@@ -16,6 +16,7 @@ function resolveShell() {
 class TerminalManager {
   constructor() {
     this.sessions = new Map();
+    this.sessionCount = 0;
   }
 
   createSession(options = {}) {
@@ -23,6 +24,8 @@ class TerminalManager {
     const shell = resolveShell();
     const cols = options.cols || DEFAULT_COLS;
     const rows = options.rows || DEFAULT_ROWS;
+    this.sessionCount += 1;
+    const title = options.title || `Terminal ${this.sessionCount}`;
 
     // For Windows PowerShell/CMD, use different args
     let shellArgs = [];
@@ -48,8 +51,10 @@ class TerminalManager {
 
     const session = {
       id,
+      title,
       shell,
       createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
       process: shellProcess,
       buffer: [],
       subscribers: new Set()
@@ -100,11 +105,13 @@ class TerminalManager {
   }
 
   listSessions() {
-    return Array.from(this.sessions.values()).map(({ id, shell, createdAt, buffer }) => ({
+    return Array.from(this.sessions.values()).map(({ id, title, shell, createdAt, updatedAt, buffer }) => ({
       id,
+      title,
       shell,
       createdAt,
-      history: buffer
+      updatedAt,
+      messageCount: buffer.length
     }));
   }
 
@@ -122,6 +129,7 @@ class TerminalManager {
     if (!session) {
       throw new Error(`Session ${id} not found`);
     }
+    session.updatedAt = new Date().toISOString();
     session.process.stdin.write(data);
   }
 }

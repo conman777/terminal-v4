@@ -1,0 +1,815 @@
+# Claude AI Development Guide
+
+## Purpose
+
+This guide provides systematic approaches for finding bugs, debugging issues, and writing clean, testable code. All rules marked **MUST** are enforced by CI; **SHOULD** rules are strongly recommended.
+
+---
+
+## CLI WORKFLOW EXPECTATIONS
+
+- Run commands through the Codex CLI harness; pass the target directory via the `workdir` parameter instead of relying on `cd`.
+- Use `powershell.exe -Command` when invoking `shell` so commands match the current environment configuration.
+- Prefer `rg`/`rg --files` for code or text searches; fall back to other tools only if ripgrep is unavailable.
+- Default to `apply_patch` for focused edits; use other tooling only when automated generation is more efficient.
+- Avoid destructive git commands (e.g., `git reset --hard`, `git clean`, `git checkout --`) unless the user explicitly instructs otherwise.
+- Leave existing uncommitted user changes untouched; never revert or overwrite unrelated modifications.
+- Follow the task planning policy: skip the planner for trivial work, otherwise maintain a multi-step plan and keep it updated.
+- The approval policy is `never`; do not request elevated permissions. Work within the existing access.
+
+## I. BUG FINDING METHODOLOGY
+
+### Systematic Inspection Approach
+
+When searching for bugs, inspect these high-risk areas in order:
+
+1. **Error Boundaries**
+   - Uncaught promise rejections
+   - Missing try-catch blocks around I/O operations
+   - Unhandled error events on streams
+   - Error callbacks that don't propagate errors
+
+2. **Async Boundaries**
+   - Race conditions between parallel operations
+   - Missing `await` keywords
+   - Concurrent access to shared state
+   - Event handlers that modify state
+
+3. **Input Validation**
+   - Missing null/undefined checks
+   - Type coercion bugs (string vs number)
+   - Path traversal vulnerabilities (`../`)
+   - SQL/command injection points
+   - Missing input sanitization
+
+4. **State Management**
+   - Stale closures capturing old state
+   - Mutations of shared objects
+   - State updates that don't trigger re-renders
+   - Cached values that don't invalidate
+
+5. **Edge Cases**
+   - Empty arrays/strings
+   - Off-by-one errors
+   - Integer overflow/underflow
+   - Timezone and date handling
+   - Unicode and special characters
+
+### Common Bug Patterns
+
+Look for these specific patterns:
+
+```javascript
+// BAD: Missing error handling
+const data = await fetchData();
+
+// GOOD: Proper error handling
+try {
+  const data = await fetchData();
+} catch (error) {
+  console.error("Failed to fetch:", error);
+  throw new Error("Data fetch failed");
+}
+
+// BAD: Race condition
+let result = null;
+fetchData().then((data) => (result = data));
+return result; // null!
+
+// GOOD: Await the promise
+const result = await fetchData();
+return result;
+
+// BAD: Path traversal vulnerability
+const filePath = `/workspace/${req.query.path}`;
+
+// GOOD: Sanitize paths (see backend/server.js:768)
+const filePath = sanitizePath(req.query.path);
+```
+
+### Testing for Bugs
+
+Use these testing strategies to uncover bugs:
+
+1. **Boundary Testing**: Test with 0, 1, max, max+1 values
+2. **Null Testing**: Pass null, undefined, empty string to all inputs
+3. **Type Testing**: Pass wrong types (string instead of number)
+4. **Concurrency Testing**: Call functions simultaneously
+5. **Error Path Testing**: Trigger all error conditions
+6. **Integration Testing**: Test cross-module interactions
+
+---
+
+## II. DEBUGGING PROCESS
+
+Follow this systematic 5-step debugging process:
+
+### Step 1: Reproduce Reliably
+
+- Create minimal reproduction case
+- Document exact steps to trigger bug
+- Note environmental factors (OS, browser, timing)
+- Write a failing test that demonstrates the bug
+
+### Step 2: Isolate the Problem
+
+- Use binary search: Comment out half the code
+- Add console.logs at boundaries between modules
+- Check inputs and outputs at each function boundary
+- Isolate to specific function or module
+
+### Step 3: Analyze Root Cause
+
+- Trace data flow backward from failure point
+- Check assumptions (is variable really what you think?)
+- Review recent changes (git blame, git log)
+- Look for similar patterns elsewhere in codebase
+
+### Step 4: Implement Fix
+
+- Make the smallest change that fixes root cause
+- Add defensive checks if appropriate
+- Update related code with same bug pattern
+- Document why the bug happened (comment or commit message)
+
+### Step 5: Verify and Test
+
+- Confirm original bug is fixed
+- Run full test suite to prevent regressions
+- Test related scenarios that might break
+- Check performance impact of fix
+
+### Debugging Tools
+
+Use these techniques:
+
+1. **Console Logging**: Log inputs, outputs, and state transitions
+2. **Debugger**: Set breakpoints at suspected failure points
+3. **Git Bisect**: Find which commit introduced the bug
+4. **Diff Analysis**: Compare working vs broken versions
+5. **Dependency Analysis**: Check if external library updated
+
+---
+
+## III. CLEAN CODE PRINCIPLES
+
+### Function Design Rules
+
+**MUST** follow these function design principles:
+
+1. **Single Responsibility**: Function does one thing well
+
+   ```javascript
+   // BAD: Function does too much
+   async function handleUser(userId) {
+     const user = await db.getUser(userId);
+     const posts = await db.getPosts(userId);
+     const formatted = posts.map((p) => formatPost(p));
+     await sendEmail(user.email, formatted);
+   }
+
+   // GOOD: Separate concerns
+   async function getUserPosts(userId) {
+     return db.getPosts(userId);
+   }
+
+   async function notifyUserOfPosts(user, posts) {
+     const formatted = posts.map(formatPost);
+     await sendEmail(user.email, formatted);
+   }
+   ```
+
+2. **No Hidden Dependencies**: All dependencies passed as parameters
+
+   ```javascript
+   // BAD: Hidden dependency on global
+   function processData() {
+     return globalDatabase.query("SELECT ...");
+   }
+
+   // GOOD: Explicit dependency
+   function processData(database) {
+     return database.query("SELECT ...");
+   }
+   ```
+
+3. **Pure When Possible**: Same input -> same output, no side effects
+
+   ```javascript
+   // BAD: Side effect
+   function addToCart(cart, item) {
+     cart.items.push(item); // Mutation!
+     return cart;
+   }
+
+   // GOOD: Pure function
+   function addToCart(cart, item) {
+     return {
+       ...cart,
+       items: [...cart.items, item],
+     };
+   }
+   ```
+
+### When to Extract a Function
+
+**SHOULD NOT** extract a function unless:
+
+- It's reused in 2+ places, OR
+- It enables unit testing of otherwise untestable logic, OR
+- A complex block (>20 lines) becomes self-documenting with a clear name
+
+**Example from codebase**: `sanitizePath` (backend/server.js:768) is extracted because it's reused in multiple endpoints AND requires thorough testing for security.
+
+### Naming Conventions
+
+**MUST** use existing domain vocabulary:
+
+- Use `createFlowspace()` - matches existing `flowspace` terminology
+- Avoid `makeWorkspace()` - introduces new terminology
+- Use `initializeTerminal()` - clear what it does
+- Avoid `setupTerm()` - abbreviations are unclear
+
+**SHOULD** make names intention-revealing:
+
+```javascript
+// BAD
+const d = new Date();
+const f = (x) => x * 2;
+
+// GOOD
+const currentTimestamp = new Date();
+const doubleValue = (value) => value * 2;
+```
+
+### Error Handling Strategy
+
+**MUST** handle errors explicitly:
+
+```javascript
+// BAD: Silent failure
+try {
+  await riskyOperation();
+} catch (error) {
+  // Nothing!
+}
+
+// GOOD: Log and propagate
+try {
+  await riskyOperation();
+} catch (error) {
+  console.error("Operation failed:", error);
+  throw new Error("Risky operation failed: " + error.message);
+}
+```
+
+**SHOULD** use specific error messages:
+
+```javascript
+// BAD
+throw new Error("Invalid input");
+
+// GOOD
+throw new Error(`Path outside workspace: ${attemptedPath}`);
+```
+
+### Comments and Documentation
+
+**SHOULD NOT** add comments except for:
+
+1. **Critical caveats** (see backend/terminal-bridge.js:259):
+
+   ```javascript
+   // CRITICAL FUNCTION: Handle scroll commands for tmux copy-mode
+   // DO NOT MODIFY THIS FUNCTION WITHOUT:
+   // 1. Running the test suite
+   // 2. Manually testing scrolling
+   ```
+
+2. **Non-obvious security implications**:
+
+   ```javascript
+   // Security: Prevent path traversal attacks
+   if (normalizedPath.includes("..")) {
+     throw new Error("Access denied");
+   }
+   ```
+
+3. **Architecture decisions** (see backend/terminal-bridge.js:121):
+   ```javascript
+   // CRITICAL: persistenceEnabled MUST be true for tmux scrolling
+   // Frontend checks this flag for scroll mode
+   ```
+
+**Prefer self-explanatory code over comments.**
+
+### When to Refactor
+
+Refactor when you encounter:
+
+1. **Duplicated Logic**: Same code in 3+ places
+2. **High Complexity**: Function has >5 branches or >3 levels of nesting
+3. **Hard to Test**: Can't write unit test without mocking everything
+4. **Unclear Intent**: Need comments to explain what code does
+5. **Breaking Changes**: Modify function signature or behavior
+
+**Before refactoring**:
+
+- Write tests that verify current behavior
+- Make refactoring in small, incremental commits
+- Run tests after each change
+
+---
+
+## IV. TESTING STRATEGY
+
+### Test Pyramid
+
+Follow this distribution:
+
+- **70% Integration Tests**: Test cross-module interactions (terminal-app/\*.spec.js)
+- **25% Unit Tests**: Test pure logic, algorithms, utilities (\*.spec.js colocated)
+- **5% E2E Tests**: Critical user flows only
+
+### What to Test
+
+**MUST** test:
+
+1. **Public APIs**: All endpoints and their error cases
+2. **Edge Cases**: Empty input, null, max values, special characters
+3. **Error Paths**: Every error condition can be triggered
+4. **Security**: Path traversal, injection, auth bypass attempts
+5. **State Transitions**: All valid state changes
+
+**SHOULD** test:
+
+1. **Complex Algorithms**: Pure functions with tricky logic
+2. **Invariants**: Properties that must always be true
+3. **Integration Points**: Where modules interact
+
+**SHOULD NOT** test:
+
+1. **Trivial Getters/Setters**: No logic to verify
+2. **Third-Party Code**: Trust well-tested libraries
+3. **Constants**: Testing `const PORT = 3000` is pointless
+
+### How to Test
+
+**MUST** follow these test patterns:
+
+1. **Arrange-Act-Assert (AAA)**:
+
+   ```javascript
+   test("should create new folder", async () => {
+     // Arrange
+     const folderName = "test-folder";
+     const parentPath = "/workspace";
+
+     // Act
+     const result = await createFolder(parentPath, folderName);
+
+     // Assert
+     expect(result.success).toBe(true);
+     expect(result.path).toBe("/workspace/test-folder");
+   });
+   ```
+
+2. **Parameterize Inputs**: Never embed magic numbers
+
+   ```javascript
+   // BAD
+   expect(add(2, 3)).toBe(5);
+
+   // GOOD
+   const a = 2;
+   const b = 3;
+   const expectedSum = 5;
+   expect(add(a, b)).toBe(expectedSum);
+   ```
+
+3. **Test Description = Assertion**:
+
+   ```javascript
+   // BAD: Description doesn't match assertion
+   test("user login", () => {
+     expect(response.token).toBeDefined(); // Testing token, not login
+   });
+
+   // GOOD: Description matches exactly
+   test("should return JWT token on successful login", () => {
+     expect(response.token).toBeDefined();
+   });
+   ```
+
+4. **Strong Assertions**:
+
+   ```javascript
+   // BAD: Weak assertion
+   expect(result.length).toBeGreaterThan(0);
+
+   // GOOD: Strong assertion
+   expect(result).toEqual([{ id: 1, name: "test" }]);
+   ```
+
+5. **Test Entire Structure**:
+
+   ```javascript
+   // BAD: Multiple weak assertions
+   expect(result).toHaveLength(1);
+   expect(result[0].id).toBe(1);
+   expect(result[0].name).toBe("test");
+
+   // GOOD: Single strong assertion
+   expect(result).toEqual([{ id: 1, name: "test" }]);
+   ```
+
+### Test Organization
+
+**MUST** organize tests:
+
+1. **Unit Tests**: Colocate in `*.spec.js` next to source file
+2. **Integration Tests**: Place in `terminal-app/*.spec.js`
+3. **Separate by Type**: Never mix unit and integration tests
+
+```javascript
+// Unit test structure
+describe("functionName", () => {
+  test("should handle normal input", () => {});
+  test("should handle edge case: empty input", () => {});
+  test("should throw on invalid input", () => {});
+});
+```
+
+### When to Mock
+
+**SHOULD** mock only:
+
+1. **External Systems**: Databases, APIs, file system
+2. **Non-Deterministic Functions**: Date.now(), Math.random()
+3. **Slow Operations**: Network calls, heavy computations
+
+**SHOULD NOT** mock:
+
+1. **Internal Modules**: Test real integration
+2. **Simple Functions**: Pure functions are fast to test
+3. **Types/Interfaces**: Use real implementations
+
+---
+
+## V. SECURITY CHECKLIST
+
+Before shipping code, verify:
+
+### Input Validation
+
+- [ ] All user input is validated (type, range, format)
+- [ ] Path parameters are sanitized (no `../`)
+- [ ] File uploads have size limits and type checks
+- [ ] Query parameters have length limits
+
+### Authentication & Authorization
+
+- [ ] All sensitive endpoints require authentication
+- [ ] User can only access their own resources
+- [ ] Session tokens expire appropriately
+- [ ] Password minimum requirements enforced
+
+### Injection Prevention
+
+- [ ] SQL queries use parameterized statements
+- [ ] Shell commands escape user input or use safe APIs
+- [ ] HTML output is escaped to prevent XSS
+- [ ] File paths are validated before file operations
+
+### Data Protection
+
+- [ ] Passwords are hashed, never stored plainly
+- [ ] Sensitive data is not logged
+- [ ] HTTPS is used in production
+- [ ] CORS is configured correctly
+
+**Example**: See `sanitizePath` function (backend/server.js:768) for comprehensive path validation.
+
+---
+
+## VI. IMPLEMENTATION WORKFLOW
+
+### Before Coding (Planning)
+
+**BP-1 (MUST)**: Ask clarifying questions about requirements
+
+**BP-2 (SHOULD)**: Draft and confirm approach for complex work
+
+**BP-3 (SHOULD)**: If two or more approaches exist, list pros and cons
+
+### While Coding (TDD)
+
+**C-1 (MUST)**: Follow TDD: scaffold stub + write failing test + implement
+
+**C-2 (MUST)**: Name functions with existing domain vocabulary
+
+**C-3 (SHOULD NOT)**: Introduce classes when small testable functions suffice
+
+**C-4 (SHOULD)**: Prefer simple, composable, testable functions
+
+**C-5 (SHOULD NOT)**: Add comments except for critical caveats
+
+**C-6 (SHOULD NOT)**: Extract functions unless reused, needed for testing, or improves readability
+
+### After Coding (Verification)
+
+**V-1 (MUST)**: Run the relevant tests. For frontend updates, execute `npx playwright test` from `terminal-app` (set the `workdir` when calling `shell`). For backend updates, run `npm run dev` from `backend` to smoke test changes and document any manual verification performed.
+
+**V-2 (MUST)**: Format changed files with Prettier. Install it if necessary (e.g., `npm install --save-dev prettier`) and run `npx prettier --check "**/*.{js,json,md}"` from the repository root; if formatting cannot be executed, call that out in your response.
+
+**V-3 (SHOULD)**: Review code against function design checklist
+
+**V-4 (SHOULD)**: Verify security checklist for user-facing changes
+
+---
+
+## VII. DATABASE
+
+**D-1 (MUST)**: Use sqlite3 with proper async/await patterns
+
+**D-2 (SHOULD)**: Keep database helper functions simple and testable in `backend/db.js`
+
+**Example**:
+
+```javascript
+// GOOD: Simple, testable helper
+async function getUserById(userId) {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+```
+
+---
+
+## VIII. CODE ORGANIZATION
+
+- `backend/` - Express API server with WebSocket support
+  - `backend/server.js` - Main server file with API endpoints
+  - `backend/auth.js` - Authentication logic
+  - `backend/docker-manager.js` - Docker container management
+  - `backend/terminal-bridge.js` - Terminal/tmux session management
+  - `backend/db.js` - SQLite database helpers
+- `terminal-app/` - Frontend static files
+  - `terminal-app/public/` - HTML, CSS, JavaScript files served to clients
+  - `terminal-app/*.spec.js` - Playwright integration tests
+
+---
+
+## IX. GIT WORKFLOW
+
+**GH-1 (MUST)**: Use Conventional Commits format: https://www.conventionalcommits.org/en/v1.0.0
+
+**GH-2 (SHOULD NOT)**: Refer to Claude or Anthropic in commit messages
+
+**Format**:
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+**Types**:
+
+- `feat`: New feature (MINOR version)
+- `fix`: Bug fix (PATCH version)
+- `docs`: Documentation only
+- `style`: Formatting, missing semicolons
+- `refactor`: Code change that neither fixes bug nor adds feature
+- `perf`: Performance improvement
+- `test`: Adding or fixing tests
+- `chore`: Maintenance tasks
+
+**Operational Notes**:
+
+- Review `git status` before staging; keep unrelated files out of the commit.
+- Do not modify or revert files you did not change for the current task.
+- Skip destructive git commands (`git reset --hard`, `git clean`, etc.) unless the user explicitly directs otherwise.
+
+---
+
+## X. SHORTCUTS
+
+### QINSPECT
+
+Deep code inspection and analysis:
+
+```
+Systematically inspect the codebase following Section I (Bug Finding Methodology):
+1. Check all error boundaries, async boundaries, input validation
+2. Review state management and edge case handling
+3. Look for common bug patterns listed in Section I
+4. Report findings with file:line references
+5. Warn if code is overcomplicated or violates clean code principles
+
+Focus on the section being discussed with the user.
+Do NOT make changes - only analyze and report.
+```
+
+### QPLAN
+
+Implementation planning:
+
+```
+Analyze similar parts of the codebase and determine whether your plan:
+- Is consistent with existing patterns and domain vocabulary
+- Introduces minimal changes
+- Reuses existing code where appropriate
+- Follows TDD workflow (Section VI)
+
+Present plan with pros/cons if multiple approaches exist.
+```
+
+### QCODE
+
+Implementation with tests:
+
+```
+Implement your plan following Section VI (Implementation Workflow):
+1. Write failing test first (TDD)
+2. Implement minimal code to pass test
+3. Run full test suite
+4. Run prettier on changed files
+5. Verify no regressions
+
+MUST follow all MUST rules from this guide.
+```
+
+### QCHECK
+
+Code quality review:
+
+```
+As a SKEPTICAL senior software engineer, review MAJOR code changes:
+
+For each function (skip minor changes):
+1. Function Design Checklist (Section III)
+2. Security Checklist (Section V) if user-facing
+3. Testing Checklist (Section IV)
+
+Report issues with specific file:line references.
+Suggest concrete improvements.
+```
+
+### QDEBUG
+
+Systematic debugging:
+
+```
+Follow the 5-step debugging process (Section II):
+1. Reproduce: Create minimal failing test
+2. Isolate: Binary search to find failing module
+3. Analyze: Trace root cause with logging
+4. Fix: Implement minimal surgical fix
+5. Verify: Run tests, check for regressions
+
+Document the root cause and fix in comments or commit message.
+```
+
+### QUX
+
+UX testing scenarios:
+
+```
+As a human UX tester, list test scenarios sorted by priority:
+1. Happy path: Most common user flow
+2. Edge cases: Empty states, max limits, errors
+3. Error recovery: What happens when things go wrong
+4. Accessibility: Keyboard navigation, screen readers
+5. Performance: Load time, responsiveness
+```
+
+### QGIT
+
+Commit and push:
+
+```
+Follow GH-1 and GH-2 (Section IX):
+1. Stage all changes
+2. Create commit with Conventional Commits format
+3. Push to remote
+
+Commit message structure:
+<type>[scope]: <description>
+
+Use appropriate type (feat, fix, docs, refactor, etc.)
+DO NOT mention Claude or Anthropic.
+```
+
+---
+
+## XI. EVALUATION CHECKLISTS
+
+### Writing Functions Checklist
+
+When evaluating a function you wrote:
+
+1. Can you read it and HONESTLY easily follow what it's doing? If yes, stop here.
+2. Does it have reasonable cyclomatic complexity (<5 branches)?
+3. Are there better data structures (parser, tree, queue) that would simplify it?
+4. Are all parameters used? Any unnecessary type casts?
+5. Is it testable without mocking core features?
+6. Does it have hidden dependencies that could be parameters?
+7. Is the name the best choice, consistent with codebase vocabulary?
+
+### Writing Tests Checklist
+
+When evaluating a test you wrote:
+
+1. Inputs are parameterized with named variables (no magic numbers)
+2. Test can fail for a real defect (not trivial like `expect(2).toBe(2)`)
+3. Description states exactly what the assertion verifies
+4. Expectations are independent, not derived from function output
+5. Follows prettier and formatting standards
+6. Tests invariants/properties when possible (not just single cases)
+7. Tests are grouped under `describe(functionName, ...)`
+8. Uses `expect.any(...)` for variable values (like IDs)
+9. Uses strongest possible assertion (`toEqual` over `toBeGreaterThan`)
+10. Tests edge cases, boundaries, unexpected input
+
+### Response Formatting
+
+- Start responses with the key outcome or change before deeper detail.
+- Cite files using inline code with `path:line` references (1-based) so locations stay unambiguous.
+- Keep the tone concise and collaborative; avoid unnecessary filler.
+- Call out any verification steps you could not run and suggest how to cover the gap.
+- Offer natural next steps (tests, commits, deployments) when they make sense for the work delivered.
+
+---
+
+## XII. REFERENCE EXAMPLES FROM CODEBASE
+
+### Good Examples
+
+**Comprehensive Input Validation** (backend/server.js:768):
+
+```javascript
+function sanitizePath(userPath) {
+  // Multiple layers of validation
+  // Handles Windows paths, UNC, WSL mounts
+  // Prevents path traversal
+  // Well-tested in integration tests
+}
+```
+
+**Critical Function Documentation** (backend/terminal-bridge.js:259):
+
+```javascript
+/**
+ * CRITICAL FUNCTION: Handle scroll commands for tmux copy-mode
+ *
+ * DO NOT MODIFY THIS FUNCTION WITHOUT:
+ * 1. Running the test suite
+ * 2. Manually testing scrolling
+ * 3. Verifying tmux copy-mode
+ */
+async function handleScroll(containerId, sessionName, action, count, ws) {
+  // ...
+}
+```
+
+**Proper Error Handling** (backend/terminal-bridge.js:12):
+
+```javascript
+async function initializeTerminal(userId, ws, sessionName = "main") {
+  try {
+    const user = await dbHelpers.getUserById(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    // ... implementation
+  } catch (error) {
+    console.error("Error initializing terminal:", error);
+    throw error; // Propagate for caller to handle
+  }
+}
+```
+
+---
+
+**Remember**: Simple, testable, secure code is better than clever code.
+
+Dont suggest that logging unless all other options have been used.
+Dont suggest that I hard refresh when i come back saying something isnt working. 
+
+
+
+
+
+
+
+
+
+
+

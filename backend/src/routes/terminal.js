@@ -6,10 +6,15 @@ const stripAnsi = (text) => text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
 function createTerminalRouter(terminalManager) {
   const router = express.Router();
 
+  router.get('/', (req, res) => {
+    const sessions = terminalManager.listSessions();
+    res.json({ sessions });
+  });
+
   router.post('/', (req, res) => {
     const { cwd, cols, rows } = req.body || {};
     const session = terminalManager.createSession({ cwd, cols, rows });
-    res.status(201).json({ sessionId: session.id });
+    res.status(201).json({ sessionId: session.id, title: session.title });
   });
 
   router.get('/:id/history', (req, res) => {
