@@ -1,0 +1,17 @@
+{
+  "name": "terminal-v4",
+  "version": "1.0.0",
+  "description": "Browser-based interface that wraps the Claude Code CLI. The project mirrors the plan from `plan.md`: an Express backend streams JSON from the CLI, while a React client renders a chat-style UI with live tool activity.",
+  "main": "index.js",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@playwright/test": "^1.56.1"
+  }
+}
