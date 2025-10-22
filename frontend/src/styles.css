@@ -380,3 +380,127 @@ button {
     justify-content: center;
   }
 }
+
+/* Terminal Styles */
+.terminal-wrapper {
+  margin: 0 36px 24px;
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.terminal-wrapper header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #e2e8f0;
+}
+
+.terminal-wrapper h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.terminal-wrapper button {
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.2));
+  color: #f8fafc;
+  padding: 8px 16px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.terminal-wrapper button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(56, 189, 248, 0.25);
+}
+
+.terminal-placeholder {
+  color: rgba(148, 163, 184, 0.7);
+  font-size: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.terminal-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.terminal-log {
+  max-height: 320px;
+  overflow-y: auto;
+  background: rgba(2, 6, 23, 0.95);
+  border-radius: 12px;
+  padding: 16px;
+  font-family: 'JetBrains Mono', 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.terminal-line {
+  margin-bottom: 4px;
+}
+
+.terminal-line.user {
+  color: #8be9fd;
+  font-weight: 500;
+}
+
+.terminal-line.terminal {
+  color: #f8f8f2;
+}
+
+.terminal-input {
+  display: flex;
+  gap: 12px;
+}
+
+.terminal-input input {
+  flex: 1;
+  background: rgba(2, 6, 23, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.terminal-input input:focus {
+  border-color: rgba(56, 189, 248, 0.45);
+}
+
+.terminal-input button {
+  background: linear-gradient(135deg, #38bdf8, #a855f7);
+  border: none;
+  border-radius: 10px;
+  padding: 12px 24px;
+  color: #f8fafc;
+  cursor: pointer;
+  font-weight: 600;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.terminal-input button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.terminal-input button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(56, 189, 248, 0.35);
+}

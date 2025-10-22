@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Highlight, themes } from 'prism-react-renderer';
+import { TerminalChat } from './components/TerminalChat';
 
 function parseSseBlock(block) {
   const lines = block.split('\n');
@@ -218,6 +219,7 @@ export default function App() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
+  const [terminalSessionId, setTerminalSessionId] = useState(null);
 
   const chatAreaRef = useRef(null);
   const textareaRef = useRef(null);
@@ -573,6 +575,25 @@ export default function App() {
     }
   }, [loadSessions]);
 
+  const launchTerminalSession = useCallback(async () => {
+    try {
+      const response = await fetch('/api/terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!response.ok) {
+        console.error('Failed to start terminal session');
+        return;
+      }
+
+      const data = await response.json();
+      setTerminalSessionId(data.sessionId);
+    } catch (error) {
+      console.error('Error launching terminal:', error);
+    }
+  }, []);
+
   const actionLabel = useMemo(() => {
     if (isStreaming) {
       return 'Streaming…';
@@ -612,6 +633,20 @@ export default function App() {
             conversation.map((message) => <MessageBubble key={message.id} message={message} />)
           )}
         </main>
+
+        <section className="terminal-wrapper">
+          <header>
+            <h3>Local Shell</h3>
+            <button type="button" onClick={launchTerminalSession}>
+              New Terminal Session
+            </button>
+          </header>
+          {terminalSessionId ? (
+            <TerminalChat sessionId={terminalSessionId} />
+          ) : (
+            <p className="terminal-placeholder">Launch a terminal session to see streaming output.</p>
+          )}
+        </section>
 
         <div className="composer">
           <form onSubmit={handleSubmit}>

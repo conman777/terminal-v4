@@ -3,14 +3,19 @@ const cors = require('cors');
 const readline = require('readline');
 const { spawnClaude } = require('./claude-wrapper');
 const { SessionStore } = require('./session-store');
+const { createTerminalRouter } = require('./routes/terminal');
+const { TerminalManager } = require('./terminal-manager');
 
 const PORT = process.env.PORT || 3020;
 const sessionStore = new SessionStore();
+const terminalManager = new TerminalManager();
 
 const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+app.use('/api/terminal', createTerminalRouter(terminalManager));
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
