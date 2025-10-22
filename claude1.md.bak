@@ -1,0 +1,362 @@
+# Claude AI Development Guide
+
+## Purpose
+
+This guide provides systematic approaches for finding bugs, debugging issues, and writing clean, testable code. All rules marked **MUST** are enforced by CI; **SHOULD** rules are strongly recommended.
+
+---
+
+## CLI WORKFLOW EXPECTATIONS
+
+- Run commands through the Codex CLI harness; pass the target directory via the `workdir` parameter instead of relying on `cd`.
+- Use `powershell.exe -Command` when invoking `shell` so commands match the current environment configuration.
+- Prefer `rg`/`rg --files` for code or text searches; fall back to other tools only if ripgrep is unavailable.
+- Default to `apply_patch` for focused edits; use other tooling only when automated generation is more efficient.
+- Avoid destructive git commands (e.g., `git reset --hard`, `git clean`, `git checkout --`) unless the user explicitly instructs otherwise.
+- Leave existing uncommitted user changes untouched; never revert or overwrite unrelated modifications.
+- Follow the task planning policy: skip the planner for trivial work, otherwise maintain a multi-step plan and keep it updated.
+- The approval policy is `never`; do not request elevated permissions. Work within the existing access.
+
+---
+
+## I. BUG FINDING CHECKLIST
+
+When searching for bugs, inspect these high-risk areas:
+
+1. **Error Boundaries** - Uncaught promise rejections, missing try-catch around I/O, unhandled stream errors
+2. **Async Boundaries** - Race conditions, missing `await`, concurrent state access, async event handlers
+3. **Input Validation** - Null/undefined checks, type coercion bugs, path traversal (`../`), injection points
+4. **State Management** - Stale closures, mutations of shared objects, cache invalidation
+5. **Edge Cases** - Empty arrays/strings, off-by-one errors, overflow/underflow, timezone/date handling, unicode
+
+**Common Patterns:**
+```javascript
+// BAD: Missing error handling
+const data = await fetchData();
+
+// GOOD: Proper error handling
+try {
+  const data = await fetchData();
+} catch (error) {
+  console.error("Failed to fetch:", error);
+  throw new Error("Data fetch failed");
+}
+
+// BAD: Path traversal vulnerability
+const filePath = `/workspace/${req.query.path}`;
+
+// GOOD: Sanitize paths (see backend/server.js:768)
+const filePath = sanitizePath(req.query.path);
+```
+
+**Testing Strategies:** Boundary testing (0, 1, max, max+1), null testing, type testing, concurrency testing, error path testing, integration testing
+
+---
+
+## II. DEBUGGING PROCESS
+
+Follow this 5-step process:
+
+1. **Reproduce** - Create minimal reproduction case, write failing test
+2. **Isolate** - Binary search: comment out half the code, log at module boundaries
+3. **Analyze** - Trace data flow backward, check assumptions, review recent changes (git blame)
+4. **Fix** - Make smallest change that fixes root cause, add defensive checks
+5. **Verify** - Confirm fix works, run full test suite, check for regressions
+
+**Tools:** Console logging, debugger breakpoints, git bisect, diff analysis, dependency checks
+
+---
+
+## III. CLEAN CODE PRINCIPLES
+
+**Function Design (MUST follow):**
+1. **Single Responsibility** - Function does one thing well
+2. **No Hidden Dependencies** - All dependencies passed as parameters
+3. **Pure When Possible** - Same input = same output, no side effects
+
+**When to Extract a Function (SHOULD NOT extract unless):**
+- Reused in 2+ places, OR
+- Enables unit testing of otherwise untestable logic, OR
+- Complex block (>20 lines) becomes self-documenting with a clear name
+
+**Example from codebase**: `sanitizePath` (backend/server.js:768) is extracted because it's reused in multiple endpoints AND requires thorough testing for security.
+
+**Naming Conventions (MUST use existing domain vocabulary):**
+- ✅ Use `createFlowspace()` - matches existing `flowspace` terminology
+- ❌ Avoid `makeWorkspace()` - introduces new terminology
+- ✅ Use `initializeTerminal()` - clear what it does
+- ❌ Avoid `setupTerm()` - abbreviations are unclear
+
+**Error Handling (MUST handle explicitly):**
+```javascript
+// GOOD: Log and propagate
+try {
+  await riskyOperation();
+} catch (error) {
+  console.error("Operation failed:", error);
+  throw new Error("Risky operation failed: " + error.message);
+}
+```
+
+**Comments (SHOULD NOT add except for):**
+1. **Critical caveats** (see backend/terminal-bridge.js:259):
+   ```javascript
+   // CRITICAL FUNCTION: Handle scroll commands for tmux copy-mode
+   // DO NOT MODIFY THIS FUNCTION WITHOUT:
+   // 1. Running the test suite
+   // 2. Manually testing scrolling
+   ```
+
+2. **Security implications**:
+   ```javascript
+   // Security: Prevent path traversal attacks
+   if (normalizedPath.includes("..")) {
+     throw new Error("Access denied");
+   }
+   ```
+
+3. **Architecture decisions** (see backend/terminal-bridge.js:121):
+   ```javascript
+   // CRITICAL: persistenceEnabled MUST be true for tmux scrolling
+   // Frontend checks this flag for scroll mode
+   ```
+
+**When to Refactor:** Duplicated logic (3+ places), high complexity (>5 branches or >3 nesting levels), hard to test, unclear intent, breaking changes
+
+---
+
+## IV. TESTING STRATEGY
+
+**Test Pyramid:**
+- 70% Integration Tests (terminal-app/\*.spec.js)
+- 25% Unit Tests (\*.spec.js colocated)
+- 5% E2E Tests (critical flows only)
+
+**MUST test:**
+- Public APIs (all endpoints + error cases)
+- Edge cases (empty input, null, max values, special characters)
+- Error paths (every error condition)
+- Security (path traversal, injection, auth bypass)
+- State transitions (all valid state changes)
+
+**Test Pattern (Arrange-Act-Assert):**
+```javascript
+test("should create new folder", async () => {
+  // Arrange
+  const folderName = "test-folder";
+  const parentPath = "/workspace";
+
+  // Act
+  const result = await createFolder(parentPath, folderName);
+
+  // Assert
+  expect(result).toEqual({
+    success: true,
+    path: "/workspace/test-folder"
+  });
+});
+```
+
+**Testing Rules:**
+- Parameterize inputs (no magic numbers)
+- Test description = what assertion verifies
+- Use strong assertions (`toEqual` over `toBeGreaterThan`)
+- Test entire structure (single assertion over multiple weak ones)
+- Group under `describe(functionName, ...)`
+
+**When to Mock:** External systems (DB, APIs, file system), non-deterministic functions (Date.now, Math.random), slow operations (network calls)
+
+**SHOULD NOT mock:** Internal modules, simple functions, types/interfaces
+
+---
+
+## V. SECURITY CHECKLIST
+
+Before shipping code, verify:
+
+**Input Validation**
+- [ ] All user input validated (type, range, format)
+- [ ] Path parameters sanitized (no `../`)
+- [ ] File uploads have size/type limits
+- [ ] Query parameters have length limits
+
+**Authentication & Authorization**
+- [ ] Sensitive endpoints require authentication
+- [ ] Users can only access own resources
+- [ ] Session tokens expire appropriately
+- [ ] Password requirements enforced
+
+**Injection Prevention**
+- [ ] SQL queries use parameterized statements
+- [ ] Shell commands escape user input or use safe APIs
+- [ ] HTML output escaped (prevent XSS)
+- [ ] File paths validated before operations
+
+**Data Protection**
+- [ ] Passwords hashed, never stored plainly
+- [ ] Sensitive data not logged
+- [ ] HTTPS in production
+- [ ] CORS configured correctly
+
+**Example**: See `sanitizePath` function (backend/server.js:768) for comprehensive path validation.
+
+---
+
+## VI. IMPLEMENTATION WORKFLOW
+
+**Before Coding (Planning)**
+- **BP-1 (MUST)**: Ask clarifying questions about requirements
+- **BP-2 (SHOULD)**: Draft and confirm approach for complex work
+- **BP-3 (SHOULD)**: If two or more approaches exist, list pros and cons
+
+**While Coding (TDD)**
+- **C-1 (MUST)**: Follow TDD: scaffold stub + write failing test + implement
+- **C-2 (MUST)**: Name functions with existing domain vocabulary
+- **C-3 (SHOULD NOT)**: Introduce classes when small testable functions suffice
+- **C-4 (SHOULD)**: Prefer simple, composable, testable functions
+- **C-5 (SHOULD NOT)**: Add comments except for critical caveats
+- **C-6 (SHOULD NOT)**: Extract functions unless reused, needed for testing, or improves readability
+
+**After Coding (Verification)**
+- **V-1 (MUST)**: Run relevant tests. Frontend: `npx playwright test` from `terminal-app`. Backend: `npm run dev` from `backend`. Document manual verification.
+- **V-2 (MUST)**: Format with Prettier: `npx prettier --check "**/*.{js,json,md}"` from repo root
+- **V-3 (SHOULD)**: Review code against function design checklist
+- **V-4 (SHOULD)**: Verify security checklist for user-facing changes
+
+---
+
+## VII. DATABASE
+
+**D-1 (MUST)**: Use sqlite3 with proper async/await patterns
+
+**D-2 (SHOULD)**: Keep database helper functions simple and testable in `backend/db.js`
+
+**Example**:
+```javascript
+// GOOD: Simple, testable helper
+async function getUserById(userId) {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT * FROM users WHERE id = ?", [userId], (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+```
+
+---
+
+## VIII. CODE ORGANIZATION
+
+- `backend/` - Express API server with WebSocket support
+  - `backend/server.js` - Main server file with API endpoints
+  - `backend/auth.js` - Authentication logic
+  - `backend/docker-manager.js` - Docker container management
+  - `backend/terminal-bridge.js` - Terminal/tmux session management
+  - `backend/db.js` - SQLite database helpers
+- `terminal-app/` - Frontend static files
+  - `terminal-app/public/` - HTML, CSS, JavaScript files served to clients
+  - `terminal-app/*.spec.js` - Playwright integration tests
+
+---
+
+## IX. GIT WORKFLOW
+
+**GH-1 (MUST)**: Use Conventional Commits format: https://www.conventionalcommits.org/en/v1.0.0
+
+**GH-2 (SHOULD NOT)**: Refer to Claude or Anthropic in commit messages
+
+**Format:**
+```
+<type>[optional scope]: <description>
+
+[optional body]
+```
+
+**Types:** `feat` (new feature), `fix` (bug fix), `docs`, `style`, `refactor`, `perf`, `test`, `chore`
+
+**Operational Notes:**
+- Review `git status` before staging; keep unrelated files out
+- Do not modify or revert files you didn't change for current task
+- Skip destructive git commands unless user explicitly directs otherwise
+
+---
+
+## X. SHORTCUTS
+
+Quick reference for common workflows:
+
+| Shortcut | Purpose |
+|----------|---------|
+| **QINSPECT** | Deep code inspection following Bug Finding Checklist (Section I). Check error/async boundaries, input validation, state management. Report findings with file:line references. Warn if overcomplicated. DO NOT make changes. |
+| **QPLAN** | Implementation planning. Analyze similar codebase parts. Ensure plan is consistent with existing patterns, uses domain vocabulary, introduces minimal changes, reuses existing code, follows TDD. Present pros/cons if multiple approaches exist. |
+| **QCODE** | TDD implementation. Write failing test first, implement minimal code to pass, run full test suite, run prettier, verify no regressions. MUST follow all MUST rules. |
+| **QCHECK** | Code quality review as SKEPTICAL senior engineer. For each major function: check Function Design (Section III), Security (Section V if user-facing), Testing (Section IV). Report issues with file:line references. Suggest concrete improvements. |
+| **QDEBUG** | Systematic debugging. Follow 5-step process (Section II): Reproduce (create failing test), Isolate (binary search), Analyze (trace root cause), Fix (minimal surgical fix), Verify (run tests). Document root cause in comments/commit. |
+| **QUX** | UX testing scenarios. List test scenarios by priority: Happy path (common flow), Edge cases (empty states, max limits, errors), Error recovery, Accessibility (keyboard, screen readers), Performance (load time, responsiveness). |
+| **QGIT** | Git commit and push. Follow GH-1 and GH-2 (Section IX). Stage changes, create commit with Conventional Commits format, push to remote. DO NOT mention Claude or Anthropic. |
+
+---
+
+## XI. EVALUATION CHECKLISTS
+
+**Writing Functions:**
+1. Can you HONESTLY easily follow what it's doing? If yes, stop here.
+2. Reasonable cyclomatic complexity (<5 branches)?
+3. Better data structures (parser, tree, queue) that would simplify it?
+4. All parameters used? Any unnecessary type casts?
+5. Testable without mocking core features?
+6. Hidden dependencies that could be parameters?
+7. Name the best choice, consistent with codebase vocabulary?
+
+**Writing Tests:**
+1. Inputs parameterized with named variables (no magic numbers)
+2. Test can fail for real defect (not trivial like `expect(2).toBe(2)`)
+3. Description states exactly what assertion verifies
+4. Expectations independent, not derived from function output
+5. Follows prettier and formatting standards
+6. Tests invariants/properties when possible (not just single cases)
+7. Tests grouped under `describe(functionName, ...)`
+8. Uses `expect.any(...)` for variable values (like IDs)
+9. Uses strongest assertion (`toEqual` over `toBeGreaterThan`)
+10. Tests edge cases, boundaries, unexpected input
+
+**Response Formatting:**
+- Start with key outcome or change before deeper detail
+- Cite files using `path:line` references (1-based)
+- Keep tone concise and collaborative; avoid unnecessary filler
+- Call out verification steps you couldn't run
+- Offer natural next steps (tests, commits, deployments)
+
+---
+
+## XII. PROJECT-SPECIFIC NOTES
+
+**Critical Code Locations:**
+
+**backend/server.js:768** - `sanitizePath()`
+- Multiple layers of validation
+- Handles Windows paths, UNC, WSL mounts
+- Prevents path traversal
+- Well-tested in integration tests
+
+**backend/terminal-bridge.js:259** - `handleScroll()`
+- CRITICAL FUNCTION: Handle scroll commands for tmux copy-mode
+- DO NOT MODIFY WITHOUT: Running test suite, manual scrolling verification, verifying tmux copy-mode
+
+**backend/terminal-bridge.js:12** - `initializeTerminal()`
+- Proper error handling pattern
+- Example of logging and propagating errors
+
+**backend/terminal-bridge.js:121** - `persistenceEnabled` flag
+- CRITICAL: MUST be true for tmux scrolling
+- Frontend checks this flag for scroll mode
+
+**Project Quirks:**
+- Don't suggest logging unless all other debugging options have been used
+- Don't suggest hard refresh when user reports something not working
+- Keep code simple - warn if complexity is unnecessary
+
+---
+
+**Remember**: Simple, testable, secure code is better than clever code.

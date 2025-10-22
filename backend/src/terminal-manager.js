@@ -33,8 +33,14 @@ class TerminalManager {
 
     // Use appropriate spawn arguments for different shells
     if (process.platform === 'win32') {
-      // Windows: use powershell with NoExit to keep the process running
-      shellArgs = ['-NoExit', '-Command', ''];
+      const shellName = path.basename(shell).toLowerCase();
+      if (shellName.includes('powershell')) {
+        shellArgs = ['-NoLogo', '-NoExit'];
+      } else {
+        // Default to cmd.exe semantics
+        shellArgs = ['/K'];
+      }
+
       shellProcess = spawn(shell, shellArgs, {
         cwd: options.cwd || process.cwd(),
         env: { ...process.env, ...options.env },
@@ -130,6 +136,12 @@ class TerminalManager {
       throw new Error(`Session ${id} not found`);
     }
     session.updatedAt = new Date().toISOString();
+    if (process.platform === 'win32') {
+      const normalised = data.replace(/\r?\n/g, '\r\n');
+      session.process.stdin.write(normalised);
+      return;
+    }
+
     session.process.stdin.write(data);
   }
 }

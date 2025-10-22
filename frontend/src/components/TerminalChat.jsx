@@ -3,6 +3,7 @@ import { useTerminalStream } from '../hooks/useTerminalStream';
 
 export function TerminalChat({ sessionId }) {
   const logRef = useRef(null);
+  const prevStreamLengthRef = useRef(0);
   const streamEvents = useTerminalStream(sessionId);
   const [history, setHistory] = useState([]);
   const [command, setCommand] = useState('');
@@ -10,9 +11,11 @@ export function TerminalChat({ sessionId }) {
   useEffect(() => {
     if (!sessionId) {
       setHistory([]);
+      prevStreamLengthRef.current = 0;
       return;
     }
 
+    prevStreamLengthRef.current = 0;
     (async () => {
       const response = await fetch(`/api/terminal/${sessionId}/history`);
       if (response.ok) {
@@ -24,7 +27,13 @@ export function TerminalChat({ sessionId }) {
 
   useEffect(() => {
     if (streamEvents.length === 0) return;
-    setHistory((prev) => [...prev, ...streamEvents.map((entry) => ({ role: 'terminal', text: entry.plain }))]);
+
+    // Only append NEW events, not the entire array
+    const newEvents = streamEvents.slice(prevStreamLengthRef.current);
+    if (newEvents.length > 0) {
+      setHistory((prev) => [...prev, ...newEvents.map((entry) => ({ role: 'terminal', text: entry.plain }))]);
+      prevStreamLengthRef.current = streamEvents.length;
+    }
   }, [streamEvents]);
 
   useEffect(() => {

@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const readline = require('readline');
 const { spawnClaude } = require('./claude-wrapper');
 const { SessionStore } = require('./session-store');
@@ -14,6 +15,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// Serve static frontend files
+app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 
 app.use('/api/terminal', createTerminalRouter(terminalManager));
 
