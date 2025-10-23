@@ -71,7 +71,8 @@ export default function App() {
     try {
       const response = await fetch('/api/terminal', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
       });
 
       if (!response.ok) {
@@ -79,7 +80,7 @@ export default function App() {
       }
 
       const data = await response.json();
-      setActiveSessionId(data.sessionId);
+      setActiveSessionId(data.session.id);
       await loadSessions();
     } catch (error) {
       console.error('Failed to create session', error);
