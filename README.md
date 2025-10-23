@@ -7,6 +7,8 @@ A browser-based terminal emulator that provides remote access to your system's c
 - 🖥️ **Full PTY Support** - Run interactive programs (Claude CLI, Python REPL, vim, etc.)
 - 🎨 **xterm.js Terminal** - Proper ANSI color rendering and terminal emulation
 - 🔄 **Multiple Sessions** - Create and manage multiple terminal sessions simultaneously
+- ❌ **Close Terminals** - Terminate any terminal session with × button
+- ⚙️ **Configurable Working Directory** - Set default starting directory for new terminals
 - 🌐 **Remote Access** - Access your terminal from any browser on your network
 - ⚡ **Real-time Streaming** - Server-Sent Events (SSE) for instant terminal output
 - 📱 **Responsive UI** - Works on desktop and mobile browsers
@@ -52,14 +54,13 @@ terminal-v4/
 │   ├── src/
 │   │   ├── index.ts      # Main server entry point
 │   │   ├── terminal/     # Terminal manager with PTY
-│   │   ├── routes/       # API route handlers
-│   │   ├── session/      # In-memory session store
-│   │   └── claude/       # Claude CLI integration
+│   │   └── routes/       # API route handlers & schemas
 │   ├── test/             # Vitest test suite
 │   └── package.json
 ├── frontend/             # React + Vite frontend
 │   ├── src/
-│   │   ├── App.jsx       # Main app with session sidebar
+│   │   ├── App.jsx       # Main app with session sidebar & settings
+│   │   ├── styles.css    # Application styles
 │   │   └── components/
 │   │       └── TerminalChat.jsx  # xterm.js integration
 │   └── package.json
@@ -71,11 +72,12 @@ terminal-v4/
 ## API Endpoints
 
 ### Terminal Management
-- `POST /api/terminal` - Create new terminal session
+- `POST /api/terminal` - Create new terminal session (accepts `cwd` for working directory)
 - `GET /api/terminal` - List all terminal sessions
 - `GET /api/terminal/:id/history` - Get terminal output history
 - `GET /api/terminal/:id/stream` - SSE stream for real-time output
 - `POST /api/terminal/:id/input` - Send input to terminal
+- `DELETE /api/terminal/:id` - Close/terminate terminal session
 
 ### Health Check
 - `GET /api/health` - Server health status

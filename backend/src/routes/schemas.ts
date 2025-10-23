@@ -1,21 +1,5 @@
 import { z } from 'zod';
 
-export const chatRequestSchema = z.object({
-  message: z
-    .string({
-      required_error: 'message is required',
-      invalid_type_error: 'message must be a string'
-    })
-    .min(1, 'message cannot be empty'),
-  sessionId: z.string().min(1).optional(),
-  allowedTools: z
-    .array(z.string().min(1))
-    .nonempty()
-    .optional()
-});
-
-export type ChatRequestBody = z.infer<typeof chatRequestSchema>;
-
 export const terminalCreateRequestSchema = z.object({
   cwd: z.string().optional(),
   cols: z.number().int().positive().max(500).optional(),

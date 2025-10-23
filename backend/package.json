@@ -1,7 +1,7 @@
 {
   "name": "claude-code-web-backend",
   "version": "0.1.0",
-  "description": "Fastify backend that wraps the Claude Code CLI and manages terminal + chat sessions.",
+  "description": "Fastify backend for web-based terminal emulator with PTY support.",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

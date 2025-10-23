@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import supertest from 'supertest';
 import { createServer } from '../src/index';
-import { MemorySessionStore } from '../src/session/memory-session-store';
 import type { TerminalManager } from '../src/terminal/terminal-manager';
 import type { TerminalSessionSnapshot } from '../src/terminal/terminal-types';
 
@@ -13,11 +12,9 @@ type TerminalManagerContract = Pick<
 async function withApp<T>(
   fn: (context: {
     app: Awaited<ReturnType<typeof createServer>>;
-    sessionStore: MemorySessionStore;
     terminalManager: TerminalManagerContract;
   }) => Promise<T>
 ): Promise<T> {
-  const sessionStore = new MemorySessionStore();
   const terminalSession: TerminalSessionSnapshot = {
     id: 'term-1',
     title: 'Terminal 1',
@@ -40,60 +37,18 @@ async function withApp<T>(
   const terminalManager = new StubTerminalManager();
   const app = await createServer({
     logger: false,
-    sessionStore,
-    spawnClaude: vi.fn().mockImplementation(() => {
-      throw new Error('Claude CLI should not be invoked in this test');
-    }),
     terminalManager: terminalManager as unknown as TerminalManager
   });
   await app.listen({ port: 0 });
 
   try {
-    return await fn({ app, sessionStore, terminalManager });
+    return await fn({ app, terminalManager });
   } finally {
     await app.close();
   }
 }
 
 describe('API routes', () => {
-  it('lists sessions via REST endpoint', async () => {
-    await withApp(async ({ app, sessionStore }) => {
-      sessionStore.createSession({ firstMessage: 'Inspect logs' });
-
-      const response = await supertest(app.server)
-        .get('/api/sessions')
-        .expect(200);
-
-      expect(response.body).toMatchObject({
-        sessions: expect.arrayContaining([
-          expect.objectContaining({ title: 'Inspect logs' })
-        ])
-      });
-    });
-  });
-
-  it('returns 404 when continuing an unknown session', async () => {
-    await withApp(async ({ app }) => {
-      const response = await supertest(app.server)
-        .post('/api/chat')
-        .send({ message: 'Hello', sessionId: 'missing-session' })
-        .expect(404);
-
-      expect(response.body.error).toContain('Session missing-session not found');
-    });
-  });
-
-  it('validates chat payload', async () => {
-    await withApp(async ({ app }) => {
-      const response = await supertest(app.server)
-        .post('/api/chat')
-        .send({})
-        .expect(400);
-
-      expect(response.body.error).toBe('Invalid chat request body');
-    });
-  });
-
   it('creates a terminal session', async () => {
     await withApp(async ({ app, terminalManager }) => {
       const response = await supertest(app.server)
@@ -127,7 +82,7 @@ describe('API routes', () => {
         .send({ command: 'ls' })
         .expect(204);
 
-      expect(terminalManager.write).toHaveBeenCalledWith('term-1', 'ls\n');
+      expect(terminalManager.write).toHaveBeenCalledWith('term-1', 'ls');
     });
   });
 

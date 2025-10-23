@@ -2,16 +2,10 @@ import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import { fileURLToPath } from 'node:url';
 import { registerCoreRoutes } from './routes/register-core-routes';
-import { MemorySessionStore } from './session/memory-session-store';
-import type { SessionStore } from './session/types';
-import { spawnClaudeProcess, type SpawnClaudeOptions } from './claude/cli';
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
-  sessionStore?: SessionStore;
-  spawnClaude?: (options: SpawnClaudeOptions) => ChildProcessWithoutNullStreams;
   terminalManager?: TerminalManager;
   terminalOptions?: TerminalManagerOptions;
 }
@@ -29,10 +23,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     origin: true
   });
 
-  const sessionStore = options.sessionStore ?? new MemorySessionStore();
-  const spawnClaude = options.spawnClaude ?? spawnClaudeProcess;
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
-  await registerCoreRoutes(app, { sessionStore, spawnClaude, terminalManager });
+  await registerCoreRoutes(app, { terminalManager });
 
   return app;
 }
