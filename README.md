@@ -1,63 +1,190 @@
-# Claude Code Web UI
+# Terminal v4 - Web-Based Terminal
 
-Browser-based interface that wraps the Claude Code CLI. The project mirrors the plan from `plan.md`: an Express backend streams JSON from the CLI, while a React client renders a chat-style UI with live tool activity.
+A browser-based terminal emulator that provides remote access to your system's command line (cmd/PowerShell/bash) through a web interface. Built with full PTY (pseudo-terminal) support for interactive programs like `claude`, `python`, `vim`, and more.
+
+## Features
+
+- 🖥️ **Full PTY Support** - Run interactive programs (Claude CLI, Python REPL, vim, etc.)
+- 🎨 **xterm.js Terminal** - Proper ANSI color rendering and terminal emulation
+- 🔄 **Multiple Sessions** - Create and manage multiple terminal sessions simultaneously
+- 🌐 **Remote Access** - Access your terminal from any browser on your network
+- ⚡ **Real-time Streaming** - Server-Sent Events (SSE) for instant terminal output
+- 📱 **Responsive UI** - Works on desktop and mobile browsers
 
 ## Requirements
 
-- Node.js 18+
-- Claude Code CLI installed locally and available on `PATH` (or supply `CLAUDE_BIN`)
+- Node.js 22+ (for node-pty compatibility)
+- Windows (PowerShell/cmd), macOS, or Linux
 
-## Project Structure
+## Quick Start
 
-- `backend/` — Express server that spawns the Claude CLI, manages in-memory sessions, and exposes `/api/chat` (Server-Sent Events) plus REST helpers.
-- `frontend/` — React + Vite single-page app that connects to the backend, shows a session list, renders streamed Markdown responses, and surfaces live tool activity.
-
-## Getting Started
-
-1. Install dependencies for both apps:
+1. **Install dependencies:**
    ```bash
    cd backend && npm install
    cd ../frontend && npm install
    ```
-2. Start the backend:
-   ```bash
-   npm run dev
-   ```
-   (Runs on `http://localhost:3020` by default.)
-3. In another terminal start the frontend:
-   ```bash
-   npm run dev
-   ```
-   (Runs on `http://localhost:5173` and proxies API calls to the backend.)
 
-The frontend streams updates from `/api/chat`, showing Claude's text as it arrives, tracking recent tool activity, and storing each exchange inside the session sidebar.
+2. **Start the backend:**
+   ```bash
+   cd backend
+   npm run dev
+   ```
+   Backend runs on `http://localhost:3020`
+
+3. **Start the frontend:**
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+   Frontend runs on `http://localhost:5173`
+
+4. **Open your browser:**
+   - Local: `http://localhost:5173`
+   - Network: `http://<your-ip>:5173`
+
+5. **Click "New"** to create a terminal session and start typing commands!
+
+## Project Structure
+
+```
+terminal-v4/
+├── backend/              # Fastify server with PTY support
+│   ├── src/
+│   │   ├── index.ts      # Main server entry point
+│   │   ├── terminal/     # Terminal manager with PTY
+│   │   ├── routes/       # API route handlers
+│   │   ├── session/      # In-memory session store
+│   │   └── claude/       # Claude CLI integration
+│   ├── test/             # Vitest test suite
+│   └── package.json
+├── frontend/             # React + Vite frontend
+│   ├── src/
+│   │   ├── App.jsx       # Main app with session sidebar
+│   │   └── components/
+│   │       └── TerminalChat.jsx  # xterm.js integration
+│   └── package.json
+└── docs/
+    ├── architecture/     # System architecture docs
+    └── development/      # Setup and testing guides
+```
+
+## API Endpoints
+
+### Terminal Management
+- `POST /api/terminal` - Create new terminal session
+- `GET /api/terminal` - List all terminal sessions
+- `GET /api/terminal/:id/history` - Get terminal output history
+- `GET /api/terminal/:id/stream` - SSE stream for real-time output
+- `POST /api/terminal/:id/input` - Send input to terminal
+
+### Health Check
+- `GET /api/health` - Server health status
 
 ## Configuration
 
-Set the following environment variables before starting the backend if you need custom behaviour:
+### Backend Environment Variables
 
-- `CLAUDE_BIN` — Override the CLI executable name/path (defaults to `claude`).
-- `CLAUDE_ALLOWED_TOOLS` — Comma-separated list passed to `--allowedTools`.
-- `CLAUDE_ASSUME_YES=true` — Automatically append `--dangerously-skip-permissions`.
-- `PORT` — Change the Express server port (default `3020`).
+- `PORT` - Backend server port (default: `3020`)
+- `HOST` - Server host (default: `0.0.0.0`)
+- `LOG_LEVEL` - Logging level (default: `info`)
 
-## API Overview
+### Default Shell
 
-- `POST /api/chat` — Start or continue a conversation. Accepts `{ message, sessionId?, allowedTools? }` and streams SSE events back to the caller.
-- `GET /api/sessions` — List in-memory sessions (metadata + preview).
-- `POST /api/sessions` — Create a blank session (used by the UI's “New” button).
-- `GET /api/sessions/:id` — Fetch a session's full message history.
-- `DELETE /api/sessions/:id` — Drop a session from the in-memory store.
+The terminal automatically detects your system's default shell:
+- **Windows**: `cmd.exe` or `PowerShell`
+- **macOS/Linux**: `$SHELL` or `/bin/bash`
 
-## Current Limitations
+## Usage Examples
 
-- The backend assumes the CLI emits well-formed `stream-json` lines; unrecognised payloads fall back to raw JSON in the UI.
-- Session continuation depends on the CLI returning a `sessionId`; the UI tracks whatever the backend reports in the `started` event.
-- Tool activity signals rely on either structured chunk payloads or stderr logs; expect to adjust parsers as you learn the real CLI shapes.
-- Session persistence is in-memory only; restarting the backend clears state.
+### Basic Commands
+```bash
+dir                    # List files (Windows)
+ls                     # List files (Unix)
+cd path/to/folder     # Change directory
+python                # Start Python REPL
+node                  # Start Node.js REPL
+```
 
-## Next Steps
+### Interactive Programs
+```bash
+claude                # Start Claude CLI interactive mode
+vim file.txt          # Edit files with vim
+python script.py      # Run Python scripts
+npm install           # Install packages
+git status            # Git operations
+```
 
-- Refine chunk and activity parsing once the exact CLI JSON schema is known.
-- Persist session history and expose `/api/sessions`.
-- Add authentication and production-ready deployment hardening.
+## Architecture Highlights
+
+- **Backend**: Fastify + TypeScript for high-performance async I/O
+- **PTY**: `@homebridge/node-pty-prebuilt-multiarch` for true terminal emulation
+- **Frontend**: React + xterm.js for professional terminal UI
+- **Communication**: Server-Sent Events (SSE) for real-time streaming
+- **Session Management**: In-memory store with multi-session support
+
+## Security Considerations
+
+⚠️ **Local Development Only** - This app is designed for local/trusted network use:
+
+- No authentication (anyone on network can access)
+- No command whitelisting (full shell access)
+- No rate limiting
+- Sessions stored in memory only
+
+**For production deployment**, you must add:
+- User authentication (JWT/session tokens)
+- Command filtering/sandboxing
+- HTTPS/TLS encryption
+- CORS restrictions
+- Rate limiting
+
+See `docs/architecture/SYSTEM_ARCHITECTURE.md` for detailed security recommendations.
+
+## Documentation
+
+- 📖 [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) - Complete system design
+- 🛠️ [Development Setup](docs/development/SETUP.md) - Local development guide
+- 🧪 [Testing Guide](docs/development/TESTING_GUIDE.md) - Running and writing tests
+- 📋 [CLAUDE.md](CLAUDE.md) - Universal best practices guide
+
+## Testing
+
+Run the test suite:
+```bash
+cd backend
+npm test              # Run all tests
+npm run test:watch   # Watch mode
+```
+
+## Troubleshooting
+
+### Terminal not responding
+- Refresh browser and create a new terminal session
+- Check backend logs for errors
+- Ensure PTY dependencies installed correctly
+
+### ANSI codes showing as text
+- Hard refresh browser (`Ctrl+F5`)
+- Check xterm.js dependencies loaded
+- Clear Vite cache: `rm -rf frontend/node_modules/.vite`
+
+### Node.js version issues
+- Requires Node.js 22+ for node-pty compatibility
+- Use `nvm` to switch Node versions if needed
+
+## Contributing
+
+1. Follow Conventional Commits format for commit messages
+2. Run tests before committing: `npm test`
+3. Update documentation for significant changes
+4. See `CLAUDE.md` for coding standards
+
+## License
+
+MIT
+
+## Acknowledgments
+
+- Built with [xterm.js](https://xtermjs.org/) for terminal emulation
+- Uses [node-pty](https://github.com/microsoft/node-pty) for PTY support
+- Powered by [Fastify](https://www.fastify.io/) and [React](https://reactjs.org/)
