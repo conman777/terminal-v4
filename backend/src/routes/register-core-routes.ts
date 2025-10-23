@@ -299,4 +299,9 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       unsubscribe();
     });
   });
+
+  app.delete('/api/terminal/:id', async (request, reply) => {
+    deps.terminalManager.close(request.params.id);
+    reply.code(204).send();
+  });
 }

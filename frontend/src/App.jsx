@@ -1,7 +1,52 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 
-function TerminalSidebar({ sessions, activeSessionId, onSelectSession, onCreateSession, isLoading }) {
+function SettingsModal({ isOpen, onClose, settings, onSave }) {
+  const [workingDir, setWorkingDir] = useState(settings.workingDir || '');
+
+  const handleSave = () => {
+    onSave({ workingDir });
+    onClose();
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>Settings</h2>
+          <button className="modal-close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label htmlFor="working-dir">Default Working Directory</label>
+            <input
+              id="working-dir"
+              type="text"
+              value={workingDir}
+              onChange={(e) => setWorkingDir(e.target.value)}
+              placeholder="e.g., C:\Users\YourName\Projects or /home/user/projects"
+            />
+            <small>Leave empty to use the backend's default directory</small>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={handleSave}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TerminalSidebar({ sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession, onOpenSettings, isLoading }) {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -9,29 +54,54 @@ function TerminalSidebar({ sessions, activeSessionId, onSelectSession, onCreateS
           <h1>Terminals</h1>
           <span className="sidebar-subtitle">Web Shell</span>
         </div>
-        <button className="sidebar-new" type="button" onClick={onCreateSession}>
-          New
-        </button>
+        <div className="sidebar-actions">
+          <button
+            className="sidebar-settings"
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="Settings"
+          >
+            ⚙
+          </button>
+          <button className="sidebar-new" type="button" onClick={onCreateSession}>
+            New
+          </button>
+        </div>
       </div>
       <div className="session-list">
         {isLoading && <div className="session-placeholder">Loading terminals…</div>}
         {!isLoading && sessions.length === 0 && <div className="session-placeholder">No terminals yet</div>}
         {sessions.map((session) => (
-          <button
+          <div
             key={session.id}
-            type="button"
             className={`session-card${session.id === activeSessionId ? ' active' : ''}`}
-            onClick={() => onSelectSession(session.id)}
           >
-            <div className="session-title">{session.title}</div>
-            <div className="session-preview">
-              {session.shell || 'Unknown shell'}
-            </div>
-            <div className="session-meta">
-              <span>{session.messageCount || 0} lines</span>
-              <span>{new Date(session.createdAt).toLocaleTimeString()}</span>
-            </div>
-          </button>
+            <button
+              type="button"
+              className="session-card-content"
+              onClick={() => onSelectSession(session.id)}
+            >
+              <div className="session-title">{session.title}</div>
+              <div className="session-preview">
+                {session.shell || 'Unknown shell'}
+              </div>
+              <div className="session-meta">
+                <span>{session.messageCount || 0} lines</span>
+                <span>{new Date(session.createdAt).toLocaleTimeString()}</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="session-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCloseSession(session.id);
+              }}
+              aria-label="Close terminal"
+            >
+              ×
+            </button>
+          </div>
         ))}
       </div>
     </aside>
@@ -42,6 +112,17 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Load settings from localStorage
+  const [settings, setSettings] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalSettings');
+      return stored ? JSON.parse(stored) : { workingDir: '' };
+    } catch {
+      return { workingDir: '' };
+    }
+  });
 
   const loadSessions = useCallback(async () => {
     setLoadingSessions(true);
@@ -69,10 +150,15 @@ export default function App() {
 
   const handleCreateSession = useCallback(async () => {
     try {
+      const requestBody = {};
+      if (settings.workingDir) {
+        requestBody.cwd = settings.workingDir;
+      }
+
       const response = await fetch('/api/terminal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -85,7 +171,7 @@ export default function App() {
     } catch (error) {
       console.error('Failed to create session', error);
     }
-  }, [loadSessions]);
+  }, [loadSessions, settings.workingDir]);
 
   const handleSelectSession = useCallback(
     (sessionId) => {
@@ -94,13 +180,60 @@ export default function App() {
     []
   );
 
+  const handleCloseSession = useCallback(
+    async (sessionId) => {
+      try {
+        await fetch(`/api/terminal/${sessionId}`, {
+          method: 'DELETE'
+        });
+
+        // If we just closed the active terminal, switch to another one or clear
+        if (sessionId === activeSessionId) {
+          const remainingSessions = sessions.filter((s) => s.id !== sessionId);
+          if (remainingSessions.length > 0) {
+            setActiveSessionId(remainingSessions[0].id);
+          } else {
+            setActiveSessionId(null);
+          }
+        }
+
+        // Reload the session list
+        await loadSessions();
+      } catch (error) {
+        console.error('Failed to close session', error);
+      }
+    },
+    [activeSessionId, sessions, loadSessions]
+  );
+
+  const handleOpenSettings = useCallback(() => {
+    setShowSettings(true);
+  }, []);
+
+  const handleSaveSettings = useCallback((newSettings) => {
+    setSettings(newSettings);
+    try {
+      localStorage.setItem('terminalSettings', JSON.stringify(newSettings));
+    } catch (error) {
+      console.error('Failed to save settings', error);
+    }
+  }, []);
+
   return (
     <div className="layout">
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        settings={settings}
+        onSave={handleSaveSettings}
+      />
       <TerminalSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={handleSelectSession}
         onCreateSession={handleCreateSession}
+        onCloseSession={handleCloseSession}
+        onOpenSettings={handleOpenSettings}
         isLoading={loadingSessions}
       />
       <div className="main-pane">
