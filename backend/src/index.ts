@@ -2,6 +2,7 @@ import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import { fileURLToPath } from 'node:url';
 import { registerCoreRoutes } from './routes/register-core-routes';
+import { registerBookmarkRoutes } from './routes/bookmark-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 
 export interface CreateServerOptions {
@@ -25,6 +26,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
   await registerCoreRoutes(app, { terminalManager });
+  await registerBookmarkRoutes(app);
 
   return app;
 }

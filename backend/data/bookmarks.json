@@ -1,0 +1,16 @@
+[
+  {
+    "id": "1761424375729",
+    "name": "claude",
+    "command": "claude --dangerously-skip-permissions",
+    "category": "General",
+    "createdAt": "2025-10-25T20:32:55.729Z"
+  },
+  {
+    "id": "1761425853752",
+    "name": "npm install -g @openai/codex",
+    "command": "npm install -g @openai/codex",
+    "category": "General",
+    "createdAt": "2025-10-25T20:57:33.752Z"
+  }
+]

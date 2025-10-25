@@ -16,6 +16,9 @@ logs/
 backend/sessions/
 backend/.sessions/
 
+# Claude Code
+.claude/
+
 # Build outputs
 dist/
 build/

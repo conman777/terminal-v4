@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TerminalChat } from './components/TerminalChat';
+import { BookmarkModal } from './components/BookmarkModal';
 
 function SettingsModal({ isOpen, onClose, settings, onSave }) {
   const [workingDir, setWorkingDir] = useState(settings.workingDir || '');
@@ -113,6 +114,8 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState(null);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [bookmarks, setBookmarks] = useState([]);
+  const [showBookmarks, setShowBookmarks] = useState(false);
 
   // Load settings from localStorage
   const [settings, setSettings] = useState(() => {
@@ -141,12 +144,108 @@ export default function App() {
     }
   }, []);
 
+  const loadBookmarks = useCallback(async () => {
+    try {
+      const response = await fetch('/api/bookmarks');
+      if (!response.ok) {
+        throw new Error(`Failed to load bookmarks (${response.status})`);
+      }
+
+      const data = await response.json();
+      setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
+    } catch (error) {
+      console.error('Failed to load bookmarks', error);
+    }
+  }, []);
+
+  const handleAddBookmark = useCallback(
+    async (name, command, category) => {
+      try {
+        const response = await fetch('/api/bookmarks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, command, category })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to create bookmark (${response.status})`);
+        }
+
+        await loadBookmarks();
+      } catch (error) {
+        console.error('Failed to create bookmark', error);
+      }
+    },
+    [loadBookmarks]
+  );
+
+  const handleUpdateBookmark = useCallback(
+    async (id, updates) => {
+      try {
+        const response = await fetch(`/api/bookmarks/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to update bookmark (${response.status})`);
+        }
+
+        await loadBookmarks();
+      } catch (error) {
+        console.error('Failed to update bookmark', error);
+      }
+    },
+    [loadBookmarks]
+  );
+
+  const handleDeleteBookmark = useCallback(
+    async (id) => {
+      try {
+        const response = await fetch(`/api/bookmarks/${id}`, {
+          method: 'DELETE'
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to delete bookmark (${response.status})`);
+        }
+
+        await loadBookmarks();
+      } catch (error) {
+        console.error('Failed to delete bookmark', error);
+      }
+    },
+    [loadBookmarks]
+  );
+
+  const handleExecuteBookmark = useCallback(
+    async (command) => {
+      if (!activeSessionId) {
+        alert('Please select a terminal session first');
+        return;
+      }
+
+      try {
+        await fetch(`/api/terminal/${activeSessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: command + '\r' })
+        });
+      } catch (error) {
+        console.error('Failed to execute bookmark command', error);
+      }
+    },
+    [activeSessionId]
+  );
+
   useEffect(() => {
     loadSessions();
+    loadBookmarks();
     // Reload sessions every 5 seconds to keep list fresh
     const interval = setInterval(loadSessions, 5000);
     return () => clearInterval(interval);
-  }, [loadSessions]);
+  }, [loadSessions, loadBookmarks]);
 
   const handleCreateSession = useCallback(async () => {
     try {
@@ -227,6 +326,15 @@ export default function App() {
         settings={settings}
         onSave={handleSaveSettings}
       />
+      <BookmarkModal
+        isOpen={showBookmarks}
+        onClose={() => setShowBookmarks(false)}
+        bookmarks={bookmarks}
+        onAdd={handleAddBookmark}
+        onUpdate={handleUpdateBookmark}
+        onDelete={handleDeleteBookmark}
+        onExecute={handleExecuteBookmark}
+      />
       <TerminalSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -245,6 +353,17 @@ export default function App() {
                 {sessions.find((s) => s.id === activeSessionId)?.title || 'Terminal'}
               </span>
             )}
+          </div>
+          <div className="header-actions">
+            <button
+              className="header-btn"
+              type="button"
+              onClick={() => setShowBookmarks(true)}
+              aria-label="Bookmarks"
+              title="Bookmarks"
+            >
+              📑
+            </button>
           </div>
         </header>
 
