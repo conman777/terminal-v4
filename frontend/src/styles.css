@@ -236,6 +236,7 @@ button {
 }
 
 .terminal-main {
+  --mobile-keybar-offset: 0px;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -931,7 +932,7 @@ button {
   top: 0;
   left: 0;
   right: 0;
-  height: 40px;
+  height: var(--mobile-header-height, 40px);
   background: rgba(15, 23, 42, 0.98);
   border-bottom: 1px solid rgba(148, 163, 184, 0.16);
   z-index: 999;
@@ -1005,7 +1006,7 @@ button {
 
 .session-dropdown {
   position: fixed;
-  top: 40px;
+  top: var(--mobile-header-height, 40px);
   left: 0;
   right: 0;
   background: rgba(15, 23, 42, 0.98);
@@ -1192,7 +1193,7 @@ button {
 /* Mobile Keybar */
 .mobile-keybar {
   position: fixed;
-  top: 40px;
+  top: var(--mobile-header-height, 40px);
   left: 0;
   right: 0;
   background: rgba(15, 23, 42, 0.98);
@@ -1272,7 +1273,10 @@ button {
 @media (max-width: 768px) {
   /* Mobile layout */
   .layout.mobile {
-    padding-top: 40px;
+    --mobile-header-height: 40px;
+    padding-top: var(--mobile-header-height);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   .layout.mobile .sidebar {
@@ -1293,8 +1297,14 @@ button {
   }
 
   /* Adjust terminal for mobile keybar */
-  .terminal-main.keybar-open {
-    padding-top: 132px; /* 40px header + ~92px keybar */
+  .terminal-main {
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-top: var(--mobile-keybar-offset, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    height: calc(
+      var(--mobile-viewport-height, 100vh) - var(--mobile-header-height, 40px) - var(--mobile-keybar-offset, 0px)
+    );
   }
 
   /* Fullscreen modals on mobile */
@@ -1381,7 +1391,17 @@ button {
 
   /* Terminal adjustments for mobile */
   .terminal-main {
-    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(
+      var(--mobile-viewport-height, 100vh) - var(--mobile-header-height, 40px) - var(--mobile-keybar-offset, 0px)
+    ); /* Full viewport height minus header and keybar */
+  }
+
+  .terminal-chat {
+    height: 100%;
+  }
+
+  .xterm-container {
+    height: 100% !important;
   }
 }
 
@@ -1410,20 +1430,21 @@ button,
 
 /* Safe area support for notched devices */
 @supports (padding: env(safe-area-inset-top)) {
+  .layout.mobile {
+    --mobile-header-height: calc(40px + env(safe-area-inset-top));
+    padding-top: var(--mobile-header-height);
+  }
+
   .mobile-header {
     padding-top: env(safe-area-inset-top);
-    height: calc(40px + env(safe-area-inset-top));
+    height: var(--mobile-header-height);
   }
 
   .mobile-keybar {
-    top: calc(40px + env(safe-area-inset-top));
+    top: var(--mobile-header-height);
   }
 
   .session-dropdown {
-    top: calc(40px + env(safe-area-inset-top));
-  }
-
-  .layout.mobile {
-    padding-top: calc(40px + env(safe-area-inset-top));
+    top: var(--mobile-header-height);
   }
 }

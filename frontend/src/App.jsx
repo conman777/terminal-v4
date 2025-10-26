@@ -4,6 +4,7 @@ import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
 import { useMobileDetect } from './hooks/useMobileDetect';
+import { useViewportHeight } from './hooks/useViewportHeight';
 
 function SettingsModal({ isOpen, onClose, settings, onSave }) {
   const [workingDir, setWorkingDir] = useState(settings.workingDir || '');
@@ -120,7 +121,9 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
+  const [keybarHeight, setKeybarHeight] = useState(0);
   const isMobile = useMobileDetect();
+  const viewportHeight = useViewportHeight();
 
   // Load settings from localStorage
   const [settings, setSettings] = useState(() => {
@@ -323,8 +326,18 @@ export default function App() {
     }
   }, []);
 
+  const handleKeybarHeightChange = useCallback((height) => {
+    setKeybarHeight(Math.max(0, Math.round(height)));
+  }, []);
+
+  const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
+  const layoutStyle =
+    isMobile && viewportHeight
+      ? { '--mobile-viewport-height': `${Math.round(viewportHeight)}px` }
+      : undefined;
+
   return (
-    <div className={`layout${isMobile ? ' mobile' : ''}`}>
+    <div className={`layout${isMobile ? ' mobile' : ''}`} style={layoutStyle}>
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
@@ -363,7 +376,11 @@ export default function App() {
             keybarOpen={keybarOpen}
             onToggleKeybar={() => setKeybarOpen(!keybarOpen)}
           />
-          <MobileKeybar sessionId={activeSessionId} isOpen={keybarOpen} />
+          <MobileKeybar
+            sessionId={activeSessionId}
+            isOpen={keybarOpen}
+            onHeightChange={handleKeybarHeightChange}
+          />
         </>
       )}
       <div className="main-pane">
@@ -391,14 +408,27 @@ export default function App() {
         </header>
         )}
 
-        <main className={`terminal-main${keybarOpen ? ' keybar-open' : ''}`}>
+        <main
+          className="terminal-main"
+          style={
+            isMobile
+              ? {
+                  '--mobile-keybar-offset': `${mobileKeybarOffset}px`
+                }
+              : undefined
+          }
+        >
           {!activeSessionId ? (
             <div className="empty-state">
               <h2>Welcome to Web Terminal</h2>
               <p>Create a new terminal session to get started. Click the "New" button in the sidebar or use the terminal to run shell commands.</p>
             </div>
           ) : (
-            <TerminalChat sessionId={activeSessionId} />
+            <TerminalChat
+              sessionId={activeSessionId}
+              keybarOpen={keybarOpen}
+              viewportHeight={viewportHeight}
+            />
           )}
         </main>
       </div>

@@ -1,4 +1,44 @@
-export function MobileKeybar({ sessionId, isOpen }) {
+import { useLayoutEffect, useRef } from 'react';
+
+export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
+  const keybarRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!onHeightChange) {
+      return;
+    }
+
+    if (typeof window === 'undefined') {
+      onHeightChange(0);
+      return;
+    }
+
+    const updateHeight = () => {
+      if (!keybarRef.current) {
+        onHeightChange(0);
+        return;
+      }
+      const measured = keybarRef.current.offsetHeight || 0;
+      onHeightChange(isOpen ? measured : 0);
+    };
+
+    updateHeight();
+
+    window.addEventListener('resize', updateHeight);
+    const viewport = window.visualViewport;
+    if (viewport) {
+      viewport.addEventListener('resize', updateHeight);
+      viewport.addEventListener('scroll', updateHeight);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateHeight);
+      if (viewport) {
+        viewport.removeEventListener('resize', updateHeight);
+        viewport.removeEventListener('scroll', updateHeight);
+      }
+    };
+  }, [isOpen, onHeightChange]);
 
   const handleKeyPress = () => {
     // Haptic feedback on mobile
@@ -60,7 +100,7 @@ export function MobileKeybar({ sessionId, isOpen }) {
   };
 
   return (
-    <div className={`mobile-keybar${isOpen ? ' open' : ''}`}>
+    <div ref={keybarRef} className={`mobile-keybar${isOpen ? ' open' : ''}`}>
       <div className="mobile-keybar-handle">
         <div className="mobile-keybar-drag-indicator"></div>
       </div>
