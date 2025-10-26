@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 import { BookmarkModal } from './components/BookmarkModal';
+import { MobileHeader } from './components/MobileHeader';
+import { MobileKeybar } from './components/MobileKeybar';
+import { useMobileDetect } from './hooks/useMobileDetect';
 
 function SettingsModal({ isOpen, onClose, settings, onSave }) {
   const [workingDir, setWorkingDir] = useState(settings.workingDir || '');
@@ -116,6 +119,8 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [keybarOpen, setKeybarOpen] = useState(false);
+  const isMobile = useMobileDetect();
 
   // Load settings from localStorage
   const [settings, setSettings] = useState(() => {
@@ -319,7 +324,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="layout">
+    <div className={`layout${isMobile ? ' mobile' : ''}`}>
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
@@ -335,7 +340,8 @@ export default function App() {
         onDelete={handleDeleteBookmark}
         onExecute={handleExecuteBookmark}
       />
-      <TerminalSidebar
+      {!isMobile && (
+        <TerminalSidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
         onSelectSession={handleSelectSession}
@@ -344,8 +350,25 @@ export default function App() {
         onOpenSettings={handleOpenSettings}
         isLoading={loadingSessions}
       />
+      )}
+      {isMobile && (
+        <>
+          <MobileHeader
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelectSession={handleSelectSession}
+            onCreateSession={handleCreateSession}
+            onOpenSettings={handleOpenSettings}
+            onOpenBookmarks={() => setShowBookmarks(true)}
+            keybarOpen={keybarOpen}
+            onToggleKeybar={() => setKeybarOpen(!keybarOpen)}
+          />
+          <MobileKeybar sessionId={activeSessionId} isOpen={keybarOpen} />
+        </>
+      )}
       <div className="main-pane">
-        <header className="app-header">
+        {!isMobile && (
+          <header className="app-header">
           <div>
             <h2>Web Terminal</h2>
             {activeSessionId && sessions.length > 0 && (
@@ -366,8 +389,9 @@ export default function App() {
             </button>
           </div>
         </header>
+        )}
 
-        <main className="terminal-main">
+        <main className={`terminal-main${keybarOpen ? ' keybar-open' : ''}`}>
           {!activeSessionId ? (
             <div className="empty-state">
               <h2>Welcome to Web Terminal</h2>

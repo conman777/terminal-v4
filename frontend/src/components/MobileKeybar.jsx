@@ -1,0 +1,95 @@
+export function MobileKeybar({ sessionId, isOpen }) {
+
+  const handleKeyPress = () => {
+    // Haptic feedback on mobile
+    if ('vibrate' in navigator) {
+      navigator.vibrate(10);
+    }
+  };
+
+  const sendKey = async (data) => {
+    if (!sessionId) return;
+
+    try {
+      await fetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: data })
+      });
+    } catch (error) {
+      console.error('Failed to send key:', error);
+    }
+  };
+
+  const keys = [
+    // Row 1: Common control keys
+    { label: 'ESC', key: '\x1b', title: 'Escape' },
+    { label: 'TAB', key: '\t', title: 'Tab' },
+    { label: '⇧TAB', key: '\x1b[Z', title: 'Shift+Tab' },
+    { label: '↵', key: '\r', title: 'Enter' },
+    { label: 'DEL', key: '\x7f', title: 'Delete/Backspace' },
+
+    // Row 2: Arrow keys + paste
+    { label: '←', key: '\x1b[D', title: 'Left Arrow' },
+    { label: '↑', key: '\x1b[A', title: 'Up Arrow' },
+    { label: '↓', key: '\x1b[B', title: 'Down Arrow' },
+    { label: '→', key: '\x1b[C', title: 'Right Arrow' },
+    { label: 'PASTE', key: 'paste', title: 'Paste from Clipboard', special: true }
+  ];
+
+  const handlePaste = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        sendKey(text);
+      }
+    } catch (error) {
+      console.error('Failed to read clipboard:', error);
+      alert('Clipboard access denied. Please enable clipboard permissions.');
+    }
+  };
+
+  const handleButtonPress = (keyData) => {
+    handleKeyPress();
+
+    if (keyData.special && keyData.key === 'paste') {
+      handlePaste();
+    } else {
+      sendKey(keyData.key);
+    }
+  };
+
+  return (
+    <div className={`mobile-keybar${isOpen ? ' open' : ''}`}>
+      <div className="mobile-keybar-handle">
+        <div className="mobile-keybar-drag-indicator"></div>
+      </div>
+      <div className="mobile-keybar-row">
+        {keys.slice(0, 5).map((keyData) => (
+          <button
+            key={keyData.label}
+            className="mobile-key"
+            onClick={() => handleButtonPress(keyData)}
+            title={keyData.title}
+            type="button"
+          >
+            {keyData.label}
+          </button>
+        ))}
+      </div>
+      <div className="mobile-keybar-row">
+        {keys.slice(5).map((keyData) => (
+          <button
+            key={keyData.label}
+            className={`mobile-key${keyData.special ? ' mobile-key-special' : ''}`}
+            onClick={() => handleButtonPress(keyData)}
+            title={keyData.title}
+            type="button"
+          >
+            {keyData.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}

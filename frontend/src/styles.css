@@ -924,11 +924,388 @@ button {
   justify-content: flex-end;
 }
 
+/* Mobile Header */
+.mobile-header {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  background: rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  z-index: 999;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  backdrop-filter: blur(10px);
+}
+
+.mobile-header-btn {
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 20px;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-header-btn:active {
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.mobile-header-session {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 8px;
+  transition: background 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-header-session:active {
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.mobile-header-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* Session Dropdown */
+.session-dropdown-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: none;
+}
+
+.session-dropdown-overlay.open {
+  display: block;
+}
+
+.session-dropdown {
+  position: fixed;
+  top: 40px;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+  max-height: 0;
+  overflow: hidden;
+  z-index: 1001;
+  transition: max-height 0.3s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+}
+
+.session-dropdown.open {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.session-dropdown-item {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  padding: 16px 20px;
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.session-dropdown-item:active {
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.session-dropdown-item.active {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.1));
+  border-left: 3px solid rgba(56, 189, 248, 0.6);
+  padding-left: 17px;
+}
+
+.session-dropdown-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.session-dropdown-meta {
+  font-size: 12px;
+  color: rgba(148, 163, 184, 0.7);
+}
+
+.session-dropdown-new {
+  width: 100%;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.2));
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 0;
+  padding: 16px 20px;
+  color: #f8fafc;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.session-dropdown-new:active {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(168, 85, 247, 0.3));
+}
+
+/* Mobile Drawer */
+.mobile-drawer-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0);
+  z-index: 1100;
+  pointer-events: none;
+  transition: background 0.3s ease;
+}
+
+.mobile-drawer-overlay.open {
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+
+.mobile-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: rgba(15, 23, 42, 0.98);
+  border-right: 1px solid rgba(148, 163, 184, 0.16);
+  z-index: 1101;
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+  backdrop-filter: blur(10px);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-drawer.open {
+  transform: translateX(0);
+}
+
+.mobile-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.mobile-drawer-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.mobile-drawer-close {
+  background: transparent;
+  border: none;
+  color: rgba(148, 163, 184, 0.7);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background 0.2s ease, color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-drawer-close:active {
+  background: rgba(148, 163, 184, 0.15);
+  color: #e2e8f0;
+}
+
+.mobile-drawer-content {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mobile-drawer-item {
+  width: 100%;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  padding: 16px;
+  color: #e2e8f0;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-drawer-item:active {
+  background: rgba(148, 163, 184, 0.15);
+  transform: translateY(-1px);
+}
+
+.mobile-drawer-icon {
+  font-size: 20px;
+  width: 24px;
+  text-align: center;
+}
+
+/* Mobile Keybar */
+.mobile-keybar {
+  position: fixed;
+  top: 40px;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.98);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 8px 12px 12px;
+  z-index: 998;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  transform: translateY(-100%);
+  transition: transform 0.3s ease;
+  pointer-events: none;
+}
+
+.mobile-keybar.open {
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.mobile-keybar-handle {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+.mobile-keybar-drag-indicator {
+  width: 40px;
+  height: 4px;
+  background: rgba(148, 163, 184, 0.3);
+  border-radius: 2px;
+}
+
+.mobile-keybar-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mobile-keybar-row:last-child {
+  margin-bottom: 0;
+}
+
+.mobile-key {
+  flex: 1;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.15), rgba(168, 85, 247, 0.15));
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.mobile-key:active {
+  transform: scale(0.95);
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.25), rgba(168, 85, 247, 0.25));
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.mobile-key-special {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.15), rgba(16, 185, 129, 0.15));
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.mobile-key-special:active {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.25), rgba(16, 185, 129, 0.25));
+}
+
 /* Responsive */
 @media (max-width: 768px) {
-  .bookmark-modal {
-    width: 95%;
-    max-height: 90vh;
+  /* Mobile layout */
+  .layout.mobile {
+    padding-top: 40px;
+  }
+
+  .layout.mobile .sidebar {
+    display: none;
+  }
+
+  .layout.mobile .app-header {
+    display: none;
+  }
+
+  /* Show mobile header and keybar */
+  .mobile-header {
+    display: flex;
+  }
+
+  .mobile-keybar {
+    display: block;
+  }
+
+  /* Adjust terminal for mobile keybar */
+  .terminal-main.keybar-open {
+    padding-top: 132px; /* 40px header + ~92px keybar */
+  }
+
+  /* Fullscreen modals on mobile */
+  .bookmark-modal,
+  .modal-content {
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    margin: 0;
+    border-radius: 0;
   }
 
   .bookmark-categories {
@@ -937,5 +1314,116 @@ button {
 
   .bookmark-command {
     font-size: 11px;
+  }
+
+  /* Increase touch targets */
+  .sidebar-settings,
+  .sidebar-new {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .header-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 14px;
+  }
+
+  .session-close {
+    width: 32px;
+    height: 32px;
+  }
+
+  .bookmark-execute-btn {
+    width: 44px;
+    height: 44px;
+  }
+
+  .bookmark-edit-btn,
+  .bookmark-delete-btn {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Mobile font sizes */
+  .terminal-chat {
+    font-size: 12px;
+  }
+
+  .session-title {
+    font-size: 14px;
+  }
+
+  .session-preview {
+    font-size: 12px;
+  }
+
+  .app-header h2 {
+    font-size: 18px;
+  }
+
+  /* Reduce padding on mobile */
+  .app-header {
+    padding: 18px 16px;
+  }
+
+  .sidebar-header {
+    padding: 16px;
+  }
+
+  .session-list {
+    padding: 12px;
+  }
+
+  .bookmark-list-items {
+    padding: 12px;
+  }
+
+  /* Terminal adjustments for mobile */
+  .terminal-main {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* Better tap feedback for all interactive elements */
+button:active,
+.session-card:active,
+.bookmark-item:active {
+  opacity: 0.8;
+}
+
+/* Prevent double-tap zoom on buttons */
+button,
+.session-card-content,
+.bookmark-execute-btn,
+.mobile-key {
+  touch-action: manipulation;
+}
+
+/* Smooth scrolling */
+.session-list,
+.bookmark-list-items,
+.bookmark-category-list {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Safe area support for notched devices */
+@supports (padding: env(safe-area-inset-top)) {
+  .mobile-header {
+    padding-top: env(safe-area-inset-top);
+    height: calc(40px + env(safe-area-inset-top));
+  }
+
+  .mobile-keybar {
+    top: calc(40px + env(safe-area-inset-top));
+  }
+
+  .session-dropdown {
+    top: calc(40px + env(safe-area-inset-top));
+  }
+
+  .layout.mobile {
+    padding-top: calc(40px + env(safe-area-inset-top));
   }
 }
