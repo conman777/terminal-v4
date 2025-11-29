@@ -14,7 +14,6 @@ export function useTerminalStream(sessionId) {
     eventSourceRef.current = source;
 
     source.addEventListener('data', (event) => {
-      console.log('[Terminal Stream] Received data event:', event.data);
       try {
         const payload = JSON.parse(event.data);
         setEvents((prev) => [...prev, { role: 'terminal', ...payload }]);
@@ -24,7 +23,6 @@ export function useTerminalStream(sessionId) {
     });
 
     source.addEventListener('end', () => {
-      console.log('[Terminal Stream] Received end event');
       source.close();
     });
 

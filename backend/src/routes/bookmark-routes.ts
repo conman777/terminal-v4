@@ -8,6 +8,10 @@ import {
 } from '../bookmarks/bookmark-store';
 import { bookmarkCreateRequestSchema, bookmarkUpdateRequestSchema } from './schemas';
 
+interface BookmarkIdParams {
+  id: string;
+}
+
 export async function registerBookmarkRoutes(app: FastifyInstance): Promise<void> {
   // Load bookmarks on startup
   await loadBookmarks();
@@ -33,7 +37,7 @@ export async function registerBookmarkRoutes(app: FastifyInstance): Promise<void
   });
 
   // PUT /api/bookmarks/:id - Update bookmark
-  app.put('/api/bookmarks/:id', async (request, reply) => {
+  app.put<{ Params: BookmarkIdParams }>('/api/bookmarks/:id', async (request, reply) => {
     const result = bookmarkUpdateRequestSchema.safeParse(request.body);
     if (!result.success) {
       reply.code(400).send({
@@ -53,7 +57,7 @@ export async function registerBookmarkRoutes(app: FastifyInstance): Promise<void
   });
 
   // DELETE /api/bookmarks/:id - Delete bookmark
-  app.delete('/api/bookmarks/:id', async (request, reply) => {
+  app.delete<{ Params: BookmarkIdParams }>('/api/bookmarks/:id', async (request, reply) => {
     const deleted = await deleteBookmark(request.params.id);
     if (!deleted) {
       reply.code(404).send({ error: 'Bookmark not found' });

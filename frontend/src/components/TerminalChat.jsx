@@ -1,13 +1,15 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const detectedUrlsRef = useRef(new Set());
 
   useEffect(() => {
     if (!sessionId || !terminalRef.current) return;
@@ -22,7 +24,48 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
       theme: {
         background: '#1e1e1e',
         foreground: '#d4d4d4'
+      },
+      allowProposedApi: true
+    });
+
+    // Handle paste with Ctrl+V
+    const handlePaste = async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text && !disposed) {
+          // Send pasted text to the terminal backend
+          fetch(`/api/terminal/${sessionId}/input`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: text })
+          }).catch((error) => {
+            console.error('Failed to send pasted input:', error);
+          });
+        }
+      } catch (err) {
+        console.error('Failed to read clipboard:', err);
       }
+    };
+
+    term.attachCustomKeyEventHandler((event) => {
+      // Allow Ctrl+C to copy (don't intercept when text is selected)
+      if (event.ctrlKey && event.key === 'c' && term.hasSelection()) {
+        return false; // Let browser handle copy
+      }
+
+      // Handle Ctrl+V paste
+      if (event.ctrlKey && event.key === 'v') {
+        handlePaste();
+        return false; // Prevent default handling
+      }
+
+      // Handle Ctrl+Shift+V paste (common in terminals)
+      if (event.ctrlKey && event.shiftKey && event.key === 'V') {
+        handlePaste();
+        return false;
+      }
+
+      return true; // Let terminal handle other keys
     });
 
     const fitAddon = new FitAddon();
@@ -30,6 +73,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    // ResizeObserver to handle container size changes (e.g., preview panel toggle)
+    let resizeObserver = null;
 
     const openWhenReady = () => {
       if (disposed || hasOpened) return;
@@ -51,21 +97,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
         }
       });
 
-      // Load history once the terminal is attached
-      (async () => {
-        try {
-          const response = await fetch(`/api/terminal/${sessionId}/history`);
-          if (disposed || !response.ok) return;
-          const data = await response.json();
-          data.history.forEach((entry) => {
-            term.write(entry.text);
+      // Set up ResizeObserver for container size changes
+      resizeObserver = new ResizeObserver(() => {
+        if (!disposed && fitAddonRef.current) {
+          // Debounce the fit call slightly to avoid excessive calls
+          requestAnimationFrame(() => {
+            if (!disposed && fitAddonRef.current) {
+              try {
+                fitAddonRef.current.fit();
+              } catch (error) {
+                // Ignore errors during rapid resizing
+              }
+            }
           });
-        } catch (error) {
-          console.error('[Terminal History] Failed to load history:', error);
         }
-      })();
+      });
+      resizeObserver.observe(container);
 
-      // Connect to SSE stream
+      // Connect to SSE stream (which sends history first, then new events)
       const source = new EventSource(`/api/terminal/${sessionId}/stream`);
       eventSourceRef.current = source;
 
@@ -74,6 +123,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
         try {
           const payload = JSON.parse(event.data);
           term.write(payload.text);
+
+          // Detect URLs in terminal output
+          if (onUrlDetected && isServerReady(payload.text)) {
+            const url = extractPreviewUrl(payload.text);
+            if (url && !detectedUrlsRef.current.has(url)) {
+              detectedUrlsRef.current.add(url);
+              onUrlDetected(url);
+            }
+          }
         } catch (err) {
           console.error('[Terminal Stream] Failed to parse event data:', err);
         }
@@ -107,8 +165,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
 
       window.addEventListener('resize', handleResize);
 
-      const resizeDisposer = term.onResize(() => {
-        handleResize();
+      // Send resize to backend PTY when terminal dimensions change
+      const resizeDisposer = term.onResize(({ cols, rows }) => {
+        if (disposed) return;
+        fetch(`/api/terminal/${sessionId}/resize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cols, rows })
+        }).catch((error) => {
+          console.error('Failed to send resize:', error);
+        });
       });
 
       const viewport = window.visualViewport;
@@ -116,9 +182,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
         viewport.addEventListener('resize', handleResize);
       }
 
+      // Handle right-click paste
+      const handleContextMenu = async (e) => {
+        e.preventDefault();
+        try {
+          const text = await navigator.clipboard.readText();
+          if (text && !disposed) {
+            fetch(`/api/terminal/${sessionId}/input`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ command: text })
+            }).catch((error) => {
+              console.error('Failed to send pasted input:', error);
+            });
+          }
+        } catch (err) {
+          console.error('Failed to read clipboard:', err);
+        }
+      };
+
+      container.addEventListener('contextmenu', handleContextMenu);
+
       // Ensure cleanup can remove listeners
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
+        container.removeEventListener('contextmenu', handleContextMenu);
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
         if (viewport) {
@@ -131,6 +219,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
 
     return () => {
       disposed = true;
+      detectedUrlsRef.current.clear();
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       if (openWhenReady.cleanup) {
         openWhenReady.cleanup();
       }
@@ -141,7 +233,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight }) {
         xtermRef.current.dispose();
       }
     };
-  }, [sessionId]);
+  }, [sessionId, onUrlDetected]);
 
   useEffect(() => {
     if (!fitAddonRef.current) return;

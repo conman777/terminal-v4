@@ -12,6 +12,7 @@ export interface TerminalSessionSummary {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  isActive: boolean;
 }
 
 export interface TerminalSessionSnapshot {

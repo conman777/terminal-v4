@@ -12,35 +12,30 @@ export type TerminalCreateRequestBody = z.infer<typeof terminalCreateRequestSche
 
 export const terminalInputRequestSchema = z.object({
   command: z
-    .string({
-      required_error: 'command is required',
-      invalid_type_error: 'command must be a string'
-    })
+    .string({ error: 'command must be a string' })
     .min(1, 'command cannot be empty')
 });
 
 export type TerminalInputRequestBody = z.infer<typeof terminalInputRequestSchema>;
 
+export const terminalResizeRequestSchema = z.object({
+  cols: z.number().int().positive().max(500),
+  rows: z.number().int().positive().max(500)
+});
+
+export type TerminalResizeRequestBody = z.infer<typeof terminalResizeRequestSchema>;
+
 export const bookmarkCreateRequestSchema = z.object({
   name: z
-    .string({
-      required_error: 'name is required',
-      invalid_type_error: 'name must be a string'
-    })
+    .string({ error: 'name must be a string' })
     .min(1, 'name cannot be empty')
     .max(100, 'name too long'),
   command: z
-    .string({
-      required_error: 'command is required',
-      invalid_type_error: 'command must be a string'
-    })
+    .string({ error: 'command must be a string' })
     .min(1, 'command cannot be empty')
     .max(1000, 'command too long'),
   category: z
-    .string({
-      required_error: 'category is required',
-      invalid_type_error: 'category must be a string'
-    })
+    .string({ error: 'category must be a string' })
     .min(1, 'category cannot be empty')
     .max(50, 'category too long')
 });
