@@ -5,7 +5,8 @@ export const terminalCreateRequestSchema = z.object({
   cols: z.number().int().positive().max(500).optional(),
   rows: z.number().int().positive().max(500).optional(),
   title: z.string().min(1).max(80).optional(),
-  shell: z.string().min(1).optional()
+  shell: z.string().min(1).optional(),
+  initialCommand: z.string().max(1000).optional()
 });
 
 export type TerminalCreateRequestBody = z.infer<typeof terminalCreateRequestSchema>;
@@ -19,8 +20,8 @@ export const terminalInputRequestSchema = z.object({
 export type TerminalInputRequestBody = z.infer<typeof terminalInputRequestSchema>;
 
 export const terminalResizeRequestSchema = z.object({
-  cols: z.number().int().positive().max(500),
-  rows: z.number().int().positive().max(500)
+  cols: z.number().positive().max(500).transform(Math.round),
+  rows: z.number().positive().max(500).transform(Math.round)
 });
 
 export type TerminalResizeRequestBody = z.infer<typeof terminalResizeRequestSchema>;

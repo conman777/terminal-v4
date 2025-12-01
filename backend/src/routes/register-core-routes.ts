@@ -123,11 +123,15 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       stream.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    snapshot.history.forEach((entry) => {
-      send('data', { text: entry.text, ts: entry.ts });
-    });
+    // Buffer events while sending history to prevent race condition
+    const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
+    let isBuffering = true;
 
     const unsubscribe = deps.terminalManager.subscribe(snapshot.id, (event) => {
+      if (isBuffering) {
+        bufferedEvents.push(event);
+        return;
+      }
       if (event === null) {
         send('end', {});
         stream.end();
@@ -135,6 +139,22 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       }
       send('data', { text: event.text, ts: event.ts });
     });
+
+    // Send history
+    snapshot.history.forEach((entry) => {
+      send('data', { text: entry.text, ts: entry.ts });
+    });
+
+    // Flush buffered events and switch to live mode
+    isBuffering = false;
+    for (const event of bufferedEvents) {
+      if (event === null) {
+        send('end', {});
+        stream.end();
+        return;
+      }
+      send('data', { text: event.text, ts: event.ts });
+    }
 
     const keepAlive = setInterval(() => {
       send('ping', {});

@@ -4,7 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { registerCoreRoutes } from './routes/register-core-routes';
 import { registerBookmarkRoutes } from './routes/bookmark-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
+import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
+import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -30,6 +32,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerCoreRoutes(app, { terminalManager });
   await registerBookmarkRoutes(app);
   await registerPreviewRoutes(app);
+
+  // Initialize Claude Code manager and routes
+  const claudeCodeManager = new ClaudeCodeManager();
+  await claudeCodeManager.initialize();
+  await registerClaudeCodeRoutes(app, claudeCodeManager);
 
   return app;
 }

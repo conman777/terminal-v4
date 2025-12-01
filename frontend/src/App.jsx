@@ -1,18 +1,53 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
 import { PreviewPanel } from './components/PreviewPanel';
+import { PathBreadcrumb } from './components/PathBreadcrumb';
+import ClaudeCodePanel from './components/ClaudeCodePanel';
+import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 
-function SettingsModal({ isOpen, onClose, settings, onSave }) {
-  const [workingDir, setWorkingDir] = useState(settings.workingDir || '');
+function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder }) {
+  const [workingDir, setWorkingDir] = useState(currentCwd || '');
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef(null);
+
+  // Update local state when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setWorkingDir(currentCwd || '');
+    }
+  }, [isOpen, currentCwd]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleSave = () => {
-    onSave({ workingDir });
+    if (workingDir && workingDir.trim()) {
+      onAddRecentFolder(workingDir.trim());
+    }
+    onSave(sessionId, workingDir.trim());
     onClose();
+  };
+
+  const handleSelectFolder = (folder) => {
+    setWorkingDir(folder);
+    setShowDropdown(false);
+  };
+
+  const handleClear = () => {
+    setWorkingDir('');
   };
 
   if (!isOpen) return null;
@@ -21,22 +56,86 @@ function SettingsModal({ isOpen, onClose, settings, onSave }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Settings</h2>
+          <h2>Session Settings</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
         <div className="modal-body">
           <div className="form-group">
-            <label htmlFor="working-dir">Default Working Directory</label>
-            <input
-              id="working-dir"
-              type="text"
-              value={workingDir}
-              onChange={(e) => setWorkingDir(e.target.value)}
-              placeholder="e.g., C:\Users\YourName\Projects or /home/user/projects"
-            />
-            <small>Leave empty to use the backend's default directory</small>
+            <label>Session: <strong>{sessionTitle || 'New Terminal'}</strong></label>
+          </div>
+          <div className="form-group">
+            <label htmlFor="working-dir">Working Directory</label>
+            <div className="input-with-actions">
+              <div className="input-with-dropdown" ref={dropdownRef}>
+                <input
+                  id="working-dir"
+                  type="text"
+                  value={workingDir}
+                  onChange={(e) => setWorkingDir(e.target.value)}
+                  placeholder="e.g., C:\Users\YourName\Projects"
+                  onFocus={() => recentFolders.length > 0 && setShowDropdown(true)}
+                />
+                {recentFolders.length > 0 && (
+                  <button
+                    type="button"
+                    className="dropdown-toggle"
+                    onClick={() => setShowDropdown(!showDropdown)}
+                    aria-label="Show recent folders"
+                  >
+                    ▼
+                  </button>
+                )}
+                {showDropdown && recentFolders.length > 0 && (
+                  <div className="folder-dropdown">
+                    <div className="folder-dropdown-header">Recent Folders</div>
+                    {recentFolders.map((folder, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        className="folder-dropdown-item"
+                        onClick={() => handleSelectFolder(folder)}
+                      >
+                        <span className="folder-icon">📁</span>
+                        <span className="folder-path" title={folder}>
+                          {folder}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="input-actions">
+                {currentCwd && currentCwd !== workingDir && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-small"
+                    onClick={() => setWorkingDir(currentCwd)}
+                    title="Use current terminal directory"
+                  >
+                    Use Current
+                  </button>
+                )}
+                {workingDir && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-small"
+                    onClick={handleClear}
+                    title="Clear directory"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+            <small>
+              {currentCwd ? (
+                <>Current: <code>{currentCwd}</code></>
+              ) : (
+                'Leave empty to use backend default'
+              )}
+            </small>
           </div>
         </div>
         <div className="modal-footer">
@@ -44,7 +143,7 @@ function SettingsModal({ isOpen, onClose, settings, onSave }) {
             Cancel
           </button>
           <button className="btn-primary" onClick={handleSave}>
-            Save
+            Save & Navigate
           </button>
         </div>
       </div>
@@ -159,21 +258,42 @@ export default function App() {
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const [projectInfo, setProjectInfo] = useState(null);
+  // Claude Code state
+  const [leftPanelMode, setLeftPanelMode] = useState('terminal'); // 'terminal' | 'claude-code'
+  const [claudeCodeSessions, setClaudeCodeSessions] = useState([]);
+  const [activeClaudeCodeId, setActiveClaudeCodeId] = useState(null);
   const mainContentRef = useRef(null);
+  const isMountedRef = useRef(true);
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
 
-  // Load settings from localStorage
-  const [settings, setSettings] = useState(() => {
+  // Load recent folders from localStorage
+  const [recentFolders, setRecentFolders] = useState(() => {
     try {
-      const stored = localStorage.getItem('terminalSettings');
-      return stored ? JSON.parse(stored) : { workingDir: '' };
+      const stored = localStorage.getItem('recentFolders');
+      return stored ? JSON.parse(stored) : [];
     } catch {
-      return { workingDir: '' };
+      return [];
     }
   });
 
+  // Add a folder to recent list (max 10, no duplicates)
+  const addRecentFolder = useCallback((folder) => {
+    if (!folder) return;
+    setRecentFolders(prev => {
+      const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
+      const updated = [folder, ...filtered].slice(0, 10);
+      try {
+        localStorage.setItem('recentFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save recent folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
   const loadSessions = useCallback(async () => {
+    if (!isMountedRef.current) return;
     setLoadingSessions(true);
     try {
       const response = await fetch('/api/terminal');
@@ -182,15 +302,20 @@ export default function App() {
       }
 
       const data = await response.json();
-      setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      if (isMountedRef.current) {
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
     } catch (error) {
       console.error('Failed to load sessions', error);
     } finally {
-      setLoadingSessions(false);
+      if (isMountedRef.current) {
+        setLoadingSessions(false);
+      }
     }
   }, []);
 
   const loadBookmarks = useCallback(async () => {
+    if (!isMountedRef.current) return;
     try {
       const response = await fetch('/api/bookmarks');
       if (!response.ok) {
@@ -198,7 +323,9 @@ export default function App() {
       }
 
       const data = await response.json();
-      setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
+      if (isMountedRef.current) {
+        setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
+      }
     } catch (error) {
       console.error('Failed to load bookmarks', error);
     }
@@ -330,13 +457,18 @@ export default function App() {
 
     // Reload sessions every 5 seconds to keep list fresh
     const interval = setInterval(loadSessions, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      isMountedRef.current = false;
+      clearInterval(interval);
+    };
   }, [loadSessions, loadBookmarks]);
 
   // Poll for project info when there's an active session
+  const lastCwdRef = useRef(null);
   useEffect(() => {
     if (!activeSessionId) {
       setProjectInfo(null);
+      lastCwdRef.current = null;
       return;
     }
 
@@ -346,6 +478,12 @@ export default function App() {
         if (response.ok) {
           const data = await response.json();
           setProjectInfo(data);
+
+          // Track directory changes as recent folders
+          if (data.cwd && data.cwd !== lastCwdRef.current) {
+            lastCwdRef.current = data.cwd;
+            addRecentFolder(data.cwd);
+          }
         }
       } catch (error) {
         console.error('Failed to fetch project info', error);
@@ -358,13 +496,31 @@ export default function App() {
     // Poll every 3 seconds
     const interval = setInterval(fetchProjectInfo, 3000);
     return () => clearInterval(interval);
-  }, [activeSessionId]);
+  }, [activeSessionId, addRecentFolder]);
+
+  // Fetch Claude Code sessions
+  useEffect(() => {
+    const fetchClaudeCodeSessions = async () => {
+      try {
+        const res = await fetch('/api/claude-code');
+        const data = await res.json();
+        setClaudeCodeSessions(data.sessions || []);
+      } catch (error) {
+        console.error('Failed to fetch Claude Code sessions:', error);
+      }
+    };
+
+    fetchClaudeCodeSessions();
+    const interval = setInterval(fetchClaudeCodeSessions, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleCreateSession = useCallback(async () => {
     try {
       const requestBody = {};
-      if (settings.workingDir) {
-        requestBody.cwd = settings.workingDir;
+      // Use most recent folder as default for new sessions
+      if (recentFolders.length > 0) {
+        requestBody.cwd = recentFolders[0];
       }
 
       const response = await fetch('/api/terminal', {
@@ -383,7 +539,7 @@ export default function App() {
     } catch (error) {
       console.error('Failed to create session', error);
     }
-  }, [loadSessions, settings.workingDir]);
+  }, [loadSessions, recentFolders]);
 
   const handleSelectSession = useCallback(
     (sessionId) => {
@@ -435,36 +591,94 @@ export default function App() {
         });
 
         // If we just closed the active terminal, switch to another one or clear
-        if (sessionId === activeSessionId) {
-          const remainingSessions = sessions.filter((s) => s.id !== sessionId);
-          if (remainingSessions.length > 0) {
-            setActiveSessionId(remainingSessions[0].id);
-          } else {
-            setActiveSessionId(null);
-          }
-        }
+        // Use functional updates to avoid stale state
+        setSessions((currentSessions) => {
+          const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
+          setActiveSessionId((currentActiveId) => {
+            if (sessionId === currentActiveId) {
+              return remainingSessions.length > 0 ? remainingSessions[0].id : null;
+            }
+            return currentActiveId;
+          });
+          return remainingSessions;
+        });
 
-        // Reload the session list
+        // Reload the session list to ensure sync with server
         await loadSessions();
       } catch (error) {
         console.error('Failed to close session', error);
       }
     },
-    [activeSessionId, sessions, loadSessions]
+    [loadSessions]
   );
 
   const handleOpenSettings = useCallback(() => {
     setShowSettings(true);
   }, []);
 
-  const handleSaveSettings = useCallback((newSettings) => {
-    setSettings(newSettings);
+  // Claude Code handlers - uses styled panel with JSON output parsing
+  const handleStartClaudeCode = useCallback(async () => {
+    const cwd = sessions.find(s => s.id === activeSessionId)?.cwd || projectInfo?.cwd || '.';
+
     try {
-      localStorage.setItem('terminalSettings', JSON.stringify(newSettings));
+      const res = await fetch('/api/claude-code/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd })
+      });
+      const session = await res.json();
+      setClaudeCodeSessions(prev => [session, ...prev]);
+      setActiveClaudeCodeId(session.id);
+      setLeftPanelMode('claude-code');
     } catch (error) {
-      console.error('Failed to save settings', error);
+      console.error('Failed to start Claude Code:', error);
     }
-  }, []);
+  }, [sessions, activeSessionId, projectInfo]);
+
+  const handleSelectClaudeCode = useCallback(async (id) => {
+    const session = claudeCodeSessions.find(s => s.id === id);
+    if (session && !session.isActive) {
+      // Restore inactive session
+      try {
+        await fetch(`/api/claude-code/${id}/restore`, { method: 'POST' });
+      } catch (error) {
+        console.error('Failed to restore session:', error);
+      }
+    }
+    setActiveClaudeCodeId(id);
+    setLeftPanelMode('claude-code');
+  }, [claudeCodeSessions]);
+
+  const handleDeleteClaudeCode = useCallback(async (id) => {
+    try {
+      await fetch(`/api/claude-code/${id}`, { method: 'DELETE' });
+      setClaudeCodeSessions(prev => prev.filter(s => s.id !== id));
+      if (activeClaudeCodeId === id) {
+        setActiveClaudeCodeId(null);
+        setLeftPanelMode('terminal');
+      }
+    } catch (error) {
+      console.error('Failed to delete session:', error);
+    }
+  }, [activeClaudeCodeId]);
+
+  // Navigate a session to a specific directory
+  const handleNavigateSession = useCallback(async (sessionId, path) => {
+    if (!sessionId || !path) return;
+
+    try {
+      const cdCommand = `cd "${path}"\r`;
+      await fetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cdCommand })
+      });
+      // Add to recent folders
+      addRecentFolder(path);
+    } catch (error) {
+      console.error('Failed to navigate session', error);
+    }
+  }, [addRecentFolder]);
 
   const handleKeybarHeightChange = useCallback((height) => {
     setKeybarHeight(Math.max(0, Math.round(height)));
@@ -498,6 +712,22 @@ export default function App() {
       });
     } catch (error) {
       console.error('Failed to run command', error);
+    }
+  }, [activeSessionId]);
+
+  const handleNavigateToPath = useCallback(async (path) => {
+    if (!activeSessionId || !path) return;
+
+    try {
+      // Send cd command to terminal
+      const cdCommand = `cd "${path}"\r`;
+      await fetch(`/api/terminal/${activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cdCommand })
+      });
+    } catch (error) {
+      console.error('Failed to navigate to path', error);
     }
   }, [activeSessionId]);
 
@@ -542,8 +772,12 @@ export default function App() {
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
-        settings={settings}
-        onSave={handleSaveSettings}
+        sessionId={activeSessionId}
+        sessionTitle={sessions.find(s => s.id === activeSessionId)?.title}
+        currentCwd={projectInfo?.cwd}
+        recentFolders={recentFolders}
+        onSave={handleNavigateSession}
+        onAddRecentFolder={addRecentFolder}
       />
       <BookmarkModal
         isOpen={showBookmarks}
@@ -581,15 +815,39 @@ export default function App() {
           <header className="app-header">
             <div className="header-left">
               <h1 className="app-title">Terminal</h1>
-              <SessionSelector
-                sessions={sessions}
-                activeSessionId={activeSessionId}
-                onSelectSession={handleSelectSession}
-                onRestoreSession={handleRestoreSession}
-                onCreateSession={handleCreateSession}
-                onCloseSession={handleCloseSession}
-                isLoading={loadingSessions}
-              />
+              <div className="mode-toggle">
+                <button
+                  className={`mode-btn ${leftPanelMode === 'terminal' ? 'active' : ''}`}
+                  onClick={() => setLeftPanelMode('terminal')}
+                >
+                  ⚡ Terminal
+                </button>
+                <button
+                  className={`mode-btn ${leftPanelMode === 'claude-code' ? 'active' : ''}`}
+                  onClick={() => setLeftPanelMode('claude-code')}
+                >
+                  🤖 Claude
+                </button>
+              </div>
+              {leftPanelMode === 'terminal' ? (
+                <SessionSelector
+                  sessions={sessions}
+                  activeSessionId={activeSessionId}
+                  onSelectSession={handleSelectSession}
+                  onRestoreSession={handleRestoreSession}
+                  onCreateSession={handleCreateSession}
+                  onCloseSession={handleCloseSession}
+                  isLoading={loadingSessions}
+                />
+              ) : (
+                <ClaudeCodeSessionSelector
+                  sessions={claudeCodeSessions}
+                  activeId={activeClaudeCodeId}
+                  onSelect={handleSelectClaudeCode}
+                  onNew={handleStartClaudeCode}
+                  onDelete={handleDeleteClaudeCode}
+                />
+              )}
             </div>
             <div className="header-actions">
               <button
@@ -622,30 +880,56 @@ export default function App() {
             </div>
           </header>
 
+          {projectInfo?.cwd && (
+            <div className="breadcrumb-bar">
+              <PathBreadcrumb
+                cwd={projectInfo.cwd}
+                onNavigate={handleNavigateToPath}
+              />
+            </div>
+          )}
+
           <main
             ref={mainContentRef}
             className={`main-content${showPreview ? ' with-preview' : ''}${isDragging ? ' dragging' : ''}`}
           >
-            {/* Terminal pane */}
+            {/* Left pane - switches between Terminal and Claude Code */}
             <div
               className="terminal-pane"
               style={showPreview ? { flex: `0 0 ${splitPosition}%` } : undefined}
             >
-              {!activeSessionId ? (
-                <div className="empty-state">
-                  <h2>Welcome to Terminal</h2>
-                  <p>Create a new terminal session to get started.</p>
-                  <button className="btn-primary" onClick={handleCreateSession}>
-                    + New Terminal
-                  </button>
-                </div>
+              {leftPanelMode === 'terminal' ? (
+                !activeSessionId ? (
+                  <div className="empty-state">
+                    <h2>Welcome to Terminal</h2>
+                    <p>Create a new terminal session to get started.</p>
+                    <button className="btn-primary" onClick={handleCreateSession}>
+                      + New Terminal
+                    </button>
+                  </div>
+                ) : (
+                  <TerminalChat
+                    sessionId={activeSessionId}
+                    keybarOpen={keybarOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={handleUrlDetected}
+                  />
+                )
               ) : (
-                <TerminalChat
-                  sessionId={activeSessionId}
-                  keybarOpen={keybarOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={handleUrlDetected}
-                />
+                !activeClaudeCodeId ? (
+                  <div className="empty-state">
+                    <h2>Claude Code</h2>
+                    <p>Start a new Claude Code session to get AI-powered assistance.</p>
+                    <button className="btn-primary" onClick={handleStartClaudeCode}>
+                      + New Claude Code Session
+                    </button>
+                  </div>
+                ) : (
+                  <ClaudeCodePanel
+                    sessionId={activeClaudeCodeId}
+                    onSessionEnd={() => setLeftPanelMode('terminal')}
+                  />
+                )
               )}
             </div>
 
