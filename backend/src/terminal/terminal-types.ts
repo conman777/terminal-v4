@@ -32,6 +32,8 @@ export interface TerminalCreateOptions {
   cols?: number;
   rows?: number;
   shell?: string;
+  /** Command to execute immediately after terminal starts */
+  initialCommand?: string;
 }
 
 export interface TerminalProcess extends EventEmitter {

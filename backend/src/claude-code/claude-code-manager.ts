@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { spawn as ptySpawn, type IPty } from '@homebridge/node-pty-prebuilt-multiarch';
 import type {
   ClaudeCodeEvent,
@@ -43,9 +44,12 @@ export class ClaudeCodeManager {
     const claudeSessionId = randomUUID();
     this.#claudeSessionIds.set(id, claudeSessionId);
 
+    // Resolve to absolute path for persistence
+    const absoluteCwd = resolve(cwd);
+
     const session: ManagedClaudeCodeSession = {
       id,
-      cwd,
+      cwd: absoluteCwd,
       process: null,
       events: [],
       subscribers: new Set(),
@@ -261,13 +265,9 @@ export class ClaudeCodeManager {
     }
 
     if (eventType === 'result') {
-      const result = obj.result as string | undefined;
-      return {
-        id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-        type: 'result',
-        timestamp,
-        content: result || ''
-      };
+      // Skip result events - they duplicate the last assistant message content
+      // The result is already captured in the assistant events
+      return null;
     }
 
     // Handle content_block events (streaming text)
@@ -395,6 +395,17 @@ export class ClaudeCodeManager {
     this.stopSession(id);
     this.#sessions.delete(id);
     deleteClaudeCodeSession(id);
+  }
+
+  updateCwd(id: string, cwd: string): ClaudeCodeSession {
+    const session = this.#sessions.get(id);
+    if (!session) throw new Error(`Session not found: ${id}`);
+
+    // Resolve to absolute path
+    session.cwd = resolve(cwd);
+    this.#scheduleSave(session);
+
+    return this.#toSnapshot(session);
   }
 }
 

@@ -1,4 +1,7 @@
 import type { FastifyInstance } from 'fastify';
+import { readdir, stat } from 'node:fs/promises';
+import { join, dirname, parse, resolve, basename } from 'node:path';
+import archiver from 'archiver';
 import { terminalCreateRequestSchema, terminalInputRequestSchema, terminalResizeRequestSchema } from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
 
@@ -198,5 +201,81 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
         updatedAt: session.updatedAt
       }
     });
+  });
+
+  // Filesystem: List directories
+  app.get<{ Querystring: { path?: string } }>('/api/fs/list', async (request, reply) => {
+    // Resolve to absolute path
+    const requestedPath = resolve(request.query.path || process.cwd());
+
+    try {
+      const stats = await stat(requestedPath);
+      if (!stats.isDirectory()) {
+        reply.code(400).send({ error: 'Path is not a directory' });
+        return;
+      }
+
+      const entries = await readdir(requestedPath, { withFileTypes: true });
+      const folders = entries
+        .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map(entry => entry.name)
+        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+      // Get parent directory (null if at root)
+      const parsed = parse(requestedPath);
+      const parent = parsed.root === requestedPath ? null : dirname(requestedPath);
+
+      reply.send({
+        path: requestedPath,
+        folders,
+        parent
+      });
+    } catch (error) {
+      reply.code(400).send({
+        error: 'Cannot access directory',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  // Filesystem: Download directory as zip
+  app.get<{ Querystring: { path?: string } }>('/api/fs/download', async (request, reply) => {
+    const requestedPath = resolve(request.query.path || process.cwd());
+
+    try {
+      const stats = await stat(requestedPath);
+      if (!stats.isDirectory()) {
+        reply.code(400).send({ error: 'Path is not a directory' });
+        return;
+      }
+
+      const folderName = basename(requestedPath) || 'download';
+      const zipFileName = `${folderName}.zip`;
+
+      reply.raw.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${zipFileName}"`,
+        'Transfer-Encoding': 'chunked'
+      });
+
+      const archive = archiver('zip', { zlib: { level: 5 } });
+
+      archive.on('error', (err) => {
+        console.error('Archive error:', err);
+        reply.raw.end();
+      });
+
+      archive.pipe(reply.raw);
+
+      // Add the directory contents to the zip
+      archive.directory(requestedPath, folderName);
+
+      await archive.finalize();
+    } catch (error) {
+      reply.code(400).send({
+        error: 'Cannot download directory',
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   });
 }

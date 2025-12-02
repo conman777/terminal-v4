@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 export interface Bookmark {
   id: string;
@@ -18,6 +19,23 @@ const DATA_DIR = join(__dirname, '..', '..', 'data');
 const BOOKMARKS_FILE = join(DATA_DIR, 'bookmarks.json');
 
 let bookmarks: Bookmark[] = [];
+
+// Simple async lock to prevent concurrent modifications
+let writeLock: Promise<void> = Promise.resolve();
+
+async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previousLock = writeLock;
+  let releaseLock: () => void;
+  writeLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+  await previousLock;
+  try {
+    return await fn();
+  } finally {
+    releaseLock!();
+  }
+}
 
 async function ensureDataDir(): Promise<void> {
   if (!existsSync(DATA_DIR)) {
@@ -59,47 +77,53 @@ export function getAllBookmarks(): Bookmark[] {
 }
 
 export async function createBookmark(name: string, command: string, category: string): Promise<Bookmark> {
-  const newBookmark: Bookmark = {
-    id: Date.now().toString(),
-    name,
-    command,
-    category,
-    createdAt: new Date().toISOString()
-  };
+  return withWriteLock(async () => {
+    const newBookmark: Bookmark = {
+      id: randomUUID(),
+      name,
+      command,
+      category,
+      createdAt: new Date().toISOString()
+    };
 
-  bookmarks.push(newBookmark);
-  await saveBookmarks();
-  return newBookmark;
+    bookmarks.push(newBookmark);
+    await saveBookmarks();
+    return newBookmark;
+  });
 }
 
 export async function updateBookmark(
   id: string,
   updates: { name?: string; command?: string; category?: string }
 ): Promise<Bookmark | null> {
-  const index = bookmarks.findIndex((b) => b.id === id);
+  return withWriteLock(async () => {
+    const index = bookmarks.findIndex((b) => b.id === id);
 
-  if (index === -1) {
-    return null;
-  }
+    if (index === -1) {
+      return null;
+    }
 
-  bookmarks[index] = {
-    ...bookmarks[index],
-    ...updates,
-    updatedAt: new Date().toISOString()
-  };
+    bookmarks[index] = {
+      ...bookmarks[index],
+      ...updates,
+      updatedAt: new Date().toISOString()
+    };
 
-  await saveBookmarks();
-  return bookmarks[index];
+    await saveBookmarks();
+    return bookmarks[index];
+  });
 }
 
 export async function deleteBookmark(id: string): Promise<boolean> {
-  const originalLength = bookmarks.length;
-  bookmarks = bookmarks.filter((b) => b.id !== id);
+  return withWriteLock(async () => {
+    const originalLength = bookmarks.length;
+    bookmarks = bookmarks.filter((b) => b.id !== id);
 
-  if (bookmarks.length === originalLength) {
-    return false;
-  }
+    if (bookmarks.length === originalLength) {
+      return false;
+    }
 
-  await saveBookmarks();
-  return true;
+    await saveBookmarks();
+    return true;
+  });
 }

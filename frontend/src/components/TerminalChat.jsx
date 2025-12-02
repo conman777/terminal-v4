@@ -165,16 +165,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       window.addEventListener('resize', handleResize);
 
-      // Send resize to backend PTY when terminal dimensions change
+      // Send resize to backend PTY when terminal dimensions change (debounced)
+      let resizeTimeout = null;
       const resizeDisposer = term.onResize(({ cols, rows }) => {
         if (disposed) return;
-        fetch(`/api/terminal/${sessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols, rows })
-        }).catch((error) => {
-          console.error('Failed to send resize:', error);
-        });
+        // Debounce resize API calls to prevent ERR_INSUFFICIENT_RESOURCES
+        if (resizeTimeout) {
+          clearTimeout(resizeTimeout);
+        }
+        resizeTimeout = setTimeout(() => {
+          if (disposed) return;
+          fetch(`/api/terminal/${sessionId}/resize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cols, rows })
+          }).catch((error) => {
+            console.error('Failed to send resize:', error);
+          });
+        }, 100);
       });
 
       const viewport = window.visualViewport;
@@ -207,6 +215,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
         container.removeEventListener('contextmenu', handleContextMenu);
+        if (resizeTimeout) {
+          clearTimeout(resizeTimeout);
+        }
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
         if (viewport) {

@@ -279,6 +279,19 @@ export class TerminalManager {
     session.updatedAt = new Date().toISOString();
     session.subscribers.forEach((subscriber) => subscriber(event));
 
+    // Try to detect CWD from Windows prompt (e.g., "C:\path\to\folder>")
+    // or Unix prompt with path (though less reliable)
+    if (process.platform === 'win32') {
+      // Windows cmd.exe prompt: "C:\Users\name\folder>"
+      const winPromptMatch = chunk.match(/^([A-Za-z]:\\[^>]*?)>/m);
+      if (winPromptMatch && winPromptMatch[1]) {
+        const detectedPath = winPromptMatch[1].trim();
+        if (detectedPath && fs.existsSync(detectedPath)) {
+          session.cwd = detectedPath;
+        }
+      }
+    }
+
     // Schedule save to disk
     this.#scheduleSave(session);
   }
@@ -334,6 +347,16 @@ export class TerminalManager {
 
     this.#sessions.set(id, session);
 
+    // Execute initial command if provided
+    if (options.initialCommand) {
+      const cmd = options.initialCommand;
+      // Small delay to ensure terminal is ready
+      setTimeout(() => {
+        const newline = process.platform === 'win32' ? '\r' : '\n';
+        session.process.write(cmd + newline);
+      }, 100);
+    }
+
     return this.getSession(id)!;
   }
 
@@ -372,8 +395,8 @@ export class TerminalManager {
       return null;
     }
 
-    // Get the actual current working directory by querying the shell
-    const cwd = await this.#getCurrentCwd(session);
+    // Use the stored cwd - it's set at session creation and updated by updateCwd
+    const cwd = session.cwd;
 
     // Helper to check if file exists
     const exists = (filename: string): boolean => {

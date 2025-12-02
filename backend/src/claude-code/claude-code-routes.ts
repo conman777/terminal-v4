@@ -13,6 +13,10 @@ interface SendInputBody {
   text: string;
 }
 
+interface UpdateCwdBody {
+  cwd: string;
+}
+
 export async function registerClaudeCodeRoutes(
   app: FastifyInstance,
   manager: ClaudeCodeManager
@@ -152,5 +156,22 @@ export async function registerClaudeCodeRoutes(
       reply.code(500).send({ error: String(error) });
     }
   });
+
+  // Update session cwd
+  app.patch<{ Params: ClaudeCodeIdParams; Body: UpdateCwdBody }>(
+    '/api/claude-code/:id/cwd',
+    async (request, reply) => {
+      try {
+        const { cwd } = request.body || {};
+        if (!cwd) {
+          return reply.code(400).send({ error: 'cwd is required' });
+        }
+        const session = manager.updateCwd(request.params.id, cwd);
+        return session;
+      } catch (error) {
+        reply.code(500).send({ error: String(error) });
+      }
+    }
+  );
 }
 

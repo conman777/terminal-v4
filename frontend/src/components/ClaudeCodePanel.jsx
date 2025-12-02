@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ToolCallBlock from './ToolCallBlock';
 import ClaudeCodeInput from './ClaudeCodeInput';
+import { FolderBrowserModal } from './FolderBrowserModal';
 
 // Helper to group tool_use with tool_result
 function groupEvents(events) {
@@ -36,10 +37,11 @@ function groupEvents(events) {
   return grouped;
 }
 
-export default function ClaudeCodePanel({ sessionId, onSessionEnd }) {
+export default function ClaudeCodePanel({ sessionId, cwd, recentFolders, onFolderChange, onSessionEnd }) {
   const [events, setEvents] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
 
@@ -106,8 +108,27 @@ export default function ClaudeCodePanel({ sessionId, onSessionEnd }) {
   // Group tool_use with its corresponding tool_result
   const groupedEvents = groupEvents(events);
 
+  const handleFolderSelect = (newPath) => {
+    if (onFolderChange) {
+      onFolderChange(newPath);
+    }
+  };
+
   return (
     <div className="claude-code-panel">
+      {/* Clickable header showing current folder */}
+      {cwd && (
+        <button
+          className="claude-code-header"
+          onClick={() => setShowFolderBrowser(true)}
+          title="Click to change folder"
+        >
+          <span className="folder-icon">📁</span>
+          <span className="folder-path">{cwd}</span>
+          <span className="folder-edit-hint">Change</span>
+        </button>
+      )}
+
       <div className="claude-code-messages">
         {groupedEvents.length === 0 ? (
           <div className="claude-code-empty">
@@ -129,6 +150,14 @@ export default function ClaudeCodePanel({ sessionId, onSessionEnd }) {
         onSend={handleSend}
         disabled={!isConnected}
         isProcessing={isProcessing}
+      />
+
+      <FolderBrowserModal
+        isOpen={showFolderBrowser}
+        onClose={() => setShowFolderBrowser(false)}
+        currentPath={cwd}
+        recentFolders={recentFolders}
+        onSelect={handleFolderSelect}
       />
     </div>
   );

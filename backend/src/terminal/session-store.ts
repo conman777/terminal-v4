@@ -73,17 +73,16 @@ export async function loadAllSessions(): Promise<PersistedSession[]> {
 
   try {
     const files = await readdir(SESSIONS_DIR);
-    const sessions: PersistedSession[] = [];
+    const jsonFiles = files.filter((file) => file.endsWith('.json'));
 
-    for (const file of files) {
-      if (!file.endsWith('.json')) continue;
-
+    // Load all sessions in parallel for better performance
+    const sessionPromises = jsonFiles.map((file) => {
       const sessionId = file.replace('.json', '');
-      const session = await loadSession(sessionId);
-      if (session) {
-        sessions.push(session);
-      }
-    }
+      return loadSession(sessionId);
+    });
+
+    const loadedSessions = await Promise.all(sessionPromises);
+    const sessions = loadedSessions.filter((s): s is PersistedSession => s !== null);
 
     // Sort by updatedAt descending (most recent first)
     sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());

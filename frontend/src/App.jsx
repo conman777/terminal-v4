@@ -5,6 +5,7 @@ import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
 import { PreviewPanel } from './components/PreviewPanel';
 import { PathBreadcrumb } from './components/PathBreadcrumb';
+import { FolderBrowserModal } from './components/FolderBrowserModal';
 import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import { useMobileDetect } from './hooks/useMobileDetect';
@@ -13,6 +14,7 @@ import { useViewportHeight } from './hooks/useViewportHeight';
 function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const dropdownRef = useRef(null);
 
   // Update local state when modal opens
@@ -39,6 +41,13 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
     }
     onSave(sessionId, workingDir.trim());
     onClose();
+  };
+
+  const handleDownload = () => {
+    const pathToDownload = workingDir || currentCwd;
+    if (!pathToDownload) return;
+    // Trigger download by navigating to the endpoint
+    window.location.href = `/api/fs/download?path=${encodeURIComponent(pathToDownload)}`;
   };
 
   const handleSelectFolder = (folder) => {
@@ -107,6 +116,14 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
                 )}
               </div>
               <div className="input-actions">
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => setShowFolderBrowser(true)}
+                  title="Browse folders"
+                >
+                  Browse
+                </button>
                 {currentCwd && currentCwd !== workingDir && (
                   <button
                     type="button"
@@ -142,10 +159,29 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
           <button className="btn-secondary" onClick={onClose}>
             Cancel
           </button>
+          <button
+            className="btn-secondary"
+            onClick={handleDownload}
+            disabled={!workingDir && !currentCwd}
+            title="Download folder as .zip"
+          >
+            ⬇ Download
+          </button>
           <button className="btn-primary" onClick={handleSave}>
             Save & Navigate
           </button>
         </div>
+
+        <FolderBrowserModal
+          isOpen={showFolderBrowser}
+          onClose={() => setShowFolderBrowser(false)}
+          currentPath={workingDir || currentCwd}
+          recentFolders={recentFolders}
+          onSelect={(path) => {
+            setWorkingDir(path);
+            setShowFolderBrowser(false);
+          }}
+        />
       </div>
     </div>
   );
@@ -662,6 +698,44 @@ export default function App() {
     }
   }, [activeClaudeCodeId]);
 
+  // Handle folder change from Claude Code panel - syncs both Claude Code and Terminal
+  const handleClaudeCodeFolderChange = useCallback(async (newPath) => {
+    // 1. Send cd command to active Terminal session
+    if (activeSessionId) {
+      try {
+        await fetch(`/api/terminal/${activeSessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: `cd "${newPath}"\r` })
+        });
+      } catch (error) {
+        console.error('Failed to change terminal directory:', error);
+      }
+    }
+
+    // 2. Update Claude Code session's cwd (persist to backend)
+    if (activeClaudeCodeId) {
+      try {
+        const res = await fetch(`/api/claude-code/${activeClaudeCodeId}/cwd`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd: newPath })
+        });
+        if (res.ok) {
+          const updatedSession = await res.json();
+          setClaudeCodeSessions(prev =>
+            prev.map(s => s.id === activeClaudeCodeId ? { ...s, cwd: updatedSession.cwd } : s)
+          );
+        }
+      } catch (error) {
+        console.error('Failed to update Claude Code cwd:', error);
+      }
+    }
+
+    // 3. Add to recent folders
+    addRecentFolder(newPath);
+  }, [activeSessionId, activeClaudeCodeId, addRecentFolder]);
+
   // Navigate a session to a specific directory
   const handleNavigateSession = useCallback(async (sessionId, path) => {
     if (!sessionId || !path) return;
@@ -927,6 +1001,9 @@ export default function App() {
                 ) : (
                   <ClaudeCodePanel
                     sessionId={activeClaudeCodeId}
+                    cwd={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.cwd}
+                    recentFolders={recentFolders}
+                    onFolderChange={handleClaudeCodeFolderChange}
                     onSessionEnd={() => setLeftPanelMode('terminal')}
                   />
                 )
