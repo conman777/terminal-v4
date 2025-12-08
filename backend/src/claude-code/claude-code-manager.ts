@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
-import { spawn as ptySpawn, type IPty } from '@homebridge/node-pty-prebuilt-multiarch';
+import { Agent, type AgentResponseMessage } from '@anthropic-ai/claude-agent-sdk';
 import type {
   ClaudeCodeEvent,
   ClaudeCodeSession,
@@ -15,8 +15,14 @@ import {
 export class ClaudeCodeManager {
   #sessions: Map<string, ManagedClaudeCodeSession> = new Map();
   #initialized = false;
-  // Track Claude session IDs for conversation continuity
-  #claudeSessionIds: Map<string, string> = new Map();
+  #apiKey: string;
+
+  constructor(apiKey?: string) {
+    this.#apiKey = apiKey || process.env.ANTHROPIC_API_KEY || '';
+    if (!this.#apiKey) {
+      throw new Error('ANTHROPIC_API_KEY is required');
+    }
+  }
 
   async initialize(): Promise<void> {
     if (this.#initialized) return;
@@ -24,10 +30,18 @@ export class ClaudeCodeManager {
     // Load persisted sessions on startup
     const persisted = await loadAllClaudeCodeSessions();
     for (const session of persisted) {
+      // Create a new agent for each persisted session
+      const agent = new Agent({
+        apiKey: this.#apiKey,
+        cwd: session.cwd,
+        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob'],
+        systemPrompt: 'You are a helpful coding assistant working in a terminal environment.'
+      });
+
       this.#sessions.set(session.id, {
         id: session.id,
         cwd: session.cwd,
-        process: null, // Not active until restored
+        agent,
         events: session.events,
         subscribers: new Set(),
         createdAt: session.createdAt,
@@ -40,17 +54,24 @@ export class ClaudeCodeManager {
 
   createSession(cwd: string): ClaudeCodeSession {
     const id = `cc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    // Generate a UUID for Claude CLI session continuity
-    const claudeSessionId = randomUUID();
-    this.#claudeSessionIds.set(id, claudeSessionId);
 
     // Resolve to absolute path for persistence
     const absoluteCwd = resolve(cwd);
 
+    // Create Agent instance
+    const agent = new Agent({
+      apiKey: this.#apiKey,
+      cwd: absoluteCwd,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob'],
+      systemPrompt: 'You are a helpful coding assistant working in a terminal environment.',
+      // Auto-accept edits to avoid permission prompts
+      permissionMode: 'acceptEdits'
+    });
+
     const session: ManagedClaudeCodeSession = {
       id,
       cwd: absoluteCwd,
-      process: null,
+      agent,
       events: [],
       subscribers: new Set(),
       createdAt: Date.now(),
@@ -63,240 +84,42 @@ export class ClaudeCodeManager {
     return this.#toSnapshot(session);
   }
 
-  // Run Claude with a prompt and stream output
-  #runClaudeWithPrompt(session: ManagedClaudeCodeSession, prompt: string): void {
-    const claudeSessionId = this.#claudeSessionIds.get(session.id);
-
-    // Build args with session ID for conversation continuity
-    const args = [
-      '--dangerously-skip-permissions',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '-p', prompt
-    ];
-
-    if (claudeSessionId) {
-      args.push('--session-id', claudeSessionId);
-    }
-
-    console.log('[CLAUDE] Spawning with args:', args.join(' '));
-
-    // Use node-pty to create a proper PTY - Claude CLI may require TTY for output
-    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
-    const shellArgs = process.platform === 'win32'
-      ? ['/c', 'claude', ...args]
-      : ['-c', `claude ${args.join(' ')}`];
-
-    console.log('[CLAUDE] Using PTY with shell:', shell, shellArgs.join(' '));
-
-    const proc = ptySpawn(shell, shellArgs, {
-      name: 'dumb', // Use dumb terminal to avoid cursor positioning escape sequences
-      cols: 300,    // Wide enough to avoid line wrapping
-      rows: 100,
-      cwd: session.cwd,
-      env: {
-        ...process.env,
-        TERM: 'dumb',
-        NO_COLOR: '1',
-        FORCE_COLOR: '0'
-      } as Record<string, string>
-    });
-
-    console.log('[CLAUDE] PTY spawned, pid:', proc.pid);
-
-    session.process = proc;
-
-    let buffer = '';
-
-    // Regex to strip ANSI escape sequences
-    const stripAnsi = (str: string): string => {
-      // eslint-disable-next-line no-control-regex
-      return str.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\].*?(?:\x07|\x1B\\))/g, '');
-    };
-
-    proc.onData((data: string) => {
-      // Strip ANSI escape sequences before processing
-      const cleanData = stripAnsi(data);
-      console.log('[CLAUDE PTY] Received:', data.length, 'chars, cleaned:', cleanData.length);
-
-      buffer += cleanData;
-
-      // Parse newline-delimited JSON
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed && trimmed.startsWith('{')) {
-          try {
-            const parsed = JSON.parse(trimmed);
-            console.log('[CLAUDE PARSED]', parsed.type || 'no-type');
-            const result = this.#parseClaudeEvent(parsed);
-            if (result) {
-              // Handle single event or array of events
-              const events = Array.isArray(result) ? result : [result];
-              for (const event of events) {
-                console.log('[CLAUDE EVENT]', event.type, event.id);
-                session.events.push(event);
-                this.#notifySubscribers(session, event);
-              }
-              this.#scheduleSave(session);
-            }
-          } catch (e) {
-            // Not valid JSON, might be shell prompt or other output
-            console.log('[CLAUDE] Non-JSON line:', trimmed.substring(0, 100));
-          }
-        }
-      }
-    });
-
-    proc.onExit(({ exitCode, signal }) => {
-      console.log('[CLAUDE] PTY exited with code:', exitCode, 'signal:', signal);
-      session.process = null;
-      this.#scheduleSave(session);
-    });
-  }
-
-  #parseClaudeEvent(raw: unknown): ClaudeCodeEvent | ClaudeCodeEvent[] | null {
-    // Parse the stream-json format from Claude Code CLI
-    // The format varies based on event type
-
-    const obj = raw as Record<string, unknown>;
+  // Map SDK events to our event format
+  #mapSDKEvent(message: AgentResponseMessage): ClaudeCodeEvent | null {
     const timestamp = Date.now();
+    const id = `evt-${timestamp}-${Math.random().toString(36).substr(2, 5)}`;
 
-    // Handle different event types from Claude Code CLI
-    const eventType = obj.type as string;
-
-    if (eventType === 'assistant') {
-      // Assistant message content - may contain multiple blocks
-      const message = obj.message as Record<string, unknown> | undefined;
-      const events: ClaudeCodeEvent[] = [];
-
-      if (message?.content && Array.isArray(message.content)) {
-        for (const block of message.content) {
-          if (typeof block === 'object' && block !== null) {
-            const blockObj = block as Record<string, unknown>;
-
-            // Handle text blocks
-            if (blockObj.type === 'text' && typeof blockObj.text === 'string') {
-              events.push({
-                id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                type: 'assistant',
-                timestamp,
-                content: blockObj.text
-              });
-            }
-
-            // Handle tool_use blocks embedded in assistant messages
-            if (blockObj.type === 'tool_use') {
-              events.push({
-                id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                type: 'tool_use',
-                timestamp,
-                tool: String(blockObj.name || ''),
-                toolInput: (blockObj.input || {}) as Record<string, unknown>
-              });
-            }
-          }
-        }
-      } else if (message?.content && typeof message.content === 'string') {
-        events.push({
-          id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          type: 'assistant',
-          timestamp,
-          content: message.content
-        });
-      }
-
-      if (events.length === 0) return null;
-      if (events.length === 1) return events[0];
-      return events;
-    }
-
-    if (eventType === 'user') {
-      // Extract content from tool_result blocks in user messages
-      const message = obj.message as Record<string, unknown> | undefined;
-      if (message?.content && Array.isArray(message.content)) {
-        const events: ClaudeCodeEvent[] = [];
-        for (const block of message.content) {
-          if (typeof block === 'object' && block !== null) {
-            const blockObj = block as Record<string, unknown>;
-            if (blockObj.type === 'tool_result') {
-              events.push({
-                id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-                type: 'tool_result',
-                timestamp,
-                toolResult: String(blockObj.content || ''),
-                isError: Boolean(blockObj.is_error)
-              });
-            }
-          }
-        }
-        if (events.length > 0) {
-          return events.length === 1 ? events[0] : events;
-        }
-      }
+    // Handle different message types from the SDK
+    if (message.type === 'text') {
       return {
-        id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-        type: 'user',
+        id,
+        type: 'assistant',
         timestamp,
-        content: String(obj.message || obj.content || '')
+        content: message.content
       };
     }
 
-    if (eventType === 'tool_use') {
+    if (message.type === 'tool_use') {
       return {
-        id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id,
         type: 'tool_use',
         timestamp,
-        tool: String(obj.name || obj.tool || ''),
-        toolInput: (obj.input || obj.parameters || {}) as Record<string, unknown>
+        tool: message.name,
+        toolInput: message.input as Record<string, unknown>
       };
     }
 
-    if (eventType === 'tool_result') {
+    if (message.type === 'tool_result') {
       return {
-        id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id,
         type: 'tool_result',
         timestamp,
-        toolResult: String(obj.content || obj.output || ''),
-        isError: Boolean(obj.is_error || obj.isError)
+        toolResult: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        isError: message.isError || false
       };
     }
 
-    if (eventType === 'result') {
-      // Skip result events - they duplicate the last assistant message content
-      // The result is already captured in the assistant events
-      return null;
-    }
-
-    // Handle content_block events (streaming text)
-    if (eventType === 'content_block_delta' || eventType === 'content_block_start') {
-      const delta = obj.delta as Record<string, unknown> | undefined;
-      const contentBlock = obj.content_block as Record<string, unknown> | undefined;
-
-      let text = '';
-      if (delta?.text) {
-        text = String(delta.text);
-      } else if (contentBlock?.text) {
-        text = String(contentBlock.text);
-      }
-
-      if (text) {
-        return {
-          id: `evt-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          type: 'assistant',
-          timestamp,
-          content: text
-        };
-      }
-    }
-
-    // Log unknown event types for debugging
-    if (eventType && !['message_start', 'message_stop', 'message_delta', 'content_block_stop'].includes(eventType)) {
-      console.log('Unknown Claude event type:', eventType, obj);
-    }
-
+    // Unknown or unsupported message type
     return null;
   }
 
@@ -326,7 +149,7 @@ export class ClaudeCodeManager {
       createdAt: session.createdAt,
       updatedAt: Date.now(),
       events: session.events,
-      isActive: session.process !== null
+      isActive: false // SDK doesn't have a concept of "active" in the same way
     };
   }
 
@@ -347,47 +170,61 @@ export class ClaudeCodeManager {
     return () => session.subscribers.delete(handler);
   }
 
-  sendInput(id: string, text: string): void {
+  async sendInput(id: string, text: string): Promise<void> {
     const session = this.#sessions.get(id);
     if (!session) throw new Error(`Session not found: ${id}`);
 
-    // Don't allow sending if a process is already running
-    if (session.process) {
-      throw new Error(`Session is busy processing a previous message`);
-    }
-
     // Add user message to events
-    const event: ClaudeCodeEvent = {
+    const userEvent: ClaudeCodeEvent = {
       id: `evt-${Date.now()}`,
       type: 'user',
       timestamp: Date.now(),
       content: text
     };
-    session.events.push(event);
-    this.#notifySubscribers(session, event);
+    session.events.push(userEvent);
+    this.#notifySubscribers(session, userEvent);
     this.#scheduleSave(session);
 
-    // Spawn Claude with this prompt
-    this.#runClaudeWithPrompt(session, text);
+    try {
+      // Query the agent and stream responses
+      for await (const message of session.agent.query(text)) {
+        const event = this.#mapSDKEvent(message);
+        if (event) {
+          console.log('[CLAUDE SDK]', event.type, event.id);
+          session.events.push(event);
+          this.#notifySubscribers(session, event);
+          this.#scheduleSave(session);
+        }
+      }
+    } catch (error) {
+      console.error('[CLAUDE SDK ERROR]', error);
+      // Add error event
+      const errorEvent: ClaudeCodeEvent = {
+        id: `evt-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: `Error: ${error instanceof Error ? error.message : String(error)}`
+      };
+      session.events.push(errorEvent);
+      this.#notifySubscribers(session, errorEvent);
+      this.#scheduleSave(session);
+      throw error;
+    }
   }
 
   restoreSession(id: string): ClaudeCodeSession {
     const session = this.#sessions.get(id);
     if (!session) throw new Error(`Session not found: ${id}`);
 
-    // If there's no Claude session ID, create one for continued conversations
-    if (!this.#claudeSessionIds.has(id)) {
-      this.#claudeSessionIds.set(id, randomUUID());
-    }
-
     return this.#toSnapshot(session);
   }
 
   stopSession(id: string): void {
+    // SDK doesn't have a concept of "stopping" - sessions are stateless
+    // This is kept for API compatibility but is a no-op
     const session = this.#sessions.get(id);
-    if (session?.process) {
-      session.process.kill();
-      session.process = null;
+    if (session) {
+      console.log('[CLAUDE SDK] Stop requested for session', id);
     }
   }
 
@@ -402,10 +239,20 @@ export class ClaudeCodeManager {
     if (!session) throw new Error(`Session not found: ${id}`);
 
     // Resolve to absolute path
-    session.cwd = resolve(cwd);
+    const absoluteCwd = resolve(cwd);
+    session.cwd = absoluteCwd;
+
+    // Create a new agent with the updated cwd
+    session.agent = new Agent({
+      apiKey: this.#apiKey,
+      cwd: absoluteCwd,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Grep', 'Glob'],
+      systemPrompt: 'You are a helpful coding assistant working in a terminal environment.',
+      permissionMode: 'acceptEdits'
+    });
+
     this.#scheduleSave(session);
 
     return this.#toSnapshot(session);
   }
 }
-

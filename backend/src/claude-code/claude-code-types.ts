@@ -1,4 +1,4 @@
-import type { IPty } from '@homebridge/node-pty-prebuilt-multiarch';
+import type { Agent } from '@anthropic-ai/claude-agent-sdk';
 
 export interface ClaudeCodeEvent {
   id: string;
@@ -29,7 +29,7 @@ export interface ClaudeCodeSession {
 export interface ManagedClaudeCodeSession {
   id: string;
   cwd: string;
-  process: IPty | null;
+  agent: Agent;
   events: ClaudeCodeEvent[];
   subscribers: Set<(event: ClaudeCodeEvent) => void>;
   createdAt: number;

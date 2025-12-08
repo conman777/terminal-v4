@@ -119,7 +119,7 @@ export async function registerClaudeCodeRoutes(
         if (!text) {
           return reply.code(400).send({ error: 'Text is required' });
         }
-        manager.sendInput(request.params.id, text);
+        await manager.sendInput(request.params.id, text);
         return { success: true };
       } catch (error) {
         reply.code(500).send({ error: String(error) });
