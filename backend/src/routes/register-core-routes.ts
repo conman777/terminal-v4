@@ -1,9 +1,55 @@
 import type { FastifyInstance } from 'fastify';
-import { readdir, stat } from 'node:fs/promises';
-import { join, dirname, parse, resolve, basename } from 'node:path';
+import { readdir, realpath, stat } from 'node:fs/promises';
+import { basename, dirname, parse, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
 import { terminalCreateRequestSchema, terminalInputRequestSchema, terminalResizeRequestSchema } from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
+
+// Define the root directory of the project for sandboxing filesystem operations
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
+
+function normalizePathForPlatform(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function isWithinBase(basePath: string, candidatePath: string): boolean {
+  const baseNormalized = normalizePathForPlatform(resolve(basePath));
+  const candidateNormalized = normalizePathForPlatform(resolve(candidatePath));
+
+  if (candidateNormalized === baseNormalized) return true;
+
+  const baseWithSep = baseNormalized.endsWith(sep) ? baseNormalized : baseNormalized + sep;
+  return candidateNormalized.startsWith(baseWithSep);
+}
+
+let projectRootRealPathCache: string | null = null;
+async function getProjectRootRealPath(): Promise<string> {
+  if (projectRootRealPathCache) return projectRootRealPathCache;
+  try {
+    projectRootRealPathCache = await realpath(PROJECT_ROOT);
+  } catch {
+    projectRootRealPathCache = PROJECT_ROOT;
+  }
+  return projectRootRealPathCache;
+}
+
+async function resolvePathInProjectRoot(targetPath: string): Promise<string | null> {
+  const resolvedTargetPath = resolve(targetPath);
+  const baseRealPath = await getProjectRootRealPath();
+
+  let targetRealPath: string;
+  try {
+    targetRealPath = await realpath(resolvedTargetPath);
+  } catch {
+    // If the path doesn't exist yet we still want to validate containment based on the resolved path.
+    targetRealPath = resolvedTargetPath;
+  }
+
+  return isWithinBase(baseRealPath, targetRealPath) ? targetRealPath : null;
+}
 
 export interface CoreRouteDependencies {
   terminalManager: TerminalManager;
@@ -126,6 +172,16 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       stream.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Persisted (inactive) session: send history and immediately end the stream.
+    if (!deps.terminalManager.isActive(snapshot.id)) {
+      snapshot.history.forEach((entry) => {
+        send('data', { text: entry.text, ts: entry.ts });
+      });
+      send('end', {});
+      stream.end();
+      return;
+    }
+
     // Buffer events while sending history to prevent race condition
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
     let isBuffering = true;
@@ -206,27 +262,41 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   // Filesystem: List directories
   app.get<{ Querystring: { path?: string } }>('/api/fs/list', async (request, reply) => {
     // Resolve to absolute path
-    const requestedPath = resolve(request.query.path || process.cwd());
+    const requestedPath = resolve(request.query.path || PROJECT_ROOT);
+    const safePath = await resolvePathInProjectRoot(requestedPath);
+
+    // Sandboxing check
+    if (!safePath) {
+      reply.code(403).send({ error: 'Access denied: path is outside project root' });
+      return;
+    }
 
     try {
-      const stats = await stat(requestedPath);
+      const stats = await stat(safePath);
       if (!stats.isDirectory()) {
         reply.code(400).send({ error: 'Path is not a directory' });
         return;
       }
 
-      const entries = await readdir(requestedPath, { withFileTypes: true });
+      const entries = await readdir(safePath, { withFileTypes: true });
       const folders = entries
         .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
         .map(entry => entry.name)
         .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
-      // Get parent directory (null if at root)
-      const parsed = parse(requestedPath);
-      const parent = parsed.root === requestedPath ? null : dirname(requestedPath);
+      // Get parent directory (null if at root or outside SAFE_ROOT)
+      const parsed = parse(safePath);
+      let parent: string | null = null;
+      if (parsed.root !== safePath) {
+        const potentialParent = dirname(safePath);
+        const baseRealPath = await getProjectRootRealPath();
+        if (potentialParent !== safePath && isWithinBase(baseRealPath, potentialParent)) {
+          parent = potentialParent;
+        }
+      }
 
       reply.send({
-        path: requestedPath,
+        path: safePath,
         folders,
         parent
       });
@@ -240,42 +310,59 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
 
   // Filesystem: Download directory as zip
   app.get<{ Querystring: { path?: string } }>('/api/fs/download', async (request, reply) => {
-    const requestedPath = resolve(request.query.path || process.cwd());
+    const requestedPath = resolve(request.query.path || PROJECT_ROOT);
+    const safePath = await resolvePathInProjectRoot(requestedPath);
 
+    // Sandboxing check
+    if (!safePath) {
+      reply.code(403).send({ error: 'Access denied: path is outside project root' });
+      return;
+    }
+
+    let stats;
     try {
-      const stats = await stat(requestedPath);
-      if (!stats.isDirectory()) {
-        reply.code(400).send({ error: 'Path is not a directory' });
-        return;
-      }
-
-      const folderName = basename(requestedPath) || 'download';
-      const zipFileName = `${folderName}.zip`;
-
-      reply.raw.writeHead(200, {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${zipFileName}"`,
-        'Transfer-Encoding': 'chunked'
-      });
-
-      const archive = archiver('zip', { zlib: { level: 5 } });
-
-      archive.on('error', (err) => {
-        console.error('Archive error:', err);
-        reply.raw.end();
-      });
-
-      archive.pipe(reply.raw);
-
-      // Add the directory contents to the zip
-      archive.directory(requestedPath, folderName);
-
-      await archive.finalize();
+      stats = await stat(safePath);
     } catch (error) {
       reply.code(400).send({
         error: 'Cannot download directory',
         message: error instanceof Error ? error.message : String(error)
       });
+      return;
+    }
+
+    if (!stats.isDirectory()) {
+      reply.code(400).send({ error: 'Path is not a directory' });
+      return;
+    }
+
+    const folderName = basename(safePath) || 'download';
+    const zipFileName = `${folderName}.zip`;
+
+    reply.hijack();
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${zipFileName}"`,
+      'Transfer-Encoding': 'chunked'
+    });
+
+    const archive = archiver('zip', { zlib: { level: 5 } });
+
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      reply.raw.end();
+    });
+
+    archive.pipe(reply.raw);
+
+    // Add the directory contents to the zip
+    archive.directory(safePath, folderName);
+
+    try {
+      await archive.finalize();
+    } catch (error) {
+      console.error('Archive finalize error:', error);
+      reply.raw.end();
     }
   });
 }

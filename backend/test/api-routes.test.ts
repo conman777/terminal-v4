@@ -6,7 +6,7 @@ import type { TerminalSessionSnapshot } from '../src/terminal/terminal-types';
 
 type TerminalManagerContract = Pick<
   TerminalManager,
-  'listSessions' | 'createSession' | 'getSession' | 'write' | 'subscribe' | 'resize' | 'close'
+  'initialize' | 'listSessions' | 'createSession' | 'getSession' | 'write' | 'subscribe' | 'resize' | 'close'
 >;
 
 async function withApp<T>(
@@ -25,6 +25,7 @@ async function withApp<T>(
   };
 
   class StubTerminalManager implements TerminalManagerContract {
+    initialize = vi.fn(async () => {});
     listSessions = vi.fn(() => []);
     createSession = vi.fn(() => terminalSession);
     getSession = vi.fn(() => terminalSession);

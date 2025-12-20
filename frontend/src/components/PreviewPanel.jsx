@@ -92,6 +92,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             value={inputUrl}
             onChange={(e) => setInputUrl(e.target.value)}
             placeholder="http://localhost:3000 or C:\path\to\index.html"
+            aria-label="Preview URL"
           />
         </form>
         <div className="preview-actions">
@@ -101,6 +102,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             onClick={handleRefresh}
             title="Refresh"
             disabled={!iframeSrc}
+            aria-label="Refresh preview"
           >
             {'\u21BB'}
           </button>
@@ -110,6 +112,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             onClick={handleOpenExternal}
             title="Open in new tab"
             disabled={!url}
+            aria-label="Open preview in new tab"
           >
             {'\u2197'}
           </button>
@@ -118,6 +121,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             className="preview-action-btn preview-close-btn"
             onClick={onClose}
             title="Close preview"
+            aria-label="Close preview"
           >
             {'\u00D7'}
           </button>

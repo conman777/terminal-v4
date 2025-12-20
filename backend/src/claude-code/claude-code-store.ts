@@ -18,6 +18,12 @@ async function ensureClaudeCodeDir(): Promise<void> {
 function getSessionFilePath(sessionId: string): string {
   // Sanitize session ID to prevent path traversal
   const safeId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
+
+  // Validate that we have a non-empty ID after sanitization
+  if (!safeId) {
+    throw new Error(`Invalid session ID: "${sessionId}" - ID must contain alphanumeric characters or hyphens`);
+  }
+
   return join(CLAUDE_CODE_DIR, `${safeId}.json`);
 }
 

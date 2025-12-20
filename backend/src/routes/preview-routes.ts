@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { createReadStream, statSync } from 'node:fs';
-import { extname, join, normalize, resolve } from 'node:path';
-import { access, constants } from 'node:fs/promises';
+import { access, constants, realpath } from 'node:fs/promises';
+import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // MIME types for common file extensions
 const MIME_TYPES: Record<string, string> = {
@@ -41,6 +42,49 @@ function getMimeType(filePath: string): string {
   return MIME_TYPES[ext] || 'application/octet-stream';
 }
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
+
+function normalizePathForPlatform(value: string): string {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function isWithinBase(basePath: string, candidatePath: string): boolean {
+  const baseNormalized = normalizePathForPlatform(resolve(basePath));
+  const candidateNormalized = normalizePathForPlatform(resolve(candidatePath));
+
+  if (candidateNormalized === baseNormalized) return true;
+
+  const baseWithSep = baseNormalized.endsWith(sep) ? baseNormalized : baseNormalized + sep;
+  return candidateNormalized.startsWith(baseWithSep);
+}
+
+let projectRootRealPathCache: string | null = null;
+async function getProjectRootRealPath(): Promise<string> {
+  if (projectRootRealPathCache) return projectRootRealPathCache;
+  try {
+    projectRootRealPathCache = await realpath(PROJECT_ROOT);
+  } catch {
+    projectRootRealPathCache = PROJECT_ROOT;
+  }
+  return projectRootRealPathCache;
+}
+
+async function resolvePathInProjectRoot(targetPath: string): Promise<string | null> {
+  const resolvedTargetPath = resolve(targetPath);
+  const baseRealPath = await getProjectRootRealPath();
+
+  let targetRealPath: string;
+  try {
+    targetRealPath = await realpath(resolvedTargetPath);
+  } catch {
+    targetRealPath = resolvedTargetPath;
+  }
+
+  return isWithinBase(baseRealPath, targetRealPath) ? targetRealPath : null;
+}
+
 function sanitizePath(basePath: string, requestedPath: string): string | null {
   // Normalize and resolve the full path
   const normalizedRequest = normalize(requestedPath).replace(/^[/\\]+/, '');
@@ -48,7 +92,7 @@ function sanitizePath(basePath: string, requestedPath: string): string | null {
 
   // Ensure the resolved path is within the base path
   const resolvedBase = resolve(basePath);
-  if (!fullPath.startsWith(resolvedBase)) {
+  if (!isWithinBase(resolvedBase, fullPath)) {
     return null;
   }
 
@@ -69,21 +113,35 @@ export async function registerPreviewRoutes(app: FastifyInstance): Promise<void>
     const basePath = query.path;
     const filePath = query.file || 'index.html';
 
+    // Sandboxing: base path must be inside the project root (prevents reading arbitrary files)
+    const safeBasePath = await resolvePathInProjectRoot(basePath);
+    if (!safeBasePath) {
+      reply.code(403).send({ error: 'Access denied: base path is outside project root' });
+      return;
+    }
+
     // Sanitize the file path to prevent directory traversal
-    const fullPath = sanitizePath(basePath, filePath);
+    const fullPath = sanitizePath(safeBasePath, filePath);
     if (!fullPath) {
       reply.code(403).send({ error: 'Access denied: path traversal detected' });
       return;
     }
 
+    // Sandboxing: also prevent symlink escapes for the specific file path.
+    const safeFullPath = await resolvePathInProjectRoot(fullPath);
+    if (!safeFullPath) {
+      reply.code(403).send({ error: 'Access denied: resolved path is outside project root' });
+      return;
+    }
+
     try {
       // Check if file exists and is readable
-      await access(fullPath, constants.R_OK);
+      await access(safeFullPath, constants.R_OK);
 
-      const stat = statSync(fullPath);
+      const stat = statSync(safeFullPath);
       if (stat.isDirectory()) {
         // If it's a directory, try to serve index.html
-        const indexPath = join(fullPath, 'index.html');
+        const indexPath = join(safeFullPath, 'index.html');
         try {
           await access(indexPath, constants.R_OK);
           const indexStat = statSync(indexPath);
@@ -100,13 +158,13 @@ export async function registerPreviewRoutes(app: FastifyInstance): Promise<void>
         }
       }
 
-      const mimeType = getMimeType(fullPath);
+      const mimeType = getMimeType(safeFullPath);
 
       reply.header('Content-Type', mimeType);
       reply.header('Content-Length', stat.size);
       reply.header('Cache-Control', 'no-cache');
 
-      return reply.send(createReadStream(fullPath));
+      return reply.send(createReadStream(safeFullPath));
     } catch (error) {
       reply.code(404).send({ error: 'File not found' });
       return;

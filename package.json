@@ -4,8 +4,9 @@
   "description": "Browser-based interface that wraps the Claude Code CLI. The project mirrors the plan from `plan.md`: an Express backend streams JSON from the CLI, while a React client renders a chat-style UI with live tool activity.",
   "main": "index.js",
   "scripts": {
-    "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test": "npm --prefix backend test",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "keywords": [],
   "author": "",

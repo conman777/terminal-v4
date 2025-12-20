@@ -3,6 +3,40 @@ import ToolCallBlock from './ToolCallBlock';
 import ClaudeCodeInput from './ClaudeCodeInput';
 import { FolderBrowserModal } from './FolderBrowserModal';
 
+// Status bar component
+function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
+  return (
+    <div className="claude-status-bar">
+      <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
+      <span className="status-text">
+        {isConnected ? 'Connected' : 'Disconnected'}
+      </span>
+      <span className="status-separator">•</span>
+      <span className="status-model">{model || 'sonnet'}</span>
+      {sessionId && (
+        <>
+          <span className="status-separator">•</span>
+          <span className="status-session" title={sessionId}>
+            {sessionId.slice(0, 15)}...
+          </span>
+        </>
+      )}
+      {eventCount > 0 && (
+        <>
+          <span className="status-separator">•</span>
+          <span className="status-events">{eventCount} events</span>
+        </>
+      )}
+      {isProcessing && (
+        <span className="status-processing">
+          <span className="processing-dot" />
+          Working...
+        </span>
+      )}
+    </div>
+  );
+}
+
 // Helper to group tool_use with tool_result
 function groupEvents(events) {
   const grouped = [];
@@ -37,73 +71,241 @@ function groupEvents(events) {
   return grouped;
 }
 
-export default function ClaudeCodePanel({ sessionId, cwd, recentFolders, onFolderChange, onSessionEnd }) {
+export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, onFolderChange, onModelChange, onSessionEnd }) {
   const [events, setEvents] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [inputHistory, setInputHistory] = useState([]);
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
+  const seenEventIdsRef = useRef(new Set());
 
   // Auto-scroll to bottom on new events
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [events]);
 
-  // Connect to SSE stream
+  // Connect to SSE stream with retry logic
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 5;
+
   useEffect(() => {
     if (!sessionId) return;
 
     // Clear events when switching sessions
     setEvents([]);
     setIsConnected(false);
+    setIsProcessing(false);
+    seenEventIdsRef.current.clear();
+    retryCountRef.current = 0;
 
-    const eventSource = new EventSource(`/api/claude-code/${sessionId}/stream`);
-    eventSourceRef.current = eventSource;
+    let eventSource = null;
+    let reconnectTimeout = null;
 
-    eventSource.onopen = () => {
-      setIsConnected(true);
-    };
-
-    eventSource.addEventListener('event', (e) => {
-      const event = JSON.parse(e.data);
-      setEvents(prev => [...prev, event]);
-
-      // Track processing state
-      if (event.type === 'tool_use') {
-        setIsProcessing(true);
-      } else if (event.type === 'assistant' || event.type === 'result') {
+    const connect = () => {
+      if (retryCountRef.current >= MAX_RETRIES) {
+        console.error('Max SSE reconnection attempts reached');
+        setIsConnected(false);
         setIsProcessing(false);
+        return;
       }
-    });
 
-    eventSource.addEventListener('history-complete', () => {
-      // History loaded, now receiving live events
-    });
+      eventSource = new EventSource(`/api/claude-code/${sessionId}/stream`);
+      eventSourceRef.current = eventSource;
 
-    eventSource.onerror = () => {
-      setIsConnected(false);
+      eventSource.onopen = () => {
+        setIsConnected(true);
+        retryCountRef.current = 0; // Reset on successful connection
+      };
+
+      eventSource.addEventListener('event', (e) => {
+        let event;
+        try {
+          event = JSON.parse(e.data);
+        } catch (err) {
+          console.error('Failed to parse SSE event:', err);
+          return;
+        }
+
+        // Generate synthetic ID for events without one to enable deduplication
+        const eventId = event?.id || `synthetic-${event.type}-${event.timestamp}-${JSON.stringify(event.content || event.tool || '').substring(0, 50)}`;
+
+        if (seenEventIdsRef.current.has(eventId)) {
+          return;
+        }
+        seenEventIdsRef.current.add(eventId);
+
+        setEvents(prev => [...prev, { ...event, id: event.id || eventId }]);
+
+        // Track processing state
+        if (event.type === 'tool_use') {
+          setIsProcessing(true);
+        } else if (event.type === 'assistant' || event.type === 'result' || (event.type === 'system' && event.isError)) {
+          setIsProcessing(false);
+        }
+      });
+
+      eventSource.addEventListener('history-complete', () => {
+        // History loaded, now receiving live events
+      });
+
+      eventSource.onerror = () => {
+        setIsConnected(false);
+        setIsProcessing(false); // Reset processing state on connection error
+        retryCountRef.current++;
+
+        // Close current connection
+        if (eventSource) {
+          eventSource.close();
+        }
+
+        // Manual retry with exponential backoff
+        if (retryCountRef.current < MAX_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
+          reconnectTimeout = setTimeout(connect, delay);
+        }
+      };
     };
+
+    connect();
 
     return () => {
-      eventSource.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (eventSource) eventSource.close();
+      setIsProcessing(false); // Reset when unmounting/switching sessions
     };
   }, [sessionId]);
 
   const handleSend = useCallback(async (text) => {
     if (!text.trim() || !sessionId) return;
 
+    // Handle slash commands locally
+    const trimmed = text.trim().toLowerCase();
+
+    // Add to history (skip slash commands)
+    if (!text.startsWith('/')) {
+      setInputHistory(prev => [...prev, text]);
+    }
+
+    if (trimmed === '/model') {
+      setShowModelPicker(true);
+      const cmdEvent = {
+        id: `cmd-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: `Current model: ${model || 'sonnet'}. Select a new model below.`
+      };
+      setEvents(prev => [...prev, cmdEvent]);
+      return;
+    }
+
+    if (trimmed === '/clear') {
+      setEvents([]);
+      seenEventIdsRef.current.clear();
+      const cmdEvent = {
+        id: `cmd-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: 'Conversation cleared.'
+      };
+      setEvents([cmdEvent]);
+      return;
+    }
+
+    if (trimmed === '/help') {
+      const cmdEvent = {
+        id: `cmd-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: `Available commands:
+/model - Change AI model
+/clear - Clear conversation
+/help - Show this help
+/compact - Toggle compact mode (coming soon)
+/cost - Show token usage (coming soon)`
+      };
+      setEvents(prev => [...prev, cmdEvent]);
+      return;
+    }
+
+    if (trimmed === '/compact' || trimmed === '/cost') {
+      const cmdEvent = {
+        id: `cmd-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: `${trimmed} - Coming soon!`
+      };
+      setEvents(prev => [...prev, cmdEvent]);
+      return;
+    }
+
+    // Set processing BEFORE fetch to avoid race with SSE events
+    setIsProcessing(true);
+
     try {
-      await fetch(`/api/claude-code/${sessionId}/input`, {
+      const res = await fetch(`/api/claude-code/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text })
       });
-      setIsProcessing(true);
+      if (!res.ok) {
+        setIsProcessing(false);
+      }
+      // Don't set isProcessing(true) here - SSE events will manage it
     } catch (error) {
       console.error('Failed to send input:', error);
+      setIsProcessing(false);
     }
-  }, [sessionId]);
+  }, [sessionId, model]);
+
+  const handleModelSelect = useCallback(async (newModel) => {
+    setShowModelPicker(false);
+    try {
+      const res = await fetch(`/api/claude-code/${sessionId}/model`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: newModel })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        if (onModelChange) {
+          onModelChange(updated);
+        }
+        // Add confirmation event
+        const confirmEvent = {
+          id: `cmd-${Date.now()}`,
+          type: 'system',
+          timestamp: Date.now(),
+          content: `Model changed to ${newModel}`
+        };
+        setEvents(prev => [...prev, confirmEvent]);
+      }
+    } catch (error) {
+      console.error('Failed to update model:', error);
+    }
+  }, [sessionId, onModelChange]);
+
+  // Handle cancel (Escape key)
+  const handleCancel = useCallback(async () => {
+    if (!sessionId || !isProcessing) return;
+
+    try {
+      await fetch(`/api/claude-code/${sessionId}/stop`, { method: 'POST' });
+      // Add system event to show cancellation
+      const cancelEvent = {
+        id: `cancel-${Date.now()}`,
+        type: 'system',
+        timestamp: Date.now(),
+        content: 'Request cancelled by user'
+      };
+      setEvents(prev => [...prev, cancelEvent]);
+      setIsProcessing(false);
+    } catch (error) {
+      console.error('Failed to cancel:', error);
+    }
+  }, [sessionId, isProcessing]);
 
   // Group tool_use with its corresponding tool_result
   const groupedEvents = groupEvents(events);
@@ -113,6 +315,16 @@ export default function ClaudeCodePanel({ sessionId, cwd, recentFolders, onFolde
       onFolderChange(newPath);
     }
   };
+
+  // Handle file:line click - copy to clipboard
+  const handleFileClick = useCallback((path, line) => {
+    navigator.clipboard.writeText(`${path}:${line}`).then(() => {
+      // Could add a toast notification here
+      console.log(`Copied to clipboard: ${path}:${line}`);
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+    });
+  }, []);
 
   return (
     <div className="claude-code-panel">
@@ -140,16 +352,54 @@ export default function ClaudeCodePanel({ sessionId, cwd, recentFolders, onFolde
           </div>
         ) : (
           groupedEvents.map((item, index) => (
-            <ToolCallBlock key={item.id || index} item={item} />
+            <ToolCallBlock key={item.id || index} item={item} onFileClick={handleFileClick} />
           ))
         )}
+
+        {/* Model picker - shown when /model command is used */}
+        {showModelPicker && (
+          <div className="model-picker">
+            <div className="model-picker-label">Select model:</div>
+            <div className="model-picker-options">
+              <button
+                className={`model-option ${model === 'sonnet' ? 'active' : ''}`}
+                onClick={() => handleModelSelect('sonnet')}
+              >
+                claude-sonnet-4-20250514
+              </button>
+              <button
+                className={`model-option ${model === 'opus' ? 'active' : ''}`}
+                onClick={() => handleModelSelect('opus')}
+              >
+                claude-opus-4-20250514
+              </button>
+              <button
+                className={`model-option ${model === 'haiku' ? 'active' : ''}`}
+                onClick={() => handleModelSelect('haiku')}
+              >
+                claude-haiku-3-5-20241022
+              </button>
+            </div>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
+
+      <StatusBar
+        sessionId={sessionId}
+        model={model}
+        isConnected={isConnected}
+        isProcessing={isProcessing}
+        eventCount={events.length}
+      />
 
       <ClaudeCodeInput
         onSend={handleSend}
         disabled={!isConnected}
         isProcessing={isProcessing}
+        history={inputHistory}
+        onCancel={handleCancel}
       />
 
       <FolderBrowserModal

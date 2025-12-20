@@ -7,6 +7,7 @@ interface ClaudeCodeIdParams {
 
 interface StartClaudeCodeBody {
   cwd?: string;
+  model?: 'sonnet' | 'opus' | 'haiku';
 }
 
 interface SendInputBody {
@@ -15,6 +16,10 @@ interface SendInputBody {
 
 interface UpdateCwdBody {
   cwd: string;
+}
+
+interface UpdateModelBody {
+  model: 'sonnet' | 'opus' | 'haiku';
 }
 
 export async function registerClaudeCodeRoutes(
@@ -30,8 +35,8 @@ export async function registerClaudeCodeRoutes(
   // Start new Claude Code session
   app.post<{ Body: StartClaudeCodeBody }>('/api/claude-code/start', async (request, reply) => {
     try {
-      const { cwd } = request.body || {};
-      const session = manager.createSession(cwd || process.cwd());
+      const { cwd, model } = request.body || {};
+      const session = manager.createSession(cwd || process.cwd(), model || 'sonnet');
       return session;
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -150,7 +155,7 @@ export async function registerClaudeCodeRoutes(
   // Delete session
   app.delete<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id', async (request, reply) => {
     try {
-      manager.deleteSession(request.params.id);
+      await manager.deleteSession(request.params.id);
       return { success: true };
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -167,6 +172,23 @@ export async function registerClaudeCodeRoutes(
           return reply.code(400).send({ error: 'cwd is required' });
         }
         const session = manager.updateCwd(request.params.id, cwd);
+        return session;
+      } catch (error) {
+        reply.code(500).send({ error: String(error) });
+      }
+    }
+  );
+
+  // Update session model
+  app.patch<{ Params: ClaudeCodeIdParams; Body: UpdateModelBody }>(
+    '/api/claude-code/:id/model',
+    async (request, reply) => {
+      try {
+        const { model } = request.body || {};
+        if (!model) {
+          return reply.code(400).send({ error: 'model is required' });
+        }
+        const session = manager.updateModel(request.params.id, model);
         return session;
       } catch (error) {
         reply.code(500).send({ error: String(error) });

@@ -42,9 +42,25 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 }
 
 async function start() {
-  const server = await createServer();
+  const terminalManager = new TerminalManager();
+  const server = await createServer({ terminalManager });
   const port = Number(process.env.PORT || 3020);
   const host = process.env.HOST || '0.0.0.0';
+
+  const shutdown = async (signal: string) => {
+    server.log.info(`${signal} received, shutting down...`);
+    try {
+      await server.close();
+      await terminalManager.closeAll();
+      process.exit(0);
+    } catch (err) {
+      server.log.error(err, 'Error during shutdown');
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 
   try {
     await server.listen({ port, host });

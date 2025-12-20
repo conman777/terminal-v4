@@ -29,6 +29,7 @@ export default function ClaudeCodeSessionSelector({
       <button
         className="session-dropdown-btn"
         onClick={() => setIsOpen(!isOpen)}
+        type="button"
       >
         <span className="session-icon">🤖</span>
         <span className="session-label">
@@ -39,7 +40,7 @@ export default function ClaudeCodeSessionSelector({
 
       {isOpen && (
         <div className="session-dropdown claude-dropdown">
-          <button className="new-session-btn" onClick={() => { onNew(); setIsOpen(false); }}>
+          <button className="new-session-btn" type="button" onClick={() => { onNew(); setIsOpen(false); }}>
             + New Claude Code Session
           </button>
 
@@ -53,6 +54,7 @@ export default function ClaudeCodeSessionSelector({
               <button
                 className="session-select-btn"
                 onClick={() => { onSelect(session.id); setIsOpen(false); }}
+                type="button"
               >
                 <span className={`status-dot ${session.isActive ? 'active' : 'inactive'}`} />
                 <span>Claude Code {index + 1}</span>
@@ -63,6 +65,8 @@ export default function ClaudeCodeSessionSelector({
               <button
                 className="session-delete-btn"
                 onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
+                aria-label="Delete Claude Code session"
+                type="button"
               >
                 ×
               </button>

@@ -117,6 +117,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Connect to SSE stream (which sends history first, then new events)
       const source = new EventSource(`/api/terminal/${sessionId}/stream`);
       eventSourceRef.current = source;
+      let hadConnectionError = false;
+
+      source.onopen = () => {
+        if (disposed) return;
+        if (hadConnectionError) {
+          hadConnectionError = false;
+          term.write('\r\n[Reconnected]\r\n');
+        }
+      };
 
       source.addEventListener('data', (event) => {
         if (disposed) return;
@@ -144,7 +153,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
 
       source.onerror = () => {
-        source.close();
+        if (disposed) return;
+        // Let EventSource auto-reconnect; just surface status once.
+        if (!hadConnectionError) {
+          hadConnectionError = true;
+          term.write('\r\n[Connection lost — attempting to reconnect…]\r\n');
+        }
       };
 
       const dataDisposer = term.onData((data) => {

@@ -1,5 +1,3 @@
-import type { Agent } from '@anthropic-ai/claude-agent-sdk';
-
 export interface ClaudeCodeEvent {
   id: string;
   type: 'assistant' | 'user' | 'tool_use' | 'tool_result' | 'system' | 'result';
@@ -17,9 +15,12 @@ export interface ClaudeCodeEvent {
   content?: string;
 }
 
+export type ClaudeModel = 'sonnet' | 'opus' | 'haiku';
+
 export interface ClaudeCodeSession {
   id: string;
   cwd: string;
+  model: ClaudeModel;
   createdAt: number;
   updatedAt: number;
   events: ClaudeCodeEvent[];
@@ -29,7 +30,8 @@ export interface ClaudeCodeSession {
 export interface ManagedClaudeCodeSession {
   id: string;
   cwd: string;
-  agent: Agent;
+  model: ClaudeModel;
+  agent: any; // Changed from Agent to any
   events: ClaudeCodeEvent[];
   subscribers: Set<(event: ClaudeCodeEvent) => void>;
   createdAt: number;

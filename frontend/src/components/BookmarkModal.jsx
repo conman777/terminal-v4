@@ -64,6 +64,7 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
             placeholder="Search bookmarks..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            aria-label="Search bookmarks"
           />
         </div>
 
@@ -140,6 +141,7 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                       onClose();
                     }}
                     title={`Execute: ${bookmark.command}`}
+                    aria-label={`Execute bookmark: ${bookmark.name}`}
                   >
                     <span className="bookmark-play">▶</span>
                   </button>
@@ -160,6 +162,7 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                         setShowAddForm(false);
                       }}
                       title="Edit bookmark"
+                      aria-label="Edit bookmark"
                     >
                       ✎
                     </button>
@@ -167,6 +170,7 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                       className="bookmark-delete-btn"
                       onClick={() => onDelete(bookmark.id)}
                       title="Delete bookmark"
+                      aria-label="Delete bookmark"
                     >
                       ×
                     </button>

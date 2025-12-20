@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { TerminalManager } from '../src/terminal/terminal-manager';
 import type {
   TerminalProcess,
@@ -62,5 +64,53 @@ describe('TerminalManager', () => {
     manager.close(snapshot.id);
     expect(fakeProcess.killed).toBe(true);
     expect(manager.listSessions()).toHaveLength(0);
+  });
+
+  it('falls back to a safe cwd when given a non-existent cwd', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn((options: TerminalSpawnOptions) => {
+      // Assert from inside to keep expectations close to the behaviour.
+      expect(options.cwd).toBe(process.cwd());
+      return fakeProcess;
+    });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+
+    manager.createSession({ cwd: '/this/path/should/not/exist' });
+    expect(spawnMock).toHaveBeenCalled();
+  });
+
+  it('updates stored cwd when receiving a full cd command payload (UI-driven navigation)', async () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn(() => fakeProcess);
+    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+
+    const snapshot = manager.createSession({ cwd: process.cwd() });
+    const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-cwd-'));
+
+    try {
+      // This mimics App.jsx sending a full command with a newline terminator.
+      manager.write(snapshot.id, `cd "${tmpDir}"\n`);
+      const projectInfo = await manager.getProjectInfo(snapshot.id);
+      expect(projectInfo?.cwd).toBe(tmpDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('caps buffered output to avoid unbounded memory growth', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn(() => fakeProcess);
+    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+
+    const snapshot = manager.createSession();
+
+    const chunkA = 'A'.repeat(1_100_000);
+    const chunkB = 'B'.repeat(1_100_000);
+    fakeProcess.emit('data', chunkA);
+    fakeProcess.emit('data', chunkB);
+
+    const history = manager.getSession(snapshot.id);
+    expect(history?.history).toHaveLength(1);
+    expect(history?.history[0].text[0]).toBe('B');
   });
 });

@@ -225,6 +225,8 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
         type="button"
         className="session-selector-btn"
         onClick={() => setIsOpen(!isOpen)}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
       >
         <span className="session-selector-label">
           {activeSession ? activeSession.title : 'No Terminal'}
@@ -244,6 +246,15 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
                 key={session.id}
                 className={`session-selector-item${session.id === activeSessionId ? ' active' : ''}${!session.isActive ? ' inactive' : ''}`}
                 onClick={() => handleSelect(session)}
+                role="option"
+                aria-selected={session.id === activeSessionId}
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleSelect(session);
+                  }
+                }}
               >
                 <div className="session-selector-item-info">
                   <span className="session-selector-item-title">
@@ -653,14 +664,14 @@ export default function App() {
   }, []);
 
   // Claude Code handlers - uses styled panel with JSON output parsing
-  const handleStartClaudeCode = useCallback(async () => {
+  const handleStartClaudeCode = useCallback(async (model = 'sonnet') => {
     const cwd = sessions.find(s => s.id === activeSessionId)?.cwd || projectInfo?.cwd || '.';
 
     try {
       const res = await fetch('/api/claude-code/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd })
+        body: JSON.stringify({ cwd, model })
       });
       const session = await res.json();
       setClaudeCodeSessions(prev => [session, ...prev]);
@@ -697,6 +708,12 @@ export default function App() {
       console.error('Failed to delete session:', error);
     }
   }, [activeClaudeCodeId]);
+
+  const handleClaudeCodeModelChange = useCallback((updatedSession) => {
+    setClaudeCodeSessions(prev =>
+      prev.map(s => s.id === updatedSession.id ? updatedSession : s)
+    );
+  }, []);
 
   // Handle folder change from Claude Code panel - syncs both Claude Code and Terminal
   const handleClaudeCodeFolderChange = useCallback(async (newPath) => {
@@ -994,16 +1011,19 @@ export default function App() {
                   <div className="empty-state">
                     <h2>Claude Code</h2>
                     <p>Start a new Claude Code session to get AI-powered assistance.</p>
-                    <button className="btn-primary" onClick={handleStartClaudeCode}>
-                      + New Claude Code Session
+                    <p className="empty-hint">Use /model to change models</p>
+                    <button className="btn-primary" onClick={() => handleStartClaudeCode('sonnet')}>
+                      + New Session
                     </button>
                   </div>
                 ) : (
                   <ClaudeCodePanel
                     sessionId={activeClaudeCodeId}
                     cwd={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.cwd}
+                    model={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.model}
                     recentFolders={recentFolders}
                     onFolderChange={handleClaudeCodeFolderChange}
+                    onModelChange={handleClaudeCodeModelChange}
                     onSessionEnd={() => setLeftPanelMode('terminal')}
                   />
                 )

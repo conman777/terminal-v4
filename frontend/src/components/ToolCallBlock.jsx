@@ -1,4 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { createTwoFilesPatch } from 'diff';
 
 // Tool type to color mapping (bullet colors)
 const TOOL_COLORS = {
@@ -15,6 +20,124 @@ const TOOL_COLORS = {
   default: '#6b7280'    // gray
 };
 
+// Regex to match file:line patterns (e.g., /path/to/file.js:42)
+const FILE_LINE_REGEX = /([\/\w\-\.]+\.[a-zA-Z0-9]+):(\d+)/g;
+
+// File link component
+function FileLink({ path, line, onClick }) {
+  const handleClick = (e) => {
+    e.preventDefault();
+    if (onClick) onClick(path, line);
+  };
+
+  return (
+    <button
+      className="file-link"
+      onClick={handleClick}
+      title={`${path} at line ${line}`}
+    >
+      {path}:{line}
+    </button>
+  );
+}
+
+// Parse text and replace file:line patterns with clickable links
+function parseFileLinks(text, onClick) {
+  if (!text || !onClick) return text;
+
+  const parts = [];
+  let lastIndex = 0;
+  let match;
+
+  // Reset regex state
+  FILE_LINE_REGEX.lastIndex = 0;
+
+  while ((match = FILE_LINE_REGEX.exec(text)) !== null) {
+    // Text before match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // The file link
+    parts.push(
+      <FileLink
+        key={`${match.index}-${match[1]}`}
+        path={match[1]}
+        line={parseInt(match[2], 10)}
+        onClick={onClick}
+      />
+    );
+    lastIndex = FILE_LINE_REGEX.lastIndex;
+  }
+
+  // Remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
+// Copy button component
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+
+  // Clear timeout on unmount to prevent memory leak
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  return (
+    <button className="copy-btn" onClick={handleCopy} title="Copy to clipboard">
+      {copied ? '✓' : '⧉'}
+    </button>
+  );
+}
+
+// Diff view component for Edit tool - memoized for performance
+function DiffView({ oldString, newString, filePath }) {
+  // Memoize expensive diff computation
+  const diffLines = useMemo(() => {
+    if (!oldString || !newString) return null;
+
+    const patch = createTwoFilesPatch(filePath, filePath, oldString, newString, '', '', { context: 3 });
+    return patch.split('\n').slice(4); // Skip the header lines
+  }, [oldString, newString, filePath]);
+
+  if (!diffLines) return null;
+
+  if (diffLines.length === 0) {
+    return <div className="diff-view"><div className="diff-context">No changes</div></div>;
+  }
+
+  return (
+    <div className="diff-view">
+      {diffLines.map((line, i) => {
+        let className = 'diff-context';
+        if (line.startsWith('+')) className = 'diff-add';
+        else if (line.startsWith('-')) className = 'diff-remove';
+        else if (line.startsWith('@')) className = 'diff-header';
+
+        return (
+          <div key={i} className={className}>
+            <span className="diff-line-content">{line || ' '}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function getToolInput(item) {
   const input = item.toolInput || {};
   const tool = item.tool?.toLowerCase();
@@ -27,7 +150,7 @@ function getToolInput(item) {
     case 'write':
       return { type: 'path', value: input.file_path || input.path || '' };
     case 'edit':
-      return { type: 'path', value: input.file_path || input.path || '' };
+      return { type: 'path', value: input.file_path || input.path || '', oldString: input.old_string, newString: input.new_string };
     case 'glob':
       return { type: 'pattern', value: input.pattern || '' };
     case 'grep':
@@ -56,12 +179,11 @@ function getOutputSummary(tool, output) {
   switch (toolLower) {
     case 'read':
       return `Read ${lines.toLocaleString()} lines`;
-    case 'bash':
-      return lines > 3 ? null : null; // Show actual output for bash
     case 'glob':
     case 'grep':
       return `Found ${lines.toLocaleString()} matches`;
     default:
+      // Show actual output for bash and other tools
       return null;
   }
 }
@@ -87,44 +209,65 @@ function capitalizeFirst(str) {
   return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
 }
 
-// Simple markdown-like rendering for assistant messages
-function renderContent(content) {
-  if (!content) return null;
+// Custom code block renderer with syntax highlighting and copy button
+function CodeBlock({ node, inline, className, children, ...props }) {
+  const match = /language-(\w+)/.exec(className || '');
+  const codeString = String(children).replace(/\n$/, '');
 
-  // Split by code blocks first
-  const parts = content.split(/(```[\s\S]*?```)/g);
-
-  return parts.map((part, i) => {
-    // Code block
-    if (part.startsWith('```')) {
-      const match = part.match(/```(\w*)\n?([\s\S]*?)```/);
-      if (match) {
-        const [, lang, code] = match;
-        return (
-          <pre key={i} className="code-block" data-lang={lang || 'text'}>
-            <code>{code.trim()}</code>
-          </pre>
-        );
-      }
-    }
-
-    // Inline code
-    const inlineCodeParts = part.split(/(`[^`]+`)/g);
+  if (!inline && (match || codeString.includes('\n'))) {
+    const language = match ? match[1] : 'text';
     return (
-      <span key={i}>
-        {inlineCodeParts.map((p, j) => {
-          if (p.startsWith('`') && p.endsWith('`')) {
-            return <code key={j} className="inline-code">{p.slice(1, -1)}</code>;
-          }
-          return p;
-        })}
-      </span>
+      <div className="code-block-wrapper">
+        <CopyButton text={codeString} />
+        <SyntaxHighlighter
+          style={oneDark}
+          language={language}
+          PreTag="div"
+          customStyle={{
+            margin: 0,
+            borderRadius: '4px',
+            fontSize: '0.85rem',
+          }}
+          {...props}
+        >
+          {codeString}
+        </SyntaxHighlighter>
+      </div>
     );
-  });
+  }
+
+  return <code className="inline-code" {...props}>{children}</code>;
 }
 
-export default function ToolCallBlock({ item }) {
+// Markdown renderer component
+function MarkdownContent({ content }) {
+  if (!content) return null;
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        code: CodeBlock,
+        // Style links
+        a: ({ node, ...props }) => (
+          <a {...props} target="_blank" rel="noopener noreferrer" className="md-link" />
+        ),
+        // Style tables
+        table: ({ node, ...props }) => (
+          <div className="md-table-wrapper">
+            <table className="md-table" {...props} />
+          </div>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+export default function ToolCallBlock({ item, onFileClick }) {
   const [expanded, setExpanded] = useState(false);
+  const [showDiff, setShowDiff] = useState(true);
 
   // User message - in a card/box like Anthropic
   if (item.type === 'user') {
@@ -137,12 +280,14 @@ export default function ToolCallBlock({ item }) {
     );
   }
 
-  // Assistant message - with bullet prefix
+  // Assistant message - with bullet prefix and full markdown
   if (item.type === 'assistant') {
     return (
       <div className="cc-assistant-message">
         <span className="cc-bullet" style={{ color: '#a855f7' }}>●</span>
-        <div className="cc-assistant-content">{renderContent(item.content)}</div>
+        <div className="cc-assistant-content">
+          <MarkdownContent content={item.content} />
+        </div>
       </div>
     );
   }
@@ -155,7 +300,7 @@ export default function ToolCallBlock({ item }) {
   // System message
   if (item.type === 'system') {
     return (
-      <div className="cc-system-message">
+      <div className={`cc-system-message ${item.isError ? 'error' : ''}`}>
         {item.content}
       </div>
     );
@@ -170,6 +315,10 @@ export default function ToolCallBlock({ item }) {
     const hasResult = !!item.result;
     const isError = item.result?.isError;
     const output = item.result?.toolResult || '';
+
+    // Check if this is an Edit tool with diff data
+    const isEditTool = tool === 'edit';
+    const hasDiffData = isEditTool && toolInput.oldString && toolInput.newString;
 
     // Get summary or truncated output
     const summary = getOutputSummary(item.tool, output);
@@ -198,7 +347,27 @@ export default function ToolCallBlock({ item }) {
               {toolInput.value.length > 60 ? toolInput.value.slice(0, 60) + '...' : toolInput.value}
             </span>
           )}
+          {hasDiffData && (
+            <button
+              className="cc-toggle-diff"
+              onClick={() => setShowDiff(!showDiff)}
+            >
+              {showDiff ? 'Hide diff' : 'Show diff'}
+            </button>
+          )}
         </div>
+
+        {/* Diff view for Edit tool */}
+        {hasDiffData && showDiff && (
+          <div className="cc-tool-output-container">
+            <span className="cc-tree-connector">├─</span>
+            <DiffView
+              oldString={toolInput.oldString}
+              newString={toolInput.newString}
+              filePath={toolInput.value}
+            />
+          </div>
+        )}
 
         {/* Output with tree-style connector */}
         {hasResult && output && (
@@ -212,7 +381,9 @@ export default function ToolCallBlock({ item }) {
                 // Show actual output for Bash, etc.
                 <>
                   {displayOutput.split('\n').map((line, idx) => (
-                    <div key={idx} className="cc-output-line">{line || ' '}</div>
+                    <div key={idx} className="cc-output-line">
+                      {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
+                    </div>
                   ))}
                 </>
               )}

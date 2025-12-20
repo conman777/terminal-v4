@@ -27,7 +27,7 @@ export function useTerminalStream(sessionId) {
     });
 
     source.onerror = () => {
-      source.close();
+      // Allow EventSource to attempt automatic reconnect.
     };
 
     return () => {

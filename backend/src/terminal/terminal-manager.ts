@@ -32,6 +32,7 @@ export interface ProjectInfo {
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
+const MAX_BUFFER_CHARS = 1_000_000;
 
 function detectShell(): string {
   if (process.platform === 'win32') {
@@ -61,6 +62,7 @@ interface ManagedTerminal {
   updatedAt: string;
   process: TerminalProcess;
   buffer: TerminalStreamEvent[];
+  bufferCharCount: number;
   subscribers: Set<(event: TerminalStreamEvent | null) => void>;
   saveTimer?: NodeJS.Timeout;
 }
@@ -131,7 +133,9 @@ export class TerminalManager {
     }
     // Save after 2 seconds of inactivity
     session.saveTimer = setTimeout(() => {
-      this.#saveSessionToDisk(session);
+      void this.#saveSessionToDisk(session).catch((error) => {
+        console.error(`Failed to persist terminal session ${session.id}:`, error);
+      });
     }, 2000);
   }
 
@@ -240,6 +244,10 @@ export class TerminalManager {
     return [...activeSessions, ...persistedSessions];
   }
 
+  isActive(id: string): boolean {
+    return this.#sessions.has(id);
+  }
+
   getSession(id: string): TerminalSessionSnapshot | null {
     // Check active sessions first
     const session = this.#sessions.get(id);
@@ -276,6 +284,11 @@ export class TerminalManager {
       ts: Date.now()
     };
     session.buffer.push(event);
+    session.bufferCharCount += event.text.length;
+    while (session.bufferCharCount > MAX_BUFFER_CHARS && session.buffer.length > 1) {
+      const removed = session.buffer.shift();
+      if (removed) session.bufferCharCount -= removed.text.length;
+    }
     session.updatedAt = new Date().toISOString();
     session.subscribers.forEach((subscriber) => subscriber(event));
 
@@ -303,7 +316,9 @@ export class TerminalManager {
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
       }
-      this.#saveSessionToDisk(session);
+      void this.#saveSessionToDisk(session).catch((error) => {
+        console.error(`Failed to persist terminal session ${session.id}:`, error);
+      });
 
       session.subscribers.forEach((subscriber) => subscriber(null));
       session.subscribers.clear();
@@ -318,7 +333,15 @@ export class TerminalManager {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
     const shell = options.shell ?? this.#defaultShell;
-    const cwd = options.cwd ?? process.cwd();
+    let cwd = options.cwd ?? process.cwd();
+    try {
+      cwd = path.resolve(cwd);
+      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+        cwd = process.cwd();
+      }
+    } catch {
+      cwd = process.cwd();
+    }
 
     const ptyProcess = this.#spawnTerminal({
       shell,
@@ -337,6 +360,7 @@ export class TerminalManager {
       updatedAt: createdAt,
       process: ptyProcess,
       buffer: [],
+      bufferCharCount: 0,
       subscribers: new Set()
     };
 
@@ -378,6 +402,7 @@ export class TerminalManager {
       throw new Error(`Terminal session ${id} not found`);
     }
 
+    this.#maybeUpdateCwdFromInput(session, input);
     session.process.write(normaliseNewlines(input));
   }
 
@@ -522,6 +547,40 @@ export class TerminalManager {
     deleteSession(id);
   }
 
+  // Kill all active sessions
+  async closeAll(options: { persist?: boolean } = {}): Promise<void> {
+    const persist = options.persist ?? true;
+    console.log(`Closing all ${this.#sessions.size} active terminal sessions`);
+    const sessions = Array.from(this.#sessions.values());
+
+    if (persist) {
+      await Promise.all(
+        sessions.map(async (session) => {
+          try {
+            if (session.saveTimer) {
+              clearTimeout(session.saveTimer);
+            }
+            session.updatedAt = new Date().toISOString();
+            await this.#saveSessionToDisk(session);
+          } catch (error) {
+            console.error(`Failed to persist terminal session ${session.id}:`, error);
+          }
+        })
+      );
+    }
+
+    for (const session of sessions) {
+      try {
+        session.subscribers.forEach((subscriber) => subscriber(null));
+        session.subscribers.clear();
+        session.process.kill();
+      } catch (err) {
+        console.error(`Error killing session ${session.id}:`, err);
+      }
+    }
+    this.#sessions.clear();
+  }
+
   // Restore a persisted session by creating a new PTY with the same ID
   restoreSession(id: string, options: { cols?: number; rows?: number } = {}): TerminalSessionSnapshot | null {
     const persisted = this.#persistedSessions.get(id);
@@ -563,6 +622,7 @@ export class TerminalManager {
       updatedAt: new Date().toISOString(),
       process: ptyProcess,
       buffer: [...persisted.history], // Restore history
+      bufferCharCount: persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
       subscribers: new Set()
     };
 
@@ -574,5 +634,48 @@ export class TerminalManager {
     this.#sessions.set(id, session);
 
     return this.getSession(id);
+  }
+
+  #maybeUpdateCwdFromInput(session: ManagedTerminal, input: string): void {
+    if (!input) return;
+    if (!input.includes('\n') && !input.includes('\r')) return;
+
+    const normalized = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const lines = normalized.split('\n');
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      const match = trimmed.match(/^cd(?:\s+\/d)?\s+(?<path>.+)$/i);
+      if (!match?.groups?.path) continue;
+
+      let target = match.groups.path.trim();
+      if (
+        (target.startsWith('"') && target.endsWith('"')) ||
+        (target.startsWith("'") && target.endsWith("'"))
+      ) {
+        target = target.slice(1, -1);
+      }
+
+      if (!target) continue;
+
+      // Expand "~" on Unix-like systems.
+      if (target === '~' || target.startsWith('~/')) {
+        const home = process.env.HOME;
+        if (home) {
+          target = path.join(home, target.slice(1));
+        }
+      }
+
+      const resolvedTarget = path.resolve(session.cwd || process.cwd(), target);
+      try {
+        if (fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()) {
+          session.cwd = resolvedTarget;
+        }
+      } catch {
+        // Ignore invalid paths.
+      }
+    }
   }
 }

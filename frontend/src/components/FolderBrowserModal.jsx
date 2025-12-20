@@ -24,7 +24,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
       setFolders(data.folders);
       setParent(data.parent);
     } catch (err) {
-      setError(err.message);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -37,9 +37,9 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
   }, [isOpen, currentPath, loadDirectory]);
 
   const handleFolderClick = (folderName) => {
-    const newPath = path.endsWith('/') || path.endsWith('\\')
-      ? `${path}${folderName}`
-      : `${path}/${folderName}`;
+    const separator = path.includes('\\') ? '\\' : '/';
+    const basePath = path.endsWith('/') || path.endsWith('\\') ? path : `${path}${separator}`;
+    const newPath = `${basePath}${folderName}`;
     loadDirectory(newPath);
   };
 
