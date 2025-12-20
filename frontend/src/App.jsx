@@ -305,10 +305,22 @@ export default function App() {
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const [projectInfo, setProjectInfo] = useState(null);
-  // Claude Code state
-  const [leftPanelMode, setLeftPanelMode] = useState('terminal'); // 'terminal' | 'claude-code'
+  // Claude Code state - restore from localStorage
+  const [leftPanelMode, setLeftPanelMode] = useState(() => {
+    try {
+      return localStorage.getItem('leftPanelMode') || 'terminal';
+    } catch {
+      return 'terminal';
+    }
+  });
   const [claudeCodeSessions, setClaudeCodeSessions] = useState([]);
-  const [activeClaudeCodeId, setActiveClaudeCodeId] = useState(null);
+  const [activeClaudeCodeId, setActiveClaudeCodeId] = useState(() => {
+    try {
+      return localStorage.getItem('lastActiveClaudeCodeId') || null;
+    } catch {
+      return null;
+    }
+  });
   const mainContentRef = useRef(null);
   const isMountedRef = useRef(true);
   const isMobile = useMobileDetect();
@@ -561,6 +573,25 @@ export default function App() {
     const interval = setInterval(fetchClaudeCodeSessions, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // Persist Claude Code state to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('leftPanelMode', leftPanelMode);
+    } catch (e) {
+      console.error('Failed to save leftPanelMode', e);
+    }
+  }, [leftPanelMode]);
+
+  useEffect(() => {
+    try {
+      if (activeClaudeCodeId) {
+        localStorage.setItem('lastActiveClaudeCodeId', activeClaudeCodeId);
+      }
+    } catch (e) {
+      console.error('Failed to save lastActiveClaudeCodeId', e);
+    }
+  }, [activeClaudeCodeId]);
 
   const handleCreateSession = useCallback(async () => {
     try {
