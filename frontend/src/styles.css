@@ -3193,6 +3193,11 @@ textarea:focus-visible {
   color: var(--accent-primary);
 }
 
+.model-option.selected {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
 .empty-hint {
   font-size: 0.75rem;
   color: var(--text-muted);

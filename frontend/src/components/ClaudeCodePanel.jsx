@@ -77,6 +77,7 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   const [isProcessing, setIsProcessing] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [showModelPicker, setShowModelPicker] = useState(false);
+  const [modelPickerIndex, setModelPickerIndex] = useState(0);
   const [inputHistory, setInputHistory] = useState([]);
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -86,6 +87,33 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [events]);
+
+  // Model picker options
+  const MODELS = ['sonnet', 'opus', 'haiku'];
+
+  // Model picker keyboard navigation
+  useEffect(() => {
+    if (!showModelPicker) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setModelPickerIndex(i => (i + 1) % MODELS.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setModelPickerIndex(i => (i - 1 + MODELS.length) % MODELS.length);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleModelSelect(MODELS[modelPickerIndex]);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowModelPicker(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showModelPicker, modelPickerIndex]);
 
   // Connect to SSE stream with retry logic
   const retryCountRef = useRef(0);
@@ -190,6 +218,9 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     }
 
     if (trimmed === '/model') {
+      // Set initial index to current model
+      const currentModelIndex = MODELS.indexOf(model || 'sonnet');
+      setModelPickerIndex(currentModelIndex >= 0 ? currentModelIndex : 0);
       setShowModelPicker(true);
       const cmdEvent = {
         id: `cmd-${Date.now()}`,
@@ -359,25 +390,25 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         {/* Model picker - shown when /model command is used */}
         {showModelPicker && (
           <div className="model-picker">
-            <div className="model-picker-label">Select model:</div>
+            <div className="model-picker-label">Select model (↑↓ to navigate, Enter to select):</div>
             <div className="model-picker-options">
               <button
-                className={`model-option ${model === 'sonnet' ? 'active' : ''}`}
+                className={`model-option ${modelPickerIndex === 0 ? 'selected' : ''} ${model === 'sonnet' ? 'active' : ''}`}
                 onClick={() => handleModelSelect('sonnet')}
               >
-                claude-sonnet-4-20250514
+                claude-sonnet-4-20250514 {model === 'sonnet' && '✓'}
               </button>
               <button
-                className={`model-option ${model === 'opus' ? 'active' : ''}`}
+                className={`model-option ${modelPickerIndex === 1 ? 'selected' : ''} ${model === 'opus' ? 'active' : ''}`}
                 onClick={() => handleModelSelect('opus')}
               >
-                claude-opus-4-20250514
+                claude-opus-4-20250514 {model === 'opus' && '✓'}
               </button>
               <button
-                className={`model-option ${model === 'haiku' ? 'active' : ''}`}
+                className={`model-option ${modelPickerIndex === 2 ? 'selected' : ''} ${model === 'haiku' ? 'active' : ''}`}
                 onClick={() => handleModelSelect('haiku')}
               >
-                claude-haiku-3-5-20241022
+                claude-haiku-3-5-20241022 {model === 'haiku' && '✓'}
               </button>
             </div>
           </div>

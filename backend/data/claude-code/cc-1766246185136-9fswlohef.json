@@ -1,0 +1,34 @@
+{
+  "id": "cc-1766246185136-9fswlohef",
+  "cwd": "/Users/conordart/Documents/coding projects/terminal-v4/backend",
+  "createdAt": 1766246185136,
+  "updatedAt": 1766246197151,
+  "events": [
+    {
+      "id": "evt-1766246187453",
+      "type": "user",
+      "timestamp": 1766246187453,
+      "content": "hey"
+    },
+    {
+      "id": "meta-1766246189280",
+      "type": "result",
+      "timestamp": 1766246189280,
+      "cli_session_id": "db954feb-f947-4387-b1ed-e84a1607880b",
+      "content": "Session metadata updated"
+    },
+    {
+      "id": "evt-1766246195148-5gkzn",
+      "type": "assistant",
+      "timestamp": 1766246195148,
+      "content": "Hey! How can I help you today?"
+    },
+    {
+      "id": "evt-1766246195150-5rlrb",
+      "type": "result",
+      "timestamp": 1766246195150,
+      "content": "Task completed successfully"
+    }
+  ],
+  "isActive": true
+}

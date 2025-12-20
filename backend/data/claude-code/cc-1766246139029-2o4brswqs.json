@@ -1,0 +1,60 @@
+{
+  "id": "cc-1766246139029-2o4brswqs",
+  "cwd": "/Users/conordart/Documents/coding projects/terminal-v4/backend",
+  "model": "sonnet",
+  "createdAt": 1766246139029,
+  "updatedAt": 1766249992156,
+  "events": [
+    {
+      "id": "evt-1766246139095",
+      "type": "user",
+      "timestamp": 1766246139095,
+      "content": "hello test"
+    },
+    {
+      "id": "meta-1766246140916",
+      "type": "result",
+      "timestamp": 1766246140916,
+      "cli_session_id": "e08264bd-9bbb-4f18-9900-a3208f9b4158",
+      "content": "Session metadata updated"
+    },
+    {
+      "id": "evt-1766246146972-54i9a",
+      "type": "assistant",
+      "timestamp": 1766246146972,
+      "content": "Hello! How can I help you today?"
+    },
+    {
+      "id": "evt-1766246147003-w37ed",
+      "type": "result",
+      "timestamp": 1766246147003,
+      "content": "Task completed successfully"
+    },
+    {
+      "id": "evt-1766249985688",
+      "type": "user",
+      "timestamp": 1766249985688,
+      "content": "hey"
+    },
+    {
+      "id": "meta-1766249987824",
+      "type": "result",
+      "timestamp": 1766249987824,
+      "cli_session_id": "908f1980-075b-4c78-8c99-6ca776b78e47",
+      "content": "Session metadata updated"
+    },
+    {
+      "id": "evt-1766249990142-2htrj",
+      "type": "assistant",
+      "timestamp": 1766249990142,
+      "content": "Hey! How can I help you today?"
+    },
+    {
+      "id": "evt-1766249990156-2w2r7",
+      "type": "result",
+      "timestamp": 1766249990156,
+      "content": "Task completed successfully"
+    }
+  ],
+  "isActive": true
+}

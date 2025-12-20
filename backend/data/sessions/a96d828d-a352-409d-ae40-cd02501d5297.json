@@ -1,0 +1,22 @@
+{
+  "id": "a96d828d-a352-409d-ae40-cd02501d5297",
+  "title": "Terminal 1",
+  "shell": "/bin/zsh",
+  "cwd": "/Users/conordart/Documents/coding projects/terminal-v4/backend",
+  "createdAt": "2025-12-20T16:57:32.017Z",
+  "updatedAt": "2025-12-20T16:57:33.880Z",
+  "history": [
+    {
+      "text": "\u001b[1m\u001b[7m%\u001b[27m\u001b[1m\u001b[0m                                                                                                                       \r \r",
+      "ts": 1766249853875
+    },
+    {
+      "text": "\u001b]7;file://Conors-MacBook-Air.local/Users/conordart/Documents/coding%20projects/terminal-v4/backend\u0007",
+      "ts": 1766249853876
+    },
+    {
+      "text": "\r\u001b[0m\u001b[27m\u001b[24m\u001b[J(base) conordart@Conors-MacBook-Air backend % \u001b[K\u001b[?2004h",
+      "ts": 1766249853880
+    }
+  ]
+}
