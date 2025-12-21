@@ -460,6 +460,7 @@ button {
   display: flex;
   flex-direction: row;
   overflow: hidden;
+  min-height: 0;
   background: var(--bg-base);
 }
 
@@ -490,7 +491,9 @@ button {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   height: 100%;
+  overflow: hidden;
 }
 
 .terminal-pane.hidden {
@@ -563,6 +566,8 @@ button {
   gap: 0;
   flex: 1;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .terminal-log {
