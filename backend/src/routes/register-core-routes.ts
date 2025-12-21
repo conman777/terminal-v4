@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
 import { terminalCreateRequestSchema, terminalInputRequestSchema, terminalResizeRequestSchema } from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
+import { scanForProjects } from '../services/project-scanner';
 
 // Define the root directory of the project for sandboxing filesystem operations
 const __filename = fileURLToPath(import.meta.url);
@@ -363,6 +364,20 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     } catch (error) {
       console.error('Archive finalize error:', error);
       reply.raw.end();
+    }
+  });
+
+  // Projects: Scan for git repositories
+  app.get<{ Querystring: { force?: string } }>('/api/projects/scan', async (request, reply) => {
+    const force = request.query.force === 'true';
+    try {
+      const result = await scanForProjects(force);
+      reply.send(result);
+    } catch (error) {
+      reply.code(500).send({
+        error: 'Failed to scan for projects',
+        message: error instanceof Error ? error.message : String(error)
+      });
     }
   });
 }

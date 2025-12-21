@@ -8,6 +8,7 @@ import { PathBreadcrumb } from './components/PathBreadcrumb';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
+import Sidebar from './components/Sidebar';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 
@@ -343,6 +344,29 @@ export default function App() {
     }
   });
 
+  // Load pinned folders from localStorage
+  const [pinnedFolders, setPinnedFolders] = useState(() => {
+    try {
+      const stored = localStorage.getItem('pinnedFolders');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Projects (git repos) state
+  const [projects, setProjects] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+
+  // Sidebar collapsed state
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('sidebarCollapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
     if (!folder) return;
@@ -356,6 +380,65 @@ export default function App() {
       }
       return updated;
     });
+  }, []);
+
+  // Pin a folder (max 20)
+  const pinFolder = useCallback((folder) => {
+    if (!folder) return;
+    setPinnedFolders(prev => {
+      if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
+        return prev; // Already pinned
+      }
+      const updated = [...prev, folder].slice(0, 20);
+      try {
+        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save pinned folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Unpin a folder
+  const unpinFolder = useCallback((folder) => {
+    setPinnedFolders(prev => {
+      const updated = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
+      try {
+        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save pinned folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Toggle sidebar collapsed state
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const newValue = !prev;
+      try {
+        localStorage.setItem('sidebarCollapsed', String(newValue));
+      } catch (e) {
+        console.error('Failed to save sidebar state', e);
+      }
+      return newValue;
+    });
+  }, []);
+
+  // Fetch projects (git repos) on mount
+  const loadProjects = useCallback(async () => {
+    setProjectsLoading(true);
+    try {
+      const response = await fetch('/api/projects/scan');
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data.projects || []);
+      }
+    } catch (error) {
+      console.error('Failed to load projects', error);
+    } finally {
+      setProjectsLoading(false);
+    }
   }, []);
 
   const loadSessions = useCallback(async () => {
@@ -480,6 +563,9 @@ export default function App() {
 
   // Initial load - restore last active session if needed
   useEffect(() => {
+    // Reset mounted ref (needed for React StrictMode double-invocation)
+    isMountedRef.current = true;
+
     const initializeSessions = async () => {
       await loadSessions();
       await loadBookmarks();
@@ -507,14 +593,42 @@ export default function App() {
                   await loadSessions();
                 }
               }
+              // Session exists and is active (or just restored) - keep activeSessionId as is
             } else {
-              // Session doesn't exist anymore, clear the stored ID
-              localStorage.removeItem('lastActiveSession');
-              setActiveSessionId(null);
+              // Session doesn't exist anymore, try to find an active session
+              const activeSession = sessionList.find(s => s.isActive);
+              if (activeSession) {
+                setActiveSessionId(activeSession.id);
+                localStorage.setItem('lastActiveSession', activeSession.id);
+              } else if (sessionList.length > 0) {
+                // No active session, use the first available
+                setActiveSessionId(sessionList[0].id);
+                localStorage.setItem('lastActiveSession', sessionList[0].id);
+              } else {
+                // No sessions at all
+                localStorage.removeItem('lastActiveSession');
+                setActiveSessionId(null);
+              }
             }
           }
         } catch (error) {
           console.error('Failed to restore last session', error);
+        }
+      } else {
+        // No stored session ID, try to select an active session
+        try {
+          const response = await fetch('/api/terminal');
+          if (response.ok) {
+            const data = await response.json();
+            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
+            const activeSession = sessionList.find(s => s.isActive);
+            if (activeSession) {
+              setActiveSessionId(activeSession.id);
+              localStorage.setItem('lastActiveSession', activeSession.id);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to find active session', error);
         }
       }
     };
@@ -528,6 +642,11 @@ export default function App() {
       clearInterval(interval);
     };
   }, [loadSessions, loadBookmarks]);
+
+  // Load projects on mount
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
 
   // Poll for project info when there's an active session
   const lastCwdRef = useRef(null);
@@ -809,6 +928,18 @@ export default function App() {
     }
   }, [addRecentFolder]);
 
+  // Handle folder selection from sidebar
+  const handleSidebarFolderSelect = useCallback((path) => {
+    if (!path) return;
+
+    if (activeSessionId) {
+      handleNavigateSession(activeSessionId, path);
+    } else {
+      // No active session, just add to recent folders
+      addRecentFolder(path);
+    }
+  }, [activeSessionId, handleNavigateSession, addRecentFolder]);
+
   const handleKeybarHeightChange = useCallback((height) => {
     setKeybarHeight(Math.max(0, Math.round(height)));
   }, []);
@@ -938,9 +1069,22 @@ export default function App() {
         </>
       )}
 
-      {/* Desktop layout - no sidebar, header with session selector */}
+      {/* Desktop layout with sidebar */}
       {!isMobile && (
-        <div className="main-container">
+        <>
+          <Sidebar
+            isCollapsed={sidebarCollapsed}
+            onToggle={toggleSidebar}
+            recentFolders={recentFolders}
+            pinnedFolders={pinnedFolders}
+            projects={projects}
+            projectsLoading={projectsLoading}
+            onFolderSelect={handleSidebarFolderSelect}
+            onPinFolder={pinFolder}
+            onUnpinFolder={unpinFolder}
+            currentPath={projectInfo?.cwd}
+          />
+          <div className="main-container">
           <header className="app-header">
             <div className="header-left">
               <h1 className="app-title">Terminal</h1>
@@ -1086,6 +1230,7 @@ export default function App() {
             )}
           </main>
         </div>
+        </>
       )}
 
       {/* Mobile layout */}
