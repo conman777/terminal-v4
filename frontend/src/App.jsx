@@ -292,7 +292,14 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
 
 export default function App() {
   const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
+  // Restore terminal session from localStorage
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    try {
+      return localStorage.getItem('lastActiveSession') || null;
+    } catch {
+      return null;
+    }
+  });
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
@@ -471,17 +478,17 @@ export default function App() {
     [activeSessionId]
   );
 
-  // Initial load - check for last active session and auto-restore if available
+  // Initial load - restore last active session if needed
   useEffect(() => {
     const initializeSessions = async () => {
       await loadSessions();
       await loadBookmarks();
 
-      // Try to restore last active session
-      try {
-        const lastSessionId = localStorage.getItem('lastActiveSession');
-        if (lastSessionId) {
-          // Fetch fresh session list to check if this session exists
+      // If we have a session ID from localStorage, ensure it's restored
+      const lastSessionId = localStorage.getItem('lastActiveSession');
+      if (lastSessionId) {
+        try {
+          // Fetch fresh session list to check session status
           const response = await fetch('/api/terminal');
           if (response.ok) {
             const data = await response.json();
@@ -489,10 +496,7 @@ export default function App() {
             const lastSession = sessionList.find(s => s.id === lastSessionId);
 
             if (lastSession) {
-              if (lastSession.isActive) {
-                // Session is already active, just select it
-                setActiveSessionId(lastSessionId);
-              } else {
+              if (!lastSession.isActive) {
                 // Session is persisted but not active, restore it
                 const restoreResponse = await fetch(`/api/terminal/${lastSessionId}/restore`, {
                   method: 'POST',
@@ -500,15 +504,18 @@ export default function App() {
                   body: JSON.stringify({})
                 });
                 if (restoreResponse.ok) {
-                  setActiveSessionId(lastSessionId);
                   await loadSessions();
                 }
               }
+            } else {
+              // Session doesn't exist anymore, clear the stored ID
+              localStorage.removeItem('lastActiveSession');
+              setActiveSessionId(null);
             }
           }
+        } catch (error) {
+          console.error('Failed to restore last session', error);
         }
-      } catch (error) {
-        console.error('Failed to restore last session', error);
       }
     };
 
