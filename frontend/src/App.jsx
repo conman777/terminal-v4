@@ -9,8 +9,11 @@ import { FolderBrowserModal } from './components/FolderBrowserModal';
 import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
+import LoginPage from './components/LoginPage';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
+import { apiFetch } from './utils/api';
 
 function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
@@ -291,7 +294,8 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
   );
 }
 
-export default function App() {
+function AppContent() {
+  const { logout, user } = useAuth();
   const [sessions, setSessions] = useState([]);
   // Restore terminal session from localStorage
   const [activeSessionId, setActiveSessionId] = useState(() => {
@@ -429,7 +433,7 @@ export default function App() {
   const loadProjects = useCallback(async () => {
     setProjectsLoading(true);
     try {
-      const response = await fetch('/api/projects/scan');
+      const response = await apiFetch('/api/projects/scan');
       if (response.ok) {
         const data = await response.json();
         setProjects(data.projects || []);
@@ -445,7 +449,7 @@ export default function App() {
     if (!isMountedRef.current) return;
     setLoadingSessions(true);
     try {
-      const response = await fetch('/api/terminal');
+      const response = await apiFetch('/api/terminal');
       if (!response.ok) {
         throw new Error(`Failed to load sessions (${response.status})`);
       }
@@ -466,7 +470,7 @@ export default function App() {
   const loadBookmarks = useCallback(async () => {
     if (!isMountedRef.current) return;
     try {
-      const response = await fetch('/api/bookmarks');
+      const response = await apiFetch('/api/bookmarks');
       if (!response.ok) {
         throw new Error(`Failed to load bookmarks (${response.status})`);
       }
@@ -483,7 +487,7 @@ export default function App() {
   const handleAddBookmark = useCallback(
     async (name, command, category) => {
       try {
-        const response = await fetch('/api/bookmarks', {
+        const response = await apiFetch('/api/bookmarks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, command, category })
@@ -504,7 +508,7 @@ export default function App() {
   const handleUpdateBookmark = useCallback(
     async (id, updates) => {
       try {
-        const response = await fetch(`/api/bookmarks/${id}`, {
+        const response = await apiFetch(`/api/bookmarks/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(updates)
@@ -525,7 +529,7 @@ export default function App() {
   const handleDeleteBookmark = useCallback(
     async (id) => {
       try {
-        const response = await fetch(`/api/bookmarks/${id}`, {
+        const response = await apiFetch(`/api/bookmarks/${id}`, {
           method: 'DELETE'
         });
 
@@ -549,7 +553,7 @@ export default function App() {
       }
 
       try {
-        await fetch(`/api/terminal/${activeSessionId}/input`, {
+        await apiFetch(`/api/terminal/${activeSessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: command + '\r' })
@@ -575,7 +579,7 @@ export default function App() {
       if (lastSessionId) {
         try {
           // Fetch fresh session list to check session status
-          const response = await fetch('/api/terminal');
+          const response = await apiFetch('/api/terminal');
           if (response.ok) {
             const data = await response.json();
             const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
@@ -584,7 +588,7 @@ export default function App() {
             if (lastSession) {
               if (!lastSession.isActive) {
                 // Session is persisted but not active, restore it
-                const restoreResponse = await fetch(`/api/terminal/${lastSessionId}/restore`, {
+                const restoreResponse = await apiFetch(`/api/terminal/${lastSessionId}/restore`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({})
@@ -617,7 +621,7 @@ export default function App() {
       } else {
         // No stored session ID, try to select an active session
         try {
-          const response = await fetch('/api/terminal');
+          const response = await apiFetch('/api/terminal');
           if (response.ok) {
             const data = await response.json();
             const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
@@ -659,7 +663,7 @@ export default function App() {
 
     const fetchProjectInfo = async () => {
       try {
-        const response = await fetch(`/api/terminal/${activeSessionId}/project-info`);
+        const response = await apiFetch(`/api/terminal/${activeSessionId}/project-info`);
         if (response.ok) {
           const data = await response.json();
           setProjectInfo(data);
@@ -687,7 +691,7 @@ export default function App() {
   useEffect(() => {
     const fetchClaudeCodeSessions = async () => {
       try {
-        const res = await fetch('/api/claude-code');
+        const res = await apiFetch('/api/claude-code');
         const data = await res.json();
         setClaudeCodeSessions(data.sessions || []);
       } catch (error) {
@@ -727,7 +731,7 @@ export default function App() {
         requestBody.cwd = recentFolders[0];
       }
 
-      const response = await fetch('/api/terminal', {
+      const response = await apiFetch('/api/terminal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody)
@@ -761,7 +765,7 @@ export default function App() {
   const handleRestoreSession = useCallback(
     async (sessionId) => {
       try {
-        const response = await fetch(`/api/terminal/${sessionId}/restore`, {
+        const response = await apiFetch(`/api/terminal/${sessionId}/restore`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({})
@@ -790,7 +794,7 @@ export default function App() {
   const handleCloseSession = useCallback(
     async (sessionId) => {
       try {
-        await fetch(`/api/terminal/${sessionId}`, {
+        await apiFetch(`/api/terminal/${sessionId}`, {
           method: 'DELETE'
         });
 
@@ -825,7 +829,7 @@ export default function App() {
     const cwd = sessions.find(s => s.id === activeSessionId)?.cwd || projectInfo?.cwd || '.';
 
     try {
-      const res = await fetch('/api/claude-code/start', {
+      const res = await apiFetch('/api/claude-code/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cwd, model })
@@ -844,7 +848,7 @@ export default function App() {
     if (session && !session.isActive) {
       // Restore inactive session
       try {
-        await fetch(`/api/claude-code/${id}/restore`, { method: 'POST' });
+        await apiFetch(`/api/claude-code/${id}/restore`, { method: 'POST' });
       } catch (error) {
         console.error('Failed to restore session:', error);
       }
@@ -855,7 +859,7 @@ export default function App() {
 
   const handleDeleteClaudeCode = useCallback(async (id) => {
     try {
-      await fetch(`/api/claude-code/${id}`, { method: 'DELETE' });
+      await apiFetch(`/api/claude-code/${id}`, { method: 'DELETE' });
       setClaudeCodeSessions(prev => prev.filter(s => s.id !== id));
       if (activeClaudeCodeId === id) {
         setActiveClaudeCodeId(null);
@@ -877,7 +881,7 @@ export default function App() {
     // 1. Send cd command to active Terminal session
     if (activeSessionId) {
       try {
-        await fetch(`/api/terminal/${activeSessionId}/input`, {
+        await apiFetch(`/api/terminal/${activeSessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: `cd "${newPath}"\r` })
@@ -890,7 +894,7 @@ export default function App() {
     // 2. Update Claude Code session's cwd (persist to backend)
     if (activeClaudeCodeId) {
       try {
-        const res = await fetch(`/api/claude-code/${activeClaudeCodeId}/cwd`, {
+        const res = await apiFetch(`/api/claude-code/${activeClaudeCodeId}/cwd`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cwd: newPath })
@@ -916,7 +920,7 @@ export default function App() {
 
     try {
       const cdCommand = `cd "${path}"\r`;
-      await fetch(`/api/terminal/${sessionId}/input`, {
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cdCommand })
@@ -965,7 +969,7 @@ export default function App() {
     if (!activeSessionId || !command) return;
 
     try {
-      await fetch(`/api/terminal/${activeSessionId}/input`, {
+      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: command + '\r' })
@@ -981,7 +985,7 @@ export default function App() {
     try {
       // Send cd command to terminal
       const cdCommand = `cd "${path}"\r`;
-      await fetch(`/api/terminal/${activeSessionId}/input`, {
+      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ command: cdCommand })
@@ -1150,6 +1154,18 @@ export default function App() {
               >
                 {'\u{1F4D1}'}
               </button>
+              <span className="header-user" title={user?.username}>
+                {user?.username}
+              </span>
+              <button
+                className="header-btn logout-btn"
+                type="button"
+                onClick={logout}
+                aria-label="Logout"
+                title="Logout"
+              >
+                {'\u{1F6AA}'}
+              </button>
             </div>
           </header>
 
@@ -1292,4 +1308,30 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthenticatedApp />
+    </AuthProvider>
+  );
+}
+
+function AuthenticatedApp() {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="auth-loading">
+        <div className="auth-loading-spinner" />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage />;
+  }
+
+  return <AppContent />;
 }

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import ToolCallBlock from './ToolCallBlock';
 import ClaudeCodeInput from './ClaudeCodeInput';
 import { FolderBrowserModal } from './FolderBrowserModal';
+import { apiFetch } from '../utils/api';
+import { getAccessToken } from '../utils/auth';
 
 // Status bar component
 function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
@@ -140,7 +142,10 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         return;
       }
 
-      eventSource = new EventSource(`/api/claude-code/${sessionId}/stream`);
+      // EventSource doesn't support headers, so pass token via query param
+      const token = getAccessToken();
+      const streamUrl = `/api/claude-code/${sessionId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      eventSource = new EventSource(streamUrl);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -276,10 +281,9 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     setIsProcessing(true);
 
     try {
-      const res = await fetch(`/api/claude-code/${sessionId}/input`, {
+      const res = await apiFetch(`/api/claude-code/${sessionId}/input`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text })
+        body: { text }
       });
       if (!res.ok) {
         setIsProcessing(false);
@@ -294,10 +298,9 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   const handleModelSelect = useCallback(async (newModel) => {
     setShowModelPicker(false);
     try {
-      const res = await fetch(`/api/claude-code/${sessionId}/model`, {
+      const res = await apiFetch(`/api/claude-code/${sessionId}/model`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: newModel })
+        body: { model: newModel }
       });
       if (res.ok) {
         const updated = await res.json();
@@ -323,7 +326,7 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     if (!sessionId || !isProcessing) return;
 
     try {
-      await fetch(`/api/claude-code/${sessionId}/stop`, { method: 'POST' });
+      await apiFetch(`/api/claude-code/${sessionId}/stop`, { method: 'POST' });
       // Add system event to show cancellation
       const cancelEvent = {
         id: `cancel-${Date.now()}`,

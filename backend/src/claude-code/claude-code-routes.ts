@@ -27,16 +27,27 @@ export async function registerClaudeCodeRoutes(
   manager: ClaudeCodeManager
 ): Promise<void> {
   // List all Claude Code sessions
-  app.get('/api/claude-code', async () => {
-    const sessions = manager.getAllSessions();
+  app.get('/api/claude-code', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    await manager.loadUserSessions(userId);
+    const sessions = manager.getAllSessions(userId);
     return { sessions };
   });
 
   // Start new Claude Code session
   app.post<{ Body: StartClaudeCodeBody }>('/api/claude-code/start', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     try {
       const { cwd, model } = request.body || {};
-      const session = manager.createSession(cwd || process.cwd(), model || 'sonnet');
+      const session = manager.createSession(userId, cwd || process.cwd(), model || 'sonnet');
       return session;
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -45,7 +56,12 @@ export async function registerClaudeCodeRoutes(
 
   // Get specific session
   app.get<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id', async (request, reply) => {
-    const session = manager.getSession(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const session = manager.getSession(userId, request.params.id);
     if (!session) {
       return reply.code(404).send({ error: 'Session not found' });
     }
@@ -54,7 +70,13 @@ export async function registerClaudeCodeRoutes(
 
   // Stream session events (SSE)
   app.get<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id/stream', async (request, reply) => {
-    const session = manager.getSession(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const session = manager.getSession(userId, request.params.id);
     if (!session) {
       return reply.code(404).send({ error: 'Session not found' });
     }
@@ -88,7 +110,7 @@ export async function registerClaudeCodeRoutes(
     // Subscribe to new events
     let unsubscribe: (() => void) | null = null;
     try {
-      unsubscribe = manager.subscribe(request.params.id, (event) => {
+      unsubscribe = manager.subscribe(userId, request.params.id, (event) => {
         send('event', event);
       });
     } catch (error) {
@@ -119,12 +141,17 @@ export async function registerClaudeCodeRoutes(
   app.post<{ Params: ClaudeCodeIdParams; Body: SendInputBody }>(
     '/api/claude-code/:id/input',
     async (request, reply) => {
+      const userId = request.userId;
+      if (!userId) {
+        reply.code(401).send({ error: 'Unauthorized' });
+        return;
+      }
       try {
         const { text } = request.body || {};
         if (!text) {
           return reply.code(400).send({ error: 'Text is required' });
         }
-        await manager.sendInput(request.params.id, text);
+        await manager.sendInput(userId, request.params.id, text);
         return { success: true };
       } catch (error) {
         reply.code(500).send({ error: String(error) });
@@ -134,8 +161,13 @@ export async function registerClaudeCodeRoutes(
 
   // Restore inactive session
   app.post<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id/restore', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     try {
-      const session = manager.restoreSession(request.params.id);
+      const session = manager.restoreSession(userId, request.params.id);
       return session;
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -144,8 +176,13 @@ export async function registerClaudeCodeRoutes(
 
   // Stop session (keep history)
   app.post<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id/stop', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     try {
-      manager.stopSession(request.params.id);
+      manager.stopSession(userId, request.params.id);
       return { success: true };
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -154,8 +191,13 @@ export async function registerClaudeCodeRoutes(
 
   // Delete session
   app.delete<{ Params: ClaudeCodeIdParams }>('/api/claude-code/:id', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     try {
-      await manager.deleteSession(request.params.id);
+      await manager.deleteSession(userId, request.params.id);
       return { success: true };
     } catch (error) {
       reply.code(500).send({ error: String(error) });
@@ -166,12 +208,17 @@ export async function registerClaudeCodeRoutes(
   app.patch<{ Params: ClaudeCodeIdParams; Body: UpdateCwdBody }>(
     '/api/claude-code/:id/cwd',
     async (request, reply) => {
+      const userId = request.userId;
+      if (!userId) {
+        reply.code(401).send({ error: 'Unauthorized' });
+        return;
+      }
       try {
         const { cwd } = request.body || {};
         if (!cwd) {
           return reply.code(400).send({ error: 'cwd is required' });
         }
-        const session = manager.updateCwd(request.params.id, cwd);
+        const session = manager.updateCwd(userId, request.params.id, cwd);
         return session;
       } catch (error) {
         reply.code(500).send({ error: String(error) });
@@ -183,12 +230,17 @@ export async function registerClaudeCodeRoutes(
   app.patch<{ Params: ClaudeCodeIdParams; Body: UpdateModelBody }>(
     '/api/claude-code/:id/model',
     async (request, reply) => {
+      const userId = request.userId;
+      if (!userId) {
+        reply.code(401).send({ error: 'Unauthorized' });
+        return;
+      }
       try {
         const { model } = request.body || {};
         if (!model) {
           return reply.code(400).send({ error: 'model is required' });
         }
-        const session = manager.updateModel(request.params.id, model);
+        const session = manager.updateModel(userId, request.params.id, model);
         return session;
       } catch (error) {
         reply.code(500).send({ error: String(error) });
@@ -196,4 +248,3 @@ export async function registerClaudeCodeRoutes(
     }
   );
 }
-

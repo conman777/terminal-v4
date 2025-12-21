@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const TEST_USER_ID = 'test-user-123';
+
 type DataHandler = (data: string) => void;
 type ExitHandler = (e: { exitCode: number; signal?: number }) => void;
 
@@ -64,10 +66,10 @@ describe('ClaudeCodeManager', () => {
     });
 
     const manager = new ClaudeCodeManager();
-    const session = manager.createSession(process.cwd());
-    await manager.sendInput(session.id, 'test');
+    const session = manager.createSession(TEST_USER_ID, process.cwd());
+    await manager.sendInput(TEST_USER_ID, session.id, 'test');
 
-    const updated = manager.getSession(session.id);
+    const updated = manager.getSession(TEST_USER_ID, session.id);
     expect(updated).not.toBeNull();
 
     const assistantTexts = (updated?.events || [])
@@ -84,16 +86,14 @@ describe('ClaudeCodeManager', () => {
     });
 
     const manager = new ClaudeCodeManager();
-    const session = manager.createSession(process.cwd());
+    const session = manager.createSession(TEST_USER_ID, process.cwd());
 
-    await expect(manager.sendInput(session.id, 'test')).rejects.toThrow('spawn failed');
+    await expect(manager.sendInput(TEST_USER_ID, session.id, 'test')).rejects.toThrow('spawn failed');
 
-    const updated = manager.getSession(session.id);
+    const updated = manager.getSession(TEST_USER_ID, session.id);
     const lastEvent = updated?.events.at(-1);
     expect(lastEvent?.type).toBe('system');
     expect(lastEvent?.isError).toBe(true);
     expect(lastEvent?.content).toContain('spawn failed');
   });
 });
-
-

@@ -17,23 +17,36 @@ export interface PersistedSession {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '..', '..', 'data');
-const SESSIONS_DIR = join(DATA_DIR, 'sessions');
 
-async function ensureSessionsDir(): Promise<void> {
-  if (!existsSync(SESSIONS_DIR)) {
-    await mkdir(SESSIONS_DIR, { recursive: true });
+function sanitizeId(id: string): string {
+  const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
+  if (!safeId) {
+    throw new Error(`Invalid ID: "${id}" - ID must contain alphanumeric characters or hyphens`);
   }
+  return safeId;
 }
 
-function getSessionFilePath(sessionId: string): string {
-  // Sanitize session ID to prevent path traversal
-  const safeId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
-  return join(SESSIONS_DIR, `${safeId}.json`);
+function getUserSessionsDir(userId: string): string {
+  const safeUserId = sanitizeId(userId);
+  return join(DATA_DIR, 'users', safeUserId, 'sessions');
 }
 
-export async function saveSession(session: PersistedSession): Promise<void> {
-  await ensureSessionsDir();
-  const filePath = getSessionFilePath(session.id);
+async function ensureUserSessionsDir(userId: string): Promise<string> {
+  const sessionsDir = getUserSessionsDir(userId);
+  if (!existsSync(sessionsDir)) {
+    await mkdir(sessionsDir, { recursive: true });
+  }
+  return sessionsDir;
+}
+
+function getSessionFilePath(userId: string, sessionId: string): string {
+  const safeSessionId = sanitizeId(sessionId);
+  return join(getUserSessionsDir(userId), `${safeSessionId}.json`);
+}
+
+export async function saveSession(userId: string, session: PersistedSession): Promise<void> {
+  await ensureUserSessionsDir(userId);
+  const filePath = getSessionFilePath(userId, session.id);
   try {
     await writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
   } catch (error) {
@@ -42,8 +55,8 @@ export async function saveSession(session: PersistedSession): Promise<void> {
   }
 }
 
-export async function loadSession(sessionId: string): Promise<PersistedSession | null> {
-  const filePath = getSessionFilePath(sessionId);
+export async function loadSession(userId: string, sessionId: string): Promise<PersistedSession | null> {
+  const filePath = getSessionFilePath(userId, sessionId);
   if (!existsSync(filePath)) {
     return null;
   }
@@ -57,8 +70,8 @@ export async function loadSession(sessionId: string): Promise<PersistedSession |
   }
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
-  const filePath = getSessionFilePath(sessionId);
+export async function deleteSession(userId: string, sessionId: string): Promise<void> {
+  const filePath = getSessionFilePath(userId, sessionId);
   if (existsSync(filePath)) {
     try {
       await unlink(filePath);
@@ -68,17 +81,17 @@ export async function deleteSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function loadAllSessions(): Promise<PersistedSession[]> {
-  await ensureSessionsDir();
+export async function loadAllSessions(userId: string): Promise<PersistedSession[]> {
+  const sessionsDir = await ensureUserSessionsDir(userId);
 
   try {
-    const files = await readdir(SESSIONS_DIR);
+    const files = await readdir(sessionsDir);
     const jsonFiles = files.filter((file) => file.endsWith('.json'));
 
     // Load all sessions in parallel for better performance
     const sessionPromises = jsonFiles.map((file) => {
       const sessionId = file.replace('.json', '');
-      return loadSession(sessionId);
+      return loadSession(userId, sessionId);
     });
 
     const loadedSessions = await Promise.all(sessionPromises);

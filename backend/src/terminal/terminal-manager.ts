@@ -55,6 +55,7 @@ export interface TerminalManagerOptions {
 
 interface ManagedTerminal {
   id: string;
+  userId: string;
   title: string;
   shell: string;
   cwd: string;
@@ -103,11 +104,10 @@ function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
 
 export class TerminalManager {
   #sessions = new Map<string, ManagedTerminal>();
-  #persistedSessions = new Map<string, PersistedSession>();
+  #persistedSessions = new Map<string, Map<string, PersistedSession>>(); // userId -> sessionId -> session
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
   #counter = 0;
-  #initialized = false;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.#spawnTerminal = options.spawnTerminal ?? ptySpawner;
@@ -115,15 +115,20 @@ export class TerminalManager {
   }
 
   async initialize(): Promise<void> {
-    if (this.#initialized) return;
+    // No-op - sessions are loaded per-user on demand
+    console.log('TerminalManager initialized');
+  }
 
-    // Load all persisted sessions on startup
-    const persisted = await loadAllSessions();
+  async loadUserSessions(userId: string): Promise<void> {
+    if (this.#persistedSessions.has(userId)) return;
+
+    const persisted = await loadAllSessions(userId);
+    const userSessions = new Map<string, PersistedSession>();
     for (const session of persisted) {
-      this.#persistedSessions.set(session.id, session);
+      userSessions.set(session.id, session);
     }
-    this.#initialized = true;
-    console.log(`Loaded ${persisted.length} persisted terminal sessions`);
+    this.#persistedSessions.set(userId, userSessions);
+    console.log(`Loaded ${persisted.length} persisted terminal sessions for user ${userId}`);
   }
 
   // Schedule a debounced save for this session
@@ -149,8 +154,14 @@ export class TerminalManager {
       updatedAt: session.updatedAt,
       history: session.buffer
     };
-    await saveSession(persisted);
-    this.#persistedSessions.set(session.id, persisted);
+    await saveSession(session.userId, persisted);
+
+    let userSessions = this.#persistedSessions.get(session.userId);
+    if (!userSessions) {
+      userSessions = new Map();
+      this.#persistedSessions.set(session.userId, userSessions);
+    }
+    userSessions.set(session.id, persisted);
   }
 
   // Get the current working directory by executing pwd/cd command
@@ -214,21 +225,24 @@ export class TerminalManager {
     });
   }
 
-  listSessions(): TerminalSessionSummary[] {
-    // Get active sessions
-    const activeSessions = Array.from(this.#sessions.values()).map((session) => ({
-      id: session.id,
-      title: session.title,
-      shell: session.shell,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      messageCount: session.buffer.length,
-      isActive: true
-    }));
+  listSessions(userId: string): TerminalSessionSummary[] {
+    // Get active sessions for this user
+    const activeSessions = Array.from(this.#sessions.values())
+      .filter((session) => session.userId === userId)
+      .map((session) => ({
+        id: session.id,
+        title: session.title,
+        shell: session.shell,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        messageCount: session.buffer.length,
+        isActive: true
+      }));
 
-    // Get persisted sessions that aren't currently active
+    // Get persisted sessions for this user that aren't currently active
     const activeIds = new Set(activeSessions.map((s) => s.id));
-    const persistedSessions = Array.from(this.#persistedSessions.values())
+    const userPersistedSessions = this.#persistedSessions.get(userId) || new Map();
+    const persistedSessions = Array.from(userPersistedSessions.values())
       .filter((s) => !activeIds.has(s.id))
       .map((session) => ({
         id: session.id,
@@ -248,10 +262,10 @@ export class TerminalManager {
     return this.#sessions.has(id);
   }
 
-  getSession(id: string): TerminalSessionSnapshot | null {
+  getSession(userId: string, id: string): TerminalSessionSnapshot | null {
     // Check active sessions first
     const session = this.#sessions.get(id);
-    if (session) {
+    if (session && session.userId === userId) {
       return {
         id: session.id,
         title: session.title,
@@ -263,7 +277,8 @@ export class TerminalManager {
     }
 
     // Fall back to persisted sessions
-    const persisted = this.#persistedSessions.get(id);
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    const persisted = userPersistedSessions?.get(id);
     if (persisted) {
       return {
         id: persisted.id,
@@ -326,7 +341,7 @@ export class TerminalManager {
     }
   }
 
-  createSession(options: TerminalCreateOptions = {}): TerminalSessionSnapshot {
+  createSession(userId: string, options: TerminalCreateOptions = {}): TerminalSessionSnapshot {
     const id = options.id ?? randomUUID();
     const createdAt = new Date().toISOString();
     const title = options.title ?? `Terminal ${++this.#counter}`;
@@ -353,6 +368,7 @@ export class TerminalManager {
 
     const session: ManagedTerminal = {
       id,
+      userId,
       title,
       shell,
       cwd,
@@ -381,12 +397,12 @@ export class TerminalManager {
       }, 100);
     }
 
-    return this.getSession(id)!;
+    return this.getSession(userId, id)!;
   }
 
-  subscribe(id: string, handler: (event: TerminalStreamEvent | null) => void): () => void {
+  subscribe(userId: string, id: string, handler: (event: TerminalStreamEvent | null) => void): () => void {
     const session = this.#sessions.get(id);
-    if (!session) {
+    if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
 
@@ -396,9 +412,9 @@ export class TerminalManager {
     };
   }
 
-  write(id: string, input: string): void {
+  write(userId: string, id: string, input: string): void {
     const session = this.#sessions.get(id);
-    if (!session) {
+    if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
 
@@ -406,17 +422,17 @@ export class TerminalManager {
     session.process.write(normaliseNewlines(input));
   }
 
-  resize(id: string, cols: number, rows: number): void {
+  resize(userId: string, id: string, cols: number, rows: number): void {
     const session = this.#sessions.get(id);
-    if (!session) {
+    if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
     session.process.resize(cols, rows);
   }
 
-  async getProjectInfo(id: string): Promise<ProjectInfo | null> {
+  async getProjectInfo(userId: string, id: string): Promise<ProjectInfo | null> {
     const session = this.#sessions.get(id);
-    if (!session) {
+    if (!session || session.userId !== userId) {
       return null;
     }
 
@@ -528,9 +544,9 @@ export class TerminalManager {
     };
   }
 
-  close(id: string): void {
+  close(userId: string, id: string): void {
     const session = this.#sessions.get(id);
-    if (session) {
+    if (session && session.userId === userId) {
       // Cancel pending save
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
@@ -543,8 +559,11 @@ export class TerminalManager {
     }
 
     // Also remove from persisted sessions and delete from disk
-    this.#persistedSessions.delete(id);
-    deleteSession(id);
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    if (userPersistedSessions) {
+      userPersistedSessions.delete(id);
+    }
+    deleteSession(userId, id);
   }
 
   // Kill all active sessions
@@ -582,15 +601,16 @@ export class TerminalManager {
   }
 
   // Restore a persisted session by creating a new PTY with the same ID
-  restoreSession(id: string, options: { cols?: number; rows?: number } = {}): TerminalSessionSnapshot | null {
-    const persisted = this.#persistedSessions.get(id);
+  restoreSession(userId: string, id: string, options: { cols?: number; rows?: number } = {}): TerminalSessionSnapshot | null {
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    const persisted = userPersistedSessions?.get(id);
     if (!persisted) {
       return null;
     }
 
     // Check if already active
     if (this.#sessions.has(id)) {
-      return this.getSession(id);
+      return this.getSession(userId, id);
     }
 
     const cols = options.cols ?? DEFAULT_COLS;
@@ -615,6 +635,7 @@ export class TerminalManager {
 
     const session: ManagedTerminal = {
       id: persisted.id,
+      userId,
       title: persisted.title,
       shell: persisted.shell,
       cwd,
@@ -633,7 +654,7 @@ export class TerminalManager {
 
     this.#sessions.set(id, session);
 
-    return this.getSession(id);
+    return this.getSession(userId, id);
   }
 
   #maybeUpdateCwdFromInput(session: ManagedTerminal, input: string): void {

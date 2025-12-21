@@ -63,11 +63,23 @@ interface TerminalIdParams {
 export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
   app.get('/api/health', async () => ({ status: 'ok' }));
 
-  app.get('/api/terminal', async () => ({
-    sessions: deps.terminalManager.listSessions()
-  }));
+  app.get('/api/terminal', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    await deps.terminalManager.loadUserSessions(userId);
+    reply.send({ sessions: deps.terminalManager.listSessions(userId) });
+  });
 
   app.post('/api/terminal', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const result = terminalCreateRequestSchema.safeParse(request.body);
     if (!result.success) {
       reply.code(400).send({
@@ -77,7 +89,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       return;
     }
 
-    const session = deps.terminalManager.createSession(result.data);
+    const session = deps.terminalManager.createSession(userId, result.data);
     reply.code(201).send({
       session: {
         id: session.id,
@@ -90,7 +102,12 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/history', async (request, reply) => {
-    const snapshot = deps.terminalManager.getSession(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -99,7 +116,12 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/project-info', async (request, reply) => {
-    const projectInfo = await deps.terminalManager.getProjectInfo(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const projectInfo = await deps.terminalManager.getProjectInfo(userId, request.params.id);
     if (!projectInfo) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -108,6 +130,12 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/input', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const result = terminalInputRequestSchema.safeParse(request.body);
     if (!result.success) {
       reply.code(400).send({
@@ -118,7 +146,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     }
 
     try {
-      deps.terminalManager.write(request.params.id, result.data.command);
+      deps.terminalManager.write(userId, request.params.id, result.data.command);
     } catch (error) {
       reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
       return;
@@ -128,6 +156,12 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/resize', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const result = terminalResizeRequestSchema.safeParse(request.body);
     if (!result.success) {
       reply.code(400).send({
@@ -138,7 +172,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     }
 
     try {
-      deps.terminalManager.resize(request.params.id, result.data.cols, result.data.rows);
+      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows);
     } catch (error) {
       reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
       return;
@@ -148,7 +182,13 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/stream', async (request, reply) => {
-    const snapshot = deps.terminalManager.getSession(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -187,7 +227,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
     let isBuffering = true;
 
-    const unsubscribe = deps.terminalManager.subscribe(snapshot.id, (event) => {
+    const unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
       if (isBuffering) {
         bufferedEvents.push(event);
         return;
@@ -233,17 +273,28 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   });
 
   app.delete<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {
-    deps.terminalManager.close(request.params.id);
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    deps.terminalManager.close(userId, request.params.id);
     reply.code(204).send();
   });
 
   // Restore a persisted session (creates new PTY, keeps history)
   app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/restore', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const result = terminalResizeRequestSchema.safeParse(request.body);
     const cols = result.success ? result.data.cols : undefined;
     const rows = result.success ? result.data.rows : undefined;
 
-    const session = deps.terminalManager.restoreSession(request.params.id, { cols, rows });
+    const session = deps.terminalManager.restoreSession(userId, request.params.id, { cols, rows });
     if (!session) {
       reply.code(404).send({ error: 'Persisted session not found' });
       return;

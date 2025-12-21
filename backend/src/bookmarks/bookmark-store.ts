@@ -16,19 +16,44 @@ export interface Bookmark {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '..', '..', 'data');
-const BOOKMARKS_FILE = join(DATA_DIR, 'bookmarks.json');
 
-let bookmarks: Bookmark[] = [];
+// Per-user bookmark cache
+const userBookmarks = new Map<string, Bookmark[]>();
 
-// Simple async lock to prevent concurrent modifications
-let writeLock: Promise<void> = Promise.resolve();
+// Per-user write locks
+const userWriteLocks = new Map<string, Promise<void>>();
 
-async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previousLock = writeLock;
+function sanitizeId(id: string): string {
+  const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
+  if (!safeId) {
+    throw new Error(`Invalid ID: "${id}" - ID must contain alphanumeric characters or hyphens`);
+  }
+  return safeId;
+}
+
+function getUserDataDir(userId: string): string {
+  const safeUserId = sanitizeId(userId);
+  return join(DATA_DIR, 'users', safeUserId);
+}
+
+function getBookmarksFilePath(userId: string): string {
+  return join(getUserDataDir(userId), 'bookmarks.json');
+}
+
+async function ensureUserDataDir(userId: string): Promise<void> {
+  const userDir = getUserDataDir(userId);
+  if (!existsSync(userDir)) {
+    await mkdir(userDir, { recursive: true });
+  }
+}
+
+async function withUserWriteLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const previousLock = userWriteLocks.get(userId) || Promise.resolve();
   let releaseLock: () => void;
-  writeLock = new Promise((resolve) => {
+  const newLock = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
+  userWriteLocks.set(userId, newLock);
   await previousLock;
   try {
     return await fn();
@@ -37,47 +62,46 @@ async function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function ensureDataDir(): Promise<void> {
-  if (!existsSync(DATA_DIR)) {
-    await mkdir(DATA_DIR, { recursive: true });
-  }
-}
+export async function loadBookmarks(userId: string): Promise<Bookmark[]> {
+  await ensureUserDataDir(userId);
 
-export async function loadBookmarks(): Promise<Bookmark[]> {
-  await ensureDataDir();
-
-  if (!existsSync(BOOKMARKS_FILE)) {
-    bookmarks = [];
-    await saveBookmarks();
-    return bookmarks;
+  const filePath = getBookmarksFilePath(userId);
+  if (!existsSync(filePath)) {
+    userBookmarks.set(userId, []);
+    await saveBookmarks(userId);
+    return [];
   }
 
   try {
-    const data = await readFile(BOOKMARKS_FILE, 'utf-8');
-    bookmarks = JSON.parse(data);
+    const data = await readFile(filePath, 'utf-8');
+    const bookmarks = JSON.parse(data) as Bookmark[];
+    userBookmarks.set(userId, bookmarks);
     return bookmarks;
   } catch (error) {
-    console.error('Failed to load bookmarks:', error);
-    bookmarks = [];
-    return bookmarks;
+    console.error(`Failed to load bookmarks for user ${userId}:`, error);
+    userBookmarks.set(userId, []);
+    return [];
   }
 }
 
-async function saveBookmarks(): Promise<void> {
+async function saveBookmarks(userId: string): Promise<void> {
+  const bookmarks = userBookmarks.get(userId) || [];
+  const filePath = getBookmarksFilePath(userId);
   try {
-    await writeFile(BOOKMARKS_FILE, JSON.stringify(bookmarks, null, 2), 'utf-8');
+    await writeFile(filePath, JSON.stringify(bookmarks, null, 2), 'utf-8');
   } catch (error) {
-    console.error('Failed to save bookmarks:', error);
+    console.error(`Failed to save bookmarks for user ${userId}:`, error);
     throw error;
   }
 }
 
-export function getAllBookmarks(): Bookmark[] {
-  return bookmarks;
+export function getAllBookmarks(userId: string): Bookmark[] {
+  return userBookmarks.get(userId) || [];
 }
 
-export async function createBookmark(name: string, command: string, category: string): Promise<Bookmark> {
-  return withWriteLock(async () => {
+export async function createBookmark(userId: string, name: string, command: string, category: string): Promise<Bookmark> {
+  return withUserWriteLock(userId, async () => {
+    const bookmarks = userBookmarks.get(userId) || [];
     const newBookmark: Bookmark = {
       id: randomUUID(),
       name,
@@ -87,16 +111,19 @@ export async function createBookmark(name: string, command: string, category: st
     };
 
     bookmarks.push(newBookmark);
-    await saveBookmarks();
+    userBookmarks.set(userId, bookmarks);
+    await saveBookmarks(userId);
     return newBookmark;
   });
 }
 
 export async function updateBookmark(
+  userId: string,
   id: string,
   updates: { name?: string; command?: string; category?: string }
 ): Promise<Bookmark | null> {
-  return withWriteLock(async () => {
+  return withUserWriteLock(userId, async () => {
+    const bookmarks = userBookmarks.get(userId) || [];
     const index = bookmarks.findIndex((b) => b.id === id);
 
     if (index === -1) {
@@ -109,21 +136,24 @@ export async function updateBookmark(
       updatedAt: new Date().toISOString()
     };
 
-    await saveBookmarks();
+    userBookmarks.set(userId, bookmarks);
+    await saveBookmarks(userId);
     return bookmarks[index];
   });
 }
 
-export async function deleteBookmark(id: string): Promise<boolean> {
-  return withWriteLock(async () => {
+export async function deleteBookmark(userId: string, id: string): Promise<boolean> {
+  return withUserWriteLock(userId, async () => {
+    const bookmarks = userBookmarks.get(userId) || [];
     const originalLength = bookmarks.length;
-    bookmarks = bookmarks.filter((b) => b.id !== id);
+    const filtered = bookmarks.filter((b) => b.id !== id);
 
-    if (bookmarks.length === originalLength) {
+    if (filtered.length === originalLength) {
       return false;
     }
 
-    await saveBookmarks();
+    userBookmarks.set(userId, filtered);
+    await saveBookmarks(userId);
     return true;
   });
 }

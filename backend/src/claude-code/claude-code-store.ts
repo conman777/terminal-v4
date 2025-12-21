@@ -7,29 +7,36 @@ import type { ClaudeCodeSession } from './claude-code-types';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '..', '..', 'data');
-const CLAUDE_CODE_DIR = join(DATA_DIR, 'claude-code');
 
-async function ensureClaudeCodeDir(): Promise<void> {
-  if (!existsSync(CLAUDE_CODE_DIR)) {
-    await mkdir(CLAUDE_CODE_DIR, { recursive: true });
-  }
-}
-
-function getSessionFilePath(sessionId: string): string {
-  // Sanitize session ID to prevent path traversal
-  const safeId = sessionId.replace(/[^a-zA-Z0-9-]/g, '');
-
-  // Validate that we have a non-empty ID after sanitization
+function sanitizeId(id: string): string {
+  const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
   if (!safeId) {
-    throw new Error(`Invalid session ID: "${sessionId}" - ID must contain alphanumeric characters or hyphens`);
+    throw new Error(`Invalid ID: "${id}" - ID must contain alphanumeric characters or hyphens`);
   }
-
-  return join(CLAUDE_CODE_DIR, `${safeId}.json`);
+  return safeId;
 }
 
-export async function saveClaudeCodeSession(session: ClaudeCodeSession): Promise<void> {
-  await ensureClaudeCodeDir();
-  const filePath = getSessionFilePath(session.id);
+function getUserClaudeCodeDir(userId: string): string {
+  const safeUserId = sanitizeId(userId);
+  return join(DATA_DIR, 'users', safeUserId, 'claude-code');
+}
+
+async function ensureUserClaudeCodeDir(userId: string): Promise<string> {
+  const claudeCodeDir = getUserClaudeCodeDir(userId);
+  if (!existsSync(claudeCodeDir)) {
+    await mkdir(claudeCodeDir, { recursive: true });
+  }
+  return claudeCodeDir;
+}
+
+function getSessionFilePath(userId: string, sessionId: string): string {
+  const safeSessionId = sanitizeId(sessionId);
+  return join(getUserClaudeCodeDir(userId), `${safeSessionId}.json`);
+}
+
+export async function saveClaudeCodeSession(userId: string, session: ClaudeCodeSession): Promise<void> {
+  await ensureUserClaudeCodeDir(userId);
+  const filePath = getSessionFilePath(userId, session.id);
   try {
     await writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
   } catch (error) {
@@ -38,8 +45,8 @@ export async function saveClaudeCodeSession(session: ClaudeCodeSession): Promise
   }
 }
 
-export async function loadClaudeCodeSession(sessionId: string): Promise<ClaudeCodeSession | null> {
-  const filePath = getSessionFilePath(sessionId);
+export async function loadClaudeCodeSession(userId: string, sessionId: string): Promise<ClaudeCodeSession | null> {
+  const filePath = getSessionFilePath(userId, sessionId);
   if (!existsSync(filePath)) {
     return null;
   }
@@ -53,8 +60,8 @@ export async function loadClaudeCodeSession(sessionId: string): Promise<ClaudeCo
   }
 }
 
-export async function deleteClaudeCodeSession(sessionId: string): Promise<void> {
-  const filePath = getSessionFilePath(sessionId);
+export async function deleteClaudeCodeSession(userId: string, sessionId: string): Promise<void> {
+  const filePath = getSessionFilePath(userId, sessionId);
   if (existsSync(filePath)) {
     try {
       await unlink(filePath);
@@ -64,17 +71,17 @@ export async function deleteClaudeCodeSession(sessionId: string): Promise<void> 
   }
 }
 
-export async function loadAllClaudeCodeSessions(): Promise<ClaudeCodeSession[]> {
-  await ensureClaudeCodeDir();
+export async function loadAllClaudeCodeSessions(userId: string): Promise<ClaudeCodeSession[]> {
+  const claudeCodeDir = await ensureUserClaudeCodeDir(userId);
 
   try {
-    const files = await readdir(CLAUDE_CODE_DIR);
+    const files = await readdir(claudeCodeDir);
     const jsonFiles = files.filter((file) => file.endsWith('.json'));
 
     // Load all sessions in parallel for better performance
     const sessionPromises = jsonFiles.map((file) => {
       const sessionId = file.replace('.json', '');
-      return loadClaudeCodeSession(sessionId);
+      return loadClaudeCodeSession(userId, sessionId);
     });
 
     const loadedSessions = await Promise.all(sessionPromises);
@@ -88,4 +95,3 @@ export async function loadAllClaudeCodeSessions(): Promise<ClaudeCodeSession[]> 
     return [];
   }
 }
-

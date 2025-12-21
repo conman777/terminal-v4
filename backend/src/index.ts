@@ -7,6 +7,9 @@ import { registerPreviewRoutes } from './routes/preview-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
+import { getDatabase, closeDatabase } from './database/db';
+import { registerAuthHook } from './auth/auth-hook';
+import { registerAuthRoutes } from './auth/auth-routes';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -26,6 +29,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await app.register(cors, {
     origin: true
   });
+
+  // Initialize database
+  getDatabase();
+
+  // Register auth hook (must be before routes)
+  registerAuthHook(app);
+
+  // Register auth routes
+  registerAuthRoutes(app);
 
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
   await terminalManager.initialize();
@@ -52,6 +64,7 @@ async function start() {
     try {
       await server.close();
       await terminalManager.closeAll();
+      closeDatabase();
       process.exit(0);
     } catch (err) {
       server.log.error(err, 'Error during shutdown');

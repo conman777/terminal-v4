@@ -3,6 +3,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
+import { apiFetch } from '../utils/api';
+import { getAccessToken } from '../utils/auth';
 
 export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected }) {
   const terminalRef = useRef(null);
@@ -34,10 +36,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const text = await navigator.clipboard.readText();
         if (text && !disposed) {
           // Send pasted text to the terminal backend
-          fetch(`/api/terminal/${sessionId}/input`, {
+          apiFetch(`/api/terminal/${sessionId}/input`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ command: text })
+            body: { command: text }
           }).catch((error) => {
             console.error('Failed to send pasted input:', error);
           });
@@ -115,7 +116,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       resizeObserver.observe(container);
 
       // Connect to SSE stream (which sends history first, then new events)
-      const source = new EventSource(`/api/terminal/${sessionId}/stream`);
+      // EventSource doesn't support headers, so pass token via query param
+      const token = getAccessToken();
+      const streamUrl = `/api/terminal/${sessionId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const source = new EventSource(streamUrl);
       eventSourceRef.current = source;
       let hadConnectionError = false;
 
@@ -162,10 +166,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
 
       const dataDisposer = term.onData((data) => {
-        fetch(`/api/terminal/${sessionId}/input`, {
+        apiFetch(`/api/terminal/${sessionId}/input`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: data })
+          body: { command: data }
         }).catch((error) => {
           console.error('Failed to send terminal input:', error);
         });
@@ -189,10 +192,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
         resizeTimeout = setTimeout(() => {
           if (disposed) return;
-          fetch(`/api/terminal/${sessionId}/resize`, {
+          apiFetch(`/api/terminal/${sessionId}/resize`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cols, rows })
+            body: { cols, rows }
           }).catch((error) => {
             console.error('Failed to send resize:', error);
           });
@@ -210,10 +212,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         try {
           const text = await navigator.clipboard.readText();
           if (text && !disposed) {
-            fetch(`/api/terminal/${sessionId}/input`, {
+            apiFetch(`/api/terminal/${sessionId}/input`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ command: text })
+              body: { command: text }
             }).catch((error) => {
               console.error('Failed to send pasted input:', error);
             });

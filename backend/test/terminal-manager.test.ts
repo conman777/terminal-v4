@@ -8,6 +8,8 @@ import type {
   TerminalSpawnOptions
 } from '../src/terminal/terminal-types';
 
+const TEST_USER_ID = 'test-user-123';
+
 class FakeTerminalProcess extends EventEmitter implements TerminalProcess {
   writes: string[] = [];
   resized: Array<{ cols: number; rows: number }> = [];
@@ -33,19 +35,19 @@ describe('TerminalManager', () => {
     const spawnMock = vi.fn((_options: TerminalSpawnOptions) => fakeProcess);
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession({ title: 'Demo Terminal', cols: 80, rows: 24 });
+    const snapshot = manager.createSession(TEST_USER_ID, { title: 'Demo Terminal', cols: 80, rows: 24 });
     expect(snapshot.title).toBe('Demo Terminal');
     expect(spawnMock).toHaveBeenCalledWith(
       expect.objectContaining({ cols: 80, rows: 24 })
     );
 
     const subscriber = vi.fn();
-    manager.subscribe(snapshot.id, subscriber);
+    manager.subscribe(TEST_USER_ID, snapshot.id, subscriber);
 
     fakeProcess.emit('data', 'hello\n');
     expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello\n' }));
 
-    const history = manager.getSession(snapshot.id);
+    const history = manager.getSession(TEST_USER_ID, snapshot.id);
     expect(history?.history).toHaveLength(1);
   });
 
@@ -54,16 +56,16 @@ describe('TerminalManager', () => {
     const spawnMock = vi.fn(() => fakeProcess);
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession();
-    manager.write(snapshot.id, 'ls\n');
+    const snapshot = manager.createSession(TEST_USER_ID);
+    manager.write(TEST_USER_ID, snapshot.id, 'ls\n');
     expect(fakeProcess.writes[0]).toContain('ls');
 
-    manager.resize(snapshot.id, 100, 40);
+    manager.resize(TEST_USER_ID, snapshot.id, 100, 40);
     expect(fakeProcess.resized).toContainEqual({ cols: 100, rows: 40 });
 
-    manager.close(snapshot.id);
+    manager.close(TEST_USER_ID, snapshot.id);
     expect(fakeProcess.killed).toBe(true);
-    expect(manager.listSessions()).toHaveLength(0);
+    expect(manager.listSessions(TEST_USER_ID)).toHaveLength(0);
   });
 
   it('falls back to a safe cwd when given a non-existent cwd', () => {
@@ -75,7 +77,7 @@ describe('TerminalManager', () => {
     });
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    manager.createSession({ cwd: '/this/path/should/not/exist' });
+    manager.createSession(TEST_USER_ID, { cwd: '/this/path/should/not/exist' });
     expect(spawnMock).toHaveBeenCalled();
   });
 
@@ -84,13 +86,13 @@ describe('TerminalManager', () => {
     const spawnMock = vi.fn(() => fakeProcess);
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession({ cwd: process.cwd() });
+    const snapshot = manager.createSession(TEST_USER_ID, { cwd: process.cwd() });
     const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-cwd-'));
 
     try {
       // This mimics App.jsx sending a full command with a newline terminator.
-      manager.write(snapshot.id, `cd "${tmpDir}"\n`);
-      const projectInfo = await manager.getProjectInfo(snapshot.id);
+      manager.write(TEST_USER_ID, snapshot.id, `cd "${tmpDir}"\n`);
+      const projectInfo = await manager.getProjectInfo(TEST_USER_ID, snapshot.id);
       expect(projectInfo?.cwd).toBe(tmpDir);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -102,14 +104,14 @@ describe('TerminalManager', () => {
     const spawnMock = vi.fn(() => fakeProcess);
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession();
+    const snapshot = manager.createSession(TEST_USER_ID);
 
     const chunkA = 'A'.repeat(1_100_000);
     const chunkB = 'B'.repeat(1_100_000);
     fakeProcess.emit('data', chunkA);
     fakeProcess.emit('data', chunkB);
 
-    const history = manager.getSession(snapshot.id);
+    const history = manager.getSession(TEST_USER_ID, snapshot.id);
     expect(history?.history).toHaveLength(1);
     expect(history?.history[0].text[0]).toBe('B');
   });

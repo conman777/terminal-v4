@@ -184,22 +184,25 @@ class AgentWrapper {
 }
 
 export class ClaudeCodeManager {
-  #sessions: Map<string, ManagedClaudeCodeSession> = new Map();
-  #initialized = false;
+  #sessions: Map<string, ManagedClaudeCodeSession & { userId: string }> = new Map();
   #apiKey: string;
 
   constructor(apiKey?: string) {
     this.#apiKey = apiKey || process.env.ANTHROPIC_API_KEY || '';
-    // Note: CLI might use global config, so API key might not be strictly required here
-    // but we keep it for consistency or if passed to env
   }
 
   async initialize(): Promise<void> {
-    if (this.#initialized) return;
+    // No-op - sessions are loaded per-user on demand
+    console.log('ClaudeCodeManager initialized');
+  }
 
-    // Load persisted sessions on startup
-    const persisted = await loadAllClaudeCodeSessions();
+  async loadUserSessions(userId: string): Promise<void> {
+    // Load persisted sessions for this user
+    const persisted = await loadAllClaudeCodeSessions(userId);
     for (const session of persisted) {
+      // Skip if already loaded
+      if (this.#sessions.has(session.id)) continue;
+
       // Default to 'sonnet' for backwards compatibility
       const model = session.model || 'sonnet';
 
@@ -214,6 +217,7 @@ export class ClaudeCodeManager {
 
       this.#sessions.set(session.id, {
         id: session.id,
+        userId,
         cwd: session.cwd,
         model,
         agent,
@@ -223,11 +227,10 @@ export class ClaudeCodeManager {
         saveTimer: null
       });
     }
-    this.#initialized = true;
-    console.log(`Loaded ${persisted.length} persisted Claude Code sessions`);
+    console.log(`Loaded ${persisted.length} persisted Claude Code sessions for user ${userId}`);
   }
 
-  createSession(cwd: string, model: ClaudeModel = 'sonnet'): ClaudeCodeSession {
+  createSession(userId: string, cwd: string, model: ClaudeModel = 'sonnet'): ClaudeCodeSession {
     const id = `cc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
     // Resolve to absolute path for persistence
@@ -243,8 +246,9 @@ export class ClaudeCodeManager {
       permissionMode: 'acceptEdits'
     });
 
-    const session: ManagedClaudeCodeSession = {
+    const session: ManagedClaudeCodeSession & { userId: string } = {
       id,
+      userId,
       cwd: absoluteCwd,
       model,
       agent,
@@ -327,12 +331,12 @@ export class ClaudeCodeManager {
     }
   }
 
-  #scheduleSave(session: ManagedClaudeCodeSession): void {
+  #scheduleSave(session: ManagedClaudeCodeSession & { userId: string }): void {
     if (session.saveTimer) {
       clearTimeout(session.saveTimer);
     }
     session.saveTimer = setTimeout(() => {
-      void saveClaudeCodeSession(this.#toSnapshot(session)).catch((error) => {
+      void saveClaudeCodeSession(session.userId, this.#toSnapshot(session)).catch((error) => {
         console.error(`Failed to save Claude Code session ${session.id}:`, error);
       });
     }, 2000); // Debounce 2 seconds
@@ -350,26 +354,29 @@ export class ClaudeCodeManager {
     };
   }
 
-  getSession(id: string): ClaudeCodeSession | null {
+  getSession(userId: string, id: string): ClaudeCodeSession | null {
     const session = this.#sessions.get(id);
-    return session ? this.#toSnapshot(session) : null;
+    if (!session || session.userId !== userId) return null;
+    return this.#toSnapshot(session);
   }
 
-  getAllSessions(): ClaudeCodeSession[] {
-    return Array.from(this.#sessions.values()).map(s => this.#toSnapshot(s));
+  getAllSessions(userId: string): ClaudeCodeSession[] {
+    return Array.from(this.#sessions.values())
+      .filter(s => s.userId === userId)
+      .map(s => this.#toSnapshot(s));
   }
 
-  subscribe(id: string, handler: (event: ClaudeCodeEvent) => void): () => void {
+  subscribe(userId: string, id: string, handler: (event: ClaudeCodeEvent) => void): () => void {
     const session = this.#sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
     session.subscribers.add(handler);
     return () => session.subscribers.delete(handler);
   }
 
-  async sendInput(id: string, text: string): Promise<void> {
+  async sendInput(userId: string, id: string, text: string): Promise<void> {
     const session = this.#sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
     // Add user message to events
     const userEvent: ClaudeCodeEvent = {
@@ -435,16 +442,16 @@ export class ClaudeCodeManager {
     }
   }
 
-  restoreSession(id: string): ClaudeCodeSession {
+  restoreSession(userId: string, id: string): ClaudeCodeSession {
     const session = this.#sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
     return this.#toSnapshot(session);
   }
 
-  stopSession(id: string): void {
+  stopSession(userId: string, id: string): void {
     const session = this.#sessions.get(id);
-    if (session) {
+    if (session && session.userId === userId) {
       console.log('[CLAUDE CLI] Stop requested for session', id);
       // Kill the PTY process if running
       if (session.agent && typeof session.agent.kill === 'function') {
@@ -453,15 +460,18 @@ export class ClaudeCodeManager {
     }
   }
 
-  async deleteSession(id: string): Promise<void> {
-    this.stopSession(id);
-    this.#sessions.delete(id);
-    await deleteClaudeCodeSession(id);
+  async deleteSession(userId: string, id: string): Promise<void> {
+    this.stopSession(userId, id);
+    const session = this.#sessions.get(id);
+    if (session && session.userId === userId) {
+      this.#sessions.delete(id);
+      await deleteClaudeCodeSession(userId, id);
+    }
   }
 
-  updateCwd(id: string, cwd: string): ClaudeCodeSession {
+  updateCwd(userId: string, id: string, cwd: string): ClaudeCodeSession {
     const session = this.#sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
     // Resolve to absolute path
     const absoluteCwd = resolve(cwd);
@@ -487,9 +497,9 @@ export class ClaudeCodeManager {
     return this.#toSnapshot(session);
   }
 
-  updateModel(id: string, model: ClaudeModel): ClaudeCodeSession {
+  updateModel(userId: string, id: string, model: ClaudeModel): ClaudeCodeSession {
     const session = this.#sessions.get(id);
-    if (!session) throw new Error(`Session not found: ${id}`);
+    if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
     session.model = model;
 

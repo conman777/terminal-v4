@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
+import { apiFetch } from '../utils/api';
 
 export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   const keybarRef = useRef(null);
@@ -51,10 +52,9 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     if (!sessionId) return;
 
     try {
-      await fetch(`/api/terminal/${sessionId}/input`, {
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: data })
+        body: { command: data }
       });
     } catch (error) {
       console.error('Failed to send key:', error);
