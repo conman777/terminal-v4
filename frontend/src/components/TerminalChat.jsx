@@ -290,6 +290,80 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       container.addEventListener('paste', handlePasteEvent, true);
 
+      // Custom touch scrolling for mobile (xterm canvas doesn't support native touch scroll)
+      let touchStartY = null;
+      let lastTouchY = null;
+      let touchVelocity = 0;
+      let momentumFrame = null;
+
+      const handleTouchStart = (e) => {
+        // Cancel any momentum scrolling
+        if (momentumFrame) {
+          cancelAnimationFrame(momentumFrame);
+          momentumFrame = null;
+        }
+
+        if (e.touches.length === 1) {
+          touchStartY = e.touches[0].clientY;
+          lastTouchY = touchStartY;
+          touchVelocity = 0;
+        }
+      };
+
+      const handleTouchMove = (e) => {
+        if (touchStartY === null || e.touches.length !== 1) return;
+
+        const currentY = e.touches[0].clientY;
+        const deltaY = lastTouchY - currentY;
+
+        // Update velocity for momentum
+        touchVelocity = deltaY;
+        lastTouchY = currentY;
+
+        // Convert pixel delta to lines (roughly 1 line per 20 pixels)
+        const lines = Math.round(deltaY / 20);
+        if (lines !== 0) {
+          term.scrollLines(lines);
+        }
+
+        e.preventDefault(); // Prevent page scroll
+      };
+
+      const handleTouchEnd = () => {
+        touchStartY = null;
+        lastTouchY = null;
+
+        // Apply momentum scrolling
+        const applyMomentum = () => {
+          if (Math.abs(touchVelocity) < 1) {
+            touchVelocity = 0;
+            momentumFrame = null;
+            return;
+          }
+
+          const lines = Math.round(touchVelocity / 20);
+          if (lines !== 0) {
+            term.scrollLines(lines);
+          }
+
+          // Decay velocity
+          touchVelocity *= 0.92;
+          momentumFrame = requestAnimationFrame(applyMomentum);
+        };
+
+        if (Math.abs(touchVelocity) > 5) {
+          momentumFrame = requestAnimationFrame(applyMomentum);
+        }
+      };
+
+      // Attach to the xterm viewport element for touch scrolling
+      const xtermViewport = container.querySelector('.xterm-viewport');
+      if (xtermViewport) {
+        xtermViewport.addEventListener('touchstart', handleTouchStart, { passive: false });
+        xtermViewport.addEventListener('touchmove', handleTouchMove, { passive: false });
+        xtermViewport.addEventListener('touchend', handleTouchEnd);
+      }
+
       // Ensure cleanup can remove listeners
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
@@ -306,6 +380,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         dataDisposer?.dispose();
         if (viewport) {
           viewport.removeEventListener('resize', handleResize);
+        }
+        // Clean up touch scroll handlers
+        if (xtermViewport) {
+          xtermViewport.removeEventListener('touchstart', handleTouchStart);
+          xtermViewport.removeEventListener('touchmove', handleTouchMove);
+          xtermViewport.removeEventListener('touchend', handleTouchEnd);
+        }
+        if (momentumFrame) {
+          cancelAnimationFrame(momentumFrame);
         }
       };
     };
@@ -337,12 +420,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [sessionId, onUrlDetected]);
 
   useEffect(() => {
-    if (!fitAddonRef.current) return;
-    try {
-      fitAddonRef.current.fit();
-    } catch (error) {
-      console.error('[Terminal Fit] Failed to resize terminal:', error);
-    }
+    if (!fitAddonRef.current || !xtermRef.current) return;
+
+    // Small delay to ensure layout has updated after viewport change
+    const timerId = setTimeout(() => {
+      try {
+        fitAddonRef.current.fit();
+        // Always scroll to bottom when viewport changes (keyboard open/close)
+        xtermRef.current.scrollToBottom();
+      } catch (error) {
+        console.error('[Terminal Fit] Failed to resize terminal:', error);
+      }
+    }, 50);
+
+    return () => clearTimeout(timerId);
   }, [keybarOpen, viewportHeight]);
 
   return (

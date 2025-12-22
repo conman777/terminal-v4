@@ -908,15 +908,18 @@ button {
 .xterm {
   height: 100%;
   width: 100%;
-  touch-action: pan-y;
+  touch-action: none; /* JS handles touch scrolling */
 }
 
 .xterm-viewport {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  touch-action: none; /* JS handles touch scrolling */
+}
+
+.xterm-screen {
+  touch-action: none; /* JS handles touch scrolling */
 }
 
 /* Terminal Input */
@@ -2390,19 +2393,17 @@ button {
 
   .layout.mobile {
     --mobile-header-height: 48px;
-    height: 100dvh;
-    max-height: 100dvh;
+    /* Use fixed positioning for reliable iOS keyboard handling */
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Bottom is set dynamically: viewport height from top */
+    height: var(--mobile-viewport-height, 100dvh);
     overflow: hidden;
     padding-top: var(--mobile-header-height);
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
-  }
-
-  @supports not (height: 100dvh) {
-    .layout.mobile {
-      height: var(--mobile-viewport-height, 100vh);
-      max-height: var(--mobile-viewport-height, 100vh);
-    }
   }
 
   .layout.mobile .sidebar {
@@ -2422,11 +2423,14 @@ button {
   }
 
   .terminal-main {
-    padding-bottom: env(safe-area-inset-bottom);
+    /* No bottom padding - keyboard handling needs clean bottom edge */
     padding-top: var(--mobile-keybar-offset, 0px);
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
     height: calc(100% - var(--mobile-keybar-offset, 0px));
+    /* Ensure it fills and doesn't overflow */
+    min-height: 0;
+    flex: 1;
   }
 
   .bookmark-modal,
@@ -2515,6 +2519,15 @@ button {
 
   .terminal-pane {
     height: 100%;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .terminal-pane .terminal-chat {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
   }
 
   .terminal-pane.hidden {
