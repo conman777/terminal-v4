@@ -104,6 +104,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       hasOpened = true;
       term.open(container);
+      const textarea = term.textarea;
+      const handleTextareaFocus = () => {
+        term.scrollToBottom();
+      };
+      if (textarea) {
+        textarea.style.position = 'fixed';
+        textarea.style.top = '0';
+        textarea.style.left = '-9999px';
+        textarea.addEventListener('focus', handleTextareaFocus);
+      }
 
       rafId = requestAnimationFrame(() => {
         if (!disposed && fitAddonRef.current) {
@@ -215,7 +225,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const handleResize = () => {
         if (!disposed && fitAddonRef.current) {
+          const buffer = term.buffer?.active;
+          const isAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+          const isFocused = term.textarea && document.activeElement === term.textarea;
           fitAddonRef.current.fit();
+          if (isAtBottom || isFocused) {
+            term.scrollToBottom();
+          }
         }
       };
 
@@ -279,6 +295,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         window.removeEventListener('resize', handleResize);
         container.removeEventListener('contextmenu', handleContextMenu);
         container.removeEventListener('paste', handlePasteEvent, true);
+        if (textarea) {
+          textarea.removeEventListener('focus', handleTextareaFocus);
+        }
         closeSocket?.();
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);

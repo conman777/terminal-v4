@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
@@ -191,11 +191,23 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
   );
 }
 
-function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestoreSession, onCreateSession, onCloseSession, isLoading }) {
+function SessionSelector({
+  activeSessions,
+  inactiveSessions,
+  activeSessionId,
+  onSelectSession,
+  onRestoreSession,
+  onCreateSession,
+  onCloseSession,
+  onRenameSession,
+  isLoading
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
 
-  const activeSession = sessions.find(s => s.id === activeSessionId);
+  const activeSession = activeSessions.find(s => s.id === activeSessionId);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -208,19 +220,51 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleSelect = (session) => {
-    if (session.isActive) {
-      onSelectSession(session.id);
-    } else {
-      // Restore inactive session
-      onRestoreSession(session.id);
+  useEffect(() => {
+    if (!isOpen) {
+      setRenamingId(null);
+      setRenameValue('');
     }
+  }, [isOpen]);
+
+  const handleSelect = (session) => {
+    onSelectSession(session.id);
     setIsOpen(false);
   };
 
   const handleClose = (e, sessionId) => {
     e.stopPropagation();
     onCloseSession(sessionId);
+  };
+
+  const startRename = (e, session) => {
+    e.stopPropagation();
+    setRenamingId(session.id);
+    setRenameValue(session.title);
+  };
+
+  const cancelRename = (e) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    setRenamingId(null);
+    setRenameValue('');
+  };
+
+  const commitRename = async (e, sessionId) => {
+    e.stopPropagation();
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      cancelRename();
+      return;
+    }
+    const clipped = trimmed.slice(0, 60);
+    if (clipped !== renameValue) {
+      setRenameValue(clipped);
+    }
+    await onRenameSession(sessionId, clipped);
+    setRenamingId(null);
+    setRenameValue('');
   };
 
   return (
@@ -242,41 +286,205 @@ function SessionSelector({ sessions, activeSessionId, onSelectSession, onRestore
         <div className="session-selector-dropdown">
           <div className="session-selector-list">
             {isLoading && <div className="session-selector-empty">Loading...</div>}
-            {!isLoading && sessions.length === 0 && (
-              <div className="session-selector-empty">No terminals</div>
+            {!isLoading && activeSessions.length === 0 && (
+              <div className="session-selector-empty">No active terminals</div>
             )}
-            {sessions.map((session) => (
-              <div
-                key={session.id}
-                className={`session-selector-item${session.id === activeSessionId ? ' active' : ''}${!session.isActive ? ' inactive' : ''}`}
-                onClick={() => handleSelect(session)}
-                role="option"
-                aria-selected={session.id === activeSessionId}
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleSelect(session);
-                  }
-                }}
-              >
-                <div className="session-selector-item-info">
-                  <span className="session-selector-item-title">
-                    {!session.isActive && <span className="session-inactive-icon" title="Inactive - click to restore">{'\u23F8'}</span>}
-                    {session.title}
-                  </span>
-                  <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
-                </div>
-                <button
-                  type="button"
-                  className="session-selector-item-close"
-                  onClick={(e) => handleClose(e, session.id)}
-                  aria-label="Close terminal"
+            {activeSessions.map((session) => {
+              const isRenaming = renamingId === session.id;
+              return (
+                <div
+                  key={session.id}
+                  className={`session-selector-item${session.id === activeSessionId ? ' active' : ''}`}
+                  onClick={() => {
+                    if (!isRenaming) {
+                      handleSelect(session);
+                    }
+                  }}
+                  role="option"
+                  aria-selected={session.id === activeSessionId}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (isRenaming) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleSelect(session);
+                    }
+                  }}
                 >
-                  ×
-                </button>
-              </div>
-            ))}
+                  <div className="session-selector-item-info">
+                    {isRenaming ? (
+                      <input
+                        className="session-selector-rename-input"
+                        value={renameValue}
+                        maxLength={60}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            commitRename(e, session.id);
+                          }
+                          if (e.key === 'Escape') {
+                            cancelRename(e);
+                          }
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        <span className="session-selector-item-title">{session.title}</span>
+                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="session-selector-item-actions">
+                    {isRenaming ? (
+                      <>
+                        <button
+                          type="button"
+                          className="session-selector-item-save"
+                          onClick={(e) => commitRename(e, session.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="session-selector-item-cancel"
+                          onClick={cancelRename}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="session-selector-item-rename"
+                          onClick={(e) => startRename(e, session)}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          className="session-selector-item-close"
+                          onClick={(e) => handleClose(e, session.id)}
+                          aria-label="Close terminal"
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {!isLoading && inactiveSessions.length > 0 && (
+              <div className="session-selector-section-title">Inactive</div>
+            )}
+            {inactiveSessions.map((session) => {
+              const isRenaming = renamingId === session.id;
+              return (
+                <div
+                  key={session.id}
+                  className="session-selector-item inactive"
+                  onClick={() => {
+                    if (!isRenaming) {
+                      onRestoreSession(session.id);
+                      setIsOpen(false);
+                    }
+                  }}
+                  role="option"
+                  aria-selected={session.id === activeSessionId}
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (isRenaming) return;
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onRestoreSession(session.id);
+                      setIsOpen(false);
+                    }
+                  }}
+                >
+                  <div className="session-selector-item-info">
+                    {isRenaming ? (
+                      <input
+                        className="session-selector-rename-input"
+                        value={renameValue}
+                        maxLength={60}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            commitRename(e, session.id);
+                          }
+                          if (e.key === 'Escape') {
+                            cancelRename(e);
+                          }
+                        }}
+                        autoFocus
+                      />
+                    ) : (
+                      <>
+                        <span className="session-selector-item-title">
+                          <span className="session-inactive-icon" title="Inactive terminal">{'\u23F8'}</span>
+                          {session.title}
+                        </span>
+                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="session-selector-item-actions">
+                    {isRenaming ? (
+                      <>
+                        <button
+                          type="button"
+                          className="session-selector-item-save"
+                          onClick={(e) => commitRename(e, session.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="session-selector-item-cancel"
+                          onClick={cancelRename}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="session-selector-item-restore"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRestoreSession(session.id);
+                            setIsOpen(false);
+                          }}
+                        >
+                          Restore
+                        </button>
+                        <button
+                          type="button"
+                          className="session-selector-item-rename"
+                          onClick={(e) => startRename(e, session)}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          className="session-selector-item-close"
+                          onClick={(e) => handleClose(e, session.id)}
+                          aria-label="Delete terminal"
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <button
             type="button"
@@ -306,6 +514,19 @@ function AppContent() {
     }
   });
   const [loadingSessions, setLoadingSessions] = useState(false);
+
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => session.isActive),
+    [sessions]
+  );
+  const inactiveSessions = useMemo(
+    () => sessions.filter((session) => !session.isActive),
+    [sessions]
+  );
+  const activeSessionSnapshot = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) || null,
+    [sessions, activeSessionId]
+  );
   const [showSettings, setShowSettings] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
@@ -316,6 +537,7 @@ function AppContent() {
   const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'preview'
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
+  const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
   // Claude Code state - restore from localStorage
   const [leftPanelMode, setLeftPanelMode] = useState(() => {
@@ -335,6 +557,7 @@ function AppContent() {
   });
   const mainContentRef = useRef(null);
   const isMountedRef = useRef(true);
+  const restoreInFlightRef = useRef(new Set());
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
 
@@ -604,10 +827,6 @@ function AppContent() {
               if (activeSession) {
                 setActiveSessionId(activeSession.id);
                 localStorage.setItem('lastActiveSession', activeSession.id);
-              } else if (sessionList.length > 0) {
-                // No active session, use the first available
-                setActiveSessionId(sessionList[0].id);
-                localStorage.setItem('lastActiveSession', sessionList[0].id);
               } else {
                 // No sessions at all
                 localStorage.removeItem('lastActiveSession');
@@ -791,6 +1010,69 @@ function AppContent() {
     [loadSessions]
   );
 
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
+    if (!activeSnapshot || activeSnapshot.isActive) return;
+    if (restoreInFlightRef.current.has(activeSessionId)) return;
+
+    restoreInFlightRef.current.add(activeSessionId);
+    setRestoringSessionId(activeSessionId);
+    const retryTimeout = setTimeout(() => {
+      restoreInFlightRef.current.delete(activeSessionId);
+    }, 10000);
+
+    handleRestoreSession(activeSessionId)
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(retryTimeout);
+        restoreInFlightRef.current.delete(activeSessionId);
+      });
+  }, [activeSessionId, sessions, handleRestoreSession]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setRestoringSessionId(null);
+      return;
+    }
+    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
+    if (!activeSnapshot || activeSnapshot.isActive) {
+      setRestoringSessionId(null);
+    }
+  }, [activeSessionId, sessions]);
+
+  const handleRenameSession = useCallback(
+    async (sessionId, title) => {
+      const trimmed = title.trim().slice(0, 60);
+      if (!trimmed) return;
+      const currentTitle = sessions.find((session) => session.id === sessionId)?.title;
+      if (currentTitle === trimmed) return;
+
+      try {
+        const response = await apiFetch(`/api/terminal/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: trimmed })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to rename session (${response.status})`);
+        }
+
+        const data = await response.json();
+        const updated = data.session;
+        setSessions((currentSessions) =>
+          currentSessions.map((session) =>
+            session.id === sessionId ? { ...session, title: updated.title, updatedAt: updated.updatedAt } : session
+          )
+        );
+      } catch (error) {
+        console.error('Failed to rename session', error);
+      }
+    },
+    [sessions]
+  );
+
   const handleCloseSession = useCallback(
     async (sessionId) => {
       try {
@@ -804,7 +1086,8 @@ function AppContent() {
           const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
           setActiveSessionId((currentActiveId) => {
             if (sessionId === currentActiveId) {
-              return remainingSessions.length > 0 ? remainingSessions[0].id : null;
+              const nextActive = remainingSessions.find((session) => session.isActive);
+              return nextActive ? nextActive.id : null;
             }
             return currentActiveId;
           });
@@ -1028,7 +1311,9 @@ function AppContent() {
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
     isMobile && viewportHeight
-      ? { '--mobile-viewport-height': `${Math.round(viewportHeight)}px` }
+      ? {
+          '--mobile-viewport-height': `${Math.round(viewportHeight)}px`
+        }
       : undefined;
 
   return (
@@ -1037,7 +1322,7 @@ function AppContent() {
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         sessionId={activeSessionId}
-        sessionTitle={sessions.find(s => s.id === activeSessionId)?.title}
+        sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
         currentCwd={projectInfo?.cwd}
         recentFolders={recentFolders}
         onSave={handleNavigateSession}
@@ -1056,10 +1341,13 @@ function AppContent() {
       {isMobile && (
         <>
           <MobileHeader
-            sessions={sessions}
+            activeSessions={activeSessions}
+            inactiveSessions={inactiveSessions}
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
+            onRestoreSession={handleRestoreSession}
             onCreateSession={handleCreateSession}
+            onRenameSession={handleRenameSession}
             onOpenSettings={handleOpenSettings}
             onOpenBookmarks={() => setShowBookmarks(true)}
             keybarOpen={keybarOpen}
@@ -1108,12 +1396,14 @@ function AppContent() {
               </div>
               {leftPanelMode === 'terminal' ? (
                 <SessionSelector
-                  sessions={sessions}
+                  activeSessions={activeSessions}
+                  inactiveSessions={inactiveSessions}
                   activeSessionId={activeSessionId}
                   onSelectSession={handleSelectSession}
                   onRestoreSession={handleRestoreSession}
                   onCreateSession={handleCreateSession}
                   onCloseSession={handleCloseSession}
+                  onRenameSession={handleRenameSession}
                   isLoading={loadingSessions}
                 />
               ) : (
@@ -1195,6 +1485,13 @@ function AppContent() {
                     <button className="btn-primary" onClick={handleCreateSession}>
                       + New Terminal
                     </button>
+                  </div>
+                ) : restoringSessionId === activeSessionId ? (
+                  <div className="terminal-restore-placeholder">
+                    <div className="terminal-restore-title">Restoring session…</div>
+                    <div className="terminal-restore-subtitle">
+                      {activeSessionSnapshot?.title || 'Getting your terminal back online'}
+                    </div>
                   </div>
                 ) : (
                   <TerminalChat

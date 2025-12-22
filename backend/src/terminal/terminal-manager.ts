@@ -261,6 +261,54 @@ export class TerminalManager {
     return [...activeSessions, ...persistedSessions];
   }
 
+  async renameSession(userId: string, id: string, title: string): Promise<TerminalSessionSummary | null> {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      throw new Error('Terminal title cannot be empty');
+    }
+
+    const session = this.#sessions.get(id);
+    if (session && session.userId === userId) {
+      session.title = trimmed;
+      session.updatedAt = new Date().toISOString();
+      this.#scheduleSave(session);
+      return {
+        id: session.id,
+        title: session.title,
+        shell: session.shell,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        messageCount: session.buffer.length,
+        isActive: true
+      };
+    }
+
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    const persisted = userPersistedSessions?.get(id);
+    if (!persisted) {
+      return null;
+    }
+
+    const updated: PersistedSession = {
+      ...persisted,
+      title: trimmed,
+      updatedAt: new Date().toISOString()
+    };
+
+    await saveSession(userId, updated);
+    userPersistedSessions.set(id, updated);
+
+    return {
+      id: updated.id,
+      title: updated.title,
+      shell: updated.shell,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      messageCount: updated.history.length,
+      isActive: false
+    };
+  }
+
   isActive(id: string): boolean {
     return this.#sessions.has(id);
   }

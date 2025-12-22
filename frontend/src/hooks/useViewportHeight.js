@@ -28,14 +28,12 @@ export function useViewportHeight() {
     if (window.visualViewport) {
       viewport = window.visualViewport;
       viewport.addEventListener('resize', updateHeight);
-      viewport.addEventListener('scroll', updateHeight);
     }
 
     return () => {
       window.removeEventListener('resize', updateHeight);
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight);
-        viewport.removeEventListener('scroll', updateHeight);
       }
     };
   }, []);

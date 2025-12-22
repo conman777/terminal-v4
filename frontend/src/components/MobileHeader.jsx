@@ -3,10 +3,13 @@ import { SessionDropdown } from './SessionDropdown';
 import { MobileDrawer } from './MobileDrawer';
 
 export function MobileHeader({
-  sessions,
+  activeSessions,
+  inactiveSessions,
   activeSessionId,
   onSelectSession,
+  onRestoreSession,
   onCreateSession,
+  onRenameSession,
   onOpenSettings,
   onOpenBookmarks,
   keybarOpen,
@@ -15,7 +18,7 @@ export function MobileHeader({
   const [showSessionDropdown, setShowSessionDropdown] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
+  const activeSession = activeSessions.find((s) => s.id === activeSessionId);
   const sessionName = activeSession?.title || 'No Session';
 
   return (
@@ -52,10 +55,13 @@ export function MobileHeader({
       <SessionDropdown
         isOpen={showSessionDropdown}
         onClose={() => setShowSessionDropdown(false)}
-        sessions={sessions}
+        activeSessions={activeSessions}
+        inactiveSessions={inactiveSessions}
         activeSessionId={activeSessionId}
         onSelectSession={onSelectSession}
+        onRestoreSession={onRestoreSession}
         onCreateSession={onCreateSession}
+        onRenameSession={onRenameSession}
       />
 
       <MobileDrawer

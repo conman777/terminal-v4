@@ -26,6 +26,12 @@ export const terminalResizeRequestSchema = z.object({
 
 export type TerminalResizeRequestBody = z.infer<typeof terminalResizeRequestSchema>;
 
+export const terminalRenameRequestSchema = z.object({
+  title: z.string().trim().min(1, 'title cannot be empty').max(60, 'title too long')
+});
+
+export type TerminalRenameRequestBody = z.infer<typeof terminalRenameRequestSchema>;
+
 export const bookmarkCreateRequestSchema = z.object({
   name: z
     .string({ error: 'name must be a string' })

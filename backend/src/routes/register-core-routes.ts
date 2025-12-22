@@ -3,7 +3,12 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, parse, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import archiver from 'archiver';
-import { terminalCreateRequestSchema, terminalInputRequestSchema, terminalResizeRequestSchema } from './schemas';
+import {
+  terminalCreateRequestSchema,
+  terminalInputRequestSchema,
+  terminalRenameRequestSchema,
+  terminalResizeRequestSchema
+} from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
 import { scanForProjects } from '../services/project-scanner';
 
@@ -181,6 +186,34 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     reply.code(204).send();
   });
 
+  app.patch<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const result = terminalRenameRequestSchema.safeParse(request.body);
+    if (!result.success) {
+      reply.code(400).send({
+        error: 'Invalid terminal update body',
+        details: result.error.flatten()
+      });
+      return;
+    }
+
+    try {
+      const session = await deps.terminalManager.renameSession(userId, request.params.id, result.data.title);
+      if (!session) {
+        reply.code(404).send({ error: 'Terminal session not found' });
+        return;
+      }
+      reply.send({ session });
+    } catch (error) {
+      reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/stream', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {
@@ -293,22 +326,22 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     request.raw.on('close', cleanup);
   });
 
-  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/ws', { websocket: true }, (connection, request) => {
+  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/ws', { websocket: true }, (socket, request) => {
     const userId = request.userId;
     if (!userId) {
-      connection.socket.close(4401, 'Unauthorized');
+      socket.close(4401, 'Unauthorized');
       return;
     }
 
     const snapshot = deps.terminalManager.getSession(userId, request.params.id);
     if (!snapshot) {
-      connection.socket.close(4404, 'Terminal session not found');
+      socket.close(4404, 'Terminal session not found');
       return;
     }
 
     const send = (text: string): boolean => {
       try {
-        connection.socket.send(text);
+        socket.send(text);
         return true;
       } catch {
         return false;
@@ -319,7 +352,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       snapshot.history.forEach((entry) => {
         send(entry.text);
       });
-      connection.socket.close(1000, 'Session ended');
+      socket.close(1000, 'Session ended');
       return;
     }
 
@@ -332,7 +365,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
         return;
       }
       if (event === null) {
-        connection.socket.close(1000, 'Session ended');
+        socket.close(1000, 'Session ended');
         return;
       }
       send(event.text);
@@ -345,19 +378,19 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     isBuffering = false;
     for (const event of bufferedEvents) {
       if (event === null) {
-        connection.socket.close(1000, 'Session ended');
+        socket.close(1000, 'Session ended');
         return;
       }
       send(event.text);
     }
 
-    connection.socket.on('message', (message) => {
+    socket.on('message', (message) => {
       const data = message.toString();
       if (!data) return;
       try {
         deps.terminalManager.write(userId, request.params.id, data);
       } catch {
-        connection.socket.close(1011, 'Write failed');
+        socket.close(1011, 'Write failed');
       }
     });
 
@@ -365,8 +398,8 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       unsubscribe();
     };
 
-    connection.socket.on('close', cleanup);
-    connection.socket.on('error', cleanup);
+    socket.on('close', cleanup);
+    socket.on('error', cleanup);
   });
 
   app.delete<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {

@@ -115,4 +115,16 @@ describe('TerminalManager', () => {
     expect(history?.history).toHaveLength(1);
     expect(history?.history[0].text[0]).toBe('B');
   });
+
+  it('renames an active session', async () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn(() => fakeProcess);
+    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+
+    const snapshot = manager.createSession(TEST_USER_ID, { title: 'Old Name' });
+    const updated = await manager.renameSession(TEST_USER_ID, snapshot.id, 'New Name');
+
+    expect(updated?.title).toBe('New Name');
+    expect(manager.getSession(TEST_USER_ID, snapshot.id)?.title).toBe('New Name');
+  });
 });
