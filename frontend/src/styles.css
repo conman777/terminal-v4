@@ -797,6 +797,9 @@ button {
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  background: #0c0c0c;
 }
 
 .terminal-log {
@@ -829,9 +832,19 @@ button {
 
 .xterm-container {
   height: 100% !important;
+  width: 100%;
   box-sizing: border-box;
-  padding: 12px 16px;
-  background: #0c0c0c;
+  overflow: hidden;
+  position: relative;
+}
+
+.xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.xterm-viewport {
+  overflow-x: hidden;
 }
 
 /* Terminal Input */
@@ -2299,6 +2312,10 @@ button {
   }
 
   .xterm-container {
+    width: 100%;
+  }
+
+  .terminal-chat {
     padding-left: calc(env(safe-area-inset-left, 0px) + 12px);
     padding-right: calc(env(safe-area-inset-right, 0px) + 12px);
   }

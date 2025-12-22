@@ -1,5 +1,6 @@
 import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
+import websocket from '@fastify/websocket';
 import { fileURLToPath } from 'node:url';
 import { registerCoreRoutes } from './routes/register-core-routes';
 import { registerBookmarkRoutes } from './routes/bookmark-routes';
@@ -29,6 +30,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await app.register(cors, {
     origin: true
   });
+  await app.register(websocket);
 
   // Initialize database
   getDatabase();

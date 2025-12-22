@@ -10,7 +10,7 @@ A browser-based terminal emulator that provides remote access to your system's c
 - ❌ **Close Terminals** - Terminate any terminal session with × button
 - ⚙️ **Configurable Working Directory** - Set default starting directory for new terminals
 - 🌐 **Remote Access** - Access your terminal from any browser on your network
-- ⚡ **Real-time Streaming** - Server-Sent Events (SSE) for instant terminal output
+- ⚡ **Real-time Streaming** - WebSocket stream for instant terminal output
 - 📱 **Responsive UI** - Works on desktop and mobile browsers
 
 ## Requirements
@@ -75,7 +75,7 @@ terminal-v4/
 - `POST /api/terminal` - Create new terminal session (accepts `cwd` for working directory)
 - `GET /api/terminal` - List all terminal sessions
 - `GET /api/terminal/:id/history` - Get terminal output history
-- `GET /api/terminal/:id/stream` - SSE stream for real-time output
+- `GET /api/terminal/:id/ws` - WebSocket stream for real-time input/output
 - `POST /api/terminal/:id/input` - Send input to terminal
 - `DELETE /api/terminal/:id` - Close/terminate terminal session
 
@@ -121,7 +121,7 @@ git status            # Git operations
 - **Backend**: Fastify + TypeScript for high-performance async I/O
 - **PTY**: `@homebridge/node-pty-prebuilt-multiarch` for true terminal emulation
 - **Frontend**: React + xterm.js for professional terminal UI
-- **Communication**: Server-Sent Events (SSE) for real-time streaming
+- **Communication**: WebSocket for real-time streaming
 - **Session Management**: In-memory store with multi-session support
 
 ## Security Considerations

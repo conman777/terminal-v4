@@ -293,6 +293,82 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     request.raw.on('close', cleanup);
   });
 
+  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/ws', { websocket: true }, (connection, request) => {
+    const userId = request.userId;
+    if (!userId) {
+      connection.socket.close(4401, 'Unauthorized');
+      return;
+    }
+
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
+    if (!snapshot) {
+      connection.socket.close(4404, 'Terminal session not found');
+      return;
+    }
+
+    const send = (text: string): boolean => {
+      try {
+        connection.socket.send(text);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!deps.terminalManager.isActive(snapshot.id)) {
+      snapshot.history.forEach((entry) => {
+        send(entry.text);
+      });
+      connection.socket.close(1000, 'Session ended');
+      return;
+    }
+
+    const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
+    let isBuffering = true;
+
+    const unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
+      if (isBuffering) {
+        bufferedEvents.push(event);
+        return;
+      }
+      if (event === null) {
+        connection.socket.close(1000, 'Session ended');
+        return;
+      }
+      send(event.text);
+    });
+
+    snapshot.history.forEach((entry) => {
+      send(entry.text);
+    });
+
+    isBuffering = false;
+    for (const event of bufferedEvents) {
+      if (event === null) {
+        connection.socket.close(1000, 'Session ended');
+        return;
+      }
+      send(event.text);
+    }
+
+    connection.socket.on('message', (message) => {
+      const data = message.toString();
+      if (!data) return;
+      try {
+        deps.terminalManager.write(userId, request.params.id, data);
+      } catch {
+        connection.socket.close(1011, 'Write failed');
+      }
+    });
+
+    const cleanup = () => {
+      unsubscribe();
+    };
+
+    connection.socket.on('close', cleanup);
+    connection.socket.on('error', cleanup);
+  });
+
   app.delete<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {

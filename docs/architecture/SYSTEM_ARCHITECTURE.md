@@ -20,7 +20,7 @@ Terminal v4 is a web-based terminal emulator providing remote access to system c
 │  │  - Session management (create/close)                  │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                            │                                 │
-│                            │ HTTP / SSE                      │
+│                            │ HTTP / WebSocket                │
 │                            ▼                                 │
 └─────────────────────────────────────────────────────────────┘
                              │
@@ -41,7 +41,7 @@ Terminal v4 is a web-based terminal emulator providing remote access to system c
 │  │  GET  /api/terminal     - List terminal sessions     │  │
 │  │  POST /api/terminal     - Create terminal session    │  │
 │  │  GET  /api/terminal/:id/history - Get history        │  │
-│  │  GET  /api/terminal/:id/stream  - SSE output stream  │  │
+│  │  GET  /api/terminal/:id/ws      - WebSocket I/O stream   │  │
 │  │  POST /api/terminal/:id/input   - Send input         │  │
 │  │  DELETE /api/terminal/:id       - Close session      │  │
 │  └───────────────────────────────────────────────────────┘  │
@@ -101,8 +101,8 @@ Fastify server managing terminal processes:
 **Session Lifecycle:**
 1. Client creates terminal via POST request
 2. Backend spawns PTY process
-3. Process output buffered + streamed via SSE
-4. Client sends input via POST requests
+3. Process output buffered + streamed via WebSocket
+4. Client sends input via WebSocket
 5. Client closes terminal via DELETE request
 6. Backend kills process and cleans up
 
@@ -123,7 +123,7 @@ Browser                 Frontend              Backend            PTY Process
    │                       │<────────────────────┤                    │
    │   Display terminal    │                     │                    │
    │<──────────────────────┤                     │                    │
-   │                       │  GET /stream (SSE)  │                    │
+   │                       │  WS /api/terminal/:id/ws │              │
    │                       ├────────────────────>│                    │
    │                       │  ...output...       │                    │
    │                       │<────────────────────┤                    │
@@ -136,13 +136,13 @@ Browser                 Frontend              Backend            PTY Process
    │                       │                     │                    │
    │   Type "ls"           │                     │                    │
    ├──────────────────────>│                     │                    │
-   │                       │  POST /input {"ls"} │                    │
+   │                       │  WS send "ls"       │                    │
    │                       ├────────────────────>│                    │
    │                       │                     │  write("ls")       │
    │                       │                     ├───────────────────>│
    │                       │                     │                    │
    │                       │                     │  output stream     │
-   │                       │  SSE events         │<───────────────────┤
+   │                       │  WS messages        │<───────────────────┤
    │                       │<────────────────────┤                    │
    │   Render output       │                     │                    │
    │<──────────────────────┤                     │                    │
@@ -180,16 +180,15 @@ Browser                 Frontend              Backend            PTY Process
 - ❌ Terminal control codes
 - ❌ Interactive input/output
 
-### Server-Sent Events (SSE) for Output
+### WebSocket for Input/Output
 
-**Why SSE instead of WebSockets?**
-- ✅ Simpler protocol (HTTP-based)
-- ✅ Automatic reconnection
+**Why WebSockets?**
+- ✅ Bidirectional streaming for input/output
+- ✅ Lower latency than per-keystroke HTTP requests
 - ✅ Browser support excellent
-- ✅ Fastify native support
-- ✅ One-way data flow is all we need (server → client)
+- ✅ Fastify support via @fastify/websocket
 
-Input goes via regular HTTP POST (client → server).
+Input goes via WebSocket messages (client ↔ server).
 
 ### Multiple Processes vs tmux/screen
 
