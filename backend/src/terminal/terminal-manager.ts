@@ -66,6 +66,9 @@ interface ManagedTerminal {
   bufferCharCount: number;
   subscribers: Set<(event: TerminalStreamEvent | null) => void>;
   saveTimer?: NodeJS.Timeout;
+  // Store handlers for cleanup
+  dataHandler?: (data: string) => void;
+  exitHandler?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
 function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
@@ -366,6 +369,11 @@ export class TerminalManager {
       env: options.env
     });
 
+    const dataHandler = (data: string) => this.#handleData(session, data);
+    const exitHandler = (code: number | null, signal: NodeJS.Signals | null) => {
+      this.#handleExit(session, code, signal);
+    };
+
     const session: ManagedTerminal = {
       id,
       userId,
@@ -377,13 +385,13 @@ export class TerminalManager {
       process: ptyProcess,
       buffer: [],
       bufferCharCount: 0,
-      subscribers: new Set()
+      subscribers: new Set(),
+      dataHandler,
+      exitHandler
     };
 
-    ptyProcess.on('data', (data: string) => this.#handleData(session, data));
-    ptyProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.#handleExit(session, code, signal);
-    });
+    ptyProcess.on('data', dataHandler);
+    ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
 
@@ -554,6 +562,13 @@ export class TerminalManager {
       // Notify subscribers that session is ending before cleanup
       session.subscribers.forEach((subscriber) => subscriber(null));
       session.subscribers.clear();
+      // Remove event listeners to prevent memory leaks
+      if (session.dataHandler) {
+        session.process.off('data', session.dataHandler);
+      }
+      if (session.exitHandler) {
+        session.process.off('exit', session.exitHandler);
+      }
       session.process.kill();
       this.#sessions.delete(id);
     }
@@ -563,7 +578,10 @@ export class TerminalManager {
     if (userPersistedSessions) {
       userPersistedSessions.delete(id);
     }
-    deleteSession(userId, id);
+    // Fire-and-forget with error handling to prevent unhandled rejection
+    deleteSession(userId, id).catch((error) => {
+      console.error(`Failed to delete session file for ${id}:`, error);
+    });
   }
 
   // Kill all active sessions
@@ -592,6 +610,13 @@ export class TerminalManager {
       try {
         session.subscribers.forEach((subscriber) => subscriber(null));
         session.subscribers.clear();
+        // Remove event listeners to prevent memory leaks
+        if (session.dataHandler) {
+          session.process.off('data', session.dataHandler);
+        }
+        if (session.exitHandler) {
+          session.process.off('exit', session.exitHandler);
+        }
         session.process.kill();
       } catch (err) {
         console.error(`Error killing session ${session.id}:`, err);
@@ -633,6 +658,11 @@ export class TerminalManager {
       cwd
     });
 
+    const dataHandler = (data: string) => this.#handleData(session, data);
+    const exitHandler = (code: number | null, signal: NodeJS.Signals | null) => {
+      this.#handleExit(session, code, signal);
+    };
+
     const session: ManagedTerminal = {
       id: persisted.id,
       userId,
@@ -644,13 +674,13 @@ export class TerminalManager {
       process: ptyProcess,
       buffer: [...persisted.history], // Restore history
       bufferCharCount: persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
-      subscribers: new Set()
+      subscribers: new Set(),
+      dataHandler,
+      exitHandler
     };
 
-    ptyProcess.on('data', (data: string) => this.#handleData(session, data));
-    ptyProcess.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
-      this.#handleExit(session, code, signal);
-    });
+    ptyProcess.on('data', dataHandler);
+    ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
 

@@ -35,6 +35,10 @@ const SCAN_DIRECTORIES = [
   path.join(os.homedir(), 'workspace'),
   path.join(os.homedir(), 'repos'),
   path.join(os.homedir(), 'src'),
+  // OneDrive paths
+  path.join(os.homedir(), 'OneDrive', 'Documents'),
+  path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents'),
+  path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents', 'coding projects'),
 ];
 
 // Cache for scanned projects

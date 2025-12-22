@@ -18,6 +18,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     let disposed = false;
     let hasOpened = false;
+    let rafId = null;
 
     const term = new Terminal({
       cursorBlink: true,
@@ -30,12 +31,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       allowProposedApi: true
     });
 
-    // Handle paste with Ctrl+V
+    // Handle paste - xterm doesn't natively handle Ctrl+V
     const handlePaste = async () => {
       try {
         const text = await navigator.clipboard.readText();
         if (text && !disposed) {
-          // Send pasted text to the terminal backend
+          // Write directly to terminal's onData won't work here since we're
+          // intercepting the key. Instead, send to backend directly.
           apiFetch(`/api/terminal/${sessionId}/input`, {
             method: 'POST',
             body: { command: text }
@@ -53,20 +55,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (event.ctrlKey && event.key === 'c' && term.hasSelection()) {
         return false; // Let browser handle copy
       }
-
-      // Handle Ctrl+V paste
-      if (event.ctrlKey && event.key === 'v') {
+      // Handle Ctrl+V paste manually (xterm doesn't handle it natively)
+      if (event.ctrlKey && event.key === 'v' && event.type === 'keydown') {
         handlePaste();
-        return false; // Prevent default handling
+        return false; // Prevent xterm from sending ^V
       }
-
-      // Handle Ctrl+Shift+V paste (common in terminals)
-      if (event.ctrlKey && event.shiftKey && event.key === 'V') {
+      // Handle Ctrl+Shift+V paste
+      if (event.ctrlKey && event.shiftKey && event.key === 'V' && event.type === 'keydown') {
         handlePaste();
         return false;
       }
-
-      return true; // Let terminal handle other keys
+      return true;
     });
 
     const fitAddon = new FitAddon();
@@ -85,16 +84,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const { width, height } = container.getBoundingClientRect();
       if (width <= 0 || height <= 0) {
-        requestAnimationFrame(openWhenReady);
+        rafId = requestAnimationFrame(openWhenReady);
         return;
       }
 
       hasOpened = true;
       term.open(container);
 
-      requestAnimationFrame(() => {
+      rafId = requestAnimationFrame(() => {
         if (!disposed && fitAddonRef.current) {
           fitAddonRef.current.fit();
+          // Send initial resize to backend
+          const { cols, rows } = term;
+          if (cols && rows) {
+            apiFetch(`/api/terminal/${sessionId}/resize`, {
+              method: 'POST',
+              body: { cols, rows }
+            }).catch(() => {});
+          }
         }
       });
 
@@ -117,6 +124,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       // Connect to SSE stream (which sends history first, then new events)
       // EventSource doesn't support headers, so pass token via query param
+      // Close any existing connection first (prevents duplicates from StrictMode)
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       const token = getAccessToken();
       const streamUrl = `/api/terminal/${sessionId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
       const source = new EventSource(streamUrl);
@@ -241,11 +253,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
     };
 
-    requestAnimationFrame(openWhenReady);
+    rafId = requestAnimationFrame(openWhenReady);
 
     return () => {
       disposed = true;
       detectedUrlsRef.current.clear();
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
       if (resizeObserver) {
         resizeObserver.disconnect();
       }
@@ -254,10 +269,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
       if (xtermRef.current) {
         xtermRef.current.dispose();
+        xtermRef.current = null;
       }
+      fitAddonRef.current = null;
     };
   }, [sessionId, onUrlDetected]);
 

@@ -131,10 +131,12 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     seenEventIdsRef.current.clear();
     retryCountRef.current = 0;
 
-    let eventSource = null;
     let reconnectTimeout = null;
+    let disposed = false;
 
     const connect = () => {
+      if (disposed) return;
+
       if (retryCountRef.current >= MAX_RETRIES) {
         console.error('Max SSE reconnection attempts reached');
         setIsConnected(false);
@@ -142,10 +144,16 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         return;
       }
 
+      // Close any existing connection first
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+
       // EventSource doesn't support headers, so pass token via query param
       const token = getAccessToken();
       const streamUrl = `/api/claude-code/${sessionId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-      eventSource = new EventSource(streamUrl);
+      const eventSource = new EventSource(streamUrl);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -185,17 +193,19 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
       });
 
       eventSource.onerror = () => {
+        if (disposed) return;
         setIsConnected(false);
         setIsProcessing(false); // Reset processing state on connection error
         retryCountRef.current++;
 
         // Close current connection
-        if (eventSource) {
-          eventSource.close();
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
         }
 
         // Manual retry with exponential backoff
-        if (retryCountRef.current < MAX_RETRIES) {
+        if (!disposed && retryCountRef.current < MAX_RETRIES) {
           const delay = Math.min(1000 * Math.pow(2, retryCountRef.current), 30000);
           reconnectTimeout = setTimeout(connect, delay);
         }
@@ -205,8 +215,12 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     connect();
 
     return () => {
+      disposed = true;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      if (eventSource) eventSource.close();
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       setIsProcessing(false); // Reset when unmounting/switching sessions
     };
   }, [sessionId]);

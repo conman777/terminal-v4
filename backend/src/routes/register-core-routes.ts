@@ -208,9 +208,17 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       (stream as { flushHeaders: () => void }).flushHeaders();
     }
 
-    const send = (event: string, data: unknown) => {
-      stream.write(`event: ${event}\n`);
-      stream.write(`data: ${JSON.stringify(data)}\n\n`);
+    let streamClosed = false;
+    const send = (event: string, data: unknown): boolean => {
+      if (streamClosed) return false;
+      try {
+        const ok1 = stream.write(`event: ${event}\n`);
+        const ok2 = stream.write(`data: ${JSON.stringify(data)}\n\n`);
+        return ok1 && ok2;
+      } catch {
+        streamClosed = true;
+        return false;
+      }
     };
 
     // Persisted (inactive) session: send history and immediately end the stream.
@@ -228,16 +236,23 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     let isBuffering = true;
 
     const unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
-      if (isBuffering) {
-        bufferedEvents.push(event);
-        return;
+      try {
+        if (streamClosed) return;
+        if (isBuffering) {
+          bufferedEvents.push(event);
+          return;
+        }
+        if (event === null) {
+          send('end', {});
+          if (!streamClosed) {
+            try { stream.end(); } catch { /* ignore */ }
+          }
+          return;
+        }
+        send('data', { text: event.text, ts: event.ts });
+      } catch {
+        streamClosed = true;
       }
-      if (event === null) {
-        send('end', {});
-        stream.end();
-        return;
-      }
-      send('data', { text: event.text, ts: event.ts });
     });
 
     // Send history
@@ -257,6 +272,10 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     }
 
     const keepAlive = setInterval(() => {
+      if (streamClosed) {
+        clearInterval(keepAlive);
+        return;
+      }
       send('ping', {});
     }, 15000);
 
@@ -264,11 +283,13 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      streamClosed = true;
       clearInterval(keepAlive);
       unsubscribe();
     };
 
     stream.on('close', cleanup);
+    stream.on('error', cleanup);
     request.raw.on('close', cleanup);
   });
 
