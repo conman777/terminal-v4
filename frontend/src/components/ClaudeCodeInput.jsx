@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { apiPost } from '../utils/api';
 
 const SLASH_COMMANDS = [
   { cmd: '/model', desc: 'Change AI model' },
@@ -12,7 +13,13 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
   const [text, setText] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingError, setRecordingError] = useState(null);
   const textareaRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const streamRef = useRef(null);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -39,6 +46,107 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
   useEffect(() => {
     setHistoryIndex(-1);
   }, [history.length]);
+
+  // Cleanup recording on unmount
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  // Clear recording error after 3 seconds
+  useEffect(() => {
+    if (recordingError) {
+      const timer = setTimeout(() => setRecordingError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [recordingError]);
+
+  const startRecording = useCallback(async () => {
+    setRecordingError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Try webm first, fall back to other formats
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : 'audio/wav';
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        audioChunksRef.current = [];
+
+        // Skip if too small (likely no audio)
+        if (audioBlob.size < 1000) {
+          setRecordingError('No audio recorded');
+          return;
+        }
+
+        // Send to backend for transcription
+        setIsTranscribing(true);
+        try {
+          const formData = new FormData();
+          formData.append('audio', audioBlob, `recording.${mimeType.split('/')[1]}`);
+
+          const result = await apiPost('/api/transcribe', formData);
+
+          if (result.text) {
+            setText(prev => prev + (prev ? ' ' : '') + result.text);
+            textareaRef.current?.focus();
+          } else if (result.message) {
+            setRecordingError(result.message);
+          }
+        } catch (error) {
+          setRecordingError(error.message || 'Transcription failed');
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      if (error.name === 'NotAllowedError') {
+        setRecordingError('Microphone access denied');
+      } else {
+        setRecordingError('Could not start recording');
+      }
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+
+  const toggleRecording = useCallback(() => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  }, [isRecording, startRecording, stopRecording]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -133,20 +241,50 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
         </div>
       )}
 
+      {recordingError && (
+        <div className="recording-error">{recordingError}</div>
+      )}
+
       <form className="claude-code-input" onSubmit={handleSubmit}>
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isProcessing ? 'Claude is working...' : 'Type a message... (/ for commands)'}
+          placeholder={
+            isRecording ? 'Recording... tap mic to stop' :
+            isTranscribing ? 'Transcribing...' :
+            isProcessing ? 'Claude is working...' :
+            'Type a message... (/ for commands)'
+          }
           aria-label="Claude message"
-          disabled={disabled || isProcessing}
+          disabled={disabled || isProcessing || isRecording || isTranscribing}
           rows={1}
         />
         <button
+          type="button"
+          onClick={toggleRecording}
+          disabled={disabled || isProcessing || isTranscribing}
+          className={`mic-button ${isRecording ? 'recording' : ''}`}
+          aria-label={isRecording ? 'Stop recording' : 'Start voice input'}
+          title={isRecording ? 'Stop recording' : 'Voice input'}
+        >
+          {isTranscribing ? '...' : isRecording ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="8" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          )}
+        </button>
+        <button
           type="submit"
-          disabled={disabled || isProcessing || !text.trim()}
+          disabled={disabled || isProcessing || isRecording || isTranscribing || !text.trim()}
           className={isProcessing ? 'processing' : ''}
           aria-label="Send message"
         >

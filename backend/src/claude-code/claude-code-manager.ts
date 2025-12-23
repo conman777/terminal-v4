@@ -13,6 +13,7 @@ import {
   loadAllClaudeCodeSessions,
   deleteClaudeCodeSession
 } from './claude-code-store';
+import { validatePathSecurity } from '../utils/path-security';
 
 /**
  * A wrapper around the Claude Code CLI using PTY to maintain compatibility
@@ -41,7 +42,10 @@ class AgentWrapper {
     // Kill any existing process before starting a new one
     this.kill();
 
-    const claudePath = process.env.CLAUDE_BIN || 'claude';
+    // On Windows, npm global binaries are .cmd files
+    const isWindows = process.platform === 'win32';
+    const defaultClaudePath = isWindows ? 'claude.cmd' : 'claude';
+    const claudePath = process.env.CLAUDE_BIN || defaultClaudePath;
     const args = [
       '-p', text,
       '--output-format', 'stream-json',
@@ -230,11 +234,11 @@ export class ClaudeCodeManager {
     console.log(`Loaded ${persisted.length} persisted Claude Code sessions for user ${userId}`);
   }
 
-  createSession(userId: string, cwd: string, model: ClaudeModel = 'sonnet'): ClaudeCodeSession {
+  async createSession(userId: string, cwd: string, model: ClaudeModel = 'sonnet'): Promise<ClaudeCodeSession> {
     const id = `cc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    // Resolve to absolute path for persistence
-    const absoluteCwd = resolve(cwd);
+    // Validate and resolve to absolute path - ensures cwd is within project root
+    const absoluteCwd = await validatePathSecurity(cwd, 'working directory');
 
     // Create Agent instance
     const agent = new AgentWrapper({
@@ -469,12 +473,12 @@ export class ClaudeCodeManager {
     }
   }
 
-  updateCwd(userId: string, id: string, cwd: string): ClaudeCodeSession {
+  async updateCwd(userId: string, id: string, cwd: string): Promise<ClaudeCodeSession> {
     const session = this.#sessions.get(id);
     if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
 
-    // Resolve to absolute path
-    const absoluteCwd = resolve(cwd);
+    // Validate and resolve to absolute path - ensures cwd is within project root
+    const absoluteCwd = await validatePathSecurity(cwd, 'working directory');
     session.cwd = absoluteCwd;
 
     // Kill the old agent's process before creating a new one

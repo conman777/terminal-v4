@@ -11,10 +11,14 @@ export const terminalCreateRequestSchema = z.object({
 
 export type TerminalCreateRequestBody = z.infer<typeof terminalCreateRequestSchema>;
 
+// Maximum input size: 1MB (reasonable limit for terminal input while allowing large pastes)
+const MAX_TERMINAL_INPUT_SIZE = 1024 * 1024;
+
 export const terminalInputRequestSchema = z.object({
   command: z
     .string({ error: 'command must be a string' })
     .min(1, 'command cannot be empty')
+    .max(MAX_TERMINAL_INPUT_SIZE, 'command exceeds maximum allowed size')
 });
 
 export type TerminalInputRequestBody = z.infer<typeof terminalInputRequestSchema>;

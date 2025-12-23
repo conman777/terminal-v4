@@ -9,7 +9,8 @@ export function SessionDropdown({
   onSelectSession,
   onRestoreSession,
   onCreateSession,
-  onRenameSession
+  onRenameSession,
+  onCloseSession
 }) {
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -121,6 +122,15 @@ export function SessionDropdown({
                   >
                     Rename
                   </button>
+                  <button
+                    type="button"
+                    className="session-dropdown-action danger"
+                    onClick={() => {
+                      onCloseSession(session.id);
+                    }}
+                  >
+                    Delete
+                  </button>
                 </div>
               )}
             </div>
@@ -198,6 +208,15 @@ export function SessionDropdown({
                     }}
                   >
                     Restore
+                  </button>
+                  <button
+                    type="button"
+                    className="session-dropdown-action danger"
+                    onClick={() => {
+                      onCloseSession(session.id);
+                    }}
+                  >
+                    Delete
                   </button>
                 </div>
               )}

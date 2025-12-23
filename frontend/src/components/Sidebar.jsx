@@ -10,7 +10,8 @@ export default function Sidebar({
   onFolderSelect,
   onPinFolder,
   onUnpinFolder,
-  currentPath
+  currentPath,
+  onAddScanFolder = null
 }) {
   return (
     <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
@@ -73,6 +74,8 @@ export default function Sidebar({
             loading={projectsLoading}
             showPinAction={true}
             defaultExpanded={true}
+            showSearch={true}
+            onAddFolder={onAddScanFolder}
           />
         </div>
       )}

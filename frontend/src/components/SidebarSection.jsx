@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import SidebarItem from './SidebarItem';
 
 export default function SidebarSection({
@@ -12,9 +12,12 @@ export default function SidebarSection({
   currentPath,
   loading = false,
   showPinAction = true,
-  defaultExpanded = true
+  defaultExpanded = true,
+  showSearch = false,
+  onAddFolder = null
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Normalize path for comparison
   const normalizePath = (p) => p?.toLowerCase().replace(/\/$/, '');
@@ -31,6 +34,22 @@ export default function SidebarSection({
   const isPinned = (path) => {
     return pinnedFolders.some(p => normalizePath(p) === normalizePath(path));
   };
+
+  // Filter items based on search query
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return items;
+    const query = searchQuery.toLowerCase();
+    return items.filter((item) => {
+      const name = typeof item === 'string' ? getFolderName(item) : item.name;
+      const path = typeof item === 'string' ? item : item.path;
+      const branch = typeof item === 'string' ? '' : (item.branch || '');
+      return (
+        name.toLowerCase().includes(query) ||
+        path.toLowerCase().includes(query) ||
+        branch.toLowerCase().includes(query)
+      );
+    });
+  }, [items, searchQuery]);
 
   // Render icon based on type
   const renderIcon = () => {
@@ -77,16 +96,61 @@ export default function SidebarSection({
         <span className="sidebar-section-icon">{renderIcon()}</span>
         <span className="sidebar-section-title">{title}</span>
         {loading && <span className="sidebar-section-loader" />}
+        {onAddFolder && (
+          <button
+            type="button"
+            className="sidebar-section-add"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddFolder();
+            }}
+            title="Add folder to scan"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z" />
+            </svg>
+          </button>
+        )}
       </button>
 
       {isExpanded && (
         <div className="sidebar-section-content">
+          {showSearch && items.length > 0 && (
+            <div className="sidebar-search">
+              <svg className="sidebar-search-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z" />
+              </svg>
+              <input
+                type="text"
+                className="sidebar-search-input"
+                placeholder="Search projects..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+              />
+              {searchQuery && (
+                <button
+                  className="sidebar-search-clear"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSearchQuery('');
+                  }}
+                  type="button"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
           {loading && items.length === 0 ? (
             <div className="sidebar-empty">Scanning...</div>
           ) : items.length === 0 ? (
             <div className="sidebar-empty">No items</div>
+          ) : filteredItems.length === 0 ? (
+            <div className="sidebar-empty">No matches for "{searchQuery}"</div>
           ) : (
-            items.map((item, index) => {
+            filteredItems.map((item, index) => {
               // Handle both string paths and Project objects
               const path = typeof item === 'string' ? item : item.path;
               const name = typeof item === 'string' ? getFolderName(item) : item.name;

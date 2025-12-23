@@ -39,13 +39,62 @@ function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) 
   );
 }
 
-// Helper to group tool_use with tool_result
+// Format relative time
+function formatRelativeTime(timestamp) {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+
+  if (seconds < 60) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+
+  const date = new Date(timestamp);
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+// Section header component
+function SectionHeader({ turnNumber, timestamp }) {
+  return (
+    <div className="cc-section-header">
+      <span className="cc-section-turn">Turn {turnNumber}</span>
+      {timestamp && (
+        <span className="cc-section-time">{formatRelativeTime(timestamp)}</span>
+      )}
+    </div>
+  );
+}
+
+// Helper to group tool_use with tool_result and add section headers
 function groupEvents(events) {
   const grouped = [];
   let currentToolUse = null;
+  let turnNumber = 0;
+  let lastUserTimestamp = null;
 
   for (const event of events) {
-    if (event.type === 'tool_use') {
+    // Start a new turn when we see a user message
+    if (event.type === 'user') {
+      // Push pending tool_use if any
+      if (currentToolUse) {
+        grouped.push(currentToolUse);
+        currentToolUse = null;
+      }
+
+      turnNumber++;
+      lastUserTimestamp = event.timestamp;
+
+      // Add section header before user message
+      grouped.push({
+        type: 'section_header',
+        id: `section-${turnNumber}`,
+        turnNumber,
+        timestamp: event.timestamp
+      });
+      grouped.push(event);
+    } else if (event.type === 'tool_use') {
       // If there's a pending tool_use without result, push it
       if (currentToolUse) {
         grouped.push(currentToolUse);
@@ -399,9 +448,20 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
             </div>
           </div>
         ) : (
-          groupedEvents.map((item, index) => (
-            <ToolCallBlock key={item.id || index} item={item} onFileClick={handleFileClick} />
-          ))
+          groupedEvents.map((item, index) => {
+            if (item.type === 'section_header') {
+              return (
+                <SectionHeader
+                  key={item.id}
+                  turnNumber={item.turnNumber}
+                  timestamp={item.timestamp}
+                />
+              );
+            }
+            return (
+              <ToolCallBlock key={item.id || index} item={item} onFileClick={handleFileClick} />
+            );
+          })
         )}
 
         {/* Model picker - shown when /model command is used */}

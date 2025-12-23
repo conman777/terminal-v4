@@ -19,6 +19,14 @@ import {
   loadAllSessions,
   type PersistedSession
 } from './session-store';
+import {
+  isTmuxAvailable,
+  tmuxSessionExists,
+  spawnTmuxWithPty,
+  destroyTmuxSession,
+  getTmuxSessionCwd,
+  listTmuxSessions
+} from './tmux-manager';
 
 export type ProjectType = 'node' | 'python-flask' | 'django' | 'rust' | 'go' | 'static' | 'unknown';
 
@@ -51,6 +59,12 @@ function normaliseNewlines(input: string): string {
 export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
   defaultShell?: string;
+  useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
+}
+
+interface ClientDimensions {
+  cols: number;
+  rows: number;
 }
 
 interface ManagedTerminal {
@@ -69,6 +83,12 @@ interface ManagedTerminal {
   // Store handlers for cleanup
   dataHandler?: (data: string) => void;
   exitHandler?: (code: number | null, signal: NodeJS.Signals | null) => void;
+  // Track dimensions per connected client to use maximum across all
+  clientDimensions: Map<string, ClientDimensions>;
+  currentCols: number;
+  currentRows: number;
+  // Tmux support
+  usesTmux: boolean;
 }
 
 function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
@@ -111,15 +131,38 @@ export class TerminalManager {
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
   #counter = 0;
+  #useTmux: boolean;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.#spawnTerminal = options.spawnTerminal ?? ptySpawner;
     this.#defaultShell = options.defaultShell ?? detectShell();
+
+    // Auto-detect tmux availability if not explicitly specified
+    if (options.useTmux !== undefined) {
+      this.#useTmux = options.useTmux && isTmuxAvailable();
+    } else {
+      this.#useTmux = isTmuxAvailable();
+    }
   }
 
   async initialize(): Promise<void> {
-    // No-op - sessions are loaded per-user on demand
-    console.log('TerminalManager initialized');
+    if (this.#useTmux) {
+      console.log('TerminalManager initialized with tmux persistence enabled');
+      // List any existing tmux sessions from previous runs
+      const existingSessions = listTmuxSessions();
+      if (existingSessions.length > 0) {
+        console.log(`Found ${existingSessions.length} existing tmux sessions from previous runs`);
+      }
+    } else {
+      console.log('TerminalManager initialized (tmux not available - sessions will not persist across restarts)');
+    }
+  }
+
+  /**
+   * Check if tmux persistence is enabled
+   */
+  isTmuxEnabled(): boolean {
+    return this.#useTmux;
   }
 
   async loadUserSessions(userId: string): Promise<void> {
@@ -285,7 +328,7 @@ export class TerminalManager {
 
     const userPersistedSessions = this.#persistedSessions.get(userId);
     const persisted = userPersistedSessions?.get(id);
-    if (!persisted) {
+    if (!persisted || !userPersistedSessions) {
       return null;
     }
 
@@ -409,13 +452,29 @@ export class TerminalManager {
       cwd = process.cwd();
     }
 
-    const ptyProcess = this.#spawnTerminal({
-      shell,
-      cols,
-      rows,
-      cwd,
-      env: options.env
-    });
+    // Use tmux if available for persistent sessions
+    const usesTmux = this.#useTmux;
+    let ptyProcess: TerminalProcess;
+
+    if (usesTmux) {
+      console.log(`[TerminalManager] Creating tmux-backed session ${id}`);
+      ptyProcess = spawnTmuxWithPty(ptySpawn, {
+        sessionId: id,
+        shell,
+        cols,
+        rows,
+        cwd,
+        env: options.env
+      });
+    } else {
+      ptyProcess = this.#spawnTerminal({
+        shell,
+        cols,
+        rows,
+        cwd,
+        env: options.env
+      });
+    }
 
     const dataHandler = (data: string) => this.#handleData(session, data);
     const exitHandler = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -435,7 +494,11 @@ export class TerminalManager {
       bufferCharCount: 0,
       subscribers: new Set(),
       dataHandler,
-      exitHandler
+      exitHandler,
+      clientDimensions: new Map(),
+      currentCols: cols,
+      currentRows: rows,
+      usesTmux
     };
 
     ptyProcess.on('data', dataHandler);
@@ -478,12 +541,57 @@ export class TerminalManager {
     session.process.write(normaliseNewlines(input));
   }
 
-  resize(userId: string, id: string, cols: number, rows: number): void {
+  resize(userId: string, id: string, cols: number, rows: number, clientId?: string): void {
     const session = this.#sessions.get(id);
     if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
-    session.process.resize(cols, rows);
+
+    // Track this client's dimensions
+    if (clientId) {
+      session.clientDimensions.set(clientId, { cols, rows });
+    }
+
+    // Calculate maximum dimensions across all connected clients
+    let maxCols = cols;
+    let maxRows = rows;
+    for (const dims of session.clientDimensions.values()) {
+      maxCols = Math.max(maxCols, dims.cols);
+      maxRows = Math.max(maxRows, dims.rows);
+    }
+
+    // Only resize PTY if dimensions changed
+    if (maxCols !== session.currentCols || maxRows !== session.currentRows) {
+      session.currentCols = maxCols;
+      session.currentRows = maxRows;
+      session.process.resize(maxCols, maxRows);
+    }
+  }
+
+  // Remove a client's dimensions (called when WebSocket disconnects)
+  removeClient(userId: string, id: string, clientId: string): void {
+    const session = this.#sessions.get(id);
+    if (!session || session.userId !== userId) {
+      return;
+    }
+
+    session.clientDimensions.delete(clientId);
+
+    // Recalculate max dimensions after client removal
+    if (session.clientDimensions.size > 0) {
+      let maxCols = DEFAULT_COLS;
+      let maxRows = DEFAULT_ROWS;
+      for (const dims of session.clientDimensions.values()) {
+        maxCols = Math.max(maxCols, dims.cols);
+        maxRows = Math.max(maxRows, dims.rows);
+      }
+
+      if (maxCols !== session.currentCols || maxRows !== session.currentRows) {
+        session.currentCols = maxCols;
+        session.currentRows = maxRows;
+        session.process.resize(maxCols, maxRows);
+      }
+    }
   }
 
   async getProjectInfo(userId: string, id: string): Promise<ProjectInfo | null> {
@@ -618,7 +726,21 @@ export class TerminalManager {
         session.process.off('exit', session.exitHandler);
       }
       session.process.kill();
+
+      // If using tmux, destroy the tmux session so it doesn't persist
+      if (session.usesTmux) {
+        console.log(`[TerminalManager] Destroying tmux session ${id}`);
+        destroyTmuxSession(id);
+      }
+
       this.#sessions.delete(id);
+    } else if (this.#useTmux) {
+      // Session might not be active but tmux session could still exist
+      // (e.g., user is deleting a persisted session without restoring it first)
+      if (tmuxSessionExists(id)) {
+        console.log(`[TerminalManager] Destroying orphaned tmux session ${id}`);
+        destroyTmuxSession(id);
+      }
     }
 
     // Also remove from persisted sessions and delete from disk
@@ -633,9 +755,11 @@ export class TerminalManager {
   }
 
   // Kill all active sessions
+  // When persist=true (default), tmux sessions are kept alive so they can be reattached after restart
+  // When persist=false, tmux sessions are destroyed
   async closeAll(options: { persist?: boolean } = {}): Promise<void> {
     const persist = options.persist ?? true;
-    console.log(`Closing all ${this.#sessions.size} active terminal sessions`);
+    console.log(`Closing all ${this.#sessions.size} active terminal sessions (persist=${persist})`);
     const sessions = Array.from(this.#sessions.values());
 
     if (persist) {
@@ -666,6 +790,14 @@ export class TerminalManager {
           session.process.off('exit', session.exitHandler);
         }
         session.process.kill();
+
+        // If not persisting, also destroy tmux sessions
+        if (!persist && session.usesTmux) {
+          console.log(`[TerminalManager] Destroying tmux session ${session.id}`);
+          destroyTmuxSession(session.id);
+        } else if (session.usesTmux) {
+          console.log(`[TerminalManager] Detaching from tmux session ${session.id} (session will persist)`);
+        }
       } catch (err) {
         console.error(`Error killing session ${session.id}:`, err);
       }
@@ -689,8 +821,18 @@ export class TerminalManager {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
 
+    // Check if tmux session exists (process survived server restart)
+    const hasTmuxSession = this.#useTmux && tmuxSessionExists(id);
+
     // Validate cwd - fall back to process.cwd() if invalid
+    // If tmux session exists, try to get current working dir from it
     let cwd = persisted.cwd;
+    if (hasTmuxSession) {
+      const tmuxCwd = getTmuxSessionCwd(id);
+      if (tmuxCwd) {
+        cwd = tmuxCwd;
+      }
+    }
     try {
       if (!cwd || !path.isAbsolute(cwd) || !fs.existsSync(cwd)) {
         cwd = process.cwd();
@@ -699,12 +841,39 @@ export class TerminalManager {
       cwd = process.cwd();
     }
 
-    const ptyProcess = this.#spawnTerminal({
-      shell: persisted.shell,
-      cols,
-      rows,
-      cwd
-    });
+    // Spawn the process - if tmux session exists, reattach to it
+    const usesTmux = this.#useTmux;
+    let ptyProcess: TerminalProcess;
+
+    if (hasTmuxSession) {
+      // Reattach to existing tmux session - running processes are preserved!
+      console.log(`[TerminalManager] Reattaching to existing tmux session ${id}`);
+      ptyProcess = spawnTmuxWithPty(ptySpawn, {
+        sessionId: id,
+        shell: persisted.shell,
+        cols,
+        rows,
+        cwd
+      });
+    } else if (usesTmux) {
+      // Create new tmux session
+      console.log(`[TerminalManager] Creating new tmux session for restored session ${id}`);
+      ptyProcess = spawnTmuxWithPty(ptySpawn, {
+        sessionId: id,
+        shell: persisted.shell,
+        cols,
+        rows,
+        cwd
+      });
+    } else {
+      // Non-tmux fallback
+      ptyProcess = this.#spawnTerminal({
+        shell: persisted.shell,
+        cols,
+        rows,
+        cwd
+      });
+    }
 
     const dataHandler = (data: string) => this.#handleData(session, data);
     const exitHandler = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -720,11 +889,17 @@ export class TerminalManager {
       createdAt: persisted.createdAt,
       updatedAt: new Date().toISOString(),
       process: ptyProcess,
-      buffer: [...persisted.history], // Restore history
-      bufferCharCount: persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
+      // If reattaching to tmux, don't restore old history - we'll get fresh output
+      // If creating new session, restore history so user sees previous output
+      buffer: hasTmuxSession ? [] : [...persisted.history],
+      bufferCharCount: hasTmuxSession ? 0 : persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
       subscribers: new Set(),
       dataHandler,
-      exitHandler
+      exitHandler,
+      clientDimensions: new Map(),
+      currentCols: cols,
+      currentRows: rows,
+      usesTmux
     };
 
     ptyProcess.on('data', dataHandler);

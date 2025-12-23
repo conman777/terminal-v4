@@ -1,10 +1,13 @@
 import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
+import multipart from '@fastify/multipart';
 import { fileURLToPath } from 'node:url';
 import { registerCoreRoutes } from './routes/register-core-routes';
 import { registerBookmarkRoutes } from './routes/bookmark-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
+import { registerTranscribeRoutes } from './routes/transcribe-routes';
+import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
@@ -31,6 +34,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     origin: true
   });
   await app.register(websocket);
+  await app.register(multipart, {
+    limits: {
+      fileSize: 25 * 1024 * 1024 // 25MB max for audio files
+    }
+  });
 
   // Initialize database
   getDatabase();
@@ -46,6 +54,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerCoreRoutes(app, { terminalManager });
   await registerBookmarkRoutes(app);
   await registerPreviewRoutes(app);
+  await registerTranscribeRoutes(app);
+  await registerSettingsRoutes(app);
 
   // Initialize Claude Code manager and routes
   const claudeCodeManager = new ClaudeCodeManager();

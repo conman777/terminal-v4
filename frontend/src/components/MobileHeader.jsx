@@ -10,10 +10,17 @@ export function MobileHeader({
   onRestoreSession,
   onCreateSession,
   onRenameSession,
+  onCloseSession,
   onOpenSettings,
+  onOpenApiSettings,
   onOpenBookmarks,
   keybarOpen,
-  onToggleKeybar
+  onToggleKeybar,
+  projects = [],
+  projectsLoading = false,
+  onFolderSelect,
+  currentPath,
+  onAddScanFolder = null
 }) {
   const [showSessionDropdown, setShowSessionDropdown] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
@@ -62,6 +69,7 @@ export function MobileHeader({
         onRestoreSession={onRestoreSession}
         onCreateSession={onCreateSession}
         onRenameSession={onRenameSession}
+        onCloseSession={onCloseSession}
       />
 
       <MobileDrawer
@@ -69,6 +77,12 @@ export function MobileHeader({
         onClose={() => setShowDrawer(false)}
         onCreateSession={onCreateSession}
         onOpenSettings={onOpenSettings}
+        onOpenApiSettings={onOpenApiSettings}
+        projects={projects}
+        projectsLoading={projectsLoading}
+        onFolderSelect={onFolderSelect}
+        currentPath={currentPath}
+        onAddScanFolder={onAddScanFolder}
       />
     </>
   );

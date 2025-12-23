@@ -5,22 +5,37 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { createTwoFilesPatch } from 'diff';
 
-// Tool type to color mapping (bullet colors)
-const TOOL_COLORS = {
-  bash: '#22c55e',      // green
-  read: '#3b82f6',      // blue
-  write: '#f59e0b',     // orange
-  edit: '#f59e0b',      // orange
-  glob: '#8b5cf6',      // purple
-  grep: '#8b5cf6',      // purple
-  task: '#06b6d4',      // cyan
-  todowrite: '#ec4899', // pink
-  webfetch: '#0ea5e9',  // sky blue
-  websearch: '#0ea5e9', // sky blue
-  default: '#6b7280'    // gray
+// Tool icons (emoji-based for simplicity, could use SVG icons)
+const TOOL_ICONS = {
+  bash: '⚡',
+  read: '📄',
+  write: '✏️',
+  edit: '✏️',
+  glob: '🔍',
+  grep: '🔍',
+  task: '🤖',
+  todowrite: '📋',
+  webfetch: '🌐',
+  websearch: '🔎',
+  default: '⚙️'
 };
 
-// Regex to match file:line patterns (e.g., /path/to/file.js:42)
+// Tool type to color mapping
+const TOOL_COLORS = {
+  bash: '#22c55e',
+  read: '#3b82f6',
+  write: '#f59e0b',
+  edit: '#f59e0b',
+  glob: '#8b5cf6',
+  grep: '#8b5cf6',
+  task: '#06b6d4',
+  todowrite: '#ec4899',
+  webfetch: '#0ea5e9',
+  websearch: '#0ea5e9',
+  default: '#6b7280'
+};
+
+// Regex to match file:line patterns
 const FILE_LINE_REGEX = /([\/\w\-\.]+\.[a-zA-Z0-9]+):(\d+)/g;
 
 // File link component
@@ -31,11 +46,7 @@ function FileLink({ path, line, onClick }) {
   };
 
   return (
-    <button
-      className="file-link"
-      onClick={handleClick}
-      title={`${path} at line ${line}`}
-    >
+    <button className="file-link" onClick={handleClick} title={`${path} at line ${line}`}>
       {path}:{line}
     </button>
   );
@@ -49,15 +60,12 @@ function parseFileLinks(text, onClick) {
   let lastIndex = 0;
   let match;
 
-  // Reset regex state
   FILE_LINE_REGEX.lastIndex = 0;
 
   while ((match = FILE_LINE_REGEX.exec(text)) !== null) {
-    // Text before match
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    // The file link
     parts.push(
       <FileLink
         key={`${match.index}-${match[1]}`}
@@ -69,7 +77,6 @@ function parseFileLinks(text, onClick) {
     lastIndex = FILE_LINE_REGEX.lastIndex;
   }
 
-  // Remaining text
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));
   }
@@ -81,7 +88,6 @@ function parseFileLinks(text, onClick) {
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
 
-  // Clear timeout on unmount to prevent memory leak
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 2000);
@@ -104,14 +110,33 @@ function CopyButton({ text }) {
   );
 }
 
-// Diff view component for Edit tool - memoized for performance
+// Todo List Widget - renders checkboxes like the official UI
+function TodoWidget({ todos }) {
+  if (!todos || !Array.isArray(todos) || todos.length === 0) {
+    return <div className="todo-widget-empty">No todos</div>;
+  }
+
+  return (
+    <div className="todo-widget">
+      {todos.map((todo, index) => (
+        <div key={index} className={`todo-item ${todo.status}`}>
+          <span className={`todo-checkbox ${todo.status}`}>
+            {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◐' : '○'}
+          </span>
+          <span className="todo-content">{todo.content}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Diff view component for Edit tool
 function DiffView({ oldString, newString, filePath }) {
-  // Memoize expensive diff computation
   const diffLines = useMemo(() => {
     if (!oldString || !newString) return null;
 
     const patch = createTwoFilesPatch(filePath, filePath, oldString, newString, '', '', { context: 3 });
-    return patch.split('\n').slice(4); // Skip the header lines
+    return patch.split('\n').slice(4);
   }, [oldString, newString, filePath]);
 
   if (!diffLines) return null;
@@ -138,38 +163,84 @@ function DiffView({ oldString, newString, filePath }) {
   );
 }
 
-function getToolInput(item) {
+function getToolDisplayInfo(item) {
   const input = item.toolInput || {};
   const tool = item.tool?.toLowerCase();
 
   switch (tool) {
     case 'bash':
-      return { type: 'command', value: input.command || input.cmd || '' };
+      return {
+        title: 'Bash',
+        subtitle: input.command || input.cmd || '',
+        icon: TOOL_ICONS.bash
+      };
     case 'read':
-      return { type: 'path', value: input.file_path || input.path || '' };
+      return {
+        title: 'Read',
+        subtitle: input.file_path || input.path || '',
+        icon: TOOL_ICONS.read
+      };
     case 'write':
-      return { type: 'path', value: input.file_path || input.path || '' };
+      return {
+        title: 'Write',
+        subtitle: input.file_path || input.path || '',
+        icon: TOOL_ICONS.write
+      };
     case 'edit':
-      return { type: 'path', value: input.file_path || input.path || '', oldString: input.old_string, newString: input.new_string };
+      return {
+        title: 'Edit',
+        subtitle: input.file_path || input.path || '',
+        icon: TOOL_ICONS.edit,
+        oldString: input.old_string,
+        newString: input.new_string
+      };
     case 'glob':
-      return { type: 'pattern', value: input.pattern || '' };
+      return {
+        title: 'Glob',
+        subtitle: input.pattern || '',
+        icon: TOOL_ICONS.glob
+      };
     case 'grep':
-      return { type: 'pattern', value: input.pattern || '' };
+      return {
+        title: 'Grep',
+        subtitle: input.pattern || '',
+        icon: TOOL_ICONS.grep
+      };
     case 'task':
-      return { type: 'description', value: input.description || input.prompt || '' };
+      return {
+        title: 'Task',
+        subtitle: input.description || input.prompt || '',
+        icon: TOOL_ICONS.task
+      };
     case 'todowrite':
-      const todos = input.todos || [];
-      return { type: 'todos', value: `${todos.length} todo${todos.length !== 1 ? 's' : ''}` };
+      return {
+        title: 'Update Todos',
+        subtitle: '',
+        icon: TOOL_ICONS.todowrite,
+        todos: input.todos
+      };
     case 'webfetch':
-      return { type: 'url', value: input.url || '' };
+      return {
+        title: 'WebFetch',
+        subtitle: input.url || '',
+        icon: TOOL_ICONS.webfetch
+      };
     case 'websearch':
-      return { type: 'query', value: input.query || '' };
+      return {
+        title: 'WebSearch',
+        subtitle: input.query || '',
+        icon: TOOL_ICONS.websearch
+      };
     default:
-      return { type: 'json', value: JSON.stringify(input).slice(0, 100) };
+      return {
+        title: item.tool || 'Tool',
+        subtitle: JSON.stringify(input).slice(0, 80),
+        icon: TOOL_ICONS.default
+      };
   }
 }
 
-// Get a summary of tool output (like "Read 222 lines")
+// Get output summary
 function getOutputSummary(tool, output) {
   if (!output) return null;
 
@@ -180,36 +251,15 @@ function getOutputSummary(tool, output) {
     case 'read':
       return `Read ${lines.toLocaleString()} lines`;
     case 'glob':
+      return `Found ${lines.toLocaleString()} files`;
     case 'grep':
       return `Found ${lines.toLocaleString()} matches`;
     default:
-      // Show actual output for bash and other tools
       return null;
   }
 }
 
-function truncateOutput(output, maxLines = 3) {
-  if (!output) return { text: '', truncated: false, hiddenLines: 0 };
-
-  const lines = output.split('\n');
-  if (lines.length <= maxLines) {
-    return { text: output, truncated: false, hiddenLines: 0 };
-  }
-
-  const visibleLines = lines.slice(0, maxLines);
-  return {
-    text: visibleLines.join('\n'),
-    truncated: true,
-    hiddenLines: lines.length - maxLines
-  };
-}
-
-function capitalizeFirst(str) {
-  if (!str) return '';
-  return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
-}
-
-// Custom code block renderer with syntax highlighting and copy button
+// Custom code block renderer
 function CodeBlock({ node, inline, className, children, ...props }) {
   const match = /language-(\w+)/.exec(className || '');
   const codeString = String(children).replace(/\n$/, '');
@@ -225,8 +275,8 @@ function CodeBlock({ node, inline, className, children, ...props }) {
           PreTag="div"
           customStyle={{
             margin: 0,
-            borderRadius: '4px',
-            fontSize: '0.85rem',
+            borderRadius: '6px',
+            fontSize: '0.8125rem',
           }}
           {...props}
         >
@@ -239,7 +289,7 @@ function CodeBlock({ node, inline, className, children, ...props }) {
   return <code className="inline-code" {...props}>{children}</code>;
 }
 
-// Markdown renderer component
+// Markdown renderer
 function MarkdownContent({ content }) {
   if (!content) return null;
 
@@ -248,11 +298,9 @@ function MarkdownContent({ content }) {
       remarkPlugins={[remarkGfm]}
       components={{
         code: CodeBlock,
-        // Style links
         a: ({ node, ...props }) => (
           <a {...props} target="_blank" rel="noopener noreferrer" className="md-link" />
         ),
-        // Style tables
         table: ({ node, ...props }) => (
           <div className="md-table-wrapper">
             <table className="md-table" {...props} />
@@ -269,30 +317,29 @@ export default function ToolCallBlock({ item, onFileClick }) {
   const [expanded, setExpanded] = useState(false);
   const [showDiff, setShowDiff] = useState(true);
 
-  // User message - in a card/box like Anthropic
+  // User message - centered card
   if (item.type === 'user') {
     return (
-      <div className="cc-user-message">
-        <div className="cc-user-card">
+      <div className="cc-message cc-user">
+        <div className="cc-user-bubble">
           {item.content}
         </div>
       </div>
     );
   }
 
-  // Assistant message - with bullet prefix and full markdown
+  // Assistant message - left aligned with markdown
   if (item.type === 'assistant') {
     return (
-      <div className="cc-assistant-message">
-        <span className="cc-bullet" style={{ color: '#a855f7' }}>●</span>
-        <div className="cc-assistant-content">
+      <div className="cc-message cc-assistant">
+        <div className="cc-assistant-bubble">
           <MarkdownContent content={item.content} />
         </div>
       </div>
     );
   }
 
-  // Skip result type - it duplicates assistant content
+  // Skip result type
   if (item.type === 'result') {
     return null;
   }
@@ -300,110 +347,114 @@ export default function ToolCallBlock({ item, onFileClick }) {
   // System message
   if (item.type === 'system') {
     return (
-      <div className={`cc-system-message ${item.isError ? 'error' : ''}`}>
+      <div className={`cc-message cc-system ${item.isError ? 'error' : ''}`}>
         {item.content}
       </div>
     );
   }
 
-  // Tool use block - bullet point style with tree connector
+  // Tool use block - card style
   if (item.type === 'tool_use') {
     const tool = item.tool?.toLowerCase() || 'default';
-    const bulletColor = TOOL_COLORS[tool] || TOOL_COLORS.default;
+    const toolColor = TOOL_COLORS[tool] || TOOL_COLORS.default;
+    const displayInfo = getToolDisplayInfo(item);
 
-    const toolInput = getToolInput(item);
     const hasResult = !!item.result;
     const isError = item.result?.isError;
     const output = item.result?.toolResult || '';
-
-    // Check if this is an Edit tool with diff data
-    const isEditTool = tool === 'edit';
-    const hasDiffData = isEditTool && toolInput.oldString && toolInput.newString;
-
-    // Get summary or truncated output
-    const summary = getOutputSummary(item.tool, output);
-    const { text: displayOutput, truncated, hiddenLines } = expanded
-      ? { text: output, truncated: false, hiddenLines: 0 }
-      : truncateOutput(output);
-
-    // Determine status
     const isRunning = !hasResult;
 
+    // Special handling for TodoWrite
+    if (tool === 'todowrite' && displayInfo.todos) {
+      return (
+        <div className="cc-message cc-tool-card">
+          <div className="cc-tool-card-header" style={{ borderLeftColor: toolColor }}>
+            <span className={`cc-tool-status ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
+              {isRunning ? '◐' : isError ? '✕' : '●'}
+            </span>
+            <span className="cc-tool-title">{displayInfo.title}</span>
+          </div>
+          <div className="cc-tool-card-body">
+            <TodoWidget todos={displayInfo.todos} />
+          </div>
+        </div>
+      );
+    }
+
+    // Edit tool with diff
+    const isEditTool = tool === 'edit';
+    const hasDiffData = isEditTool && displayInfo.oldString && displayInfo.newString;
+
+    // Output handling
+    const summary = getOutputSummary(item.tool, output);
+    const outputLines = output.split('\n');
+    const maxLines = 8;
+    const shouldTruncate = outputLines.length > maxLines && !expanded;
+    const displayLines = shouldTruncate ? outputLines.slice(0, maxLines) : outputLines;
+
     return (
-      <div className="cc-tool-block">
-        {/* Tool header line with bullet */}
-        <div className="cc-tool-header">
-          <span
-            className={`cc-bullet ${isRunning ? 'pulsing' : ''} ${isError ? 'error' : ''}`}
-            style={{ color: isError ? '#ef4444' : bulletColor }}
-          >
-            ●
+      <div className="cc-message cc-tool-card">
+        <div className="cc-tool-card-header" style={{ borderLeftColor: toolColor }}>
+          <span className={`cc-tool-status ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
+            {isRunning ? '◐' : isError ? '✕' : '●'}
           </span>
-          <span className="cc-tool-name" style={{ color: bulletColor }}>
-            {capitalizeFirst(item.tool)}
-          </span>
-          {toolInput.value && (
-            <span className="cc-tool-input">
-              {toolInput.value.length > 60 ? toolInput.value.slice(0, 60) + '...' : toolInput.value}
+          <span className="cc-tool-title">{displayInfo.title}</span>
+          {displayInfo.subtitle && (
+            <span className="cc-tool-subtitle">
+              {displayInfo.subtitle.length > 60
+                ? displayInfo.subtitle.slice(0, 60) + '...'
+                : displayInfo.subtitle}
             </span>
           )}
           {hasDiffData && (
-            <button
-              className="cc-toggle-diff"
-              onClick={() => setShowDiff(!showDiff)}
-            >
+            <button className="cc-tool-toggle" onClick={() => setShowDiff(!showDiff)}>
               {showDiff ? 'Hide diff' : 'Show diff'}
             </button>
           )}
         </div>
 
-        {/* Diff view for Edit tool */}
+        {/* Diff view for Edit */}
         {hasDiffData && showDiff && (
-          <div className="cc-tool-output-container">
-            <span className="cc-tree-connector">├─</span>
+          <div className="cc-tool-card-body">
             <DiffView
-              oldString={toolInput.oldString}
-              newString={toolInput.newString}
-              filePath={toolInput.value}
+              oldString={displayInfo.oldString}
+              newString={displayInfo.newString}
+              filePath={displayInfo.subtitle}
             />
           </div>
         )}
 
-        {/* Output with tree-style connector */}
+        {/* Output */}
         {hasResult && output && (
-          <div className="cc-tool-output-container">
-            <span className="cc-tree-connector">└─</span>
-            <div className="cc-tool-output">
-              {summary ? (
-                // Show summary for Read, etc.
-                <span className="cc-output-summary">{summary}</span>
-              ) : (
-                // Show actual output for Bash, etc.
-                <>
-                  {displayOutput.split('\n').map((line, idx) => (
-                    <div key={idx} className="cc-output-line">
-                      {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
-                    </div>
-                  ))}
-                </>
-              )}
-              {!summary && truncated && (
-                <button
-                  className="cc-show-more"
-                  onClick={() => setExpanded(true)}
-                >
-                  ... +{hiddenLines} lines
-                </button>
-              )}
-              {!summary && expanded && output.split('\n').length > 3 && (
-                <button
-                  className="cc-show-more"
-                  onClick={() => setExpanded(false)}
-                >
-                  Show less
-                </button>
-              )}
-            </div>
+          <div className="cc-tool-card-body">
+            {summary ? (
+              <div className="cc-tool-summary">{summary}</div>
+            ) : (
+              <div className="cc-tool-output">
+                {displayLines.map((line, idx) => (
+                  <div key={idx} className="cc-output-line">
+                    {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
+                  </div>
+                ))}
+                {shouldTruncate && (
+                  <button className="cc-expand-btn" onClick={() => setExpanded(true)}>
+                    Show {outputLines.length - maxLines} more lines
+                  </button>
+                )}
+                {expanded && outputLines.length > maxLines && (
+                  <button className="cc-expand-btn" onClick={() => setExpanded(false)}>
+                    Show less
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Error message */}
+        {isError && (
+          <div className="cc-tool-card-body cc-tool-error">
+            {output || 'Tool execution failed'}
           </div>
         )}
       </div>

@@ -13,6 +13,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const socketRef = useRef(null);
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
+  const clientIdRef = useRef(null);
 
   useEffect(() => {
     if (!sessionId || !terminalRef.current) return;
@@ -180,6 +181,29 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         socket.onmessage = (event) => {
           if (disposed) return;
           const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+
+          // Check if this is a clientId message from the server
+          if (data.startsWith('{"type":"clientId"')) {
+            try {
+              const msg = JSON.parse(data);
+              if (msg.type === 'clientId' && msg.clientId) {
+                clientIdRef.current = msg.clientId;
+                // Send initial dimensions with clientId now that we have it
+                const { cols, rows } = term;
+                if (cols && rows) {
+                  apiFetch(`/api/terminal/${sessionId}/resize`, {
+                    method: 'POST',
+                    body: { cols, rows, clientId: msg.clientId }
+                  }).catch(() => {});
+                }
+              }
+            } catch {
+              // Not JSON, write to terminal
+              term.write(data);
+            }
+            return;
+          }
+
           term.write(data);
 
           if (onUrlDetected && isServerReady(data)) {
@@ -247,9 +271,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
         resizeTimeout = setTimeout(() => {
           if (disposed) return;
+          // Include clientId so backend can track dimensions per client
+          const resizeBody = { cols, rows };
+          if (clientIdRef.current) {
+            resizeBody.clientId = clientIdRef.current;
+          }
           apiFetch(`/api/terminal/${sessionId}/resize`, {
             method: 'POST',
-            body: { cols, rows }
+            body: resizeBody
           }).catch((error) => {
             console.error('Failed to send resize:', error);
           });
@@ -398,6 +427,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     return () => {
       disposed = true;
       detectedUrlsRef.current.clear();
+      clientIdRef.current = null;
       if (rafId) {
         cancelAnimationFrame(rafId);
       }
@@ -422,18 +452,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
 
-    // Small delay to ensure layout has updated after viewport change
-    const timerId = setTimeout(() => {
+    // Use requestAnimationFrame to ensure DOM has updated, then fit
+    let rafId = null;
+    let timerId = null;
+    let timerId2 = null;
+
+    const performFit = () => {
       try {
-        fitAddonRef.current.fit();
-        // Always scroll to bottom when viewport changes (keyboard open/close)
-        xtermRef.current.scrollToBottom();
+        if (fitAddonRef.current) {
+          fitAddonRef.current.fit();
+        }
+        if (xtermRef.current) {
+          // Always scroll to bottom when viewport changes (keyboard open/close)
+          xtermRef.current.scrollToBottom();
+        }
       } catch (error) {
         console.error('[Terminal Fit] Failed to resize terminal:', error);
       }
-    }, 50);
+    };
 
-    return () => clearTimeout(timerId);
+    // First fit after RAF to catch immediate layout changes
+    rafId = requestAnimationFrame(() => {
+      performFit();
+      // Second fit after short delay to catch CSS transition/animation updates
+      timerId = setTimeout(performFit, 100);
+      // Third fit after longer delay for slower devices/keyboards
+      timerId2 = setTimeout(performFit, 300);
+    });
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      if (timerId) clearTimeout(timerId);
+      if (timerId2) clearTimeout(timerId2);
+    };
   }, [keybarOpen, viewportHeight]);
 
   return (

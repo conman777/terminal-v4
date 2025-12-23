@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { TerminalChat } from './components/TerminalChat';
+import { TerminalMicButton } from './components/TerminalMicButton';
 import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
@@ -10,6 +11,7 @@ import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
 import LoginPage from './components/LoginPage';
+import ApiSettingsModal from './components/ApiSettingsModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
@@ -528,6 +530,7 @@ function AppContent() {
     [sessions, activeSessionId]
   );
   const [showSettings, setShowSettings] = useState(false);
+  const [showApiSettings, setShowApiSettings] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
@@ -663,6 +666,30 @@ function AppContent() {
       }
     } catch (error) {
       console.error('Failed to load projects', error);
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, []);
+
+  // Add a custom folder to scan for projects
+  const handleAddScanFolder = useCallback(async () => {
+    const folderPath = prompt('Enter folder path to scan for git repositories:');
+    if (!folderPath || !folderPath.trim()) return;
+
+    setProjectsLoading(true);
+    try {
+      const response = await apiFetch('/api/projects/scan-dirs', {
+        method: 'POST',
+        body: { path: folderPath.trim() }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.projects) {
+          setProjects(data.projects);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to add scan folder', error);
     } finally {
       setProjectsLoading(false);
     }
@@ -1337,6 +1364,10 @@ function AppContent() {
         onDelete={handleDeleteBookmark}
         onExecute={handleExecuteBookmark}
       />
+      <ApiSettingsModal
+        isOpen={showApiSettings}
+        onClose={() => setShowApiSettings(false)}
+      />
 
       {isMobile && (
         <>
@@ -1348,10 +1379,17 @@ function AppContent() {
             onRestoreSession={handleRestoreSession}
             onCreateSession={handleCreateSession}
             onRenameSession={handleRenameSession}
+            onCloseSession={handleCloseSession}
             onOpenSettings={handleOpenSettings}
+            onOpenApiSettings={() => setShowApiSettings(true)}
             onOpenBookmarks={() => setShowBookmarks(true)}
             keybarOpen={keybarOpen}
             onToggleKeybar={() => setKeybarOpen(!keybarOpen)}
+            projects={projects}
+            projectsLoading={projectsLoading}
+            onFolderSelect={handleSidebarFolderSelect}
+            currentPath={projectInfo?.cwd}
+            onAddScanFolder={handleAddScanFolder}
           />
           <MobileKeybar
             sessionId={activeSessionId}
@@ -1375,6 +1413,7 @@ function AppContent() {
             onPinFolder={pinFolder}
             onUnpinFolder={unpinFolder}
             currentPath={projectInfo?.cwd}
+            onAddScanFolder={handleAddScanFolder}
           />
           <div className="main-container">
           <header className="app-header">
@@ -1417,6 +1456,15 @@ function AppContent() {
               )}
             </div>
             <div className="header-actions">
+              <button
+                className="header-btn"
+                type="button"
+                onClick={() => setShowApiSettings(true)}
+                aria-label="API Settings"
+                title="API Settings"
+              >
+                {'\u{1F511}'}
+              </button>
               <button
                 className="header-btn"
                 type="button"
@@ -1494,12 +1542,15 @@ function AppContent() {
                     </div>
                   </div>
                 ) : (
-                  <TerminalChat
-                    sessionId={activeSessionId}
-                    keybarOpen={keybarOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={handleUrlDetected}
-                  />
+                  <div className="terminal-with-mic">
+                    <TerminalChat
+                      sessionId={activeSessionId}
+                      keybarOpen={keybarOpen}
+                      viewportHeight={viewportHeight}
+                      onUrlDetected={handleUrlDetected}
+                    />
+                    <TerminalMicButton sessionId={activeSessionId} />
+                  </div>
                 )
               ) : (
                 !activeClaudeCodeId ? (
@@ -1581,12 +1632,15 @@ function AppContent() {
                   <p>Create a new terminal session to get started.</p>
                 </div>
               ) : (
-                <TerminalChat
-                  sessionId={activeSessionId}
-                  keybarOpen={keybarOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={handleUrlDetected}
-                />
+                <div className="terminal-with-mic">
+                  <TerminalChat
+                    sessionId={activeSessionId}
+                    keybarOpen={keybarOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={handleUrlDetected}
+                  />
+                  <TerminalMicButton sessionId={activeSessionId} />
+                </div>
               )}
             </div>
 

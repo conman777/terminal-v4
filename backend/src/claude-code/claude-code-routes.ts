@@ -47,10 +47,16 @@ export async function registerClaudeCodeRoutes(
     }
     try {
       const { cwd, model } = request.body || {};
-      const session = manager.createSession(userId, cwd || process.cwd(), model || 'sonnet');
+      const session = await manager.createSession(userId, cwd || process.cwd(), model || 'sonnet');
       return session;
     } catch (error) {
-      reply.code(500).send({ error: String(error) });
+      // Return 403 for path security errors, 500 for other errors
+      const errorMsg = String(error);
+      if (errorMsg.includes('Access denied')) {
+        reply.code(403).send({ error: errorMsg });
+      } else {
+        reply.code(500).send({ error: errorMsg });
+      }
     }
   });
 
@@ -137,6 +143,9 @@ export async function registerClaudeCodeRoutes(
     request.raw.on('close', cleanup);
   });
 
+  // Maximum input size for Claude Code prompts (100KB - prompts can be longer than terminal commands)
+  const MAX_CLAUDE_INPUT_SIZE = 100 * 1024;
+
   // Send input to session
   app.post<{ Params: ClaudeCodeIdParams; Body: SendInputBody }>(
     '/api/claude-code/:id/input',
@@ -150,6 +159,10 @@ export async function registerClaudeCodeRoutes(
         const { text } = request.body || {};
         if (!text) {
           return reply.code(400).send({ error: 'Text is required' });
+        }
+        // Validate input length
+        if (text.length > MAX_CLAUDE_INPUT_SIZE) {
+          return reply.code(400).send({ error: 'Text exceeds maximum allowed size (100KB)' });
         }
         await manager.sendInput(userId, request.params.id, text);
         return { success: true };
@@ -218,10 +231,16 @@ export async function registerClaudeCodeRoutes(
         if (!cwd) {
           return reply.code(400).send({ error: 'cwd is required' });
         }
-        const session = manager.updateCwd(userId, request.params.id, cwd);
+        const session = await manager.updateCwd(userId, request.params.id, cwd);
         return session;
       } catch (error) {
-        reply.code(500).send({ error: String(error) });
+        // Return 403 for path security errors, 500 for other errors
+        const errorMsg = String(error);
+        if (errorMsg.includes('Access denied')) {
+          reply.code(403).send({ error: errorMsg });
+        } else {
+          reply.code(500).send({ error: errorMsg });
+        }
       }
     }
   );

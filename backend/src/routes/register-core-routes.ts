@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { readdir, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, parse, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdir, stat } from 'node:fs/promises';
+import { basename, parse } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import archiver from 'archiver';
 import {
   terminalCreateRequestSchema,
@@ -10,52 +10,11 @@ import {
   terminalResizeRequestSchema
 } from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
-import { scanForProjects } from '../services/project-scanner';
-
-// Define the root directory of the project for sandboxing filesystem operations
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
-
-function normalizePathForPlatform(value: string): string {
-  return process.platform === 'win32' ? value.toLowerCase() : value;
-}
-
-function isWithinBase(basePath: string, candidatePath: string): boolean {
-  const baseNormalized = normalizePathForPlatform(resolve(basePath));
-  const candidateNormalized = normalizePathForPlatform(resolve(candidatePath));
-
-  if (candidateNormalized === baseNormalized) return true;
-
-  const baseWithSep = baseNormalized.endsWith(sep) ? baseNormalized : baseNormalized + sep;
-  return candidateNormalized.startsWith(baseWithSep);
-}
-
-let projectRootRealPathCache: string | null = null;
-async function getProjectRootRealPath(): Promise<string> {
-  if (projectRootRealPathCache) return projectRootRealPathCache;
-  try {
-    projectRootRealPathCache = await realpath(PROJECT_ROOT);
-  } catch {
-    projectRootRealPathCache = PROJECT_ROOT;
-  }
-  return projectRootRealPathCache;
-}
-
-async function resolvePathInProjectRoot(targetPath: string): Promise<string | null> {
-  const resolvedTargetPath = resolve(targetPath);
-  const baseRealPath = await getProjectRootRealPath();
-
-  let targetRealPath: string;
-  try {
-    targetRealPath = await realpath(resolvedTargetPath);
-  } catch {
-    // If the path doesn't exist yet we still want to validate containment based on the resolved path.
-    targetRealPath = resolvedTargetPath;
-  }
-
-  return isWithinBase(baseRealPath, targetRealPath) ? targetRealPath : null;
-}
+import { scanForProjects, addCustomScanDirectory, removeCustomScanDirectory, getCustomScanDirectories } from '../services/project-scanner';
+import {
+  resolvePathInProjectRoot,
+  isValidIdentifier
+} from '../utils/path-security';
 
 export interface CoreRouteDependencies {
   terminalManager: TerminalManager;
@@ -176,8 +135,18 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       return;
     }
 
+    // Extract optional clientId from body for multi-client dimension tracking
+    const body = request.body as { cols: number; rows: number; clientId?: string };
+    let clientId = body.clientId;
+
+    // Validate clientId format if provided (defense-in-depth)
+    if (clientId && !isValidIdentifier(clientId, 64)) {
+      reply.code(400).send({ error: 'Invalid clientId format' });
+      return;
+    }
+
     try {
-      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows);
+      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows, clientId);
     } catch (error) {
       reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
       return;
@@ -339,6 +308,9 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
       return;
     }
 
+    // Generate unique client ID for this WebSocket connection
+    const clientId = randomUUID();
+
     const send = (text: string): boolean => {
       try {
         socket.send(text);
@@ -347,6 +319,9 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
         return false;
       }
     };
+
+    // Send clientId to frontend so it can include it in resize requests
+    send(JSON.stringify({ type: 'clientId', clientId }));
 
     if (!deps.terminalManager.isActive(snapshot.id)) {
       snapshot.history.forEach((entry) => {
@@ -396,6 +371,8 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
 
     const cleanup = () => {
       unsubscribe();
+      // Remove this client's dimensions when WebSocket disconnects
+      deps.terminalManager.removeClient(userId, request.params.id, clientId);
     };
 
     socket.on('close', cleanup);
@@ -560,5 +537,40 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
         message: error instanceof Error ? error.message : String(error)
       });
     }
+  });
+
+  // Projects: Get custom scan directories
+  app.get('/api/projects/scan-dirs', async (request, reply) => {
+    reply.send({ directories: getCustomScanDirectories() });
+  });
+
+  // Projects: Add a custom scan directory
+  app.post<{ Body: { path: string } }>('/api/projects/scan-dirs', async (request, reply) => {
+    const { path: dirPath } = request.body;
+    if (!dirPath || typeof dirPath !== 'string') {
+      reply.code(400).send({ error: 'Path is required' });
+      return;
+    }
+
+    const added = addCustomScanDirectory(dirPath);
+    if (added) {
+      // Trigger a rescan to include new directory
+      const result = await scanForProjects(true);
+      reply.send({ success: true, directories: getCustomScanDirectories(), projects: result.projects });
+    } else {
+      reply.send({ success: false, message: 'Directory already in scan list', directories: getCustomScanDirectories() });
+    }
+  });
+
+  // Projects: Remove a custom scan directory
+  app.delete<{ Body: { path: string } }>('/api/projects/scan-dirs', async (request, reply) => {
+    const { path: dirPath } = request.body;
+    if (!dirPath || typeof dirPath !== 'string') {
+      reply.code(400).send({ error: 'Path is required' });
+      return;
+    }
+
+    const removed = removeCustomScanDirectory(dirPath);
+    reply.send({ success: removed, directories: getCustomScanDirectories() });
   });
 }

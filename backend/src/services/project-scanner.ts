@@ -22,8 +22,8 @@ interface ScanResponse {
   fromCache: boolean;
 }
 
-// Directories to scan for git repos
-const SCAN_DIRECTORIES = [
+// Default directories to scan for git repos
+const DEFAULT_SCAN_DIRECTORIES = [
   os.homedir(),
   path.join(os.homedir(), 'Documents'),
   path.join(os.homedir(), 'code'),
@@ -35,17 +35,29 @@ const SCAN_DIRECTORIES = [
   path.join(os.homedir(), 'workspace'),
   path.join(os.homedir(), 'repos'),
   path.join(os.homedir(), 'src'),
+  path.join(os.homedir(), 'GitHub'),
   // OneDrive paths
   path.join(os.homedir(), 'OneDrive', 'Documents'),
   path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents'),
   path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents', 'coding projects'),
+  // Windows common paths
+  'C:\\Users',
+  'C:\\code',
+  'C:\\projects',
+  'C:\\dev',
+  'D:\\code',
+  'D:\\projects',
+  'D:\\dev',
 ];
+
+// Custom user directories (will be populated from settings)
+let customScanDirectories: string[] = [];
 
 // Cache for scanned projects
 let projectCache: ProjectCache | null = null;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-const MAX_PROJECTS = 50;
-const MAX_DEPTH = 3;
+const MAX_PROJECTS = 100;
+const MAX_DEPTH = 4;
 
 // Directories to skip when scanning
 const SKIP_DIRS = new Set([
@@ -156,13 +168,58 @@ async function scanDirectory(
 }
 
 /**
+ * Add a custom directory to scan
+ */
+export function addCustomScanDirectory(dirPath: string): boolean {
+  const normalizedPath = path.normalize(dirPath);
+  if (!customScanDirectories.includes(normalizedPath)) {
+    customScanDirectories.push(normalizedPath);
+    clearProjectCache(); // Clear cache so next scan includes new dir
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Remove a custom directory from scan
+ */
+export function removeCustomScanDirectory(dirPath: string): boolean {
+  const normalizedPath = path.normalize(dirPath);
+  const index = customScanDirectories.indexOf(normalizedPath);
+  if (index > -1) {
+    customScanDirectories.splice(index, 1);
+    clearProjectCache();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Get current custom scan directories
+ */
+export function getCustomScanDirectories(): string[] {
+  return [...customScanDirectories];
+}
+
+/**
+ * Set custom scan directories (replaces existing)
+ */
+export function setCustomScanDirectories(dirs: string[]): void {
+  customScanDirectories = dirs.map(d => path.normalize(d));
+  clearProjectCache();
+}
+
+/**
  * Scan all configured directories for git repos
  */
 async function scanForGitRepos(): Promise<Project[]> {
   const foundProjects: Project[] = [];
   const scannedPaths = new Set<string>();
 
-  for (const scanDir of SCAN_DIRECTORIES) {
+  // Combine default and custom directories
+  const allDirectories = [...DEFAULT_SCAN_DIRECTORIES, ...customScanDirectories];
+
+  for (const scanDir of allDirectories) {
     if (!fs.existsSync(scanDir)) continue;
 
     // Resolve to real path to handle symlinks
