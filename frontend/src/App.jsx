@@ -1396,6 +1396,14 @@ function AppContent() {
             isOpen={keybarOpen}
             onHeightChange={handleKeybarHeightChange}
           />
+          {projectInfo?.cwd && (
+            <div className="breadcrumb-bar mobile-breadcrumb">
+              <PathBreadcrumb
+                cwd={projectInfo.cwd}
+                onNavigate={handleNavigateToPath}
+              />
+            </div>
+          )}
         </>
       )}
 

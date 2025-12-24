@@ -603,6 +603,20 @@ button {
   background: var(--accent-primary-dim);
 }
 
+/* Mobile breadcrumb */
+.mobile-breadcrumb {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.mobile-breadcrumb .path-breadcrumb {
+  font-size: 11px;
+}
+
+.mobile-breadcrumb .breadcrumb-segment {
+  padding: 3px 6px;
+}
+
 /* ===========================================
    Session Selector Dropdown
    =========================================== */
