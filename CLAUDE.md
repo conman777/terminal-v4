@@ -1,3 +1,58 @@
+# Terminal V4 - Project Guide
+
+## Project Architecture
+
+This is a browser-based terminal emulator that wraps Claude Code CLI. It consists of:
+
+- **Backend** (`/backend`): Fastify server (TypeScript) on port 3020
+- **Frontend** (`/frontend`): React + Vite SPA
+
+### Deployment Setup
+
+The Fastify backend serves **both** the API and the static frontend files:
+
+- API routes: `/api/*` (terminal, auth, bookmarks, settings, etc.)
+- Static files: Served from `frontend/dist/` via `@fastify/static`
+- SPA fallback: Non-API 404s return `index.html` for client-side routing
+
+**Cloudflare Tunnel** routes all traffic to `localhost:3020`. There is no separate frontend server in production.
+
+### Build & Deploy Commands
+
+```bash
+# Build frontend
+cd frontend && npm run build
+
+# Build backend
+cd backend && npm run build
+
+# Start production server (serves both API + frontend)
+cd backend && npm start
+
+# Development (separate servers with hot reload)
+cd frontend && npm run dev   # Port 5173, proxies /api to 3020
+cd backend && npm run dev    # Port 3020
+```
+
+### Restarting the Server
+
+```bash
+# Kill existing process
+pkill -9 -f "node.*dist/index.js"
+
+# Rebuild and restart
+cd ~/terminal-v4/backend && npm run build && npm start
+```
+
+### Key Files
+
+- `backend/src/index.ts` - Server entry, registers all routes + static serving
+- `backend/src/routes/register-core-routes.ts` - Terminal & filesystem API routes
+- `frontend/src/` - React components
+- `frontend/dist/` - Built frontend (served by backend)
+
+---
+
 # Universal Software Engineering Best Practices
 
 ## Purpose

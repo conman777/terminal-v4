@@ -2,7 +2,9 @@ import Fastify, { FastifyInstance, FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
 import { registerCoreRoutes } from './routes/register-core-routes';
 import { registerBookmarkRoutes } from './routes/bookmark-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
@@ -63,6 +65,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerTranscribeRoutes(app);
   await registerSettingsRoutes(app);
   await registerClaudeCodeRoutes(app, claudeCodeManager);
+
+  // Serve static frontend files
+  const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
+  await app.register(fastifyStatic, {
+    root: frontendPath,
+    prefix: '/'
+  });
+
+  // SPA fallback - serve index.html for non-API routes
+  app.setNotFoundHandler((request, reply) => {
+    if (request.url.startsWith('/api/')) {
+      reply.code(404).send({ error: 'Not Found', message: 'API route not found' });
+      return;
+    }
+    return reply.sendFile('index.html');
+  });
 
   return app;
 }
