@@ -16,6 +16,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 import { apiFetch } from './utils/api';
+import { getAccessToken } from './utils/auth';
 
 function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
@@ -52,8 +53,13 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
   const handleDownload = () => {
     const pathToDownload = workingDir || currentCwd;
     if (!pathToDownload) return;
+    const params = new URLSearchParams({ path: pathToDownload });
+    const token = getAccessToken();
+    if (token) {
+      params.set('token', token);
+    }
     // Trigger download by navigating to the endpoint
-    window.location.href = `/api/fs/download?path=${encodeURIComponent(pathToDownload)}`;
+    window.location.href = `/api/fs/download?${params.toString()}`;
   };
 
   const handleSelectFolder = (folder) => {
@@ -992,6 +998,7 @@ function AppContent() {
   const handleSelectSession = useCallback(
     (sessionId) => {
       setActiveSessionId(sessionId);
+      setShowPreview(false); // Reset preview when switching sessions
       // Remember the last active session
       try {
         localStorage.setItem('lastActiveSession', sessionId);
@@ -1016,6 +1023,7 @@ function AppContent() {
         }
 
         setActiveSessionId(sessionId);
+        setShowPreview(false); // Reset preview when restoring sessions
         await loadSessions();
 
         // Remember the last active session

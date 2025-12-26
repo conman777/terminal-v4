@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../utils/api';
 
 export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders, onSelect }) {
   const [path, setPath] = useState(currentPath || '');
@@ -14,7 +15,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
       const url = dirPath
         ? `/api/fs/list?path=${encodeURIComponent(dirPath)}`
         : '/api/fs/list';
-      const res = await fetch(url);
+      const res = await apiFetch(url);
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.message || data.error || 'Failed to load directory');

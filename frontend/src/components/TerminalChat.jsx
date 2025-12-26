@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
+import { useMobileDetect } from '../hooks/useMobileDetect';
 
 export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected }) {
   const terminalRef = useRef(null);
@@ -14,6 +15,28 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
   const clientIdRef = useRef(null);
+  const isMobile = useMobileDetect();
+
+  // Scroll handlers for mobile buttons
+  const scrollUp = useCallback(() => {
+    const term = xtermRef.current;
+    console.log('[Scroll] Up clicked, term exists:', !!term);
+    if (term) {
+      const buffer = term.buffer?.active;
+      console.log('[Scroll] Buffer - baseY:', buffer?.baseY, 'viewportY:', buffer?.viewportY, 'length:', buffer?.length);
+      term.scrollLines(-5);
+    }
+  }, []);
+
+  const scrollDown = useCallback(() => {
+    const term = xtermRef.current;
+    console.log('[Scroll] Down clicked, term exists:', !!term);
+    if (term) {
+      const buffer = term.buffer?.active;
+      console.log('[Scroll] Buffer - baseY:', buffer?.baseY, 'viewportY:', buffer?.viewportY, 'length:', buffer?.length);
+      term.scrollLines(5);
+    }
+  }, []);
 
   useEffect(() => {
     if (!sessionId || !terminalRef.current) return;
@@ -194,6 +217,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         socketRef.current = socket;
         let hadConnectionError = false;
         let shouldReconnect = true;
+        // Skip URL detection during initial history replay (first 500ms after connect)
+        let skipUrlDetection = true;
+        let skipUrlTimeout = null;
 
         socket.onopen = () => {
           if (disposed) return;
@@ -201,6 +227,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             hadConnectionError = false;
             term.write('\r\n[Reconnected]\r\n');
           }
+          // Enable URL detection after history replay settles
+          skipUrlTimeout = setTimeout(() => {
+            skipUrlDetection = false;
+          }, 500);
         };
 
         socket.onmessage = (event) => {
@@ -231,7 +261,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           term.write(data);
 
-          if (onUrlDetected && isServerReady(data)) {
+          // Only detect URLs after initial history replay (skipUrlDetection = false)
+          if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
             const url = extractPreviewUrl(data);
             if (url && !detectedUrlsRef.current.has(url)) {
               detectedUrlsRef.current.add(url);
@@ -262,6 +293,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         return () => {
           shouldReconnect = false;
+          if (skipUrlTimeout) {
+            clearTimeout(skipUrlTimeout);
+          }
           socket.close();
         };
       };
@@ -273,9 +307,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         // Filter out terminal escape sequences that shouldn't be sent as input
         // These are responses to terminal queries (DA, DSR, etc.), not user input
-        const isEscapeSequence = /^\x1b\[[\?>].*/.test(data) || /^\[[\?>]\d+/.test(data);
+        // Filter ANY sequence starting with ESC or containing only escape codes
+        const isEscapeSequence = /^\x1b/.test(data) || /^\[[\?>]\d+/.test(data);
         if (isEscapeSequence) {
-          console.log('[TerminalChat] Filtering escape sequence:', data.replace(/\x1b/g, 'ESC'));
+          console.log('[TerminalChat] Filtering escape sequence:', data.length, 'chars');
           return;
         }
 
@@ -355,80 +390,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       container.addEventListener('paste', handlePasteEvent, true);
 
-      // Custom touch scrolling for mobile (xterm canvas doesn't support native touch scroll)
-      let touchStartY = null;
-      let lastTouchY = null;
-      let touchVelocity = 0;
-      let momentumFrame = null;
-
-      const handleTouchStart = (e) => {
-        // Cancel any momentum scrolling
-        if (momentumFrame) {
-          cancelAnimationFrame(momentumFrame);
-          momentumFrame = null;
-        }
-
-        if (e.touches.length === 1) {
-          touchStartY = e.touches[0].clientY;
-          lastTouchY = touchStartY;
-          touchVelocity = 0;
-        }
-      };
-
-      const handleTouchMove = (e) => {
-        if (touchStartY === null || e.touches.length !== 1) return;
-
-        const currentY = e.touches[0].clientY;
-        const deltaY = lastTouchY - currentY;
-
-        // Update velocity for momentum
-        touchVelocity = deltaY;
-        lastTouchY = currentY;
-
-        // Convert pixel delta to lines (roughly 1 line per 20 pixels)
-        const lines = Math.round(deltaY / 20);
-        if (lines !== 0) {
-          term.scrollLines(lines);
-        }
-
-        e.preventDefault(); // Prevent page scroll
-      };
-
-      const handleTouchEnd = () => {
-        touchStartY = null;
-        lastTouchY = null;
-
-        // Apply momentum scrolling
-        const applyMomentum = () => {
-          if (Math.abs(touchVelocity) < 1) {
-            touchVelocity = 0;
-            momentumFrame = null;
-            return;
-          }
-
-          const lines = Math.round(touchVelocity / 20);
-          if (lines !== 0) {
-            term.scrollLines(lines);
-          }
-
-          // Decay velocity
-          touchVelocity *= 0.92;
-          momentumFrame = requestAnimationFrame(applyMomentum);
-        };
-
-        if (Math.abs(touchVelocity) > 5) {
-          momentumFrame = requestAnimationFrame(applyMomentum);
-        }
-      };
-
-      // Attach to the xterm viewport element for touch scrolling
-      const xtermViewport = container.querySelector('.xterm-viewport');
-      if (xtermViewport) {
-        xtermViewport.addEventListener('touchstart', handleTouchStart, { passive: false });
-        xtermViewport.addEventListener('touchmove', handleTouchMove, { passive: false });
-        xtermViewport.addEventListener('touchend', handleTouchEnd);
-      }
-
       // Ensure cleanup can remove listeners
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
@@ -445,15 +406,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         dataDisposer?.dispose();
         if (viewport) {
           viewport.removeEventListener('resize', handleResize);
-        }
-        // Clean up touch scroll handlers
-        if (xtermViewport) {
-          xtermViewport.removeEventListener('touchstart', handleTouchStart);
-          xtermViewport.removeEventListener('touchmove', handleTouchMove);
-          xtermViewport.removeEventListener('touchend', handleTouchEnd);
-        }
-        if (momentumFrame) {
-          cancelAnimationFrame(momentumFrame);
         }
       };
     };
@@ -495,12 +447,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const performFit = () => {
       try {
+        const term = xtermRef.current;
+        const buffer = term?.buffer?.active;
+        const isAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+        const isFocused = term?.textarea && document.activeElement === term.textarea;
+
         if (fitAddonRef.current) {
           fitAddonRef.current.fit();
         }
-        if (xtermRef.current) {
-          // Always scroll to bottom when viewport changes (keyboard open/close)
-          xtermRef.current.scrollToBottom();
+        if (term && (isAtBottom || isFocused)) {
+          term.scrollToBottom();
         }
       } catch (error) {
         console.error('[Terminal Fit] Failed to resize terminal:', error);
@@ -526,6 +482,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   return (
     <div className="terminal-chat">
       <div ref={terminalRef} className="xterm-container" style={{ height: '100%', width: '100%' }}></div>
+      {isMobile && (
+        <div className="terminal-scroll-buttons">
+          <button className="scroll-btn scroll-up" onClick={scrollUp} aria-label="Scroll up">
+            ▲
+          </button>
+          <button className="scroll-btn scroll-down" onClick={scrollDown} aria-label="Scroll down">
+            ▼
+          </button>
+        </div>
+      )}
     </div>
   );
 }

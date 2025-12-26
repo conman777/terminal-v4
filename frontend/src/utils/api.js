@@ -23,8 +23,13 @@ async function refreshAccessToken() {
   }
 
   const data = await response.json();
-  setTokens(data.accessToken, data.refreshToken);
-  return data.accessToken;
+  const tokens = data?.tokens || data;
+  if (!tokens?.accessToken || !tokens?.refreshToken) {
+    clearTokens();
+    throw new Error('Token refresh failed');
+  }
+  setTokens(tokens.accessToken, tokens.refreshToken);
+  return tokens.accessToken;
 }
 
 export async function apiFetch(url, options = {}) {

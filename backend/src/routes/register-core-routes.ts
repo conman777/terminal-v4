@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { readdir, stat } from 'node:fs/promises';
-import { basename, parse } from 'node:path';
+import { basename, dirname, parse, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import archiver from 'archiver';
 import {
@@ -14,7 +14,10 @@ import type { ClaudeCodeManager } from '../claude-code/claude-code-manager';
 import { scanForProjects, addCustomScanDirectory, removeCustomScanDirectory, getCustomScanDirectories } from '../services/project-scanner';
 import {
   resolvePathInProjectRoot,
-  isValidIdentifier
+  isValidIdentifier,
+  PROJECT_ROOT,
+  getProjectRootRealPath,
+  isWithinBase
 } from '../utils/path-security';
 
 export interface CoreRouteDependencies {

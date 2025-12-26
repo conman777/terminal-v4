@@ -52,8 +52,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   app.post<{ Body: { refreshToken: string } }>('/api/auth/refresh', async (request, reply) => {
     try {
       const input = refreshSchema.parse(request.body);
-      const tokens = refreshTokens(input.refreshToken);
-      reply.send(tokens);
+      const result = refreshTokens(input.refreshToken);
+      reply.send(result);
     } catch (error) {
       if (error instanceof ZodError) {
         reply.status(400).send({

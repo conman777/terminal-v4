@@ -133,7 +133,7 @@ export async function login(username: string, password: string): Promise<AuthRes
 }
 
 // Refresh tokens
-export function refreshTokens(refreshToken: string): TokenPair {
+export function refreshTokens(refreshToken: string): AuthResult {
   // Clean up expired tokens
   deleteExpiredRefreshTokens();
 
@@ -161,9 +161,14 @@ export function refreshTokens(refreshToken: string): TokenPair {
   deleteRefreshToken(storedToken.id);
 
   // Generate new tokens
-  return {
+  const tokens: TokenPair = {
     accessToken: generateAccessToken(user),
     refreshToken: generateRefreshToken(user.id)
+  };
+
+  return {
+    user: toPublicUser(user),
+    tokens
   };
 }
 

@@ -1,6 +1,23 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { getAccessToken } from '../utils/auth';
 
 // Convert file:// URLs or local paths to preview API URLs
+function withAuthToken(url) {
+  const token = getAccessToken();
+  if (!token) return url;
+
+  try {
+    const fullUrl = new URL(url, window.location.origin);
+    if (!fullUrl.searchParams.has('token')) {
+      fullUrl.searchParams.set('token', token);
+    }
+    return `${fullUrl.pathname}${fullUrl.search}${fullUrl.hash}`;
+  } catch {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${encodeURIComponent(token)}`;
+  }
+}
+
 function toPreviewUrl(inputUrl) {
   if (!inputUrl) return null;
 
@@ -11,7 +28,7 @@ function toPreviewUrl(inputUrl) {
     const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
     const directory = filePath.substring(0, lastSlash);
     const filename = filePath.substring(lastSlash + 1);
-    return `/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`;
+    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
   // Handle Windows-style paths (C:\... or C:/...)
@@ -19,7 +36,7 @@ function toPreviewUrl(inputUrl) {
     const lastSlash = Math.max(inputUrl.lastIndexOf('/'), inputUrl.lastIndexOf('\\'));
     const directory = inputUrl.substring(0, lastSlash);
     const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
-    return `/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`;
+    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
   // Handle Unix-style absolute paths
@@ -27,7 +44,7 @@ function toPreviewUrl(inputUrl) {
     const lastSlash = inputUrl.lastIndexOf('/');
     const directory = inputUrl.substring(0, lastSlash) || '/';
     const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
-    return `/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`;
+    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
   // Regular HTTP(S) URLs pass through

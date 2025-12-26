@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { getAccessToken } from '../utils/auth';
 
 export function useTerminalStream(sessionId) {
   const [events, setEvents] = useState([]);
@@ -10,7 +11,11 @@ export function useTerminalStream(sessionId) {
       return undefined;
     }
 
-    const source = new EventSource(`/api/terminal/${sessionId}/stream`);
+    const token = getAccessToken();
+    const streamUrl = token
+      ? `/api/terminal/${sessionId}/stream?token=${encodeURIComponent(token)}`
+      : `/api/terminal/${sessionId}/stream`;
+    const source = new EventSource(streamUrl);
     eventSourceRef.current = source;
 
     source.addEventListener('data', (event) => {
