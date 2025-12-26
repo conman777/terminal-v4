@@ -37,12 +37,14 @@ cd backend && npm run dev    # Port 3020
 ### Restarting the Server
 
 ```bash
-# Kill existing process
-pkill -9 -f "node.*dist/index.js"
+# Use the restart script (recommended)
+~/terminal-v4/restart.sh
 
-# Rebuild and restart
-cd ~/terminal-v4/backend && npm run build && npm start
+# Or manually:
+cd ~/terminal-v4/backend && npm run build && pkill -f "node.*dist/index.js"; nohup npm start > /tmp/backend.log 2>&1 &
 ```
+
+Logs are written to `/tmp/backend.log`.
 
 ### Key Files
 
