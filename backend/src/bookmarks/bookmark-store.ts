@@ -1,7 +1,6 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export interface Bookmark {
@@ -13,9 +12,8 @@ export interface Bookmark {
   updatedAt?: string;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '..', '..', 'data');
+// Use process.cwd() which is the backend/ directory when running npm start
+const DATA_DIR = join(process.cwd(), 'data');
 
 // Per-user bookmark cache
 const userBookmarks = new Map<string, Bookmark[]>();

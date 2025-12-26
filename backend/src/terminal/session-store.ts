@@ -1,7 +1,6 @@
 import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { TerminalStreamEvent } from './terminal-types';
 
 export interface PersistedSession {
@@ -14,9 +13,8 @@ export interface PersistedSession {
   history: TerminalStreamEvent[];
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const DATA_DIR = join(__dirname, '..', '..', 'data');
+// Use process.cwd() which is the backend/ directory when running npm start
+const DATA_DIR = join(process.cwd(), 'data');
 
 function sanitizeId(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
