@@ -16,6 +16,13 @@ logs/
 backend/sessions/
 backend/.sessions/
 
+# User data (sessions, bookmarks, etc)
+backend/data/
+data/
+
+# SSL certificates
+*.pem
+
 # Claude Code
 .claude/
 
