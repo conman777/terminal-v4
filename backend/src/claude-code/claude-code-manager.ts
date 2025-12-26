@@ -370,6 +370,11 @@ export class ClaudeCodeManager {
       .map(s => this.#toSnapshot(s));
   }
 
+  async listSessions(userId: string): Promise<ClaudeCodeSession[]> {
+    await this.loadUserSessions(userId);
+    return this.getAllSessions(userId);
+  }
+
   subscribe(userId: string, id: string, handler: (event: ClaudeCodeEvent) => void): () => void {
     const session = this.#sessions.get(id);
     if (!session || session.userId !== userId) throw new Error(`Session not found: ${id}`);
