@@ -3,6 +3,11 @@
 
 cd ~/terminal-v4/backend
 
+# Load environment variables
+set -a
+source .env 2>/dev/null
+set +a
+
 echo "Building backend..."
 npm run build
 
