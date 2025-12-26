@@ -1262,7 +1262,7 @@ function AppContent() {
 
   const handleUrlDetected = useCallback((url) => {
     setPreviewUrl(url);
-    setShowPreview(true);
+    // Don't auto-open preview - user can click the preview button to see it
   }, []);
 
   const handlePreviewClose = useCallback(() => {
