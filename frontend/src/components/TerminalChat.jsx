@@ -49,6 +49,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'Consolas, "Courier New", monospace',
+      scrollback: 5000,
       theme: {
         background: '#1e1e1e',
         foreground: '#d4d4d4'
@@ -484,10 +485,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       <div ref={terminalRef} className="xterm-container" style={{ height: '100%', width: '100%' }}></div>
       {isMobile && (
         <div className="terminal-scroll-buttons">
-          <button className="scroll-btn scroll-up" onClick={scrollUp} aria-label="Scroll up">
+          <button
+            className="scroll-btn scroll-up"
+            onClick={scrollUp}
+            onTouchEnd={(e) => { e.preventDefault(); scrollUp(); }}
+            aria-label="Scroll up"
+          >
             ▲
           </button>
-          <button className="scroll-btn scroll-down" onClick={scrollDown} aria-label="Scroll down">
+          <button
+            className="scroll-btn scroll-down"
+            onClick={scrollDown}
+            onTouchEnd={(e) => { e.preventDefault(); scrollDown(); }}
+            aria-label="Scroll down"
+          >
             ▼
           </button>
         </div>

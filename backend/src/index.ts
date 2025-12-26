@@ -70,7 +70,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
   await app.register(fastifyStatic, {
     root: frontendPath,
-    prefix: '/'
+    prefix: '/',
+    // Disable default caching so our setHeaders takes full control
+    cacheControl: false,
+    setHeaders: (res, path) => {
+      // HTML files: never cache (always revalidate)
+      if (path.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      } else {
+        // JS/CSS/assets with hashes: cache for 1 year
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    }
   });
 
   // SPA fallback - serve index.html for non-API routes
@@ -79,6 +92,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       reply.code(404).send({ error: 'Not Found', message: 'API route not found' });
       return;
     }
+    // Set no-cache headers for SPA fallback
+    reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+    reply.header('Pragma', 'no-cache');
+    reply.header('Expires', '0');
     return reply.sendFile('index.html');
   });
 
