@@ -51,15 +51,17 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
   await terminalManager.initialize();
-  await registerCoreRoutes(app, { terminalManager });
+
+  // Initialize Claude Code manager before registering core routes
+  const claudeCodeManager = new ClaudeCodeManager();
+  await claudeCodeManager.initialize();
+
+  // Register routes with both managers
+  await registerCoreRoutes(app, { terminalManager, claudeCodeManager });
   await registerBookmarkRoutes(app);
   await registerPreviewRoutes(app);
   await registerTranscribeRoutes(app);
   await registerSettingsRoutes(app);
-
-  // Initialize Claude Code manager and routes
-  const claudeCodeManager = new ClaudeCodeManager();
-  await claudeCodeManager.initialize();
   await registerClaudeCodeRoutes(app, claudeCodeManager);
 
   return app;

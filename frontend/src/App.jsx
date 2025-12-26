@@ -734,6 +734,52 @@ function AppContent() {
     }
   }, []);
 
+  // Consolidated state fetcher - replaces three separate polling endpoints
+  const lastCwdRef = useRef(null);
+  const fetchAppState = useCallback(async () => {
+    if (!isMountedRef.current) return;
+
+    try {
+      const url = activeSessionId
+        ? `/api/state?sessionId=${activeSessionId}`
+        : '/api/state';
+
+      const response = await apiFetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch app state (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      // Update sessions list
+      if (data.sessions && isMountedRef.current) {
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
+
+      // Update project info
+      if (data.projectInfo && isMountedRef.current) {
+        setProjectInfo(data.projectInfo);
+
+        // Track directory changes as recent folders
+        if (data.projectInfo.cwd && data.projectInfo.cwd !== lastCwdRef.current) {
+          lastCwdRef.current = data.projectInfo.cwd;
+          addRecentFolder(data.projectInfo.cwd);
+        }
+      } else if (!activeSessionId && isMountedRef.current) {
+        // Clear project info if no active session
+        setProjectInfo(null);
+        lastCwdRef.current = null;
+      }
+
+      // Update Claude Code sessions
+      if (data.claudeCodeSessions && isMountedRef.current) {
+        setClaudeCodeSessions(Array.isArray(data.claudeCodeSessions) ? data.claudeCodeSessions : []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch app state:', error);
+    }
+  }, [activeSessionId, addRecentFolder]);
+
   const handleAddBookmark = useCallback(
     async (name, command, category) => {
       try {
@@ -885,70 +931,18 @@ function AppContent() {
 
     initializeSessions();
 
-    // Reload sessions every 5 seconds to keep list fresh
-    const interval = setInterval(loadSessions, 5000);
+    // Poll consolidated state every 5 seconds to keep everything fresh
+    const interval = setInterval(fetchAppState, 5000);
     return () => {
       isMountedRef.current = false;
       clearInterval(interval);
     };
-  }, [loadSessions, loadBookmarks]);
+  }, [loadSessions, loadBookmarks, fetchAppState]);
 
   // Load projects on mount
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
-
-  // Poll for project info when there's an active session
-  const lastCwdRef = useRef(null);
-  useEffect(() => {
-    if (!activeSessionId) {
-      setProjectInfo(null);
-      lastCwdRef.current = null;
-      return;
-    }
-
-    const fetchProjectInfo = async () => {
-      try {
-        const response = await apiFetch(`/api/terminal/${activeSessionId}/project-info`);
-        if (response.ok) {
-          const data = await response.json();
-          setProjectInfo(data);
-
-          // Track directory changes as recent folders
-          if (data.cwd && data.cwd !== lastCwdRef.current) {
-            lastCwdRef.current = data.cwd;
-            addRecentFolder(data.cwd);
-          }
-        }
-      } catch (error) {
-        console.error('Failed to fetch project info', error);
-      }
-    };
-
-    // Fetch immediately
-    fetchProjectInfo();
-
-    // Poll every 3 seconds
-    const interval = setInterval(fetchProjectInfo, 3000);
-    return () => clearInterval(interval);
-  }, [activeSessionId, addRecentFolder]);
-
-  // Fetch Claude Code sessions
-  useEffect(() => {
-    const fetchClaudeCodeSessions = async () => {
-      try {
-        const res = await apiFetch('/api/claude-code');
-        const data = await res.json();
-        setClaudeCodeSessions(data.sessions || []);
-      } catch (error) {
-        console.error('Failed to fetch Claude Code sessions:', error);
-      }
-    };
-
-    fetchClaudeCodeSessions();
-    const interval = setInterval(fetchClaudeCodeSessions, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Persist Claude Code state to localStorage
   useEffect(() => {
@@ -1629,6 +1623,16 @@ function AppContent() {
                 >
                   Preview
                 </button>
+              </div>
+            )}
+
+            {/* Path breadcrumb for mobile */}
+            {projectInfo?.cwd && mobileView !== 'preview' && (
+              <div className="breadcrumb-bar">
+                <PathBreadcrumb
+                  cwd={projectInfo.cwd}
+                  onNavigate={handleNavigateToPath}
+                />
               </div>
             )}
 

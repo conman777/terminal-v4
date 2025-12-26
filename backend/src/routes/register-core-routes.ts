@@ -10,6 +10,7 @@ import {
   terminalResizeRequestSchema
 } from './schemas';
 import type { TerminalManager } from '../terminal/terminal-manager';
+import type { ClaudeCodeManager } from '../claude-code/claude-code-manager';
 import { scanForProjects, addCustomScanDirectory, removeCustomScanDirectory, getCustomScanDirectories } from '../services/project-scanner';
 import {
   resolvePathInProjectRoot,
@@ -18,6 +19,7 @@ import {
 
 export interface CoreRouteDependencies {
   terminalManager: TerminalManager;
+  claudeCodeManager: ClaudeCodeManager;
 }
 
 interface TerminalIdParams {
@@ -35,6 +37,39 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     }
     await deps.terminalManager.loadUserSessions(userId);
     reply.send({ sessions: deps.terminalManager.listSessions(userId) });
+  });
+
+  // Consolidated state endpoint - fetches sessions, project info, and Claude sessions in one request
+  app.get('/api/state', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const activeSessionId = request.query.sessionId as string | undefined;
+
+    // Fetch all state in parallel for optimal performance
+    const [sessions, projectInfo, claudeCodeSessions] = await Promise.all([
+      // Load and list terminal sessions
+      deps.terminalManager.loadUserSessions(userId).then(() =>
+        deps.terminalManager.listSessions(userId)
+      ),
+
+      // Get project info only if we have an active session
+      activeSessionId
+        ? deps.terminalManager.getProjectInfo(userId, activeSessionId).catch(() => null)
+        : Promise.resolve(null),
+
+      // List Claude Code sessions
+      deps.claudeCodeManager.listSessions(userId)
+    ]);
+
+    reply.send({
+      sessions: sessions || [],
+      projectInfo: projectInfo || null,
+      claudeCodeSessions: claudeCodeSessions || []
+    });
   });
 
   app.post('/api/terminal', async (request, reply) => {

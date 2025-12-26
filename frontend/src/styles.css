@@ -603,18 +603,26 @@ button {
   background: var(--accent-primary-dim);
 }
 
-/* Mobile breadcrumb */
-.mobile-breadcrumb {
-  padding: 6px 12px;
-  font-size: 12px;
-}
+/* Mobile breadcrumb adjustments */
+@media (max-width: 768px) {
+  .breadcrumb-bar {
+    padding: 6px 12px;
+  }
 
-.mobile-breadcrumb .path-breadcrumb {
-  font-size: 11px;
-}
+  .path-breadcrumb {
+    font-size: 11px;
+    gap: 1px;
+  }
 
-.mobile-breadcrumb .breadcrumb-segment {
-  padding: 3px 6px;
+  .breadcrumb-segment {
+    padding: 3px 6px;
+    font-size: 11px;
+  }
+
+  .breadcrumb-separator {
+    margin: 0 2px;
+    font-size: 12px;
+  }
 }
 
 /* ===========================================
@@ -1019,18 +1027,17 @@ button {
 .xterm {
   height: 100%;
   width: 100%;
-  touch-action: none; /* JS handles touch scrolling */
 }
 
 .xterm-viewport {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  touch-action: none; /* JS handles touch scrolling */
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
 }
 
 .xterm-screen {
-  touch-action: none; /* JS handles touch scrolling */
+  /* Allow native touch scrolling on mobile */
 }
 
 /* Terminal Input */

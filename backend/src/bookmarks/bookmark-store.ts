@@ -62,20 +62,59 @@ async function withUserWriteLock<T>(userId: string, fn: () => Promise<T>): Promi
   }
 }
 
+// Default fixed bookmarks that all users get
+const DEFAULT_BOOKMARKS: Omit<Bookmark, 'id' | 'createdAt'>[] = [
+  {
+    name: 'Claude Code (skip permissions)',
+    command: 'claude --dangerously-skip-permissions',
+    category: 'Claude'
+  }
+];
+
+function createDefaultBookmarks(): Bookmark[] {
+  return DEFAULT_BOOKMARKS.map(bookmark => ({
+    ...bookmark,
+    id: randomUUID(),
+    createdAt: new Date().toISOString()
+  }));
+}
+
 export async function loadBookmarks(userId: string): Promise<Bookmark[]> {
   await ensureUserDataDir(userId);
 
   const filePath = getBookmarksFilePath(userId);
   if (!existsSync(filePath)) {
-    userBookmarks.set(userId, []);
+    const defaultBookmarks = createDefaultBookmarks();
+    userBookmarks.set(userId, defaultBookmarks);
     await saveBookmarks(userId);
-    return [];
+    return defaultBookmarks;
   }
 
   try {
     const data = await readFile(filePath, 'utf-8');
-    const bookmarks = JSON.parse(data) as Bookmark[];
-    userBookmarks.set(userId, bookmarks);
+    let bookmarks = JSON.parse(data) as Bookmark[];
+
+    // Add missing default bookmarks to existing users
+    let needsSave = false;
+    for (const defaultBookmark of DEFAULT_BOOKMARKS) {
+      const exists = bookmarks.some(b => b.command === defaultBookmark.command);
+      if (!exists) {
+        bookmarks.push({
+          ...defaultBookmark,
+          id: randomUUID(),
+          createdAt: new Date().toISOString()
+        });
+        needsSave = true;
+      }
+    }
+
+    if (needsSave) {
+      userBookmarks.set(userId, bookmarks);
+      await saveBookmarks(userId);
+    } else {
+      userBookmarks.set(userId, bookmarks);
+    }
+
     return bookmarks;
   } catch (error) {
     console.error(`Failed to load bookmarks for user ${userId}:`, error);

@@ -28,6 +28,13 @@ export function useVoiceInput(onTranscribed) {
 
   const startRecording = useCallback(async () => {
     setError(null);
+
+    // Check if getUserMedia is available
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Microphone not available (HTTPS required on mobile)');
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -86,10 +93,15 @@ export function useVoiceInput(onTranscribed) {
       mediaRecorder.start();
       setIsRecording(true);
     } catch (err) {
+      console.error('Recording error:', err.name, err.message);
       if (err.name === 'NotAllowedError') {
         setError('Microphone access denied');
+      } else if (err.name === 'NotSupportedError') {
+        setError('Microphone not supported (HTTPS required)');
+      } else if (err.name === 'NotFoundError') {
+        setError('No microphone found');
       } else {
-        setError('Could not start recording');
+        setError(`Could not start recording: ${err.message}`);
       }
     }
   }, [onTranscribed]);

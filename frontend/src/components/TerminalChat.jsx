@@ -30,11 +30,36 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         background: '#1e1e1e',
         foreground: '#d4d4d4'
       },
-      allowProposedApi: true
+      allowProposedApi: true,
+      windowOptions: {
+        setWinSizePixels: false,
+        raiseWin: false,
+        lowerWin: false,
+        refreshWin: false,
+        restoreWin: false,
+        minimizeWin: false,
+        setWinPosition: false,
+        setWinSizeChars: false,
+        fullscreenWin: false,
+        maximizeWin: false,
+        getWinState: false,
+        getWinPosition: false,
+        getWinSizePixels: false,
+        getScreenSizePixels: false,
+        getCellSizePixels: false,
+        getWinSizeChars: false,
+        getScreenSizeChars: false,
+        getIconTitle: false,
+        getWinTitle: false,
+        pushTitle: false,
+        popTitle: false,
+        setWinLines: false
+      }
     });
 
     const sendTerminalInput = (text) => {
       if (!text || disposed) return;
+      console.log('[TerminalChat] Sending input:', text.length, 'chars');
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(text);
@@ -244,6 +269,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const closeSocket = connectSocket();
 
       const dataDisposer = term.onData((data) => {
+        if (disposed) return;
+
+        // Filter out terminal escape sequences that shouldn't be sent as input
+        // These are responses to terminal queries (DA, DSR, etc.), not user input
+        const isEscapeSequence = /^\x1b\[[\?>].*/.test(data) || /^\[[\?>]\d+/.test(data);
+        if (isEscapeSequence) {
+          console.log('[TerminalChat] Filtering escape sequence:', data.replace(/\x1b/g, 'ESC'));
+          return;
+        }
+
+        console.log('[TerminalChat] onData triggered:', data.length, 'chars');
         sendTerminalInput(data);
       });
 
