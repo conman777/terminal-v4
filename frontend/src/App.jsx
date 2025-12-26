@@ -1634,15 +1634,6 @@ function AppContent() {
               </div>
             )}
 
-            {/* Path breadcrumb for mobile */}
-            {projectInfo?.cwd && mobileView !== 'preview' && (
-              <div className="breadcrumb-bar">
-                <PathBreadcrumb
-                  cwd={projectInfo.cwd}
-                  onNavigate={handleNavigateToPath}
-                />
-              </div>
-            )}
 
             {/* Terminal pane */}
             <div className={`terminal-pane${mobileView === 'preview' ? ' hidden' : ''}`}>

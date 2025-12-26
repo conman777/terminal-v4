@@ -83,10 +83,17 @@ export default function SidebarSection({
 
   return (
     <div className="sidebar-section">
-      <button
+      <div
         className="sidebar-section-header"
         onClick={() => setIsExpanded(!isExpanded)}
-        type="button"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsExpanded(!isExpanded);
+          }
+        }}
       >
         <span className={`sidebar-section-chevron ${isExpanded ? 'expanded' : ''}`}>
           <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
@@ -111,7 +118,7 @@ export default function SidebarSection({
             </svg>
           </button>
         )}
-      </button>
+      </div>
 
       {isExpanded && (
         <div className="sidebar-section-content">
