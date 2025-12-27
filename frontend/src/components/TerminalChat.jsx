@@ -17,26 +17,68 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const clientIdRef = useRef(null);
   const isMobile = useMobileDetect();
 
-  // Scroll handlers for mobile buttons
-  const scrollUp = useCallback(() => {
-    const term = xtermRef.current;
-    console.log('[Scroll] Up clicked, term exists:', !!term);
-    if (term) {
-      const buffer = term.buffer?.active;
-      console.log('[Scroll] Buffer - baseY:', buffer?.baseY, 'viewportY:', buffer?.viewportY, 'length:', buffer?.length);
-      term.scrollLines(-5);
+  // Track if we're in tmux copy mode
+  const inCopyModeRef = useRef(false);
+
+  // Send data to terminal via WebSocket
+  const sendToTerminal = useCallback((data) => {
+    const socket = socketRef.current;
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(data);
     }
   }, []);
 
+  // Scroll handlers for mobile buttons
+  // Uses tmux copy-mode when xterm has no scrollback (baseY === 0)
+  const scrollUp = useCallback(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    const buffer = term.buffer?.active;
+    const baseY = buffer?.baseY || 0;
+
+    if (baseY > 0) {
+      // xterm has scrollback, use native scroll
+      term.scrollLines(-5);
+    } else {
+      // No xterm scrollback - likely tmux managing it
+      // Enter copy mode (Ctrl+B [) then Page Up
+      if (!inCopyModeRef.current) {
+        sendToTerminal('\x02['); // Ctrl+B [
+        inCopyModeRef.current = true;
+      }
+      sendToTerminal('\x1b[5~'); // Page Up
+    }
+  }, [sendToTerminal]);
+
   const scrollDown = useCallback(() => {
     const term = xtermRef.current;
-    console.log('[Scroll] Down clicked, term exists:', !!term);
-    if (term) {
-      const buffer = term.buffer?.active;
-      console.log('[Scroll] Buffer - baseY:', buffer?.baseY, 'viewportY:', buffer?.viewportY, 'length:', buffer?.length);
+    if (!term) return;
+
+    const buffer = term.buffer?.active;
+    const baseY = buffer?.baseY || 0;
+
+    if (baseY > 0) {
+      // xterm has scrollback, use native scroll
       term.scrollLines(5);
+    } else {
+      // No xterm scrollback - likely tmux managing it
+      // Enter copy mode (Ctrl+B [) then Page Down
+      if (!inCopyModeRef.current) {
+        sendToTerminal('\x02['); // Ctrl+B [
+        inCopyModeRef.current = true;
+      }
+      sendToTerminal('\x1b[6~'); // Page Down
     }
-  }, []);
+  }, [sendToTerminal]);
+
+  // Exit tmux copy mode when user types
+  const exitCopyMode = useCallback(() => {
+    if (inCopyModeRef.current) {
+      sendToTerminal('q'); // Exit copy mode
+      inCopyModeRef.current = false;
+    }
+  }, [sendToTerminal]);
 
   useEffect(() => {
     if (!sessionId || !terminalRef.current) return;
@@ -313,6 +355,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (isEscapeSequence) {
           console.log('[TerminalChat] Filtering escape sequence:', data.length, 'chars');
           return;
+        }
+
+        // Exit tmux copy mode when user types
+        if (inCopyModeRef.current) {
+          sendTerminalInput('q'); // Exit copy mode first
+          inCopyModeRef.current = false;
         }
 
         console.log('[TerminalChat] onData triggered:', data.length, 'chars');
