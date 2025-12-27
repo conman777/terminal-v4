@@ -487,16 +487,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         <div className="terminal-scroll-buttons">
           <button
             className="scroll-btn scroll-up"
-            onClick={scrollUp}
-            onTouchEnd={(e) => { e.preventDefault(); scrollUp(); }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              scrollUp();
+            }}
             aria-label="Scroll up"
           >
             ▲
           </button>
           <button
             className="scroll-btn scroll-down"
-            onClick={scrollDown}
-            onTouchEnd={(e) => { e.preventDefault(); scrollDown(); }}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              scrollDown();
+            }}
             aria-label="Scroll down"
           >
             ▼
