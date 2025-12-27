@@ -53,9 +53,9 @@ function toPreviewUrl(inputUrl) {
     const parsed = new URL(inputUrl);
     const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsed.hostname);
     if (isLocalhost && parsed.port) {
-      // Rewrite to go through the dev proxy
+      // Rewrite to go through the dev proxy (with auth token)
       const path = parsed.pathname + parsed.search + parsed.hash;
-      return `/api/dev-proxy/${parsed.port}${path}`;
+      return withAuthToken(`/api/dev-proxy/${parsed.port}${path}`);
     }
   } catch {
     // Not a valid URL, fall through
