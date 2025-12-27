@@ -190,18 +190,65 @@ Browser                 Frontend              Backend            PTY Process
 
 Input goes via WebSocket messages (client ↔ server).
 
-### Multiple Processes vs tmux/screen
+### Terminal Persistence with tmux
 
-**Each terminal = separate process:**
-- ✅ Simpler architecture
-- ✅ Process isolation (crash doesn't affect others)
-- ✅ Works on Windows without tmux
-- ✅ Easy resource cleanup
+**Platform-specific behavior:**
 
-**No tmux needed:**
-- Tmux is for multiplexing in a single terminal
-- We're building a multiplexer in the web UI
-- Native process management is cleaner
+**Windows:** Each terminal = separate process (no tmux)
+- Direct node-pty process management
+- Sessions lost on server restart
+- xterm.js manages scrollback buffer
+
+**Linux:** Each terminal = tmux session
+- tmux provides session persistence across server restarts
+- Sessions survive disconnection and can be reattached
+- tmux manages scrollback buffer (not xterm.js)
+
+**tmux Manager (`backend/src/terminal/tmux-manager.ts`):**
+- Detects if tmux is available on the system
+- Creates tmux sessions with prefix `terminal-app-{sessionId}`
+- Attaches to existing sessions on reconnection
+- Handles resize commands for tmux windows
+
+### Mobile Scrolling with tmux
+
+**Important:** When tmux is active, scrollback is managed by tmux, not xterm.js.
+
+**How scroll buttons work (`frontend/src/components/TerminalChat.jsx`):**
+
+1. **Check xterm scrollback:** If `buffer.baseY > 0`, xterm has scrollback → use `term.scrollLines()`
+
+2. **If baseY === 0:** tmux is managing scrollback → send tmux commands:
+   - Enter copy mode: `Ctrl+B [` (`\x02[`)
+   - Page Up: `\x1b[5~`
+   - Page Down: `\x1b[6~`
+   - Auto-exit copy mode when user types (sends `q`)
+
+**Why this matters:**
+- On Windows (no tmux): `term.scrollLines()` works directly
+- On Linux (with tmux): Must use tmux copy-mode commands
+- The code detects which mode to use by checking `baseY`
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Scroll Button Tap                   │
+└─────────────────────┬───────────────────────────────┘
+                      │
+                      ▼
+              ┌───────────────┐
+              │ baseY > 0 ?   │
+              └───────┬───────┘
+                     / \
+                   /     \
+                 Yes      No
+                /           \
+               ▼             ▼
+    ┌─────────────────┐  ┌──────────────────────┐
+    │ term.scrollLines│  │ Send tmux commands:  │
+    │ (xterm native)  │  │ - Enter copy mode    │
+    └─────────────────┘  │ - Page Up/Down       │
+                         └──────────────────────┘
+```
 
 ### LocalStorage for Settings
 
