@@ -7,7 +7,7 @@ import { apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -89,8 +89,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: 'Consolas, "Courier New", monospace',
+      fontSize: fontSize || (isMobile ? 20 : 14),
+      fontFamily: isMobile
+        ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
+        : 'Consolas, "Courier New", monospace',
       scrollback: 5000,
       theme: {
         background: '#1e1e1e',
@@ -484,7 +486,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       fitAddonRef.current = null;
     };
-  }, [sessionId, onUrlDetected]);
+  }, [sessionId, onUrlDetected, fontSize, isMobile]);
 
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;

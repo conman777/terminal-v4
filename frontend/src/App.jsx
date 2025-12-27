@@ -18,7 +18,7 @@ import { useViewportHeight } from './hooks/useViewportHeight';
 import { apiFetch } from './utils/api';
 import { getAccessToken } from './utils/auth';
 
-function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder }) {
+function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -165,6 +165,21 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
                 'Leave empty to use backend default'
               )}
             </small>
+          </div>
+          <div className="form-group">
+            <label htmlFor="font-size">Terminal Font Size</label>
+            <div className="font-size-selector">
+              <input
+                id="font-size"
+                type="range"
+                min="10"
+                max="24"
+                value={terminalFontSize}
+                onChange={(e) => onFontSizeChange(parseInt(e.target.value, 10))}
+              />
+              <span className="font-size-value">{terminalFontSize}px</span>
+            </div>
+            <small>Adjust terminal text size (changes apply immediately)</small>
           </div>
         </div>
         <div className="modal-footer">
@@ -602,6 +617,27 @@ function AppContent() {
       return false;
     }
   });
+
+  // Terminal font size (stored in localStorage)
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalFontSize');
+      if (stored) return parseInt(stored, 10);
+      return isMobile ? 20 : 14;
+    } catch {
+      return isMobile ? 20 : 14;
+    }
+  });
+
+  // Update font size and persist to localStorage
+  const updateTerminalFontSize = useCallback((size) => {
+    setTerminalFontSize(size);
+    try {
+      localStorage.setItem('terminalFontSize', String(size));
+    } catch (e) {
+      console.error('Failed to save terminal font size', e);
+    }
+  }, []);
 
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
@@ -1356,6 +1392,8 @@ function AppContent() {
         recentFolders={recentFolders}
         onSave={handleNavigateSession}
         onAddRecentFolder={addRecentFolder}
+        terminalFontSize={terminalFontSize}
+        onFontSizeChange={updateTerminalFontSize}
       />
       <BookmarkModal
         isOpen={showBookmarks}
@@ -1558,6 +1596,7 @@ function AppContent() {
                       keybarOpen={keybarOpen}
                       viewportHeight={viewportHeight}
                       onUrlDetected={handleUrlDetected}
+                      fontSize={terminalFontSize}
                     />
                     <TerminalMicButton sessionId={activeSessionId} />
                   </div>
@@ -1649,6 +1688,7 @@ function AppContent() {
                     keybarOpen={keybarOpen}
                     viewportHeight={viewportHeight}
                     onUrlDetected={handleUrlDetected}
+                    fontSize={terminalFontSize}
                   />
                   <TerminalMicButton sessionId={activeSessionId} />
                 </div>
