@@ -10,6 +10,7 @@ import { registerBookmarkRoutes } from './routes/bookmark-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
 import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
+import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
@@ -64,6 +65,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerPreviewRoutes(app);
   await registerTranscribeRoutes(app);
   await registerSettingsRoutes(app);
+  await registerDevProxyRoutes(app);
   await registerClaudeCodeRoutes(app, claudeCodeManager);
 
   // Serve static frontend files
