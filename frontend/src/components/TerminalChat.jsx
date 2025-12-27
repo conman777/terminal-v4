@@ -20,6 +20,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
 
+  // Prevent double-firing on iOS (both touchstart and pointerdown can fire)
+  const scrollHandledRef = useRef(false);
+
   // Send data to terminal via WebSocket
   const sendToTerminal = useCallback((data) => {
     const socket = socketRef.current;
@@ -540,7 +543,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              scrollUp();
+              if (!scrollHandledRef.current) {
+                scrollHandledRef.current = true;
+                scrollUp();
+                setTimeout(() => { scrollHandledRef.current = false; }, 100);
+              }
+            }}
+            onTouchStart={(e) => {
+              // iOS Safari fallback
+              e.preventDefault();
+              e.stopPropagation();
+              if (!scrollHandledRef.current) {
+                scrollHandledRef.current = true;
+                scrollUp();
+                setTimeout(() => { scrollHandledRef.current = false; }, 100);
+              }
             }}
             aria-label="Scroll up"
           >
@@ -551,7 +568,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              scrollDown();
+              if (!scrollHandledRef.current) {
+                scrollHandledRef.current = true;
+                scrollDown();
+                setTimeout(() => { scrollHandledRef.current = false; }, 100);
+              }
+            }}
+            onTouchStart={(e) => {
+              // iOS Safari fallback
+              e.preventDefault();
+              e.stopPropagation();
+              if (!scrollHandledRef.current) {
+                scrollHandledRef.current = true;
+                scrollDown();
+                setTimeout(() => { scrollHandledRef.current = false; }, 100);
+              }
             }}
             aria-label="Scroll down"
           >
