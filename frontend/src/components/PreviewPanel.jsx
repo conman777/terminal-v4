@@ -47,12 +47,17 @@ function toPreviewUrl(inputUrl) {
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
-  // Handle localhost/127.0.0.1/0.0.0.0 URLs - proxy through backend
+  // Handle localhost/local network URLs - proxy through backend
   // This allows previewing dev servers running on the remote server
   try {
     const parsed = new URL(inputUrl);
-    const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(parsed.hostname);
-    if (isLocalhost && parsed.port) {
+    const hostname = parsed.hostname;
+
+    // Check if it's a local address that needs proxying
+    const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
+    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
+
+    if ((isLocalhost || isPrivateIP) && parsed.port) {
       // Rewrite to go through the dev proxy (with auth token)
       const path = parsed.pathname + parsed.search + parsed.hash;
       return withAuthToken(`/api/dev-proxy/${parsed.port}${path}`);
