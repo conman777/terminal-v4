@@ -95,7 +95,7 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
 
         // Rewrite URLs in HTML/JS content to go through proxy
         const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('text/html') || contentType.includes('javascript')) {
+        if (contentType.includes('text/html')) {
           let content = body.toString('utf-8');
 
           // Rewrite absolute localhost URLs
@@ -108,6 +108,22 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
           content = content.replace(
             new RegExp(`(["'])ws://localhost:${port}(/[^"']*)?\\1`, 'g'),
             `$1wss://${request.headers.host}/api/dev-proxy-ws/${port}$2$1`
+          );
+
+          // Rewrite absolute paths (src="/...", href="/...") to go through proxy
+          // This handles Vite's asset paths like /assets/index.js
+          content = content.replace(
+            /(src|href|action)=(["'])\//g,
+            `$1=$2/api/dev-proxy/${port}/`
+          );
+
+          // Also handle srcset attributes
+          content = content.replace(
+            /srcset=(["'])([^"']+)\1/g,
+            (match, quote, srcset) => {
+              const rewritten = srcset.replace(/\/([^\s,]+)/g, `/api/dev-proxy/${port}/$1`);
+              return `srcset=${quote}${rewritten}${quote}`;
+            }
           );
 
           reply.send(content);
