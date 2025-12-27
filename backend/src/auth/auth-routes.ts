@@ -4,26 +4,10 @@ import { registerSchema, loginSchema, refreshSchema } from './auth-schemas.js';
 import { ZodError } from 'zod';
 
 export function registerAuthRoutes(app: FastifyInstance): void {
-  // Register new user
+  // Register new user - DISABLED
   app.post<{ Body: { username: string; password: string } }>('/api/auth/register', async (request, reply) => {
-    try {
-      const input = registerSchema.parse(request.body);
-      const result = await register(input.username, input.password);
-      reply.status(201).send(result);
-    } catch (error) {
-      if (error instanceof ZodError) {
-        reply.status(400).send({
-          error: 'Validation error',
-          details: error.errors
-        });
-        return;
-      }
-      if (error instanceof Error && error.message === 'Username already exists') {
-        reply.status(409).send({ error: error.message });
-        return;
-      }
-      throw error;
-    }
+    // Registration is disabled - only existing users can log in
+    reply.status(403).send({ error: 'Registration is disabled' });
   });
 
   // Login

@@ -2,14 +2,12 @@ import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function LoginPage() {
-  const [isRegister, setIsRegister] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [localError, setLocalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { login, register, error: authError } = useAuth();
+  const { login, error: authError } = useAuth();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -20,35 +18,14 @@ export default function LoginPage() {
       return;
     }
 
-    if (isRegister) {
-      if (password !== confirmPassword) {
-        setLocalError('Passwords do not match');
-        return;
-      }
-      if (password.length < 8) {
-        setLocalError('Password must be at least 8 characters');
-        return;
-      }
-    }
-
     setIsSubmitting(true);
     try {
-      if (isRegister) {
-        await register(username.trim(), password);
-      } else {
-        await login(username.trim(), password);
-      }
+      await login(username.trim(), password);
     } catch (err) {
       // Error is set in auth context
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const toggleMode = () => {
-    setIsRegister(!isRegister);
-    setLocalError('');
-    setConfirmPassword('');
   };
 
   const error = localError || authError;
@@ -66,7 +43,7 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
-          <h2>{isRegister ? 'Create Account' : 'Sign In'}</h2>
+          <h2>Sign In</h2>
 
           {error && <div className="login-error">{error}</div>}
 
@@ -91,36 +68,14 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Enter password"
-              autoComplete={isRegister ? 'new-password' : 'current-password'}
+              autoComplete="current-password"
               disabled={isSubmitting}
             />
           </div>
 
-          {isRegister && (
-            <div className="login-field">
-              <label htmlFor="confirmPassword">Confirm Password</label>
-              <input
-                id="confirmPassword"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm password"
-                autoComplete="new-password"
-                disabled={isSubmitting}
-              />
-            </div>
-          )}
-
           <button type="submit" className="login-submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Please wait...' : (isRegister ? 'Create Account' : 'Sign In')}
+            {isSubmitting ? 'Please wait...' : 'Sign In'}
           </button>
-
-          <div className="login-toggle">
-            {isRegister ? 'Already have an account?' : "Don't have an account?"}
-            <button type="button" onClick={toggleMode} disabled={isSubmitting}>
-              {isRegister ? 'Sign In' : 'Register'}
-            </button>
-          </div>
         </form>
       </div>
     </div>
