@@ -1105,6 +1105,24 @@ button {
   border-color: rgba(255, 255, 255, 0.5);
 }
 
+/* Desktop scroll buttons - smaller and subtle */
+.terminal-scroll-buttons.desktop {
+  opacity: 0.3;
+  transition: opacity 0.2s ease;
+}
+
+.terminal-scroll-buttons.desktop:hover {
+  opacity: 1;
+}
+
+.terminal-scroll-buttons.desktop .scroll-btn {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+  border-width: 1px;
+  background: rgba(60, 60, 60, 0.8);
+}
+
 /* Terminal Input */
 .terminal-input {
   display: flex;
