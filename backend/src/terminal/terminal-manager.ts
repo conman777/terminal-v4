@@ -166,8 +166,7 @@ export class TerminalManager {
   }
 
   async loadUserSessions(userId: string): Promise<void> {
-    if (this.#persistedSessions.has(userId)) return;
-
+    // Always reload from disk to detect external changes (deletions, other tabs, etc.)
     const persisted = await loadAllSessions(userId);
     const userSessions = new Map<string, PersistedSession>();
     for (const session of persisted) {

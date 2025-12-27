@@ -1070,6 +1070,9 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Failed to restore session', error);
+        // Refresh session list to remove stale entries
+        await loadSessions();
+        throw error; // Re-throw so callers know it failed
       }
     },
     [loadSessions]
@@ -1088,7 +1091,11 @@ function AppContent() {
     }, 10000);
 
     handleRestoreSession(activeSessionId)
-      .catch(() => {})
+      .catch((error) => {
+        console.error('Session restore failed, clearing selection:', error);
+        // Clear active session since restore failed - session may no longer exist
+        setActiveSessionId(null);
+      })
       .finally(() => {
         clearTimeout(retryTimeout);
         restoreInFlightRef.current.delete(activeSessionId);
