@@ -240,22 +240,50 @@ function getToolDisplayInfo(item) {
   }
 }
 
-// Get output summary
-function getOutputSummary(tool, output) {
-  if (!output) return null;
-
-  const lines = output.split('\n').length;
+// Generate tool summary for collapsed view
+function generateToolSummary(tool, input, output, isError) {
   const toolLower = tool?.toLowerCase();
+
+  if (isError) {
+    return 'Error';
+  }
+
+  if (!output) {
+    return 'Running...';
+  }
+
+  const lines = output.split('\n').filter(l => l.trim()).length;
+  const chars = output.length;
 
   switch (toolLower) {
     case 'read':
-      return `Read ${lines.toLocaleString()} lines`;
+      return `${lines.toLocaleString()} lines`;
+    case 'write':
+      return `${lines.toLocaleString()} lines written`;
+    case 'edit':
+      return 'Applied';
+    case 'bash': {
+      const exitMatch = output.match(/exit code[:\s]*(\d+)/i);
+      if (exitMatch && exitMatch[1] !== '0') {
+        return `Exit ${exitMatch[1]}`;
+      }
+      return lines > 0 ? `${lines} lines` : 'Done';
+    }
     case 'glob':
-      return `Found ${lines.toLocaleString()} files`;
+      return `${lines.toLocaleString()} files`;
     case 'grep':
-      return `Found ${lines.toLocaleString()} matches`;
+      return `${lines.toLocaleString()} matches`;
+    case 'task':
+      return 'Completed';
+    case 'todowrite':
+      const todoCount = input?.todos?.length || 0;
+      return `${todoCount} items`;
+    case 'webfetch':
+      return chars > 0 ? `${Math.round(chars / 1024)}KB` : 'Fetched';
+    case 'websearch':
+      return lines > 0 ? `${lines} results` : 'Searched';
     default:
-      return null;
+      return lines > 0 ? `${lines} lines` : 'Done';
   }
 }
 
@@ -314,8 +342,9 @@ function MarkdownContent({ content }) {
 }
 
 export default function ToolCallBlock({ item, onFileClick }) {
+  // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
-  const [showDiff, setShowDiff] = useState(true);
+  const [showFullOutput, setShowFullOutput] = useState(false);
 
   // User message - centered card
   if (item.type === 'user') {
@@ -353,7 +382,7 @@ export default function ToolCallBlock({ item, onFileClick }) {
     );
   }
 
-  // Tool use block - card style
+  // Tool use block - compact collapsed style
   if (item.type === 'tool_use') {
     const tool = item.tool?.toLowerCase() || 'default';
     const toolColor = TOOL_COLORS[tool] || TOOL_COLORS.default;
@@ -364,19 +393,31 @@ export default function ToolCallBlock({ item, onFileClick }) {
     const output = item.result?.toolResult || '';
     const isRunning = !hasResult;
 
-    // Special handling for TodoWrite
+    // Generate summary for the header
+    const summary = generateToolSummary(item.tool, item.toolInput, output, isError);
+
+    // Special handling for TodoWrite - always show expanded
     if (tool === 'todowrite' && displayInfo.todos) {
       return (
-        <div className="cc-message cc-tool-card">
-          <div className="cc-tool-card-header" style={{ borderLeftColor: toolColor }}>
-            <span className={`cc-tool-status ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
-              {isRunning ? '◐' : isError ? '✕' : '●'}
+        <div className="cc-message cc-tool-compact">
+          <div
+            className={`cc-tool-header ${expanded ? 'expanded' : ''}`}
+            style={{ '--tool-color': toolColor }}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <span className="cc-tool-expand">{expanded ? '▼' : '▶'}</span>
+            <span className="cc-tool-icon">{displayInfo.icon}</span>
+            <span className="cc-tool-name">{displayInfo.title}</span>
+            <span className="cc-tool-summary">{summary}</span>
+            <span className={`cc-tool-status-icon ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
+              {isRunning ? '⟳' : isError ? '✕' : '✓'}
             </span>
-            <span className="cc-tool-title">{displayInfo.title}</span>
           </div>
-          <div className="cc-tool-card-body">
-            <TodoWidget todos={displayInfo.todos} />
-          </div>
+          {expanded && (
+            <div className="cc-tool-body">
+              <TodoWidget todos={displayInfo.todos} />
+            </div>
+          )}
         </div>
       );
     }
@@ -385,76 +426,73 @@ export default function ToolCallBlock({ item, onFileClick }) {
     const isEditTool = tool === 'edit';
     const hasDiffData = isEditTool && displayInfo.oldString && displayInfo.newString;
 
-    // Output handling
-    const summary = getOutputSummary(item.tool, output);
-    const outputLines = output.split('\n');
-    const maxLines = 8;
-    const shouldTruncate = outputLines.length > maxLines && !expanded;
-    const displayLines = shouldTruncate ? outputLines.slice(0, maxLines) : outputLines;
+    // Output handling for expanded view
+    const outputLines = output ? output.split('\n') : [];
+    const maxInitialLines = 10;
+    const hasMoreOutput = outputLines.length > maxInitialLines;
+    const displayLines = showFullOutput ? outputLines : outputLines.slice(0, maxInitialLines);
+
+    // Truncate subtitle for display
+    const shortSubtitle = displayInfo.subtitle
+      ? (displayInfo.subtitle.length > 40
+          ? '...' + displayInfo.subtitle.slice(-37)
+          : displayInfo.subtitle)
+      : '';
 
     return (
-      <div className="cc-message cc-tool-card">
-        <div className="cc-tool-card-header" style={{ borderLeftColor: toolColor }}>
-          <span className={`cc-tool-status ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
-            {isRunning ? '◐' : isError ? '✕' : '●'}
+      <div className={`cc-message cc-tool-compact ${isError ? 'error' : ''}`}>
+        <div
+          className={`cc-tool-header ${expanded ? 'expanded' : ''}`}
+          style={{ '--tool-color': toolColor }}
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="cc-tool-expand">{expanded ? '▼' : '▶'}</span>
+          <span className="cc-tool-icon">{displayInfo.icon}</span>
+          <span className="cc-tool-name">{displayInfo.title}</span>
+          {shortSubtitle && <span className="cc-tool-path">{shortSubtitle}</span>}
+          <span className="cc-tool-summary">{summary}</span>
+          <span className={`cc-tool-status-icon ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
+            {isRunning ? '⟳' : isError ? '✕' : '✓'}
           </span>
-          <span className="cc-tool-title">{displayInfo.title}</span>
-          {displayInfo.subtitle && (
-            <span className="cc-tool-subtitle">
-              {displayInfo.subtitle.length > 60
-                ? displayInfo.subtitle.slice(0, 60) + '...'
-                : displayInfo.subtitle}
-            </span>
-          )}
-          {hasDiffData && (
-            <button className="cc-tool-toggle" onClick={() => setShowDiff(!showDiff)}>
-              {showDiff ? 'Hide diff' : 'Show diff'}
-            </button>
-          )}
         </div>
 
-        {/* Diff view for Edit */}
-        {hasDiffData && showDiff && (
-          <div className="cc-tool-card-body">
-            <DiffView
-              oldString={displayInfo.oldString}
-              newString={displayInfo.newString}
-              filePath={displayInfo.subtitle}
-            />
-          </div>
-        )}
+        {/* Expanded content */}
+        {expanded && (
+          <div className="cc-tool-body">
+            {/* Diff view for Edit */}
+            {hasDiffData && (
+              <DiffView
+                oldString={displayInfo.oldString}
+                newString={displayInfo.newString}
+                filePath={displayInfo.subtitle}
+              />
+            )}
 
-        {/* Output */}
-        {hasResult && output && (
-          <div className="cc-tool-card-body">
-            {summary ? (
-              <div className="cc-tool-summary">{summary}</div>
-            ) : (
+            {/* Output */}
+            {hasResult && output && !hasDiffData && (
               <div className="cc-tool-output">
                 {displayLines.map((line, idx) => (
                   <div key={idx} className="cc-output-line">
                     {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
                   </div>
                 ))}
-                {shouldTruncate && (
-                  <button className="cc-expand-btn" onClick={() => setExpanded(true)}>
-                    Show {outputLines.length - maxLines} more lines
+                {hasMoreOutput && !showFullOutput && (
+                  <button className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(true); }}>
+                    Show {outputLines.length - maxInitialLines} more lines
                   </button>
                 )}
-                {expanded && outputLines.length > maxLines && (
-                  <button className="cc-expand-btn" onClick={() => setExpanded(false)}>
+                {showFullOutput && hasMoreOutput && (
+                  <button className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(false); }}>
                     Show less
                   </button>
                 )}
               </div>
             )}
-          </div>
-        )}
 
-        {/* Error message */}
-        {isError && (
-          <div className="cc-tool-card-body cc-tool-error">
-            {output || 'Tool execution failed'}
+            {/* Error message */}
+            {isError && !output && (
+              <div className="cc-tool-error-msg">Tool execution failed</div>
+            )}
           </div>
         )}
       </div>

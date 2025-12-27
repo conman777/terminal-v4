@@ -3471,6 +3471,136 @@ textarea:focus-visible {
   font-size: 0.8125rem;
 }
 
+/* Compact Tool Block - Collapsed by default */
+.cc-message.cc-tool-compact {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.cc-message.cc-tool-compact.error {
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.cc-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-left: 3px solid var(--tool-color, var(--border-subtle));
+}
+
+.cc-tool-header:hover {
+  background: var(--bg-hover);
+}
+
+.cc-tool-header.expanded {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cc-tool-expand {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  width: 1rem;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.cc-tool-icon {
+  font-size: 0.875rem;
+  flex-shrink: 0;
+}
+
+.cc-tool-name {
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.cc-tool-path {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.cc-tool-summary {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.cc-tool-status-icon {
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+}
+
+.cc-tool-status-icon.running {
+  color: #f59e0b;
+  animation: spinStatus 1s linear infinite;
+}
+
+.cc-tool-status-icon.success {
+  color: #22c55e;
+}
+
+.cc-tool-status-icon.error {
+  color: #ef4444;
+}
+
+@keyframes spinStatus {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.cc-tool-body {
+  padding: 0.75rem;
+  background: var(--bg-base);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.cc-tool-output {
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.cc-show-more-btn {
+  background: none;
+  border: none;
+  padding: 0.5rem 0;
+  color: var(--accent-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.cc-show-more-btn:hover {
+  color: var(--accent-hover, #60a5fa);
+  text-decoration: underline;
+}
+
+.cc-tool-error-msg {
+  color: #ef4444;
+  font-size: 0.8125rem;
+  padding: 0.25rem 0;
+}
+
 /* Todo Widget - Checkbox list */
 .todo-widget {
   display: flex;
@@ -3746,6 +3876,80 @@ textarea:focus-visible {
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Claude Code Mobile Overrides */
+@media (max-width: 768px) {
+  .claude-code-pane {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .claude-code-pane .claude-code-panel {
+    height: 100%;
+  }
+
+  .claude-code-messages {
+    padding: 0.75rem;
+  }
+
+  .claude-code-messages > * {
+    max-width: 100%;
+  }
+
+  .cc-message.cc-tool-compact {
+    border-radius: 0.375rem;
+  }
+
+  .cc-tool-header {
+    padding: 0.625rem;
+    gap: 0.375rem;
+    min-height: 44px; /* Touch target */
+  }
+
+  .cc-tool-name {
+    font-size: 0.75rem;
+  }
+
+  .cc-tool-path {
+    display: none; /* Hide path on mobile to save space */
+  }
+
+  .cc-tool-summary {
+    font-size: 0.6875rem;
+  }
+
+  .cc-tool-body {
+    padding: 0.5rem;
+    max-height: 300px;
+  }
+
+  .cc-tool-output {
+    font-size: 0.6875rem;
+  }
+
+  .cc-user-bubble {
+    padding: 0.625rem 0.875rem;
+    font-size: 0.875rem;
+  }
+
+  .cc-assistant-bubble {
+    font-size: 0.875rem;
+  }
+
+  .claude-code-input {
+    padding: 0.5rem;
+    gap: 0.375rem;
+  }
+
+  .claude-code-input textarea {
+    font-size: 16px; /* Prevent iOS zoom */
+    padding: 0.5rem 0.75rem;
+    min-height: 44px;
+  }
 }
 
 /* Terminal with Mic Button Wrapper */

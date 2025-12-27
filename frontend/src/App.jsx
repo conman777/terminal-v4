@@ -558,7 +558,7 @@ function AppContent() {
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'preview'
+  const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'claude' | 'preview'
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
@@ -1653,16 +1653,23 @@ function AppContent() {
             className="terminal-main"
             style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
           >
-            {/* Mobile view switcher */}
-            {previewUrl && (
-              <div className="mobile-view-switcher">
-                <button
-                  type="button"
-                  className={`view-switch-btn${mobileView === 'terminal' ? ' active' : ''}`}
-                  onClick={() => setMobileView('terminal')}
-                >
-                  Terminal
-                </button>
+            {/* Mobile view switcher - always show to access Claude */}
+            <div className="mobile-view-switcher">
+              <button
+                type="button"
+                className={`view-switch-btn${mobileView === 'terminal' ? ' active' : ''}`}
+                onClick={() => setMobileView('terminal')}
+              >
+                ⚡ Terminal
+              </button>
+              <button
+                type="button"
+                className={`view-switch-btn${mobileView === 'claude' ? ' active' : ''}`}
+                onClick={() => setMobileView('claude')}
+              >
+                🤖 Claude
+              </button>
+              {previewUrl && (
                 <button
                   type="button"
                   className={`view-switch-btn${mobileView === 'preview' ? ' active' : ''}`}
@@ -1670,30 +1677,42 @@ function AppContent() {
                 >
                   Preview
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
 
             {/* Terminal pane */}
-            <div className={`terminal-pane${mobileView === 'preview' ? ' hidden' : ''}`}>
-              {!activeSessionId ? (
-                <div className="empty-state">
-                  <h2>Welcome to Terminal</h2>
-                  <p>Create a new terminal session to get started.</p>
-                </div>
-              ) : (
-                <div className="terminal-with-mic">
-                  <TerminalChat
-                    sessionId={activeSessionId}
-                    keybarOpen={keybarOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={handleUrlDetected}
-                    fontSize={terminalFontSize}
-                  />
-                  <TerminalMicButton sessionId={activeSessionId} />
-                </div>
-              )}
-            </div>
+            {mobileView === 'terminal' && (
+              <div className="terminal-pane">
+                {!activeSessionId ? (
+                  <div className="empty-state">
+                    <h2>Welcome to Terminal</h2>
+                    <p>Create a new terminal session to get started.</p>
+                  </div>
+                ) : (
+                  <div className="terminal-with-mic">
+                    <TerminalChat
+                      sessionId={activeSessionId}
+                      keybarOpen={keybarOpen}
+                      viewportHeight={viewportHeight}
+                      onUrlDetected={handleUrlDetected}
+                      fontSize={terminalFontSize}
+                    />
+                    <TerminalMicButton sessionId={activeSessionId} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Claude Code pane */}
+            {mobileView === 'claude' && (
+              <div className="claude-code-pane">
+                <ClaudeCodePanel
+                  sessionId={activeClaudeCodeId}
+                  onSessionChange={handleClaudeCodeSessionChange}
+                />
+              </div>
+            )}
 
             {/* Mobile preview - full screen when active */}
             {mobileView === 'preview' && (
