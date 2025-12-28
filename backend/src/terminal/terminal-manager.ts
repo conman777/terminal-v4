@@ -174,6 +174,25 @@ export class TerminalManager {
     }
     this.#persistedSessions.set(userId, userSessions);
     console.log(`Loaded ${persisted.length} persisted terminal sessions for user ${userId}`);
+
+    // Auto-restore sessions that have surviving tmux processes
+    if (this.#useTmux) {
+      for (const session of persisted) {
+        // Skip if already active
+        if (this.#sessions.has(session.id)) {
+          continue;
+        }
+        // Check if tmux session exists (survived server restart)
+        try {
+          if (tmuxSessionExists(session.id)) {
+            console.log(`Auto-restoring session ${session.id} with surviving tmux process`);
+            this.restoreSession(userId, session.id);
+          }
+        } catch (error) {
+          console.error(`Failed to auto-restore session ${session.id}:`, error);
+        }
+      }
+    }
   }
 
   // Schedule a debounced save for this session

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 import { TerminalMicButton } from './components/TerminalMicButton';
+import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
@@ -537,6 +538,22 @@ function AppContent() {
       return null;
     }
   });
+
+  // Split pane layout state
+  const [paneLayout, setPaneLayout] = useState(() => {
+    try {
+      const saved = localStorage.getItem('paneLayout');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {}
+    return {
+      type: 'single',
+      panes: [{ id: 'pane-1', sessionId: null }],
+      activePaneId: 'pane-1'
+    };
+  });
+
   const [loadingSessions, setLoadingSessions] = useState(false);
 
   const activeSessions = useMemo(
@@ -1046,6 +1063,117 @@ function AppContent() {
     },
     []
   );
+
+  // Save pane layout to localStorage when it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('paneLayout', JSON.stringify(paneLayout));
+    } catch {}
+  }, [paneLayout]);
+
+  // Initialize first pane with active session if not set
+  useEffect(() => {
+    if (activeSessionId && paneLayout.panes[0]?.sessionId === null) {
+      setPaneLayout(prev => ({
+        ...prev,
+        panes: prev.panes.map((pane, i) =>
+          i === 0 ? { ...pane, sessionId: activeSessionId } : pane
+        )
+      }));
+    }
+  }, [activeSessionId]);
+
+  // Handle session selection in a specific pane
+  const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
+    setPaneLayout(prev => ({
+      ...prev,
+      panes: prev.panes.map(pane =>
+        pane.id === paneId ? { ...pane, sessionId } : pane
+      )
+    }));
+    if (sessionId) {
+      setActiveSessionId(sessionId);
+    }
+  }, []);
+
+  // Handle pane focus
+  const handlePaneFocus = useCallback((paneId) => {
+    setPaneLayout(prev => ({
+      ...prev,
+      activePaneId: paneId
+    }));
+    // Also set the active session to the focused pane's session
+    const pane = paneLayout.panes.find(p => p.id === paneId);
+    if (pane?.sessionId) {
+      setActiveSessionId(pane.sessionId);
+    }
+  }, [paneLayout.panes]);
+
+  // Handle pane split
+  const handlePaneSplit = useCallback((paneId, direction) => {
+    setPaneLayout(prev => {
+      if (prev.panes.length >= 4) return prev; // Max 4 panes
+
+      const newPaneId = `pane-${Date.now()}`;
+      let newType = prev.type;
+      let newPanes = [...prev.panes];
+
+      if (prev.type === 'single') {
+        newType = direction === 'horizontal' ? 'horizontal' : 'vertical';
+        newPanes.push({ id: newPaneId, sessionId: null });
+      } else if (prev.type === 'horizontal' && direction === 'vertical') {
+        newType = 'grid';
+        newPanes.push({ id: newPaneId, sessionId: null });
+      } else if (prev.type === 'vertical' && direction === 'horizontal') {
+        newType = 'grid';
+        newPanes.push({ id: newPaneId, sessionId: null });
+      } else if (prev.type === 'horizontal' || prev.type === 'vertical') {
+        // Already 2 panes, add a third
+        newType = 'grid';
+        newPanes.push({ id: newPaneId, sessionId: null });
+      } else if (prev.type === 'grid' && prev.panes.length < 4) {
+        // Already grid, just add another pane
+        newPanes.push({ id: newPaneId, sessionId: null });
+      }
+
+      return {
+        ...prev,
+        type: newType,
+        panes: newPanes
+      };
+    });
+  }, []);
+
+  // Handle pane close
+  const handlePaneClose = useCallback((paneId) => {
+    setPaneLayout(prev => {
+      if (prev.panes.length <= 1) return prev; // Can't close last pane
+
+      const newPanes = prev.panes.filter(p => p.id !== paneId);
+      let newType = prev.type;
+
+      if (newPanes.length === 1) {
+        newType = 'single';
+      } else if (newPanes.length === 2) {
+        // Keep current orientation or default to horizontal
+        newType = prev.type === 'vertical' ? 'vertical' : 'horizontal';
+      } else if (newPanes.length === 3) {
+        newType = 'grid';
+      }
+
+      // If we closed the active pane, focus the first remaining pane
+      let newActivePaneId = prev.activePaneId;
+      if (paneId === prev.activePaneId) {
+        newActivePaneId = newPanes[0]?.id || 'pane-1';
+      }
+
+      return {
+        type: newType,
+        panes: newPanes,
+        activePaneId: newActivePaneId
+      };
+    });
+  }, []);
 
   const handleRestoreSession = useCallback(
     async (sessionId) => {
@@ -1592,7 +1720,7 @@ function AppContent() {
               style={showPreview ? { flex: `0 0 ${splitPosition}%` } : undefined}
             >
               {leftPanelMode === 'terminal' ? (
-                !activeSessionId ? (
+                activeSessions.length === 0 ? (
                   <div className="empty-state">
                     <h2>Welcome to Terminal</h2>
                     <p>Create a new terminal session to get started.</p>
@@ -1600,24 +1728,19 @@ function AppContent() {
                       + New Terminal
                     </button>
                   </div>
-                ) : restoringSessionId === activeSessionId ? (
-                  <div className="terminal-restore-placeholder">
-                    <div className="terminal-restore-title">Restoring session…</div>
-                    <div className="terminal-restore-subtitle">
-                      {activeSessionSnapshot?.title || 'Getting your terminal back online'}
-                    </div>
-                  </div>
                 ) : (
-                  <div className="terminal-with-mic">
-                    <TerminalChat
-                      sessionId={activeSessionId}
-                      keybarOpen={keybarOpen}
-                      viewportHeight={viewportHeight}
-                      onUrlDetected={handleUrlDetected}
-                      fontSize={terminalFontSize}
-                    />
-                    <TerminalMicButton sessionId={activeSessionId} />
-                  </div>
+                  <SplitPaneContainer
+                    layout={paneLayout}
+                    sessions={activeSessions}
+                    onPaneSessionSelect={handlePaneSessionSelect}
+                    onPaneSplit={handlePaneSplit}
+                    onPaneClose={handlePaneClose}
+                    onPaneFocus={handlePaneFocus}
+                    keybarOpen={keybarOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={handleUrlDetected}
+                    fontSize={terminalFontSize}
+                  />
                 )
               ) : (
                 !activeClaudeCodeId ? (

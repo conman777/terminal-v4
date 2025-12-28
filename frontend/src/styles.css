@@ -107,13 +107,8 @@ button {
   display: flex;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg-base);
-  /* Subtle grid pattern background */
-  background-image: 
-    linear-gradient(rgba(39, 39, 42, 0.3) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(39, 39, 42, 0.3) 1px, transparent 1px);
-  background-size: 60px 60px;
-  background-position: -1px -1px;
+  background: #0b0b0d;
+  background-image: none !important;
 }
 
 /* Main Container */
@@ -850,7 +845,8 @@ button {
   flex-direction: row;
   overflow: hidden;
   min-height: 0;
-  background: var(--bg-base);
+  background: #0b0b0d;
+  background-image: none !important;
 }
 
 .main-content.with-preview .terminal-pane {
@@ -862,7 +858,8 @@ button {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: var(--bg-surface);
+  background: #0b0b0d;
+  background-image: none !important;
   overflow: hidden;
   min-height: 0;
   /* On mobile, fill remaining space after header */
@@ -876,6 +873,8 @@ button {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
+  background: #0b0b0d;
+  background-image: none !important;
 }
 
 /* Terminal Pane */
@@ -888,6 +887,8 @@ button {
   height: 100%;
   overflow: hidden;
   position: relative;
+  background: #0b0b0d;
+  background-image: none !important;
 }
 
 .terminal-pane.hidden {
@@ -5235,5 +5236,184 @@ textarea:focus-visible {
   .file-manager-close {
     color: #fff !important;
     font-size: 24px;
+  }
+}
+
+/* ===========================================
+   Split Pane Terminal Layout
+   =========================================== */
+
+.split-pane-container {
+  display: grid;
+  height: 100%;
+  width: 100%;
+  gap: 2px;
+  background: var(--border-subtle);
+}
+
+/* Single pane - full width/height */
+.split-pane-container.single {
+  grid-template: 1fr / 1fr;
+}
+
+/* Horizontal split - side by side */
+.split-pane-container.horizontal {
+  grid-template: 1fr / 1fr 1fr;
+}
+
+/* Vertical split - stacked */
+.split-pane-container.vertical {
+  grid-template: 1fr 1fr / 1fr;
+}
+
+/* 2x2 Grid - 4 panes */
+.split-pane-container.grid {
+  grid-template: 1fr 1fr / 1fr 1fr;
+}
+
+/* Individual terminal pane */
+.split-terminal-pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-base);
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid transparent;
+  transition: border-color var(--transition-fast);
+}
+
+.split-terminal-pane.active {
+  border-color: var(--accent-primary);
+}
+
+/* Pane header with controls */
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 32px;
+}
+
+/* Session selector dropdown */
+.pane-session-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pane-session-select:hover {
+  border-color: var(--border-hover);
+}
+
+.pane-session-select:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+/* Pane control buttons */
+.pane-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.pane-btn {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 4px 6px;
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.pane-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.pane-btn.pane-close:hover {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* Pane content area */
+.pane-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Empty pane state */
+.pane-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* Terminal with mic wrapper inside pane */
+.pane-content .terminal-with-mic {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-content .terminal-with-mic .terminal-chat {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Mobile: Disable split panes */
+@media (max-width: 768px) {
+  .split-pane-container {
+    /* On mobile, always show single pane */
+    grid-template: 1fr / 1fr !important;
+  }
+
+  /* Hide all panes except the active one */
+  .split-terminal-pane:not(.active) {
+    display: none;
+  }
+
+  .pane-header {
+    padding: 6px 12px;
+    min-height: 40px;
+  }
+
+  .pane-session-select {
+    font-size: 14px;
+    padding: 6px 10px;
+  }
+
+  .pane-btn {
+    padding: 6px 10px;
+    font-size: 12px;
   }
 }
