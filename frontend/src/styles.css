@@ -1036,21 +1036,21 @@ button {
 /* Terminal Image Upload */
 .terminal-image-btn {
   position: absolute;
-  top: 8px;
-  right: 60px;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  color: var(--text-muted);
+  bottom: 1rem;
+  right: calc(1rem + 48px + 0.5rem);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
-  transition: all var(--transition-fast);
-  opacity: 0.6;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 .terminal-image-btn svg {
@@ -1058,11 +1058,9 @@ button {
 }
 
 .terminal-image-btn:hover {
-  opacity: 1;
-  background: var(--bg-surface);
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-  box-shadow: 0 0 10px var(--accent-primary-dim);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  transform: scale(1.05);
 }
 
 .terminal-image-dropzone {
@@ -4185,6 +4183,12 @@ textarea:focus-visible {
   animation: pulse-requesting 1s ease-in-out infinite;
 }
 
+.claude-code-input .mic-button.checking {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  animation: pulse-requesting 1s ease-in-out infinite;
+}
+
 @keyframes pulse-recording {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
@@ -4347,6 +4351,12 @@ textarea:focus-visible {
 .terminal-mic-button.requesting {
   background: var(--accent-primary-dim);
   color: var(--accent-primary);
+  animation: pulse-requesting 1s ease-in-out infinite;
+}
+
+.terminal-mic-button.checking {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
   animation: pulse-requesting 1s ease-in-out infinite;
 }
 

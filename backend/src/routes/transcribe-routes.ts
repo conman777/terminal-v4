@@ -8,6 +8,54 @@ interface TranscribeResponse {
 }
 
 export async function registerTranscribeRoutes(app: FastifyInstance): Promise<void> {
+  // Health check endpoint - verify API key and Groq connectivity before recording
+  app.get('/api/transcribe/health', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      return reply.code(401).send({ ok: false, reason: 'unauthorized' });
+    }
+
+    const userApiKey = getUserGroqApiKey(userId);
+    const apiKey = userApiKey || process.env.GROQ_API_KEY;
+
+    if (!apiKey) {
+      return { ok: false, reason: 'no_api_key' };
+    }
+
+    try {
+      // Quick connectivity check - verify we can reach Groq and key is valid
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch('https://api.groq.com/openai/v1/models', {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiKey}` },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.status === 401) {
+        return { ok: false, reason: 'invalid_api_key' };
+      }
+      if (response.status === 429) {
+        return { ok: false, reason: 'rate_limited' };
+      }
+      if (!response.ok) {
+        return { ok: false, reason: 'api_error' };
+      }
+
+      return { ok: true };
+    } catch (err: unknown) {
+      const error = err as Error;
+      if (error.name === 'AbortError') {
+        return { ok: false, reason: 'timeout' };
+      }
+      // DNS or network errors
+      return { ok: false, reason: 'network_error' };
+    }
+  });
+
   app.post('/api/transcribe', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {

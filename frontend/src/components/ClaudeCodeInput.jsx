@@ -21,7 +21,7 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
     textareaRef.current?.focus();
   }, []);
 
-  const { isRecording, isRequesting, isTranscribing, error: recordingError, toggleRecording } = useVoiceInput(handleTranscription);
+  const { isRecording, isChecking, isRequesting, isTranscribing, error: recordingError, toggleRecording } = useVoiceInput(handleTranscription);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -127,11 +127,13 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
   const micButtonClasses = [
     'mic-button',
     isRecording ? 'recording' : '',
+    isChecking ? 'checking' : '',
     isRequesting ? 'requesting' : ''
   ].filter(Boolean).join(' ');
 
   // Determine placeholder text
   const getPlaceholder = () => {
+    if (isChecking) return 'Checking API...';
     if (isRequesting) return 'Requesting microphone...';
     if (isRecording) return 'Recording... tap mic to stop';
     if (isTranscribing) return 'Transcribing...';
@@ -140,11 +142,13 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
   };
 
   // Determine aria label for mic button
-  const micAriaLabel = isRequesting
-    ? 'Requesting microphone access'
-    : isRecording
-      ? 'Stop recording'
-      : 'Start voice input';
+  const micAriaLabel = isChecking
+    ? 'Checking API...'
+    : isRequesting
+      ? 'Requesting microphone access'
+      : isRecording
+        ? 'Stop recording'
+        : 'Start voice input';
 
   return (
     <div className="claude-code-input-wrapper">
@@ -183,12 +187,20 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
         <button
           type="button"
           onClick={toggleRecording}
-          disabled={disabled || isProcessing || isTranscribing || isRequesting}
+          disabled={disabled || isProcessing || isTranscribing || isRequesting || isChecking}
           className={micButtonClasses}
           aria-label={micAriaLabel}
           title={micAriaLabel}
         >
-          {isTranscribing ? '...' : isRequesting ? (
+          {isTranscribing ? '...' : isChecking ? (
+            // Pulsing mic icon while checking API
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/>
+              <line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          ) : isRequesting ? (
             // Pulsing mic icon while requesting permission
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>

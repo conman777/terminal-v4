@@ -1,8 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { apiPost } from '../utils/api';
+import { apiPost, apiGet } from '../utils/api';
+
+// Map API health check reasons to user-friendly messages
+const HEALTH_ERROR_MESSAGES = {
+  no_api_key: 'No Groq API key configured',
+  invalid_api_key: 'Groq API key is invalid',
+  network_error: "Can't reach Groq API - check network",
+  timeout: 'Groq API not responding',
+  rate_limited: 'Rate limited - wait a moment',
+  api_error: 'Groq API error - try again',
+  unauthorized: 'Not logged in'
+};
 
 export function useVoiceInput(onTranscribed) {
   const [isRecording, setIsRecording] = useState(false);
+  const [isChecking, setIsChecking] = useState(false);
   const [isRequesting, setIsRequesting] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState(null);
@@ -47,13 +59,32 @@ export function useVoiceInput(onTranscribed) {
     };
   }, [cleanup]);
 
-  // Clear error after 3 seconds
+  // Clear error after 4 seconds (slightly longer for better readability)
   useEffect(() => {
     if (error) {
-      const timer = setTimeout(() => setError(null), 3000);
+      const timer = setTimeout(() => setError(null), 4000);
       return () => clearTimeout(timer);
     }
   }, [error]);
+
+  // Pre-flight API health check
+  const checkApiHealth = useCallback(async () => {
+    try {
+      const result = await apiGet('/api/transcribe/health');
+      if (result.ok) {
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        message: HEALTH_ERROR_MESSAGES[result.reason] || 'API check failed'
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        message: "Can't reach server - check connection"
+      };
+    }
+  }, []);
 
   const startRecording = useCallback(async () => {
     // Cleanup any existing recording first
@@ -65,7 +96,17 @@ export function useVoiceInput(onTranscribed) {
 
     // Check if getUserMedia is available
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setError('Microphone not available (HTTPS required on mobile)');
+      setError('Microphone not available (HTTPS required)');
+      return;
+    }
+
+    // Pre-flight check: verify API is available before recording
+    setIsChecking(true);
+    const healthCheck = await checkApiHealth();
+    setIsChecking(false);
+
+    if (!healthCheck.ok) {
+      setError(healthCheck.message);
       return;
     }
 
@@ -124,9 +165,23 @@ export function useVoiceInput(onTranscribed) {
             onTranscribed?.(result.text);
           } else if (result.message) {
             setError(result.message);
+          } else if (result.error) {
+            // Parse specific error types from transcription response
+            if (result.details?.includes('rate_limit') || result.details?.includes('429')) {
+              setError('Rate limited - wait a moment');
+            } else if (result.details?.includes('EAI_AGAIN') || result.details?.includes('ENOTFOUND')) {
+              setError("Network error - can't connect");
+            } else {
+              setError(result.error);
+            }
           }
         } catch (err) {
-          setError(err.message || 'Transcription failed');
+          // Handle fetch errors with better messages
+          if (err.message?.includes('fetch') || err.message?.includes('network')) {
+            setError("Network error - can't connect");
+          } else {
+            setError(err.message || 'Transcription failed');
+          }
         } finally {
           setIsTranscribing(false);
         }
@@ -166,7 +221,7 @@ export function useVoiceInput(onTranscribed) {
         setError(`Could not start recording: ${err.message}`);
       }
     }
-  }, [cleanup, onTranscribed]);
+  }, [cleanup, checkApiHealth, onTranscribed]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -191,6 +246,7 @@ export function useVoiceInput(onTranscribed) {
 
   return {
     isRecording,
+    isChecking,
     isRequesting,
     isTranscribing,
     error,
