@@ -61,17 +61,20 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
       delete responseHeaders['connection'];
       delete responseHeaders['keep-alive'];
 
+      // Get auth token from request to preserve in redirects
+      const query = request.query as Record<string, string>;
+      const token = query.token || '';
+      const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : '';
+
       // Rewrite Location header for redirects
       if (responseHeaders['location']) {
         const location = responseHeaders['location'];
         // Rewrite localhost URLs in redirects to go through proxy
         if (location.startsWith(`http://localhost:${port}`)) {
-          responseHeaders['location'] = location.replace(
-            `http://localhost:${port}`,
-            `/api/dev-proxy/${port}`
-          );
+          const newPath = location.replace(`http://localhost:${port}`, `/api/dev-proxy/${port}`);
+          responseHeaders['location'] = newPath + (newPath.includes('?') ? '&' : '') + (token ? `token=${encodeURIComponent(token)}` : '');
         } else if (location.startsWith('/')) {
-          responseHeaders['location'] = `/api/dev-proxy/${port}${location}`;
+          responseHeaders['location'] = `/api/dev-proxy/${port}${location}${tokenSuffix}`;
         }
       }
 
@@ -98,10 +101,15 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
         if (contentType.includes('text/html')) {
           let content = body.toString('utf-8');
 
+          // Get auth token from request to append to rewritten URLs
+          const query = request.query as Record<string, string>;
+          const token = query.token || '';
+          const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : '';
+
           // Rewrite absolute localhost URLs
           content = content.replace(
             new RegExp(`(["'])(http://localhost:${port})(/[^"']*)?\\1`, 'g'),
-            `$1/api/dev-proxy/${port}$3$1`
+            `$1/api/dev-proxy/${port}$3${tokenSuffix}$1`
           );
 
           // Rewrite HMR WebSocket URLs for Vite
@@ -113,15 +121,19 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
           // Rewrite absolute paths (src="/...", href="/...") to go through proxy
           // This handles Vite's asset paths like /assets/index.js
           content = content.replace(
-            /(src|href|action)=(["'])\//g,
-            `$1=$2/api/dev-proxy/${port}/`
+            /(src|href|action)=(["'])\/([^"']*)/g,
+            (match, attr, quote, path) => {
+              // Don't double-rewrite already proxied paths
+              if (path.startsWith('api/dev-proxy')) return match;
+              return `${attr}=${quote}/api/dev-proxy/${port}/${path}${tokenSuffix}`;
+            }
           );
 
           // Also handle srcset attributes
           content = content.replace(
             /srcset=(["'])([^"']+)\1/g,
             (match, quote, srcset) => {
-              const rewritten = srcset.replace(/\/([^\s,]+)/g, `/api/dev-proxy/${port}/$1`);
+              const rewritten = srcset.replace(/\/([^\s,]+)/g, `/api/dev-proxy/${port}/$1${tokenSuffix}`);
               return `srcset=${quote}${rewritten}${quote}`;
             }
           );
@@ -161,8 +173,13 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
+    // Preserve auth token in redirect
+    const query = request.query as Record<string, string>;
+    const token = query.token || '';
+    const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : '';
+
     // Redirect to include trailing slash for proper relative URL resolution
-    reply.redirect(`/api/dev-proxy/${port}/`);
+    reply.redirect(`/api/dev-proxy/${port}/${tokenSuffix}`);
   });
 
   // WebSocket proxy for HMR (Hot Module Replacement)
