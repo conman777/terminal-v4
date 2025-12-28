@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
-import { apiFetch } from '../utils/api';
+import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 
@@ -17,6 +17,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const clientIdRef = useRef(null);
   const isMobile = useMobileDetect();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [imageDragOver, setImageDragOver] = useState(false);
+  const imageInputRef = useRef(null);
+  const sendTerminalInputRef = useRef(null);
 
   // Reset loading state when session changes
   useEffect(() => {
@@ -89,6 +92,57 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [sendToTerminal]);
 
+  // Handle image upload and insert path into terminal
+  const handleImageUpload = useCallback(async (file) => {
+    if (!file) return;
+    try {
+      const path = await uploadScreenshot(file);
+      if (path && sendTerminalInputRef.current) {
+        sendTerminalInputRef.current(path + ' ');
+      }
+    } catch (err) {
+      console.error('[TerminalChat] Screenshot upload failed:', err);
+    }
+  }, []);
+
+  // Handle image drop
+  const handleImageDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageDragOver(false);
+
+    const files = Array.from(e.dataTransfer?.files || []);
+    const imageFile = files.find(f => f.type.startsWith('image/'));
+    if (imageFile) {
+      handleImageUpload(imageFile);
+    }
+  }, [handleImageUpload]);
+
+  // Handle drag events
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types?.includes('Files')) {
+      setImageDragOver(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageDragOver(false);
+  }, []);
+
+  // Handle file input selection
+  const handleImageSelect = useCallback((e) => {
+    const file = e.target?.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      handleImageUpload(file);
+    }
+    // Reset input so same file can be selected again
+    if (e.target) e.target.value = '';
+  }, [handleImageUpload]);
+
   useEffect(() => {
     if (!sessionId || !terminalRef.current) return;
 
@@ -149,9 +203,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         console.error('Failed to send terminal input:', error);
       });
     };
+    // Store in ref so image upload callbacks can access it
+    sendTerminalInputRef.current = sendTerminalInput;
 
     const handleClipboardPaste = async () => {
       try {
+        // Try to read clipboard items (for images)
+        if (navigator.clipboard.read) {
+          try {
+            const clipboardItems = await navigator.clipboard.read();
+            for (const item of clipboardItems) {
+              const imageType = item.types.find(t => t.startsWith('image/'));
+              if (imageType) {
+                const blob = await item.getType(imageType);
+                const path = await uploadScreenshot(blob);
+                if (path) {
+                  sendTerminalInput(path + ' ');
+                  return;
+                }
+              }
+            }
+          } catch {
+            // Fallback to text if clipboard.read() fails or no image
+          }
+        }
+        // Fall back to text paste
         const text = await navigator.clipboard.readText();
         sendTerminalInput(text);
       } catch (err) {
@@ -360,12 +436,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const dataDisposer = term.onData((data) => {
         if (disposed) return;
 
-        // Filter out terminal escape sequences that shouldn't be sent as input
-        // These are responses to terminal queries (DA, DSR, etc.), not user input
-        // Filter ANY sequence starting with ESC or containing only escape codes
-        const isEscapeSequence = /^\x1b/.test(data) || /^\[[\?>]\d+/.test(data);
-        if (isEscapeSequence) {
-          console.log('[TerminalChat] Filtering escape sequence:', data.length, 'chars');
+        // Filter out terminal query RESPONSES that shouldn't be sent as input
+        // These are responses like DA (Device Attributes), DSR (Device Status Report)
+        // Examples: \x1b[?1;2c, \x1b[0n, \x1b[>0;0;0c
+        // DO NOT filter arrow keys (\x1b[A, \x1b[B, etc.) or other user input
+        const isQueryResponse = /^\x1b\[[\?>\d;]*[cn]$/.test(data) || /^\x1b\]/.test(data);
+        if (isQueryResponse) {
+          console.log('[TerminalChat] Filtering query response:', data.length, 'chars');
           return;
         }
 
@@ -581,8 +658,38 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [keybarOpen, viewportHeight]);
 
   return (
-    <div className="terminal-chat">
+    <div
+      className="terminal-chat"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleImageDrop}
+    >
       <div ref={terminalRef} className="xterm-container" style={{ height: '100%', width: '100%' }}></div>
+
+      {/* Image upload button */}
+      <button
+        className="terminal-image-btn"
+        onClick={() => imageInputRef.current?.click()}
+        title="Upload image"
+        aria-label="Upload image"
+      >
+        📷
+      </button>
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleImageSelect}
+      />
+
+      {/* Drop zone overlay */}
+      {imageDragOver && (
+        <div className="terminal-image-dropzone">
+          <span>Drop image to upload</span>
+        </div>
+      )}
+
       {isLoadingHistory && (
         <div className="terminal-loading-indicator">
           <span className="terminal-loading-spinner"></span>

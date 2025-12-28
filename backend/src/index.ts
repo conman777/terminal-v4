@@ -12,6 +12,7 @@ import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
+import { registerFileRoutes } from './routes/file-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 import { getDatabase, closeDatabase } from './database/db';
@@ -39,7 +40,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await app.register(websocket);
   await app.register(multipart, {
     limits: {
-      fileSize: 25 * 1024 * 1024 // 25MB max for audio files
+      fileSize: 100 * 1024 * 1024 // 100MB max for file uploads
     }
   });
 
@@ -67,6 +68,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerSettingsRoutes(app);
   await registerDevProxyRoutes(app);
   await registerClaudeCodeRoutes(app, claudeCodeManager);
+  await registerFileRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');

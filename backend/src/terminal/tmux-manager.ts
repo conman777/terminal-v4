@@ -185,22 +185,16 @@ export function spawnTmuxWithPty(
   const sessionExists = tmuxSessionExists(options.sessionId);
 
   if (!sessionExists) {
-    // Create new detached tmux session first
-    console.log(`[tmux] Creating new session: ${sessionName}`);
+    // Create new detached tmux session with the specified shell
+    console.log(`[tmux] Creating new session: ${sessionName} with shell: ${options.shell}`);
     try {
       execSync(
-        `tmux new-session -d -s "${sessionName}" -x ${options.cols} -y ${options.rows}`,
+        `tmux new-session -d -s "${sessionName}" -x ${options.cols} -y ${options.rows} "${options.shell}"`,
         {
           cwd: options.cwd || process.cwd(),
           env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
           stdio: 'pipe'
         }
-      );
-
-      // Set the shell for the session
-      execSync(
-        `tmux send-keys -t "${sessionName}" "exec ${options.shell}" Enter`,
-        { stdio: 'pipe' }
       );
     } catch (error) {
       console.error(`[tmux] Failed to create session:`, error);

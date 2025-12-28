@@ -117,3 +117,26 @@ export async function apiPatch(url, body) {
   }
   return response.json();
 }
+
+/**
+ * Upload a screenshot/image and return the path
+ * @param {File|Blob} file - The image file or blob to upload
+ * @returns {Promise<string>} The path to the uploaded screenshot (e.g., ~/screenshots/screenshot-xxx.png)
+ */
+export async function uploadScreenshot(file) {
+  const formData = new FormData();
+  formData.append('image', file, file.name || 'screenshot.png');
+
+  const response = await apiFetch('/api/files/screenshot', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Upload failed' }));
+    throw new Error(error.error || error.message || 'Screenshot upload failed');
+  }
+
+  const data = await response.json();
+  return data.path;
+}

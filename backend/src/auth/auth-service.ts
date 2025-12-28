@@ -16,8 +16,8 @@ import {
 } from './user-store.js';
 
 const BCRYPT_ROUNDS = 12;
-const ACCESS_TOKEN_EXPIRY = '15m';
-const REFRESH_TOKEN_EXPIRY_DAYS = 7;
+const ACCESS_TOKEN_EXPIRY = '24h';
+const REFRESH_TOKEN_EXPIRY_DAYS = 30;
 
 // Get secrets from environment or use defaults for development
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production';

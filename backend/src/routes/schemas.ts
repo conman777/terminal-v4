@@ -60,3 +60,36 @@ export const bookmarkUpdateRequestSchema = z.object({
 });
 
 export type BookmarkUpdateRequestBody = z.infer<typeof bookmarkUpdateRequestSchema>;
+
+// File Manager schemas
+export const fileListQuerySchema = z.object({
+  path: z.string().optional() // defaults to ~
+});
+
+export type FileListQuery = z.infer<typeof fileListQuerySchema>;
+
+export const fileMkdirRequestSchema = z.object({
+  path: z.string().min(1).max(4096) // full path including new folder name
+});
+
+export type FileMkdirRequestBody = z.infer<typeof fileMkdirRequestSchema>;
+
+export const fileDeleteRequestSchema = z.object({
+  path: z.string().min(1).max(4096)
+});
+
+export type FileDeleteRequestBody = z.infer<typeof fileDeleteRequestSchema>;
+
+export const fileRenameRequestSchema = z.object({
+  oldPath: z.string().min(1).max(4096),
+  newPath: z.string().min(1).max(4096)
+});
+
+export type FileRenameRequestBody = z.infer<typeof fileRenameRequestSchema>;
+
+export const fileUnzipRequestSchema = z.object({
+  zipPath: z.string().min(1).max(4096),
+  extractTo: z.string().max(4096).optional() // defaults to same directory as zip
+});
+
+export type FileUnzipRequestBody = z.infer<typeof fileUnzipRequestSchema>;

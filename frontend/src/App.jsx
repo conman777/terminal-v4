@@ -10,6 +10,7 @@ import { FolderBrowserModal } from './components/FolderBrowserModal';
 import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
+import { FileManager } from './components/FileManager';
 import LoginPage from './components/LoginPage';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -558,6 +559,7 @@ function AppContent() {
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [showFileManager, setShowFileManager] = useState(false);
   const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'claude' | 'preview'
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
@@ -1547,6 +1549,15 @@ function AppContent() {
               >
                 {'\u{1F4D1}'}
               </button>
+              <button
+                className={`header-btn${showFileManager ? ' active' : ''}`}
+                type="button"
+                onClick={() => setShowFileManager(!showFileManager)}
+                aria-label="File Manager"
+                title={showFileManager ? 'Hide Files' : 'Show Files'}
+              >
+                {'\u{1F4C1}'}
+              </button>
               <span className="header-user" title={user?.username}>
                 {user?.username}
               </span>
@@ -1649,6 +1660,15 @@ function AppContent() {
               </>
             )}
           </main>
+
+          {/* File Manager Sidebar */}
+          {showFileManager && (
+            <FileManager
+              isOpen={showFileManager}
+              onClose={() => setShowFileManager(false)}
+              onNavigateTerminal={handleNavigateToPath}
+            />
+          )}
         </div>
         </>
       )}
@@ -1685,6 +1705,13 @@ function AppContent() {
                   Preview
                 </button>
               )}
+              <button
+                type="button"
+                className={`view-switch-btn${showFileManager ? ' active' : ''}`}
+                onClick={() => setShowFileManager(!showFileManager)}
+              >
+                📁
+              </button>
             </div>
 
 
@@ -1733,6 +1760,30 @@ function AppContent() {
             )}
           </main>
         </div>
+      )}
+
+      {/* Mobile File Manager - render at root level outside all containers */}
+      {isMobile && showFileManager && (
+        <>
+          <div
+            className="file-manager-overlay open"
+            onClick={() => setShowFileManager(false)}
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: 'rgba(0,0,0,0.6)',
+              zIndex: 99998
+            }}
+          />
+          <FileManager
+            isOpen={showFileManager}
+            onClose={() => setShowFileManager(false)}
+            onNavigateTerminal={handleNavigateToPath}
+          />
+        </>
       )}
     </div>
   );
