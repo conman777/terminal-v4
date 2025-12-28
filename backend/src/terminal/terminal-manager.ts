@@ -551,19 +551,13 @@ export class TerminalManager {
       session.clientDimensions.set(clientId, { cols, rows });
     }
 
-    // Calculate maximum dimensions across all connected clients
-    let maxCols = cols;
-    let maxRows = rows;
-    for (const dims of session.clientDimensions.values()) {
-      maxCols = Math.max(maxCols, dims.cols);
-      maxRows = Math.max(maxRows, dims.rows);
-    }
-
-    // Only resize PTY if dimensions changed
-    if (maxCols !== session.currentCols || maxRows !== session.currentRows) {
-      session.currentCols = maxCols;
-      session.currentRows = maxRows;
-      session.process.resize(maxCols, maxRows);
+    // Use the calling client's dimensions directly
+    // This ensures the PTY matches the active client's viewport
+    // Other connected clients may see formatting issues, but the active one works correctly
+    if (cols !== session.currentCols || rows !== session.currentRows) {
+      session.currentCols = cols;
+      session.currentRows = rows;
+      session.process.resize(cols, rows);
     }
   }
 
@@ -576,19 +570,14 @@ export class TerminalManager {
 
     session.clientDimensions.delete(clientId);
 
-    // Recalculate max dimensions after client removal
+    // If there are remaining clients, use the first one's dimensions
+    // Otherwise keep current dimensions (will be updated when next client resizes)
     if (session.clientDimensions.size > 0) {
-      let maxCols = DEFAULT_COLS;
-      let maxRows = DEFAULT_ROWS;
-      for (const dims of session.clientDimensions.values()) {
-        maxCols = Math.max(maxCols, dims.cols);
-        maxRows = Math.max(maxRows, dims.rows);
-      }
-
-      if (maxCols !== session.currentCols || maxRows !== session.currentRows) {
-        session.currentCols = maxCols;
-        session.currentRows = maxRows;
-        session.process.resize(maxCols, maxRows);
+      const [firstDims] = session.clientDimensions.values();
+      if (firstDims && (firstDims.cols !== session.currentCols || firstDims.rows !== session.currentRows)) {
+        session.currentCols = firstDims.cols;
+        session.currentRows = firstDims.rows;
+        session.process.resize(firstDims.cols, firstDims.rows);
       }
     }
   }
