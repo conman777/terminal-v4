@@ -51,18 +51,24 @@ export function TerminalPane({
           {canSplit && (
             <>
               <button
-                className="pane-btn"
+                className="pane-btn pane-split-btn"
                 onClick={(e) => { e.stopPropagation(); onSplit(pane.id, 'horizontal'); }}
                 title="Split horizontally"
               >
-                ⬜|⬜
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="1" y="2" width="5" height="10" rx="1" />
+                  <rect x="8" y="2" width="5" height="10" rx="1" />
+                </svg>
               </button>
               <button
-                className="pane-btn"
+                className="pane-btn pane-split-btn"
                 onClick={(e) => { e.stopPropagation(); onSplit(pane.id, 'vertical'); }}
                 title="Split vertically"
               >
-                ⬜/⬜
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <rect x="2" y="1" width="10" height="5" rx="1" />
+                  <rect x="2" y="8" width="10" height="5" rx="1" />
+                </svg>
               </button>
             </>
           )}

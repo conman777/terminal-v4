@@ -1,6 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getAccessToken } from '../utils/auth';
 
+// Format timestamp for log display
+function formatTime(timestamp) {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
+}
+
 // Convert file:// URLs or local paths to preview API URLs
 function withAuthToken(url) {
   const token = getAccessToken();
@@ -74,10 +80,41 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inputUrl, setInputUrl] = useState(url || '');
+  const [logs, setLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(true);
   const iframeRef = useRef(null);
+  const logsEndRef = useRef(null);
 
   // Convert the URL for iframe display
   const iframeSrc = useMemo(() => toPreviewUrl(url), [url]);
+
+  // Listen for console messages from iframe
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'preview-console') {
+        const { level, message, timestamp } = event.data;
+        setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp }]);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  // Auto-scroll logs to bottom
+  useEffect(() => {
+    if (showLogs && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, showLogs]);
+
+  // Clear logs when URL changes
+  useEffect(() => {
+    setLogs([]);
+  }, [url]);
+
+  const handleClearLogs = useCallback(() => {
+    setLogs([]);
+  }, []);
 
   useEffect(() => {
     setInputUrl(url || '');
@@ -239,6 +276,46 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               style={{ opacity: isLoading ? 0 : 1 }}
             />
           </>
+        )}
+      </div>
+
+      {/* Console Logs Panel */}
+      <div className={`preview-logs ${showLogs ? 'expanded' : 'collapsed'}`}>
+        <div className="preview-logs-header" onClick={() => setShowLogs(!showLogs)}>
+          <span className="preview-logs-title">
+            <span className="preview-logs-icon">{'\u{1F4CB}'}</span>
+            Console
+            {logs.length > 0 && <span className="preview-logs-count">{logs.length}</span>}
+          </span>
+          <div className="preview-logs-actions">
+            {showLogs && (
+              <button
+                type="button"
+                className="preview-logs-btn"
+                onClick={(e) => { e.stopPropagation(); handleClearLogs(); }}
+                title="Clear logs"
+              >
+                Clear
+              </button>
+            )}
+            <span className="preview-logs-toggle">{showLogs ? '\u25BC' : '\u25B2'}</span>
+          </div>
+        </div>
+        {showLogs && (
+          <div className="preview-logs-content">
+            {logs.length === 0 ? (
+              <div className="preview-logs-empty">No console output yet</div>
+            ) : (
+              logs.map((log) => (
+                <div key={log.id} className={`preview-log-entry preview-log-${log.level}`}>
+                  <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                  <span className="preview-log-level">{log.level}</span>
+                  <span className="preview-log-message">{log.message}</span>
+                </div>
+              ))
+            )}
+            <div ref={logsEndRef} />
+          </div>
         )}
       </div>
     </div>

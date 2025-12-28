@@ -1,6 +1,81 @@
 import type { FastifyInstance } from 'fastify';
 import { pipeline } from 'node:stream/promises';
 
+// Script to inject into HTML pages to capture console logs and errors
+const CONSOLE_CAPTURE_SCRIPT = `
+<script>
+(function() {
+  if (window.__devProxyConsoleInjected) return;
+  window.__devProxyConsoleInjected = true;
+
+  const originalConsole = {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    info: console.info.bind(console),
+    debug: console.debug.bind(console)
+  };
+
+  function serialize(args) {
+    return args.map(arg => {
+      if (arg === null) return 'null';
+      if (arg === undefined) return 'undefined';
+      if (typeof arg === 'string') return arg;
+      if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+      if (arg instanceof Error) return arg.stack || arg.message;
+      try {
+        return JSON.stringify(arg, null, 2);
+      } catch {
+        return String(arg);
+      }
+    });
+  }
+
+  function sendLog(level, args) {
+    try {
+      window.parent.postMessage({
+        type: 'preview-console',
+        level: level,
+        message: serialize(args).join(' '),
+        timestamp: Date.now()
+      }, '*');
+    } catch {}
+  }
+
+  console.log = function(...args) {
+    sendLog('log', args);
+    originalConsole.log(...args);
+  };
+  console.warn = function(...args) {
+    sendLog('warn', args);
+    originalConsole.warn(...args);
+  };
+  console.error = function(...args) {
+    sendLog('error', args);
+    originalConsole.error(...args);
+  };
+  console.info = function(...args) {
+    sendLog('info', args);
+    originalConsole.info(...args);
+  };
+  console.debug = function(...args) {
+    sendLog('debug', args);
+    originalConsole.debug(...args);
+  };
+
+  window.addEventListener('error', function(event) {
+    sendLog('error', [event.message + ' at ' + event.filename + ':' + event.lineno + ':' + event.colno]);
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    const reason = event.reason;
+    const message = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+    sendLog('error', ['Unhandled Promise Rejection: ' + message]);
+  });
+})();
+</script>
+`;
+
 // Allowed ports for dev server proxy (security: prevent arbitrary port access)
 const ALLOWED_PORTS = new Set([
   3000, 3001, 3002, 3003,  // Common React/Next.js ports
@@ -137,6 +212,16 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
               return `srcset=${quote}${rewritten}${quote}`;
             }
           );
+
+          // Inject console capture script to forward logs to parent window
+          if (content.includes('</head>')) {
+            content = content.replace('</head>', CONSOLE_CAPTURE_SCRIPT + '</head>');
+          } else if (content.includes('</body>')) {
+            content = content.replace('</body>', CONSOLE_CAPTURE_SCRIPT + '</body>');
+          } else {
+            // Fallback: prepend to content
+            content = CONSOLE_CAPTURE_SCRIPT + content;
+          }
 
           reply.send(content);
         } else {

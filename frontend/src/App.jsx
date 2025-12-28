@@ -304,7 +304,11 @@ function SessionSelector({
         <span className="session-selector-label">
           {activeSession ? activeSession.title : 'No Terminal'}
         </span>
-        <span className="session-selector-arrow">{isOpen ? '\u25B2' : '\u25BC'}</span>
+        <span className={`session-selector-arrow${isOpen ? ' open' : ''}`}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </span>
       </button>
 
       {isOpen && (
@@ -1609,13 +1613,22 @@ function AppContent() {
                   className={`mode-btn ${leftPanelMode === 'terminal' ? 'active' : ''}`}
                   onClick={() => setLeftPanelMode('terminal')}
                 >
-                  ⚡ Terminal
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 17 10 11 4 5" />
+                    <line x1="12" y1="19" x2="20" y2="19" />
+                  </svg>
+                  Terminal
                 </button>
                 <button
                   className={`mode-btn ${leftPanelMode === 'claude-code' ? 'active' : ''}`}
                   onClick={() => setLeftPanelMode('claude-code')}
                 >
-                  🤖 Claude
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 16v-4" />
+                    <path d="M12 8h.01" />
+                  </svg>
+                  Claude
                 </button>
               </div>
               {leftPanelMode === 'terminal' ? (
@@ -1648,7 +1661,9 @@ function AppContent() {
                 aria-label="API Settings"
                 title="API Settings"
               >
-                {'\u{1F511}'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+                </svg>
               </button>
               <button
                 className="header-btn"
@@ -1657,7 +1672,10 @@ function AppContent() {
                 aria-label="Settings"
                 title="Settings"
               >
-                {'\u2699'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
               </button>
               <button
                 className={`header-btn${showPreview ? ' active' : ''}`}
@@ -1666,7 +1684,10 @@ function AppContent() {
                 aria-label="Toggle Preview"
                 title={showPreview ? 'Hide Preview' : 'Show Preview'}
               >
-                {showPreview ? '\u25A6' : '\u25A3'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <line x1="12" y1="3" x2="12" y2="21" />
+                </svg>
               </button>
               <button
                 className="header-btn"
@@ -1675,7 +1696,9 @@ function AppContent() {
                 aria-label="Bookmarks"
                 title="Bookmarks"
               >
-                {'\u{1F4D1}'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                </svg>
               </button>
               <button
                 className={`header-btn${showFileManager ? ' active' : ''}`}
@@ -1684,11 +1707,17 @@ function AppContent() {
                 aria-label="File Manager"
                 title={showFileManager ? 'Hide Files' : 'Show Files'}
               >
-                {'\u{1F4C1}'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
               </button>
-              <span className="header-user" title={user?.username}>
-                {user?.username}
-              </span>
+              <div className="header-user-badge" title={user?.username}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                  <circle cx="12" cy="7" r="4" />
+                </svg>
+                <span>{user?.username}</span>
+              </div>
               <button
                 className="header-btn logout-btn"
                 type="button"
@@ -1696,7 +1725,11 @@ function AppContent() {
                 aria-label="Logout"
                 title="Logout"
               >
-                {'\u{1F6AA}'}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="16 17 21 12 16 7" />
+                  <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
               </button>
             </div>
           </header>

@@ -19,6 +19,13 @@ export async function registerTranscribeRoutes(app: FastifyInstance): Promise<vo
     const userApiKey = getUserGroqApiKey(userId);
     const apiKey = userApiKey || process.env.GROQ_API_KEY;
 
+    app.log.info({
+      userId,
+      hasUserKey: !!userApiKey,
+      hasEnvKey: !!process.env.GROQ_API_KEY,
+      keyPrefix: apiKey ? apiKey.substring(0, 8) : 'none'
+    }, 'Transcribe request');
+
     if (!apiKey) {
       reply.code(400).send({
         error: 'Groq API key not configured',
@@ -62,7 +69,13 @@ export async function registerTranscribeRoutes(app: FastifyInstance): Promise<vo
 
       if (!response.ok) {
         const errorText = await response.text();
-        app.log.error({ status: response.status, error: errorText }, 'Groq API error');
+        app.log.error({
+          status: response.status,
+          error: errorText,
+          audioSize: audioBuffer.length,
+          mimeType,
+          filename
+        }, 'Groq API error');
         reply.code(502).send({ error: 'Transcription failed', details: errorText });
         return;
       }
