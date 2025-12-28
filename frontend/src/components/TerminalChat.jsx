@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -16,6 +16,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const suppressPasteEventRef = useRef(false);
   const clientIdRef = useRef(null);
   const isMobile = useMobileDetect();
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+
+  // Reset loading state when session changes
+  useEffect(() => {
+    setIsLoadingHistory(true);
+  }, [sessionId]);
 
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
@@ -278,6 +284,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           // Enable URL detection after history replay settles
           skipUrlTimeout = setTimeout(() => {
             skipUrlDetection = false;
+            setIsLoadingHistory(false);
           }, 500);
         };
 
@@ -576,6 +583,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   return (
     <div className="terminal-chat">
       <div ref={terminalRef} className="xterm-container" style={{ height: '100%', width: '100%' }}></div>
+      {isLoadingHistory && (
+        <div className="terminal-loading-indicator">
+          <span className="terminal-loading-spinner"></span>
+          <span>Loading history...</span>
+        </div>
+      )}
       <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"
