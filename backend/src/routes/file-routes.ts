@@ -1,14 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { readdir, stat, mkdir, rm, rename } from 'node:fs/promises';
 import { createWriteStream, createReadStream } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
-import { Extract } from 'unzipper';
+import { Open } from 'unzipper';
 import {
   resolvePathInUserHome,
   USER_HOME,
-  sanitizeFilename
+  sanitizeFilename,
+  isWithinBase
 } from '../utils/path-security.js';
 import {
   fileListQuerySchema,
@@ -127,15 +128,18 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const parts = request.parts();
-    let destinationPath = '~';
+    let destinationPath: string | null = null;
+    const pendingFiles: Array<{ tempPath: string; filename: string }> = [];
     const uploadedFiles: string[] = [];
+    const tempDir = join(USER_HOME, '.terminal-upload-tmp');
 
     try {
       for await (const part of parts) {
         if (part.type === 'field' && part.fieldname === 'path') {
           destinationPath = part.value as string;
         } else if (part.type === 'file') {
-          const safeDest = await resolvePathInUserHome(destinationPath);
+          const targetPath = destinationPath ?? '~';
+          const safeDest = await resolvePathInUserHome(targetPath);
           if (!safeDest) {
             reply.code(403).send({ error: 'Access denied: destination is outside home directory' });
             return;
@@ -147,10 +151,15 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
             return;
           }
 
-          const filePath = join(safeDest, safeFilename);
+          const finalPath = join(safeDest, safeFilename);
+          const shouldStage = destinationPath === null;
+          const filePath = shouldStage ? join(tempDir, safeFilename) : finalPath;
 
           // Check file size limit
           let totalSize = 0;
+          if (shouldStage) {
+            await mkdir(tempDir, { recursive: true });
+          }
           const writeStream = createWriteStream(filePath);
 
           try {
@@ -172,7 +181,11 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
               writeStream.on('error', reject);
             });
 
-            uploadedFiles.push(filePath.replace(USER_HOME, '~'));
+            if (shouldStage) {
+              pendingFiles.push({ tempPath: filePath, filename: safeFilename });
+            } else {
+              uploadedFiles.push(finalPath.replace(USER_HOME, '~'));
+            }
           } catch (error) {
             writeStream.destroy();
             await rm(filePath, { force: true }).catch(() => {});
@@ -181,8 +194,25 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
+      if (pendingFiles.length > 0) {
+        const resolvedDest = await resolvePathInUserHome(destinationPath ?? '~');
+        if (!resolvedDest) {
+          reply.code(403).send({ error: 'Access denied: destination is outside home directory' });
+          return;
+        }
+        await mkdir(resolvedDest, { recursive: true });
+        for (const staged of pendingFiles) {
+          const finalPath = join(resolvedDest, staged.filename);
+          await rename(staged.tempPath, finalPath);
+          uploadedFiles.push(finalPath.replace(USER_HOME, '~'));
+        }
+      }
+
       reply.code(201).send({ success: true, files: uploadedFiles });
     } catch (error) {
+      for (const staged of pendingFiles) {
+        await rm(staged.tempPath, { force: true }).catch(() => {});
+      }
       reply.code(500).send({ error: 'Upload failed', message: (error as Error).message });
     }
   });
@@ -327,11 +357,33 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         return;
       }
 
-      // Extract the zip
-      await pipeline(
-        createReadStream(safeZipPath),
-        Extract({ path: safeExtractPath })
-      );
+      // Validate entries to prevent Zip Slip
+      const directory = await Open.file(safeZipPath);
+      for (const entry of directory.files) {
+        const entryPath = entry.path.replace(/\\/g, '/');
+        const resolvedPath = resolve(safeExtractPath, entryPath);
+        if (!isWithinBase(safeExtractPath, resolvedPath)) {
+          reply.code(400).send({ error: 'Zip contains invalid paths' });
+          return;
+        }
+      }
+
+      // Extract the zip safely
+      for (const entry of directory.files) {
+        const entryPath = entry.path.replace(/\\/g, '/');
+        const resolvedPath = resolve(safeExtractPath, entryPath);
+
+        if (entry.type === 'Directory') {
+          await mkdir(resolvedPath, { recursive: true });
+          continue;
+        }
+        if (entry.type !== 'File') {
+          continue;
+        }
+
+        await mkdir(dirname(resolvedPath), { recursive: true });
+        await pipeline(entry.stream(), createWriteStream(resolvedPath));
+      }
 
       reply.send({ success: true, extractedTo: safeExtractPath.replace(USER_HOME, '~') });
     } catch (error) {

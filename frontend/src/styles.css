@@ -5697,3 +5697,81 @@ textarea:focus-visible {
     height: 16px;
   }
 }
+
+/* ==========================================================================
+   Mobile Terminal Carousel
+   ========================================================================== */
+
+.mobile-terminal-carousel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  touch-action: pan-y pinch-zoom;
+}
+
+.mobile-terminal-carousel .carousel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mobile-terminal-carousel .carousel-content .terminal-with-mic {
+  height: 100%;
+  position: relative;
+}
+
+/* Carousel dot indicators */
+.carousel-indicators {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 0;
+  background: var(--bg-primary);
+  z-index: 10;
+}
+
+.carousel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s ease;
+}
+
+.carousel-dot:hover {
+  background: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.carousel-dot.active {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  transform: scale(1.25);
+}
+
+/* Empty state within carousel */
+.mobile-terminal-carousel .empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.mobile-terminal-carousel .empty-state h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  color: var(--text-primary);
+}
+
+.mobile-terminal-carousel .empty-state p {
+  margin: 0;
+  font-size: 0.875rem;
+}

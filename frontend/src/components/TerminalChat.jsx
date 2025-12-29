@@ -20,6 +20,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [imageDragOver, setImageDragOver] = useState(false);
   const imageInputRef = useRef(null);
   const sendTerminalInputRef = useRef(null);
+  const fitTimeoutRef = useRef(null);
+  const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 
   // Reset loading state when session changes
   useEffect(() => {
@@ -308,20 +310,34 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
       });
 
+      // Centralized debounced fit function - prevents flashing from multiple rapid fit calls
+      const debouncedFit = () => {
+        if (disposed) return;
+        if (fitTimeoutRef.current) {
+          clearTimeout(fitTimeoutRef.current);
+        }
+        fitTimeoutRef.current = setTimeout(() => {
+          if (disposed || !fitAddonRef.current || !xtermRef.current) return;
+          try {
+            // Capture scroll position BEFORE fit
+            const buffer = xtermRef.current.buffer?.active;
+            const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+
+            fitAddonRef.current.fit();
+
+            // Only scroll to bottom if user was already there
+            if (wasAtBottom) {
+              xtermRef.current.scrollToBottom();
+            }
+          } catch (error) {
+            // Ignore errors during rapid resizing
+          }
+        }, 150);
+      };
+
       // Set up ResizeObserver for container size changes
       resizeObserver = new ResizeObserver(() => {
-        if (!disposed && fitAddonRef.current) {
-          // Debounce the fit call slightly to avoid excessive calls
-          requestAnimationFrame(() => {
-            if (!disposed && fitAddonRef.current) {
-              try {
-                fitAddonRef.current.fit();
-              } catch (error) {
-                // Ignore errors during rapid resizing
-              }
-            }
-          });
-        }
+        debouncedFit();
       });
       resizeObserver.observe(container);
 
@@ -369,10 +385,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
 
           // Check if this is a clientId message from the server
-          if (data.startsWith('{"type":"clientId"')) {
+          if (data.startsWith('{')) {
             try {
               const msg = JSON.parse(data);
-              if (msg.type === 'clientId' && msg.clientId) {
+              if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
                 clientIdRef.current = msg.clientId;
                 // Send initial dimensions with clientId now that we have it
                 const { cols, rows } = term;
@@ -385,9 +401,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               }
             } catch {
               // Not JSON, write to terminal
-              term.write(data);
             }
-            return;
           }
 
           term.write(data);
@@ -456,17 +470,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         sendTerminalInput(data);
       });
 
-      const handleResize = () => {
-        if (!disposed && fitAddonRef.current) {
-          const buffer = term.buffer?.active;
-          const isAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
-          const isFocused = term.textarea && document.activeElement === term.textarea;
-          fitAddonRef.current.fit();
-          if (isAtBottom || isFocused) {
-            term.scrollToBottom();
-          }
-        }
-      };
+      // Window/viewport resize just triggers the debounced fit
+      const handleResize = () => debouncedFit();
 
       window.addEventListener('resize', handleResize);
 
@@ -597,6 +602,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (rafId) {
         cancelAnimationFrame(rafId);
       }
+      if (fitTimeoutRef.current) {
+        clearTimeout(fitTimeoutRef.current);
+        fitTimeoutRef.current = null;
+      }
       if (resizeObserver) {
         resizeObserver.disconnect();
       }
@@ -615,46 +624,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
   }, [sessionId, onUrlDetected, fontSize, isMobile]);
 
+  // Handle keybar/viewport changes with debounced fit (avoids triple-fit flashing)
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
 
-    // Use requestAnimationFrame to ensure DOM has updated, then fit
-    let rafId = null;
-    let timerId = null;
-    let timerId2 = null;
+    // Clear any pending fit and schedule a new one
+    if (fitTimeoutRef.current) {
+      clearTimeout(fitTimeoutRef.current);
+    }
 
-    const performFit = () => {
+    fitTimeoutRef.current = setTimeout(() => {
+      if (!fitAddonRef.current || !xtermRef.current) return;
       try {
         const term = xtermRef.current;
-        const buffer = term?.buffer?.active;
-        const isAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
-        const isFocused = term?.textarea && document.activeElement === term.textarea;
+        const buffer = term.buffer?.active;
+        const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
 
-        if (fitAddonRef.current) {
-          fitAddonRef.current.fit();
-        }
-        if (term && (isAtBottom || isFocused)) {
+        fitAddonRef.current.fit();
+
+        if (wasAtBottom) {
           term.scrollToBottom();
         }
       } catch (error) {
         console.error('[Terminal Fit] Failed to resize terminal:', error);
       }
-    };
-
-    // First fit after RAF to catch immediate layout changes
-    rafId = requestAnimationFrame(() => {
-      performFit();
-      // Second fit after short delay to catch CSS transition/animation updates
-      timerId = setTimeout(performFit, 100);
-      // Third fit after longer delay for slower devices/keyboards
-      timerId2 = setTimeout(performFit, 300);
-    });
-
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      if (timerId) clearTimeout(timerId);
-      if (timerId2) clearTimeout(timerId2);
-    };
+    }, 150);
   }, [keybarOpen, viewportHeight]);
 
   return (

@@ -12,6 +12,7 @@ import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
 import { FileManager } from './components/FileManager';
+import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -582,6 +583,7 @@ function AppContent() {
   const [showPreview, setShowPreview] = useState(false);
   const [showFileManager, setShowFileManager] = useState(false);
   const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'claude' | 'preview'
+  const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0); // Index for mobile terminal carousel
   const [splitPosition, setSplitPosition] = useState(50); // percentage
   const [isDragging, setIsDragging] = useState(false);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
@@ -1871,26 +1873,18 @@ function AppContent() {
             </div>
 
 
-            {/* Terminal pane */}
+            {/* Terminal pane with swipe carousel */}
             {mobileView === 'terminal' && (
               <div className="terminal-pane">
-                {!activeSessionId ? (
-                  <div className="empty-state">
-                    <h2>Welcome to Terminal</h2>
-                    <p>Create a new terminal session to get started.</p>
-                  </div>
-                ) : (
-                  <div className="terminal-with-mic">
-                    <TerminalChat
-                      sessionId={activeSessionId}
-                      keybarOpen={keybarOpen}
-                      viewportHeight={viewportHeight}
-                      onUrlDetected={handleUrlDetected}
-                      fontSize={terminalFontSize}
-                    />
-                    <TerminalMicButton sessionId={activeSessionId} />
-                  </div>
-                )}
+                <MobileTerminalCarousel
+                  sessions={activeSessions}
+                  currentIndex={mobileTerminalIndex}
+                  onIndexChange={setMobileTerminalIndex}
+                  keybarOpen={keybarOpen}
+                  viewportHeight={viewportHeight}
+                  onUrlDetected={handleUrlDetected}
+                  fontSize={terminalFontSize}
+                />
               </div>
             )}
 

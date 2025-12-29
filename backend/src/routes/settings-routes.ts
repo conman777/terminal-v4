@@ -41,6 +41,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     const { groqApiKey } = request.body || {};
 
+    if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
+      reply.code(400).send({ error: 'Invalid Groq API key format' });
+      return;
+    }
+
     // Validate API key format if provided (Groq keys start with gsk_)
     if (groqApiKey !== undefined && groqApiKey !== null && groqApiKey !== '') {
       if (!groqApiKey.startsWith('gsk_')) {

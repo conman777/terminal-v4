@@ -744,7 +744,8 @@ export class TerminalManager {
     } else if (this.#useTmux) {
       // Session might not be active but tmux session could still exist
       // (e.g., user is deleting a persisted session without restoring it first)
-      if (tmuxSessionExists(id)) {
+      const userPersistedSessions = this.#persistedSessions.get(userId);
+      if (userPersistedSessions?.has(id) && tmuxSessionExists(id)) {
         console.log(`[TerminalManager] Destroying orphaned tmux session ${id}`);
         destroyTmuxSession(id);
       }
