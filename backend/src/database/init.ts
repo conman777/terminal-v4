@@ -2,7 +2,9 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.TERMINAL_DATA_DIR
+  ? path.resolve(process.env.TERMINAL_DATA_DIR)
+  : path.join(process.cwd(), 'data');
 const DB_PATH = path.join(DATA_DIR, 'terminal.db');
 
 export function initDatabase(): Database.Database {
@@ -10,6 +12,9 @@ export function initDatabase(): Database.Database {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
+
+  console.log(`[database] Using data dir: ${DATA_DIR}`);
+  console.log(`[database] Using db path: ${DB_PATH}`);
 
   const db = new Database(DB_PATH);
 

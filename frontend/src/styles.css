@@ -1031,6 +1031,7 @@ button {
   padding: 12px 16px;
   box-sizing: border-box;
   background: #0c0c0c;
+  touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
 }
 
 /* Terminal Image Upload */
@@ -1168,6 +1169,7 @@ button {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
+  touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
 }
 
 .xterm-screen {
@@ -5707,7 +5709,7 @@ textarea:focus-visible {
   flex-direction: column;
   height: 100%;
   position: relative;
-  touch-action: pan-y pinch-zoom;
+  touch-action: pan-y;
 }
 
 .mobile-terminal-carousel .carousel-content {

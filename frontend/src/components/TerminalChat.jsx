@@ -31,8 +31,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
 
-  // Prevent double-firing on iOS (both touchstart and pointerdown can fire)
-  const scrollHandledRef = useRef(false);
+  // Track scroll interval for press-and-hold continuous scrolling
+  const scrollIntervalRef = useRef(null);
 
   // Send data to terminal via WebSocket
   const sendToTerminal = useCallback((data) => {
@@ -93,6 +93,38 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       inCopyModeRef.current = false;
     }
   }, [sendToTerminal]);
+
+  // Start continuous scrolling (called on press)
+  const startScrolling = useCallback((direction) => {
+    // Clear any existing interval
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+    }
+
+    // Scroll immediately on press
+    if (direction === 'up') {
+      scrollUp();
+    } else {
+      scrollDown();
+    }
+
+    // Then continue scrolling at interval while held
+    scrollIntervalRef.current = setInterval(() => {
+      if (direction === 'up') {
+        scrollUp();
+      } else {
+        scrollDown();
+      }
+    }, 150);
+  }, [scrollUp, scrollDown]);
+
+  // Stop continuous scrolling (called on release)
+  const stopScrolling = useCallback(() => {
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
+    }
+  }, []);
 
   // Handle image upload and insert path into terminal
   const handleImageUpload = useCallback(async (file) => {
@@ -606,6 +638,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         clearTimeout(fitTimeoutRef.current);
         fitTimeoutRef.current = null;
       }
+      if (scrollIntervalRef.current) {
+        clearInterval(scrollIntervalRef.current);
+        scrollIntervalRef.current = null;
+      }
       if (resizeObserver) {
         resizeObserver.disconnect();
       }
@@ -700,22 +736,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (!scrollHandledRef.current) {
-                scrollHandledRef.current = true;
-                scrollUp();
-                setTimeout(() => { scrollHandledRef.current = false; }, 100);
-              }
+              startScrolling('up');
             }}
+            onPointerUp={stopScrolling}
+            onPointerLeave={stopScrolling}
             onTouchStart={(e) => {
-              // iOS Safari fallback
               e.preventDefault();
               e.stopPropagation();
-              if (!scrollHandledRef.current) {
-                scrollHandledRef.current = true;
-                scrollUp();
-                setTimeout(() => { scrollHandledRef.current = false; }, 100);
-              }
+              startScrolling('up');
             }}
+            onTouchEnd={stopScrolling}
             aria-label="Scroll up"
           >
             ▲
@@ -725,22 +755,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onPointerDown={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (!scrollHandledRef.current) {
-                scrollHandledRef.current = true;
-                scrollDown();
-                setTimeout(() => { scrollHandledRef.current = false; }, 100);
-              }
+              startScrolling('down');
             }}
+            onPointerUp={stopScrolling}
+            onPointerLeave={stopScrolling}
             onTouchStart={(e) => {
-              // iOS Safari fallback
               e.preventDefault();
               e.stopPropagation();
-              if (!scrollHandledRef.current) {
-                scrollHandledRef.current = true;
-                scrollDown();
-                setTimeout(() => { scrollHandledRef.current = false; }, 100);
-              }
+              startScrolling('down');
             }}
+            onTouchEnd={stopScrolling}
             aria-label="Scroll down"
           >
             ▼

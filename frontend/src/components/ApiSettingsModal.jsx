@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { apiGet, apiPatch } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function ApiSettingsModal({ isOpen, onClose }) {
+  const { user } = useAuth();
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasExistingKey, setHasExistingKey] = useState(false);
   const [maskedKey, setMaskedKey] = useState('');
@@ -86,6 +88,11 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                   <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">
                     console.groq.com
                   </a>
+                </p>
+                <p className="form-help">
+                  Stored per-user on the server. Current user:{' '}
+                  <strong>{user?.username || 'Unknown'}</strong>
+                  {user?.id ? ` (${user.id})` : ''}
                 </p>
                 {hasExistingKey && (
                   <div className="existing-key">

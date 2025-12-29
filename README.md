@@ -89,6 +89,7 @@ terminal-v4/
 - `PORT` - Backend server port (default: `3020`)
 - `HOST` - Server host (default: `0.0.0.0`)
 - `LOG_LEVEL` - Logging level (default: `info`)
+- `TERMINAL_DATA_DIR` - Override backend data directory (default: `backend/data`)
 
 ### Default Shell
 
