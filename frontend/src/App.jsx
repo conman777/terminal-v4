@@ -1486,6 +1486,24 @@ function AppContent() {
     }
   }, [activeSessionId]);
 
+  // Handle mobile terminal carousel index change - sync with activeSessionId
+  const handleMobileTerminalIndexChange = useCallback((newIndex) => {
+    setMobileTerminalIndex(newIndex);
+    // Update activeSessionId to match the carousel selection
+    if (activeSessions[newIndex]) {
+      setActiveSessionId(activeSessions[newIndex].id);
+    }
+  }, [activeSessions]);
+
+  // Sync carousel index when activeSessionId changes (e.g., from header dropdown)
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const index = activeSessions.findIndex(s => s.id === activeSessionId);
+    if (index !== -1 && index !== mobileTerminalIndex) {
+      setMobileTerminalIndex(index);
+    }
+  }, [activeSessionId, activeSessions, mobileTerminalIndex]);
+
   // Split handle drag handlers
   const handleSplitMouseDown = useCallback((e) => {
     e.preventDefault();
@@ -1879,7 +1897,7 @@ function AppContent() {
                 <MobileTerminalCarousel
                   sessions={activeSessions}
                   currentIndex={mobileTerminalIndex}
-                  onIndexChange={setMobileTerminalIndex}
+                  onIndexChange={handleMobileTerminalIndexChange}
                   keybarOpen={keybarOpen}
                   viewportHeight={viewportHeight}
                   onUrlDetected={handleUrlDetected}
