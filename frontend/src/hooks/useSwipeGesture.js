@@ -120,7 +120,7 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       container.removeEventListener('touchmove', handleTouchMove, { capture: true });
       container.removeEventListener('touchend', handleTouchEnd, { capture: true });
     };
-  }, []);
+  }, [enabled]);
 
   return { containerRef };
 }
