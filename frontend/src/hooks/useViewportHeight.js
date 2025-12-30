@@ -40,7 +40,7 @@ export function useViewportHeight() {
 
     // iOS sometimes doesn't fire events reliably - poll as backup
     // This catches edge cases where events are missed
-    const pollInterval = setInterval(updateHeight, 100);
+    const pollInterval = setInterval(updateHeight, 500);
 
     return () => {
       window.removeEventListener('resize', updateHeight);

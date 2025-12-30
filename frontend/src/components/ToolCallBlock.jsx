@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -317,6 +317,15 @@ function CodeBlock({ node, inline, className, children, ...props }) {
   return <code className="inline-code" {...props}>{children}</code>;
 }
 
+// Memoized output line to avoid re-parsing file links on every render
+const OutputLine = memo(function OutputLine({ line, onFileClick }) {
+  const content = useMemo(
+    () => (onFileClick ? parseFileLinks(line, onFileClick) : line || ' '),
+    [line, onFileClick]
+  );
+  return <div className="cc-output-line">{content}</div>;
+});
+
 // Markdown renderer
 function MarkdownContent({ content }) {
   if (!content) return null;
@@ -341,7 +350,7 @@ function MarkdownContent({ content }) {
   );
 }
 
-export default function ToolCallBlock({ item, onFileClick }) {
+function ToolCallBlock({ item, onFileClick }) {
   // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
   const [showFullOutput, setShowFullOutput] = useState(false);
@@ -472,9 +481,7 @@ export default function ToolCallBlock({ item, onFileClick }) {
             {hasResult && output && !hasDiffData && (
               <div className="cc-tool-output">
                 {displayLines.map((line, idx) => (
-                  <div key={idx} className="cc-output-line">
-                    {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
-                  </div>
+                  <OutputLine key={idx} line={line} onFileClick={onFileClick} />
                 ))}
                 {hasMoreOutput && !showFullOutput && (
                   <button className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(true); }}>
@@ -501,3 +508,5 @@ export default function ToolCallBlock({ item, onFileClick }) {
 
   return null;
 }
+
+export default memo(ToolCallBlock);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ToolCallBlock from './ToolCallBlock';
 import ClaudeCodeInput from './ClaudeCodeInput';
 import { FolderBrowserModal } from './FolderBrowserModal';
@@ -133,10 +133,15 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   const messagesEndRef = useRef(null);
   const eventSourceRef = useRef(null);
   const seenEventIdsRef = useRef(new Set());
+  const lastEventTimeRef = useRef(0);
+  const pendingEventsRef = useRef([]);
+  const batchTimeoutRef = useRef(null);
 
-  // Auto-scroll to bottom on new events
+  // Auto-scroll to bottom on new events (use instant scroll during rapid output to avoid animation queue buildup)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const timeSinceLastEvent = Date.now() - lastEventTimeRef.current;
+    const behavior = timeSinceLastEvent < 100 ? 'instant' : 'smooth';
+    messagesEndRef.current?.scrollIntoView({ behavior });
   }, [events]);
 
   // Model picker options
@@ -226,10 +231,22 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
           return;
         }
         seenEventIdsRef.current.add(eventId);
+        lastEventTimeRef.current = Date.now();
 
-        setEvents(prev => [...prev, { ...event, id: event.id || eventId }]);
+        // Batch events to reduce render frequency during rapid output
+        pendingEventsRef.current.push({ ...event, id: event.id || eventId });
 
-        // Track processing state
+        if (!batchTimeoutRef.current) {
+          batchTimeoutRef.current = setTimeout(() => {
+            if (pendingEventsRef.current.length > 0) {
+              setEvents(prev => [...prev, ...pendingEventsRef.current]);
+              pendingEventsRef.current = [];
+            }
+            batchTimeoutRef.current = null;
+          }, 50);
+        }
+
+        // Track processing state (immediate, not batched, for responsive UI feedback)
         if (event.type === 'tool_use') {
           setIsProcessing(true);
         } else if (event.type === 'assistant' || event.type === 'result' || (event.type === 'system' && event.isError)) {
@@ -266,6 +283,11 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     return () => {
       disposed = true;
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (batchTimeoutRef.current) {
+        clearTimeout(batchTimeoutRef.current);
+        batchTimeoutRef.current = null;
+      }
+      pendingEventsRef.current = [];
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -404,8 +426,8 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     }
   }, [sessionId, isProcessing]);
 
-  // Group tool_use with its corresponding tool_result
-  const groupedEvents = groupEvents(events);
+  // Group tool_use with its corresponding tool_result (memoized to avoid reprocessing on every render)
+  const groupedEvents = useMemo(() => groupEvents(events), [events]);
 
   const handleFolderSelect = (newPath) => {
     if (onFolderChange) {
