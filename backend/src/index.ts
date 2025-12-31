@@ -13,6 +13,7 @@ import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
 import { registerProcessRoutes } from './routes/process-routes';
+import { registerSystemRoutes } from './routes/system-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { registerFileRoutes } from './routes/file-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
@@ -39,6 +40,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await app.register(cors, {
     origin: true
   });
+  // Compression is handled by Cloudflare - don't double-compress
+  // await app.register(fastifyCompress, { ... });
   await app.register(websocket);
   await app.register(multipart, {
     limits: {
@@ -76,6 +79,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerClaudeCodeRoutes(app, claudeCodeManager);
   await registerFileRoutes(app);
   await registerProcessRoutes(app);
+  await registerSystemRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');

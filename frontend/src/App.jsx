@@ -19,13 +19,20 @@ import { ProcessManagerModal } from './components/ProcessManagerModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
-import { apiFetch } from './utils/api';
+import { apiFetch, apiGet } from './utils/api';
 import { getAccessToken } from './utils/auth';
+
+// Format bytes to human-readable GB
+function formatBytes(bytes) {
+  const gb = bytes / (1024 ** 3);
+  return `${gb.toFixed(1)} GB`;
+}
 
 function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [systemStats, setSystemStats] = useState(null);
   const dropdownRef = useRef(null);
 
   // Update local state when modal opens
@@ -45,6 +52,29 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Poll system stats while modal is open
+  useEffect(() => {
+    if (!isOpen) {
+      setSystemStats(null);
+      return;
+    }
+
+    const fetchStats = async () => {
+      try {
+        const stats = await apiGet('/api/system/stats');
+        if (stats.memory) {
+          setSystemStats(stats);
+        }
+      } catch (err) {
+        // Silently fail - stats are optional
+      }
+    };
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 2000);
+    return () => clearInterval(interval);
+  }, [isOpen]);
 
   const handleSave = () => {
     if (workingDir && workingDir.trim()) {
@@ -185,6 +215,35 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
             </div>
             <small>Adjust terminal text size (changes apply immediately)</small>
           </div>
+
+          {/* System Resources Section */}
+          {systemStats && (
+            <div className="settings-section" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-dim)' }}>
+              <h3 style={{ margin: '0 0 1rem', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>System Resources</h3>
+              <div className="stat-row">
+                <label>RAM</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${systemStats.memory.percentage}%` }}
+                  />
+                </div>
+                <span>
+                  {formatBytes(systemStats.memory.used)} / {formatBytes(systemStats.memory.total)}
+                </span>
+              </div>
+              <div className="stat-row">
+                <label>CPU</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${systemStats.cpu.percentage}%` }}
+                  />
+                </div>
+                <span>{systemStats.cpu.percentage}% ({systemStats.cpu.cores} cores)</span>
+              </div>
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>
