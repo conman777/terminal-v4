@@ -53,6 +53,29 @@ Logs are written to `/tmp/backend.log`.
 - `frontend/src/` - React components
 - `frontend/dist/` - Built frontend (served by backend)
 
+### Preview System
+
+The preview panel (`frontend/src/components/PreviewPanel.jsx`) displays apps running on the VM via an iframe. It uses a proxy subdomain pattern: `preview-{port}.conordart.com`.
+
+**Cache-Busting Architecture:**
+
+The preview proxy (`backend/src/routes/preview-subdomain-routes.ts`) implements deep cache-busting to ensure hard refresh works correctly:
+
+1. **HTML**: Rewrites all `src` and `href` attributes to include `?_cb=timestamp`
+2. **JavaScript**: Rewrites ES module `import` statements to include cache-buster
+3. **CSS**: Rewrites `url()` and `@import` to include cache-buster
+
+This ensures the entire resource chain gets fresh content on refresh:
+```
+HTML → JS/CSS → imported JS → imported CSS → images/fonts
+```
+
+**Important patterns to follow:**
+
+- Never directly mutate DOM elements that React controls (e.g., don't do `iframeRef.current.src = x` when React renders `<iframe src={state} />`)
+- When cache-busting, remember that entry-point busting alone doesn't bust downstream resources
+- The cache-buster is extracted from `?_cb=` param or generated fresh, then propagated to all resources
+
 ---
 
 # Universal Software Engineering Best Practices
