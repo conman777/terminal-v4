@@ -1435,6 +1435,63 @@ button {
   max-height: 60vh;
 }
 
+/* Settings Section with System Stats */
+.settings-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.settings-section h3 {
+  margin: 0 0 1rem;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.stat-row:last-child {
+  margin-bottom: 0;
+}
+
+.stat-row label {
+  width: 40px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.stat-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.stat-fill {
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.stat-row span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 110px;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
 .modal-footer {
   display: flex;
   align-items: center;
@@ -2479,18 +2536,67 @@ button {
 
 .mobile-header {
   display: none;
+  flex-direction: column;
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  height: var(--mobile-header-height, 48px);
+  height: var(--mobile-header-height, 88px);
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   z-index: 999;
+  padding: 0;
+  backdrop-filter: blur(10px);
+}
+
+.mobile-header-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
-  backdrop-filter: blur(10px);
+  padding: 0 8px;
+  height: 44px;
+}
+
+.mobile-header-nav {
+  height: 44px;
+  border-top: 1px solid var(--border-subtle);
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.mobile-header-breadcrumb {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mobile-header-breadcrumb .path-breadcrumb {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.mobile-header-breadcrumb .breadcrumb-segment {
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.mobile-header-breadcrumb-placeholder {
+  flex: 1;
+}
+
+.mobile-header-nav .mobile-view-switcher {
+  position: static;
+  padding: 0;
+  background: transparent;
+  border: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mobile-header-nav .view-switch-btn {
+  padding: 6px 10px;
+  font-size: 14px;
 }
 
 .mobile-header-btn {
@@ -3147,7 +3253,7 @@ button {
   }
 
   .layout.mobile {
-    --mobile-header-height: 48px;
+    --mobile-header-height: 88px;
     /* Use fixed positioning for reliable iOS keyboard handling */
     position: fixed;
     top: 0;
@@ -3304,7 +3410,7 @@ button {
 /* Safe area support */
 @supports (padding: env(safe-area-inset-top)) {
   .layout.mobile {
-    --mobile-header-height: calc(48px + env(safe-area-inset-top));
+    --mobile-header-height: calc(88px + env(safe-area-inset-top));
     padding-top: var(--mobile-header-height);
   }
 
@@ -4176,7 +4282,9 @@ textarea:focus-visible {
 .claude-code-input .mic-button.recording {
   background: #dc2626;
   color: white;
-  animation: pulse-recording 1s ease-in-out infinite;
+  animation: pulse-recording-glow 0.8s ease-in-out infinite;
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.8);
 }
 
 .claude-code-input .mic-button.requesting {
@@ -4194,6 +4302,17 @@ textarea:focus-visible {
 @keyframes pulse-recording {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
+}
+
+@keyframes pulse-recording-glow {
+  0%, 100% {
+    opacity: 1;
+    box-shadow: 0 0 12px rgba(220, 38, 38, 0.8);
+  }
+  50% {
+    opacity: 0.85;
+    box-shadow: 0 0 20px rgba(220, 38, 38, 1), 0 0 30px rgba(220, 38, 38, 0.5);
+  }
 }
 
 @keyframes pulse-requesting {
@@ -4347,7 +4466,9 @@ textarea:focus-visible {
 .terminal-mic-button.recording {
   background: #dc2626;
   color: white;
-  animation: pulse-recording 1s ease-in-out infinite;
+  animation: pulse-recording-glow 0.8s ease-in-out infinite;
+  transform: scale(1.15);
+  box-shadow: 0 0 12px rgba(220, 38, 38, 0.8);
 }
 
 .terminal-mic-button.requesting {
@@ -5776,4 +5897,213 @@ textarea:focus-visible {
 .mobile-terminal-carousel .empty-state p {
   margin: 0;
   font-size: 0.875rem;
+}
+
+/* ==========================================================================
+   Process Manager Modal
+   ========================================================================== */
+
+.process-modal {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.process-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.process-modal-header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.process-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+}
+
+.process-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.process-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  padding: 0.75rem 1rem;
+  margin: 0 1.25rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.process-loading,
+.process-empty {
+  text-align: center;
+  color: var(--text-secondary);
+  padding: 2rem;
+  font-size: 0.9375rem;
+}
+
+.process-section {
+  margin-bottom: 1.5rem;
+}
+
+.process-section:last-child {
+  margin-bottom: 0;
+}
+
+.process-section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.process-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.process-item:last-child {
+  margin-bottom: 0;
+}
+
+.process-status {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+
+.process-status.running {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.process-status.stopped {
+  background: #6b7280;
+}
+
+.process-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.process-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  margin-bottom: 0.25rem;
+}
+
+.process-path {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  word-break: break-all;
+  margin-bottom: 0.5rem;
+}
+
+.process-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.process-badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+  color: var(--text-secondary);
+}
+
+.process-type-badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+}
+
+.process-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  flex-shrink: 0;
+}
+
+.process-start-btn,
+.process-stop-btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.process-start-btn {
+  background: #22c55e;
+  color: white;
+}
+
+.process-start-btn:hover:not(:disabled) {
+  background: #16a34a;
+}
+
+.process-start-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.process-stop-btn {
+  background: #ef4444;
+  color: white;
+}
+
+.process-stop-btn:hover:not(:disabled) {
+  background: #dc2626;
+}
+
+.process-stop-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

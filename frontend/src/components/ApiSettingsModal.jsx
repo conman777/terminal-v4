@@ -2,6 +2,12 @@ import { useState, useEffect } from 'react';
 import { apiGet, apiPatch } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 
+// Format bytes to human-readable GB
+function formatBytes(bytes) {
+  const gb = bytes / (1024 ** 3);
+  return `${gb.toFixed(1)} GB`;
+}
+
 export default function ApiSettingsModal({ isOpen, onClose }) {
   const { user } = useAuth();
   const [groqApiKey, setGroqApiKey] = useState('');
@@ -11,11 +17,33 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [systemStats, setSystemStats] = useState(null);
 
   useEffect(() => {
     if (isOpen) {
       loadSettings();
     }
+  }, [isOpen]);
+
+  // Poll system stats while modal is open
+  useEffect(() => {
+    if (!isOpen) {
+      setSystemStats(null);
+      return;
+    }
+
+    const fetchStats = async () => {
+      try {
+        const stats = await apiGet('/api/system/stats');
+        setSystemStats(stats);
+      } catch (err) {
+        // Silently fail - stats are optional
+      }
+    };
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 2000);
+    return () => clearInterval(interval);
   }, [isOpen]);
 
   const loadSettings = async () => {
@@ -77,6 +105,35 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
           </button>
         </div>
         <div className="modal-body">
+          {/* System Resources Section */}
+          {systemStats && (
+            <div className="settings-section">
+              <h3>System Resources</h3>
+              <div className="stat-row">
+                <label>RAM</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${systemStats.memory.percentage}%` }}
+                  />
+                </div>
+                <span>
+                  {formatBytes(systemStats.memory.used)} / {formatBytes(systemStats.memory.total)}
+                </span>
+              </div>
+              <div className="stat-row">
+                <label>CPU</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${systemStats.cpu.percentage}%` }}
+                  />
+                </div>
+                <span>{systemStats.cpu.percentage}% ({systemStats.cpu.cores} cores)</span>
+              </div>
+            </div>
+          )}
+
           {isLoading ? (
             <div className="loading">Loading settings...</div>
           ) : (

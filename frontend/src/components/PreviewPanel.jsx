@@ -53,7 +53,7 @@ function toPreviewUrl(inputUrl) {
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
-  // Handle localhost/local network URLs - proxy through backend
+  // Handle localhost/local network URLs - use preview subdomain
   // This allows previewing dev servers running on the remote server
   try {
     const parsed = new URL(inputUrl);
@@ -64,9 +64,10 @@ function toPreviewUrl(inputUrl) {
     const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
 
     if ((isLocalhost || isPrivateIP) && parsed.port) {
-      // Rewrite to go through the dev proxy (with auth token)
+      // Use preview subdomain instead of path-based proxy
+      // This properly supports SPA navigation since URL paths stay natural
       const path = parsed.pathname + parsed.search + parsed.hash;
-      return withAuthToken(`/api/dev-proxy/${parsed.port}${path}`);
+      return `https://preview-${parsed.port}.conordart.com${path}`;
     }
   } catch {
     // Not a valid URL, fall through
@@ -86,7 +87,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const logsEndRef = useRef(null);
 
   // Convert the URL for iframe display
-  const iframeSrc = useMemo(() => toPreviewUrl(url), [url]);
+  const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
+
+  // Track the actual iframe src (including cache buster for refreshes)
+  const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
+
+  // Update iframeSrc when baseIframeSrc changes (new URL entered)
+  useEffect(() => {
+    setIframeSrc(baseIframeSrc);
+  }, [baseIframeSrc]);
 
   // Listen for console messages from iframe
   useEffect(() => {
@@ -131,12 +140,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, []);
 
   const handleRefresh = useCallback(() => {
-    if (iframeRef.current && iframeSrc) {
+    if (baseIframeSrc) {
       setIsLoading(true);
       setError(null);
-      iframeRef.current.src = iframeSrc;
+      setLogs([]); // Clear logs on refresh
+      // Add cache-busting timestamp to force hard refresh
+      const cacheBuster = `_cb=${Date.now()}`;
+      const separator = baseIframeSrc.includes('?') ? '&' : '?';
+      setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
     }
-  }, [iframeSrc]);
+  }, [baseIframeSrc]);
 
   const handleUrlSubmit = useCallback((e) => {
     e.preventDefault();
@@ -146,10 +159,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [inputUrl, onUrlChange]);
 
   const handleOpenExternal = useCallback(() => {
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer');
+    // Open the preview URL (subdomain) rather than original localhost URL
+    if (iframeSrc) {
+      window.open(iframeSrc, '_blank', 'noopener,noreferrer');
     }
-  }, [url]);
+  }, [iframeSrc]);
 
   return (
     <div className="preview-panel">
@@ -184,7 +198,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             className="preview-action-btn"
             onClick={handleOpenExternal}
             title="Open in new tab"
-            disabled={!url}
+            disabled={!iframeSrc}
             aria-label="Open preview in new tab"
           >
             {'\u2197'}

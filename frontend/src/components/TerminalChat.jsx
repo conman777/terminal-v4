@@ -33,6 +33,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Track scroll interval for press-and-hold continuous scrolling
   const scrollIntervalRef = useRef(null);
+  const scrollStartTimeRef = useRef(null);
+  const scrollDirectionRef = useRef(null);
 
   // Send data to terminal via WebSocket
   const sendToTerminal = useCallback((data) => {
@@ -94,12 +96,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [sendToTerminal]);
 
-  // Start continuous scrolling (called on press)
+  // Start continuous scrolling with acceleration (called on press)
   const startScrolling = useCallback((direction) => {
-    // Clear any existing interval
+    // Clear any existing timeout
     if (scrollIntervalRef.current) {
-      clearInterval(scrollIntervalRef.current);
+      clearTimeout(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
     }
+
+    // Track start time and direction
+    scrollStartTimeRef.current = Date.now();
+    scrollDirectionRef.current = direction;
 
     // Scroll immediately on press
     if (direction === 'up') {
@@ -108,20 +115,43 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       scrollDown();
     }
 
-    // Then continue scrolling at interval while held
-    scrollIntervalRef.current = setInterval(() => {
-      if (direction === 'up') {
-        scrollUp();
-      } else {
-        scrollDown();
-      }
-    }, 150);
+    // Acceleration settings (halved speed from original)
+    const INITIAL_DELAY = 400;  // Start slow (400ms between scrolls)
+    const MIN_DELAY = 60;       // Maximum speed (60ms between scrolls)
+    const ACCEL_TIME = 2000;    // Time to reach max speed (2 seconds)
+
+    // Recursive function for accelerating scroll
+    const scheduleNextScroll = () => {
+      const elapsed = Date.now() - scrollStartTimeRef.current;
+
+      // Calculate current delay (linear interpolation from INITIAL to MIN over ACCEL_TIME)
+      const progress = Math.min(elapsed / ACCEL_TIME, 1);
+      const currentDelay = INITIAL_DELAY - (INITIAL_DELAY - MIN_DELAY) * progress;
+
+      scrollIntervalRef.current = setTimeout(() => {
+        if (scrollDirectionRef.current === 'up') {
+          scrollUp();
+        } else if (scrollDirectionRef.current === 'down') {
+          scrollDown();
+        }
+
+        // Continue if still scrolling
+        if (scrollDirectionRef.current) {
+          scheduleNextScroll();
+        }
+      }, currentDelay);
+    };
+
+    // Start the acceleration loop
+    scheduleNextScroll();
   }, [scrollUp, scrollDown]);
 
   // Stop continuous scrolling (called on release)
   const stopScrolling = useCallback(() => {
+    scrollDirectionRef.current = null;
+    scrollStartTimeRef.current = null;
     if (scrollIntervalRef.current) {
-      clearInterval(scrollIntervalRef.current);
+      clearTimeout(scrollIntervalRef.current);
       scrollIntervalRef.current = null;
     }
   }, []);

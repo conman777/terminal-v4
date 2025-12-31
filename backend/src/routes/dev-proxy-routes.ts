@@ -1,13 +1,128 @@
 import type { FastifyInstance } from 'fastify';
 import { pipeline } from 'node:stream/promises';
 
-// Script to inject into HTML pages to capture console logs and errors
-const CONSOLE_CAPTURE_SCRIPT = `
+// Script to inject into HTML pages for URL rewriting and console capture
+// PORT_PLACEHOLDER will be replaced with the actual port number
+const DEV_PROXY_SCRIPT = `
 <script>
 (function() {
-  if (window.__devProxyConsoleInjected) return;
-  window.__devProxyConsoleInjected = true;
+  if (window.__devProxyInjected) return;
+  window.__devProxyInjected = true;
 
+  // Proxy base path - PORT_PLACEHOLDER gets replaced server-side
+  const proxyBase = '/api/dev-proxy/PORT_PLACEHOLDER';
+  const tokenParam = 'TOKEN_PLACEHOLDER';
+
+  // URL rewriting function
+  function rewriteUrl(url) {
+    if (!url) return url;
+    const urlStr = String(url);
+    // Already proxied
+    if (urlStr.startsWith(proxyBase)) return urlStr;
+    // Absolute URLs to other origins - leave alone
+    if (urlStr.match(/^https?:\\/\\//) && !urlStr.includes('localhost:PORT_PLACEHOLDER')) return urlStr;
+    // Localhost URLs for this port - rewrite
+    if (urlStr.includes('localhost:PORT_PLACEHOLDER')) {
+      return urlStr.replace(/https?:\\/\\/localhost:PORT_PLACEHOLDER/, proxyBase);
+    }
+    // Relative URLs starting with / - prepend proxy base
+    if (urlStr.startsWith('/') && !urlStr.startsWith('/api/dev-proxy')) {
+      return proxyBase + urlStr;
+    }
+    return urlStr;
+  }
+
+  // 1. Intercept history.pushState and replaceState
+  const originalPushState = history.pushState.bind(history);
+  const originalReplaceState = history.replaceState.bind(history);
+
+  history.pushState = function(state, title, url) {
+    return originalPushState(state, title, rewriteUrl(url));
+  };
+
+  history.replaceState = function(state, title, url) {
+    return originalReplaceState(state, title, rewriteUrl(url));
+  };
+
+  // 2. Intercept fetch
+  const originalFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (typeof input === 'string') {
+      input = rewriteUrl(input);
+    } else if (input instanceof Request) {
+      const rewritten = rewriteUrl(input.url);
+      if (rewritten !== input.url) {
+        input = new Request(rewritten, input);
+      }
+    }
+    return originalFetch(input, init);
+  };
+
+  // 3. Intercept XMLHttpRequest
+  const originalXHROpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    return originalXHROpen.call(this, method, rewriteUrl(url), ...rest);
+  };
+
+  // 4. FORCE FULL PAGE RELOADS for all internal navigation
+  // SPA client-side routing doesn't work through proxies because frameworks
+  // read window.location.pathname which shows the proxied path, not the app path.
+  // The only reliable solution is to force full page reloads.
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('a[href]');
+    if (!link) return;
+
+    const href = link.getAttribute('href');
+    if (!href) return;
+
+    // Skip hash-only links (same page anchors)
+    if (href.startsWith('#')) return;
+
+    // Skip external links (http://, https://, //)
+    if (href.match(/^(https?:)?\\/\\//)) return;
+
+    // Skip javascript: links
+    if (href.startsWith('javascript:')) return;
+
+    // Skip already-proxied links
+    if (href.startsWith(proxyBase) || href.startsWith('/api/dev-proxy')) return;
+
+    // For all other internal links, force a full page reload through the proxy
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    let newUrl = href;
+    if (href.startsWith('/')) {
+      newUrl = proxyBase + href;
+    } else {
+      // Relative URL - resolve against current location
+      newUrl = proxyBase + '/' + href;
+    }
+
+    if (link.target === '_blank') {
+      window.open(newUrl, '_blank');
+    } else {
+      window.location.href = newUrl;
+    }
+  }, true);  // CAPTURE PHASE - runs before any framework handlers
+
+  // 5. Set base href for relative resource loading (only if not already set)
+  if (!document.querySelector('base')) {
+    const base = document.createElement('base');
+    base.href = proxyBase + '/';
+    if (document.head) {
+      document.head.prepend(base);
+    } else {
+      document.addEventListener('DOMContentLoaded', function() {
+        if (!document.querySelector('base')) {
+          document.head.prepend(base);
+        }
+      });
+    }
+  }
+
+  // 6. Console capture - forward logs to parent window
   const originalConsole = {
     log: console.log.bind(console),
     warn: console.warn.bind(console),
@@ -158,6 +273,11 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
         reply.header(key, value);
       }
 
+      // Prevent caching to ensure refresh always fetches fresh content
+      reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+      reply.header('Pragma', 'no-cache');
+      reply.header('Expires', '0');
+
       // Stream the response body
       if (response.body) {
         const reader = response.body.getReader();
@@ -213,14 +333,19 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
             }
           );
 
-          // Inject console capture script to forward logs to parent window
-          if (content.includes('</head>')) {
-            content = content.replace('</head>', CONSOLE_CAPTURE_SCRIPT + '</head>');
-          } else if (content.includes('</body>')) {
-            content = content.replace('</body>', CONSOLE_CAPTURE_SCRIPT + '</body>');
+          // Inject dev proxy script (URL rewriting + console capture)
+          // Must inject at START of <head> to run before framework code
+          const script = DEV_PROXY_SCRIPT
+            .replace(/PORT_PLACEHOLDER/g, String(port))
+            .replace(/TOKEN_PLACEHOLDER/g, token || '');
+
+          if (content.includes('<head>')) {
+            content = content.replace('<head>', '<head>' + script);
+          } else if (content.includes('<html>')) {
+            content = content.replace('<html>', '<html><head>' + script + '</head>');
           } else {
             // Fallback: prepend to content
-            content = CONSOLE_CAPTURE_SCRIPT + content;
+            content = script + content;
           }
 
           reply.send(content);

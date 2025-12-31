@@ -15,6 +15,7 @@ import { FileManager } from './components/FileManager';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
 import ApiSettingsModal from './components/ApiSettingsModal';
+import { ProcessManagerModal } from './components/ProcessManagerModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
@@ -577,6 +578,7 @@ function AppContent() {
   const [showApiSettings, setShowApiSettings] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
+  const [showProcessManager, setShowProcessManager] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -908,24 +910,32 @@ function AppContent() {
     [loadBookmarks]
   );
 
+  // Use ref to always have latest activeSessionId (avoids stale closure in modal)
+  const activeSessionIdRef = useRef(activeSessionId);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   const handleExecuteBookmark = useCallback(
     async (command) => {
-      if (!activeSessionId) {
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId) {
         alert('Please select a terminal session first');
         return;
       }
 
       try {
-        await apiFetch(`/api/terminal/${activeSessionId}/input`, {
+        await apiFetch(`/api/terminal/${sessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command: command + '\r' })
         });
       } catch (error) {
         console.error('Failed to execute bookmark command', error);
+        alert('Failed to execute command');
       }
     },
-    [activeSessionId]
+    []
   );
 
   // Initial load - restore last active session if needed
@@ -1569,6 +1579,11 @@ function AppContent() {
         isOpen={showApiSettings}
         onClose={() => setShowApiSettings(false)}
       />
+      <ProcessManagerModal
+        isOpen={showProcessManager}
+        onClose={() => setShowProcessManager(false)}
+        projects={projects}
+      />
 
       {isMobile && (
         <>
@@ -1591,20 +1606,18 @@ function AppContent() {
             onFolderSelect={handleSidebarFolderSelect}
             currentPath={projectInfo?.cwd}
             onAddScanFolder={handleAddScanFolder}
+            mobileView={mobileView}
+            onViewChange={setMobileView}
+            previewUrl={previewUrl}
+            showFileManager={showFileManager}
+            onToggleFileManager={() => setShowFileManager(!showFileManager)}
+            onNavigateToPath={handleNavigateToPath}
           />
           <MobileKeybar
             sessionId={activeSessionId}
             isOpen={keybarOpen}
             onHeightChange={handleKeybarHeightChange}
           />
-          {projectInfo?.cwd && (
-            <div className="breadcrumb-bar mobile-breadcrumb">
-              <PathBreadcrumb
-                cwd={projectInfo.cwd}
-                onNavigate={handleNavigateToPath}
-              />
-            </div>
-          )}
         </>
       )}
 
@@ -1718,6 +1731,19 @@ function AppContent() {
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                </svg>
+              </button>
+              <button
+                className="header-btn"
+                type="button"
+                onClick={() => setShowProcessManager(true)}
+                aria-label="Process Manager"
+                title="Process Manager"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
                 </svg>
               </button>
               <button
@@ -1856,41 +1882,6 @@ function AppContent() {
             className="terminal-main"
             style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
           >
-            {/* Mobile view switcher - always show to access Claude */}
-            <div className="mobile-view-switcher">
-              <button
-                type="button"
-                className={`view-switch-btn${mobileView === 'terminal' ? ' active' : ''}`}
-                onClick={() => setMobileView('terminal')}
-              >
-                ⚡ Terminal
-              </button>
-              <button
-                type="button"
-                className={`view-switch-btn${mobileView === 'claude' ? ' active' : ''}`}
-                onClick={() => setMobileView('claude')}
-              >
-                🤖 Claude
-              </button>
-              {previewUrl && (
-                <button
-                  type="button"
-                  className={`view-switch-btn${mobileView === 'preview' ? ' active' : ''}`}
-                  onClick={() => setMobileView('preview')}
-                >
-                  Preview
-                </button>
-              )}
-              <button
-                type="button"
-                className={`view-switch-btn${showFileManager ? ' active' : ''}`}
-                onClick={() => setShowFileManager(!showFileManager)}
-              >
-                📁
-              </button>
-            </div>
-
-
             {/* Terminal pane with swipe carousel */}
             {mobileView === 'terminal' && (
               <div className="terminal-pane">

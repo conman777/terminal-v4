@@ -11,6 +11,8 @@ import { registerPreviewRoutes } from './routes/preview-routes';
 import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
+import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
+import { registerProcessRoutes } from './routes/process-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { registerFileRoutes } from './routes/file-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
@@ -53,6 +55,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Register auth routes
   registerAuthRoutes(app);
 
+  // Register preview subdomain routes early (before other routes)
+  // This handles requests to preview-{port}.conordart.com
+  await registerPreviewSubdomainRoutes(app);
+
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
   await terminalManager.initialize();
 
@@ -69,6 +75,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerDevProxyRoutes(app);
   await registerClaudeCodeRoutes(app, claudeCodeManager);
   await registerFileRoutes(app);
+  await registerProcessRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
