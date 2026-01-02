@@ -13,6 +13,204 @@ const SKIP_HEADERS = new Set([
   'http2-settings'
 ]);
 
+// Debug script injected into HTML pages
+// Captures console logs, errors, and network requests
+// Sends to both postMessage (browser UI) and backend API (for Claude Code)
+const PREVIEW_DEBUG_SCRIPT = `
+<script>
+(function() {
+  if (window.__previewDebugInjected) return;
+  window.__previewDebugInjected = true;
+
+  // Extract port and main domain from hostname (preview-{port}.conordart.com)
+  const portMatch = location.hostname.match(/^preview-(\\d+)\\.(.+)$/i);
+  if (!portMatch) return;
+  const PORT = portMatch[1];
+  const MAIN_DOMAIN = portMatch[2];
+
+  // Send logs to main domain, not preview subdomain (which proxies to localhost)
+  const API_URL = location.protocol + '//' + MAIN_DOMAIN + '/api/preview/' + PORT + '/logs';
+  const pendingLogs = [];
+  let flushTimeout = null;
+
+  // Send logs to backend (batched)
+  function flushLogs() {
+    if (pendingLogs.length === 0) return;
+    const batch = pendingLogs.splice(0, pendingLogs.length);
+    try {
+      navigator.sendBeacon(API_URL, JSON.stringify({ logs: batch }));
+    } catch (e) {
+      // Fallback to fetch
+      fetch(API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ logs: batch }),
+        keepalive: true
+      }).catch(() => {});
+    }
+  }
+
+  function queueLog(entry) {
+    pendingLogs.push(entry);
+    // Also send to parent via postMessage for browser UI
+    try {
+      window.parent.postMessage({ type: 'preview-' + entry.type, ...entry }, '*');
+    } catch {}
+    // Debounce flush
+    if (flushTimeout) clearTimeout(flushTimeout);
+    flushTimeout = setTimeout(flushLogs, 100);
+  }
+
+  // Serialize console arguments
+  function serialize(args) {
+    return args.map(function(arg) {
+      if (arg === null) return 'null';
+      if (arg === undefined) return 'undefined';
+      if (typeof arg === 'string') return arg;
+      if (typeof arg === 'number' || typeof arg === 'boolean') return String(arg);
+      if (arg instanceof Error) return arg.stack || arg.message;
+      try { return JSON.stringify(arg, null, 2); }
+      catch (e) { return String(arg); }
+    }).join(' ');
+  }
+
+  // Console capture
+  var origConsole = {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    info: console.info.bind(console),
+    debug: console.debug.bind(console)
+  };
+
+  ['log', 'warn', 'error', 'info', 'debug'].forEach(function(level) {
+    console[level] = function() {
+      var args = Array.prototype.slice.call(arguments);
+      queueLog({
+        type: 'console',
+        level: level,
+        message: serialize(args),
+        timestamp: Date.now()
+      });
+      origConsole[level].apply(console, args);
+    };
+  });
+
+  // Error capture
+  window.addEventListener('error', function(event) {
+    queueLog({
+      type: 'error',
+      message: event.message,
+      filename: event.filename,
+      lineno: event.lineno,
+      colno: event.colno,
+      stack: event.error ? event.error.stack : null,
+      timestamp: Date.now()
+    });
+  });
+
+  window.addEventListener('unhandledrejection', function(event) {
+    var reason = event.reason;
+    var message = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+    queueLog({
+      type: 'error',
+      message: 'Unhandled Promise Rejection: ' + message,
+      stack: reason && reason.stack ? reason.stack : null,
+      timestamp: Date.now()
+    });
+  });
+
+  // Network capture - fetch
+  var origFetch = window.fetch;
+  window.fetch = function(input, init) {
+    var url = typeof input === 'string' ? input : (input.url || String(input));
+    var method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
+    var startTime = Date.now();
+
+    return origFetch.apply(this, arguments).then(function(response) {
+      var duration = Date.now() - startTime;
+      var entry = {
+        type: 'network',
+        method: method,
+        url: url,
+        status: response.status,
+        statusText: response.statusText,
+        duration: duration,
+        timestamp: startTime
+      };
+
+      // Try to get response preview for errors or JSON
+      if (response.status >= 400 || (response.headers.get('content-type') || '').includes('json')) {
+        response.clone().text().then(function(text) {
+          entry.responsePreview = text.slice(0, 500);
+          queueLog(entry);
+        }).catch(function() {
+          queueLog(entry);
+        });
+      } else {
+        queueLog(entry);
+      }
+
+      return response;
+    }).catch(function(err) {
+      queueLog({
+        type: 'network',
+        method: method,
+        url: url,
+        error: err.message,
+        duration: Date.now() - startTime,
+        timestamp: startTime
+      });
+      throw err;
+    });
+  };
+
+  // Network capture - XMLHttpRequest
+  var XHROpen = XMLHttpRequest.prototype.open;
+  var XHRSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function(method, url) {
+    this._debugMethod = method;
+    this._debugUrl = url;
+    return XHROpen.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function() {
+    var xhr = this;
+    var startTime = Date.now();
+
+    xhr.addEventListener('loadend', function() {
+      var entry = {
+        type: 'network',
+        method: xhr._debugMethod || 'GET',
+        url: xhr._debugUrl || '',
+        status: xhr.status,
+        statusText: xhr.statusText,
+        duration: Date.now() - startTime,
+        timestamp: startTime
+      };
+
+      // Get response preview for errors or JSON
+      var contentType = xhr.getResponseHeader('content-type') || '';
+      if (xhr.status >= 400 || contentType.includes('json')) {
+        try {
+          entry.responsePreview = (xhr.responseText || '').slice(0, 500);
+        } catch (e) {}
+      }
+
+      queueLog(entry);
+    });
+
+    return XHRSend.apply(this, arguments);
+  };
+
+  // Flush on page unload
+  window.addEventListener('beforeunload', flushLogs);
+  window.addEventListener('pagehide', flushLogs);
+})();
+</script>
+`;
+
 function getPreviewPort(host: string | undefined): number | null {
   if (!host) return null;
   const match = host.match(PREVIEW_SUBDOMAIN_PATTERN);
@@ -46,13 +244,28 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Set correct host for the target server
       forwardHeaders['host'] = `localhost:${port}`;
 
-      // Get request body for non-GET requests
-      let body: any = undefined;
+      // Set X-Forwarded headers for apps that need to know the original request details
+      const originalHost = request.headers.host || `preview-${port}.conordart.com`;
+      forwardHeaders['x-forwarded-host'] = originalHost;
+      forwardHeaders['x-forwarded-proto'] = 'https';
+      forwardHeaders['x-forwarded-port'] = '443';
+      forwardHeaders['x-forwarded-for'] = request.ip || '127.0.0.1';
+
+      // Buffer request body for non-GET requests (onRequest runs before body parsing)
+      let body: Buffer | undefined = undefined;
       if (request.method !== 'GET' && request.method !== 'HEAD') {
-        body = request.body;
-        if (body && typeof body === 'object') {
-          body = JSON.stringify(body);
+        const chunks: Buffer[] = [];
+        for await (const chunk of request.raw) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         }
+        if (chunks.length > 0) {
+          body = Buffer.concat(chunks);
+          forwardHeaders['content-length'] = String(body.length);
+        } else {
+          delete forwardHeaders['content-length'];
+        }
+      } else {
+        delete forwardHeaders['content-length'];
       }
 
       // Make proxied request
@@ -74,7 +287,20 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         // Remove X-Frame-Options to allow iframe embedding
         if (lowerKey === 'x-frame-options') continue;
 
+        // Skip Set-Cookie here - handle separately below
+        if (lowerKey === 'set-cookie') continue;
+
         reply.header(key, value);
+      }
+
+      // Handle Set-Cookie headers specially - entries() doesn't handle multiple cookies correctly
+      const setCookieHeaders =
+        typeof (response.headers as any).getSetCookie === 'function'
+          ? (response.headers as any).getSetCookie()
+          : (response.headers as any).raw?.()['set-cookie'] ??
+            (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
+      if (setCookieHeaders.length > 0) {
+        reply.header('set-cookie', setCookieHeaders);
       }
 
       // Allow iframe embedding
@@ -151,34 +377,16 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
+          // Inject debug script at start of <head> to run before app code
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', '<head>' + PREVIEW_DEBUG_SCRIPT);
+          } else if (html.includes('<html>')) {
+            html = html.replace('<html>', '<html><head>' + PREVIEW_DEBUG_SCRIPT + '</head>');
+          } else {
+            html = PREVIEW_DEBUG_SCRIPT + html;
+          }
+
           reply.send(html);
-        } else if (contentType.includes('javascript') || contentType.includes('application/javascript') ||
-                   request.url.endsWith('.js') || request.url.includes('.js?')) {
-          // For JavaScript files, rewrite ES module imports to include cache-buster
-          let js = body.toString('utf-8');
-
-          // Rewrite static imports: import { x } from './module.js' or import './module.js'
-          js = js.replace(
-            /(import\s+(?:(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+)?)(["'])(\.[^"']+)\2/g,
-            (match, prefix, quote, specifier) => {
-              // Skip if already has _cb parameter
-              if (specifier.includes('_cb=')) return match;
-              const separator = specifier.includes('?') ? '&' : '?';
-              return `${prefix}${quote}${specifier}${separator}_cb=${cacheBuster}${quote}`;
-            }
-          );
-
-          // Rewrite dynamic imports: import('./module.js')
-          js = js.replace(
-            /import\s*\(\s*(["'])(\.[^"']+)\1\s*\)/g,
-            (match, quote, specifier) => {
-              if (specifier.includes('_cb=')) return match;
-              const separator = specifier.includes('?') ? '&' : '?';
-              return `import(${quote}${specifier}${separator}_cb=${cacheBuster}${quote})`;
-            }
-          );
-
-          reply.send(js);
         } else if (contentType.includes('text/css') || request.url.endsWith('.css') || request.url.includes('.css?')) {
           // For CSS files, rewrite url() references
           let css = body.toString('utf-8');
