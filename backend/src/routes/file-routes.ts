@@ -1,13 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { readdir, stat, mkdir, rm, rename } from 'node:fs/promises';
 import { createWriteStream, createReadStream } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { createGunzip } from 'node:zlib';
+import archiver from 'archiver';
 import { Open } from 'unzipper';
 import {
-  resolvePathInUserHome,
   USER_HOME,
+  resolvePathAnywhere,
   sanitizeFilename,
   isWithinBase
 } from '../utils/path-security.js';
@@ -29,6 +29,34 @@ interface FileItem {
 }
 
 export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
+  function formatDisplayPath(fullPath: string): string {
+    return isWithinBase(USER_HOME, fullPath)
+      ? fullPath.replace(USER_HOME, '~')
+      : fullPath;
+  }
+
+  function sanitizeRelativePath(input: string): string | null {
+    if (!input) return null;
+
+    const normalized = input.replace(/\\/g, '/');
+    if (isAbsolute(normalized) || normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized)) {
+      return null;
+    }
+
+    const segments = normalized.split('/').filter(Boolean);
+    if (segments.length === 0) return null;
+
+    const sanitizedSegments: string[] = [];
+    for (const segment of segments) {
+      if (segment === '.' || segment === '..') return null;
+      const sanitized = sanitizeFilename(segment);
+      if (!sanitized) return null;
+      sanitizedSegments.push(sanitized);
+    }
+
+    return sanitizedSegments.join('/');
+  }
+
   // List directory contents
   app.get('/api/files/list', async (request, reply) => {
     const userId = request.userId;
@@ -44,12 +72,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const requestedPath = query.data.path || '~';
-    const safePath = await resolvePathInUserHome(requestedPath);
-
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside home directory' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(requestedPath);
 
     try {
       const entries = await readdir(safePath, { withFileTypes: true });
@@ -83,7 +106,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       });
 
       // Convert path back to ~ notation for display
-      const displayPath = safePath.replace(USER_HOME, '~');
+      const displayPath = formatDisplayPath(safePath);
 
       reply.send({ path: displayPath, items });
     } catch (error) {
@@ -105,15 +128,11 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const safePath = await resolvePathInUserHome(body.data.path);
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside home directory' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(body.data.path);
 
     try {
       await mkdir(safePath, { recursive: true });
-      reply.code(201).send({ success: true, path: safePath.replace(USER_HOME, '~') });
+      reply.code(201).send({ success: true, path: formatDisplayPath(safePath) });
     } catch (error) {
       reply.code(500).send({ error: 'Failed to create directory', message: (error as Error).message });
     }
@@ -139,27 +158,28 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
           destinationPath = part.value as string;
         } else if (part.type === 'file') {
           const targetPath = destinationPath ?? '~';
-          const safeDest = await resolvePathInUserHome(targetPath);
-          if (!safeDest) {
-            reply.code(403).send({ error: 'Access denied: destination is outside home directory' });
-            return;
-          }
+          const safeDest = await resolvePathAnywhere(targetPath);
 
-          const safeFilename = sanitizeFilename(part.filename);
-          if (!safeFilename) {
+          const safeRelativePath = sanitizeRelativePath(part.filename);
+          if (!safeRelativePath) {
             reply.code(400).send({ error: 'Invalid filename' });
             return;
           }
 
-          const finalPath = join(safeDest, safeFilename);
+          const finalPath = join(safeDest, safeRelativePath);
+          if (!isWithinBase(safeDest, finalPath)) {
+            reply.code(400).send({ error: 'Invalid filename' });
+            return;
+          }
           const shouldStage = destinationPath === null;
-          const filePath = shouldStage ? join(tempDir, safeFilename) : finalPath;
+          const filePath = shouldStage ? join(tempDir, safeRelativePath) : finalPath;
 
           // Check file size limit
           let totalSize = 0;
           if (shouldStage) {
             await mkdir(tempDir, { recursive: true });
           }
+          await mkdir(dirname(filePath), { recursive: true });
           const writeStream = createWriteStream(filePath);
 
           try {
@@ -182,9 +202,9 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
             });
 
             if (shouldStage) {
-              pendingFiles.push({ tempPath: filePath, filename: safeFilename });
+              pendingFiles.push({ tempPath: filePath, filename: safeRelativePath });
             } else {
-              uploadedFiles.push(finalPath.replace(USER_HOME, '~'));
+              uploadedFiles.push(formatDisplayPath(finalPath));
             }
           } catch (error) {
             writeStream.destroy();
@@ -195,16 +215,17 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       }
 
       if (pendingFiles.length > 0) {
-        const resolvedDest = await resolvePathInUserHome(destinationPath ?? '~');
-        if (!resolvedDest) {
-          reply.code(403).send({ error: 'Access denied: destination is outside home directory' });
-          return;
-        }
+        const resolvedDest = await resolvePathAnywhere(destinationPath ?? '~');
         await mkdir(resolvedDest, { recursive: true });
         for (const staged of pendingFiles) {
           const finalPath = join(resolvedDest, staged.filename);
+          if (!isWithinBase(resolvedDest, finalPath)) {
+            reply.code(400).send({ error: 'Invalid filename' });
+            return;
+          }
+          await mkdir(dirname(finalPath), { recursive: true });
           await rename(staged.tempPath, finalPath);
-          uploadedFiles.push(finalPath.replace(USER_HOME, '~'));
+          uploadedFiles.push(formatDisplayPath(finalPath));
         }
       }
 
@@ -231,16 +252,36 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const safePath = await resolvePathInUserHome(query.data.path);
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside home directory' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(query.data.path);
 
     try {
       const stats = await stat(safePath);
       if (stats.isDirectory()) {
-        reply.code(400).send({ error: 'Cannot download a directory' });
+        const folderName = basename(safePath) || 'download';
+        const zipFileName = `${folderName}.zip`;
+
+        reply.hijack();
+        reply.raw.writeHead(200, {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': `attachment; filename="${zipFileName}"`,
+          'Transfer-Encoding': 'chunked'
+        });
+
+        const archive = archiver('zip', { zlib: { level: 5 } });
+        archive.on('error', (err) => {
+          console.error('Archive error:', err);
+          reply.raw.end();
+        });
+
+        archive.pipe(reply.raw);
+        archive.directory(safePath, folderName);
+
+        try {
+          await archive.finalize();
+        } catch (error) {
+          console.error('Archive finalize error:', error);
+          reply.raw.end();
+        }
         return;
       }
 
@@ -270,11 +311,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const safePath = await resolvePathInUserHome(body.data.path);
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside home directory' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(body.data.path);
 
     // Prevent deleting home directory itself
     if (safePath === USER_HOME) {
@@ -304,17 +341,12 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const safeOldPath = await resolvePathInUserHome(body.data.oldPath);
-    const safeNewPath = await resolvePathInUserHome(body.data.newPath);
-
-    if (!safeOldPath || !safeNewPath) {
-      reply.code(403).send({ error: 'Access denied: path is outside home directory' });
-      return;
-    }
+    const safeOldPath = await resolvePathAnywhere(body.data.oldPath);
+    const safeNewPath = await resolvePathAnywhere(body.data.newPath);
 
     try {
       await rename(safeOldPath, safeNewPath);
-      reply.send({ success: true, path: safeNewPath.replace(USER_HOME, '~') });
+      reply.send({ success: true, path: formatDisplayPath(safeNewPath) });
     } catch (error) {
       reply.code(500).send({ error: 'Failed to rename', message: (error as Error).message });
     }
@@ -334,20 +366,11 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return;
     }
 
-    const safeZipPath = await resolvePathInUserHome(body.data.zipPath);
-    if (!safeZipPath) {
-      reply.code(403).send({ error: 'Access denied: zip path is outside home directory' });
-      return;
-    }
+    const safeZipPath = await resolvePathAnywhere(body.data.zipPath);
 
     // Default extract to same directory as zip file
     const extractTo = body.data.extractTo || dirname(body.data.zipPath);
-    const safeExtractPath = await resolvePathInUserHome(extractTo);
-
-    if (!safeExtractPath) {
-      reply.code(403).send({ error: 'Access denied: extract path is outside home directory' });
-      return;
-    }
+    const safeExtractPath = await resolvePathAnywhere(extractTo);
 
     try {
       // Check if file exists and is a zip
@@ -385,7 +408,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         await pipeline(entry.stream(), createWriteStream(resolvedPath));
       }
 
-      reply.send({ success: true, extractedTo: safeExtractPath.replace(USER_HOME, '~') });
+      reply.send({ success: true, extractedTo: formatDisplayPath(safeExtractPath) });
     } catch (error) {
       reply.code(500).send({ error: 'Failed to extract zip', message: (error as Error).message });
     }

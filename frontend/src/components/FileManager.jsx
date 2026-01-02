@@ -11,6 +11,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
 
   const loadDirectory = useCallback(async (path) => {
     setLoading(true);
@@ -36,27 +37,42 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     loadDirectory(path);
   }, [loadDirectory]);
 
+  const buildItemPath = useCallback((itemName) => {
+    const base = currentPath.endsWith('/') && currentPath.length > 1
+      ? currentPath.slice(0, -1)
+      : currentPath;
+    if (base === '~') return `~/${itemName}`;
+    if (base === '/') return `/${itemName}`;
+    return `${base}/${itemName}`;
+  }, [currentPath]);
+
   const navigateUp = useCallback(() => {
-    if (!currentPath || currentPath === '~') return;
-    const parts = currentPath.split('/');
-    parts.pop();
-    const parentPath = parts.length === 1 && parts[0] === '~' ? '~' : parts.join('/');
+    if (!currentPath || currentPath === '~' || currentPath === '/') return;
+    const trimmed = currentPath.endsWith('/') && currentPath.length > 1
+      ? currentPath.slice(0, -1)
+      : currentPath;
+    const lastSlash = trimmed.lastIndexOf('/');
+    if (lastSlash < 0) return;
+    if (lastSlash === 0) {
+      navigateTo('/');
+      return;
+    }
+    const parentPath = trimmed.slice(0, lastSlash);
     navigateTo(parentPath);
   }, [currentPath, navigateTo]);
 
   const handleItemClick = useCallback((item) => {
     if (item.type === 'directory') {
-      const newPath = currentPath === '~' ? `~/${item.name}` : `${currentPath}/${item.name}`;
-      navigateTo(newPath);
+      navigateTo(buildItemPath(item.name));
     }
-  }, [currentPath, navigateTo]);
+  }, [buildItemPath, navigateTo]);
 
   const handleItemDoubleClick = useCallback((item) => {
     if (item.type === 'directory' && onNavigateTerminal) {
-      const fullPath = currentPath === '~' ? `~/${item.name}` : `${currentPath}/${item.name}`;
+      const fullPath = buildItemPath(item.name);
       onNavigateTerminal(fullPath);
     }
-  }, [currentPath, onNavigateTerminal]);
+  }, [buildItemPath, onNavigateTerminal]);
 
   const handleCreateFolder = useCallback(async () => {
     if (!newFolderName.trim()) return;
@@ -75,16 +91,66 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     }
   }, [currentPath, newFolderName, loadDirectory]);
 
-  const handleUpload = useCallback(async (files) => {
-    if (!files || files.length === 0) return;
+  const readAllDirectoryEntries = useCallback(async (directoryReader) => {
+    const entries = [];
+    while (true) {
+      const batch = await new Promise((resolve, reject) => {
+        directoryReader.readEntries(resolve, reject);
+      });
+      if (!batch.length) break;
+      entries.push(...batch);
+    }
+    return entries;
+  }, []);
 
-    setUploadProgress({ current: 0, total: files.length });
+  const readEntryFiles = useCallback(async (entry, prefix = '') => {
+    if (entry.isFile) {
+      const file = await new Promise((resolve, reject) => {
+        entry.file(resolve, reject);
+      });
+      return [{ file, relativePath: `${prefix}${file.name}` }];
+    }
+    if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const entries = await readAllDirectoryEntries(reader);
+      const files = [];
+      for (const child of entries) {
+        const childFiles = await readEntryFiles(child, `${prefix}${entry.name}/`);
+        files.push(...childFiles);
+      }
+      return files;
+    }
+    return [];
+  }, [readAllDirectoryEntries]);
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+  const getDroppedEntries = useCallback(async (dataTransfer) => {
+    const itemsList = Array.from(dataTransfer?.items || []);
+    if (itemsList.length === 0) return [];
+
+    const entries = itemsList
+      .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null))
+      .filter(Boolean);
+
+    if (entries.length === 0) return [];
+
+    const files = [];
+    for (const entry of entries) {
+      const entryFiles = await readEntryFiles(entry);
+      files.push(...entryFiles);
+    }
+    return files;
+  }, [readEntryFiles]);
+
+  const handleUploadEntries = useCallback(async (entries) => {
+    if (!entries || entries.length === 0) return;
+
+    setUploadProgress({ current: 0, total: entries.length });
+
+    for (let i = 0; i < entries.length; i++) {
+      const { file, relativePath } = entries[i];
       const formData = new FormData();
       formData.append('path', currentPath);
-      formData.append('files', file);
+      formData.append('files', file, relativePath || file.name);
 
       try {
         await fetch('/api/files/upload', {
@@ -104,16 +170,35 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     loadDirectory(currentPath);
   }, [currentPath, loadDirectory]);
 
+  const handleUpload = useCallback(async (files) => {
+    if (!files || files.length === 0) return;
+    const entries = Array.from(files).map((file) => ({
+      file,
+      relativePath: file.webkitRelativePath || file.name
+    }));
+    await handleUploadEntries(entries);
+  }, [handleUploadEntries]);
+
   const handleFileSelect = useCallback((e) => {
     handleUpload(e.target.files);
     e.target.value = '';
   }, [handleUpload]);
 
-  const handleDrop = useCallback((e) => {
+  const handleFolderSelect = useCallback((e) => {
+    handleUpload(e.target.files);
+    e.target.value = '';
+  }, [handleUpload]);
+
+  const handleDrop = useCallback(async (e) => {
     e.preventDefault();
     setDragOver(false);
+    const entries = await getDroppedEntries(e.dataTransfer);
+    if (entries.length > 0) {
+      await handleUploadEntries(entries);
+      return;
+    }
     handleUpload(e.dataTransfer.files);
-  }, [handleUpload]);
+  }, [getDroppedEntries, handleUpload, handleUploadEntries]);
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -125,7 +210,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   }, []);
 
   const handleDelete = useCallback(async (item) => {
-    const fullPath = currentPath === '~' ? `~/${item.name}` : `${currentPath}/${item.name}`;
+    const fullPath = buildItemPath(item.name);
     if (!confirm(`Delete "${item.name}"?`)) return;
 
     try {
@@ -137,16 +222,16 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     } catch (err) {
       setError(err.message || 'Failed to delete');
     }
-  }, [currentPath, loadDirectory]);
+  }, [buildItemPath, loadDirectory]);
 
   const handleDownload = useCallback(async (item) => {
-    const fullPath = currentPath === '~' ? `~/${item.name}` : `${currentPath}/${item.name}`;
+    const fullPath = buildItemPath(item.name);
     const token = localStorage.getItem('accessToken');
     window.open(`/api/files/download?path=${encodeURIComponent(fullPath)}&token=${token}`, '_blank');
-  }, [currentPath]);
+  }, [buildItemPath]);
 
   const handleUnzip = useCallback(async (item) => {
-    const fullPath = currentPath === '~' ? `~/${item.name}` : `${currentPath}/${item.name}`;
+    const fullPath = buildItemPath(item.name);
     try {
       await apiFetch('/api/files/unzip', {
         method: 'POST',
@@ -156,7 +241,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     } catch (err) {
       setError(err.message || 'Failed to extract zip');
     }
-  }, [currentPath, loadDirectory]);
+  }, [buildItemPath, currentPath, loadDirectory]);
 
   const formatSize = (bytes) => {
     if (bytes === 0) return '-';
@@ -167,15 +252,46 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
 
   const getBreadcrumbs = () => {
     if (!currentPath || currentPath === '~') return [{ name: 'Home', path: '~' }];
+    if (currentPath.startsWith('~/')) {
+      const parts = currentPath.split('/');
+      const crumbs = [];
+      let path = '';
+      for (const part of parts) {
+        path = path ? `${path}/${part}` : part;
+        crumbs.push({ name: part === '~' ? 'Home' : part, path });
+      }
+      return crumbs;
+    }
+
+    if (currentPath === '/') return [{ name: '/', path: '/' }];
+
+    if (currentPath.startsWith('/')) {
+      const parts = currentPath.split('/').filter(Boolean);
+      const crumbs = [{ name: '/', path: '/' }];
+      let path = '';
+      for (const part of parts) {
+        path = `${path}/${part}`;
+        crumbs.push({ name: part, path });
+      }
+      return crumbs;
+    }
+
     const parts = currentPath.split('/');
     const crumbs = [];
     let path = '';
     for (const part of parts) {
       path = path ? `${path}/${part}` : part;
-      crumbs.push({ name: part === '~' ? 'Home' : part, path });
+      crumbs.push({ name: part, path });
     }
     return crumbs;
   };
+
+  const handleGoToPath = useCallback(() => {
+    const nextPath = window.prompt('Go to path:', currentPath);
+    if (nextPath) {
+      navigateTo(nextPath.trim());
+    }
+  }, [currentPath, navigateTo]);
 
   if (!isOpen) return null;
 
@@ -213,12 +329,27 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
         <button onClick={() => fileInputRef.current?.click()} title="Upload">
           ⬆
         </button>
+        <button onClick={() => folderInputRef.current?.click()} title="Upload folder">
+          🗂
+        </button>
+        <button onClick={handleGoToPath} title="Go to path">
+          ↦
+        </button>
         <input
           ref={fileInputRef}
           type="file"
           multiple
           style={{ display: 'none' }}
           onChange={handleFileSelect}
+        />
+        <input
+          ref={folderInputRef}
+          type="file"
+          multiple
+          webkitdirectory="true"
+          directory="true"
+          style={{ display: 'none' }}
+          onChange={handleFolderSelect}
         />
       </div>
 
@@ -276,6 +407,11 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
               <div className="file-actions">
                 {item.type === 'file' && (
                   <button onClick={(e) => { e.stopPropagation(); handleDownload(item); }} title="Download">
+                    ⬇
+                  </button>
+                )}
+                {item.type === 'directory' && (
+                  <button onClick={(e) => { e.stopPropagation(); handleDownload(item); }} title="Download zip">
                     ⬇
                   </button>
                 )}
