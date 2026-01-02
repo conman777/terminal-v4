@@ -30,6 +30,9 @@ Backend configuration (set in a `.env` file under `backend/` or via shell):
 | `CLAUDE_BIN` | Path or alias for the Claude CLI | `claude` |
 | `CLAUDE_ALLOWED_TOOLS` | Comma separated list passed to `--allowedTools` | *(unset)* |
 | `CLAUDE_ASSUME_YES` | If `true`, enables `--dangerously-skip-permissions` | `false` |
+| `JWT_SECRET` | JWT signing secret | *(required in production)* |
+| `REFRESH_SECRET` | Refresh token signing secret | *(required in production)* |
+| `ALLOWED_USERNAME` | Only this username is allowed to authenticate | *(unset)* |
 
 Frontend uses Vite’s default env handling. Ensure `VITE_BACKEND_URL` in `frontend/.env` points to the backend if customizing ports.
 

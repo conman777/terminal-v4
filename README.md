@@ -90,6 +90,9 @@ terminal-v4/
 - `HOST` - Server host (default: `0.0.0.0`)
 - `LOG_LEVEL` - Logging level (default: `info`)
 - `TERMINAL_DATA_DIR` - Override backend data directory (default: `backend/data`)
+- `JWT_SECRET` - JWT signing secret (required in production)
+- `REFRESH_SECRET` - Refresh token signing secret (required in production)
+- `ALLOWED_USERNAME` - Only this username is allowed to authenticate
 
 ### Default Shell
 
@@ -127,19 +130,14 @@ git status            # Git operations
 
 ## Security Considerations
 
-⚠️ **Local Development Only** - This app is designed for local/trusted network use:
+⚠️ **Internet Exposure Requires Hardening**
 
-- No authentication (anyone on network can access)
-- No command whitelisting (full shell access)
-- No rate limiting
-- Sessions stored in memory only
-
-**For production deployment**, you must add:
-- User authentication (JWT/session tokens)
-- Command filtering/sandboxing
-- HTTPS/TLS encryption
-- CORS restrictions
-- Rate limiting
+This app provides full shell access to the host. If exposed to the internet:
+- Ensure `JWT_SECRET` and `REFRESH_SECRET` are set to strong values
+- Set `ALLOWED_USERNAME` so only your account can log in
+- Use HTTPS/TLS (terminate at a reverse proxy or load balancer)
+- Add rate limiting or a WAF in front of `/api/auth/login`
+- Keep host OS and dependencies patched
 
 See `docs/architecture/SYSTEM_ARCHITECTURE.md` for detailed security recommendations.
 

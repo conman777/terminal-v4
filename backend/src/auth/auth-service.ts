@@ -19,9 +19,33 @@ const BCRYPT_ROUNDS = 12;
 const ACCESS_TOKEN_EXPIRY = '24h';
 const REFRESH_TOKEN_EXPIRY_DAYS = 30;
 
+const DEV_JWT_SECRET = 'dev-jwt-secret-change-in-production';
+const DEV_REFRESH_SECRET = 'dev-refresh-secret-change-in-production';
+
 // Get secrets from environment or use defaults for development
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production';
-const REFRESH_SECRET = process.env.REFRESH_SECRET || 'dev-refresh-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || DEV_JWT_SECRET;
+const REFRESH_SECRET = process.env.REFRESH_SECRET || DEV_REFRESH_SECRET;
+const ALLOWED_USERNAME = process.env.ALLOWED_USERNAME?.trim();
+const REQUIRE_STRONG_SECRETS = process.env.NODE_ENV === 'production';
+
+export function assertAuthConfig(): void {
+  if (REQUIRE_STRONG_SECRETS) {
+    if (!process.env.JWT_SECRET || JWT_SECRET === DEV_JWT_SECRET) {
+      throw new Error('JWT_SECRET must be set to a strong value in production');
+    }
+    if (!process.env.REFRESH_SECRET || REFRESH_SECRET === DEV_REFRESH_SECRET) {
+      throw new Error('REFRESH_SECRET must be set to a strong value in production');
+    }
+  }
+  if (ALLOWED_USERNAME !== undefined && ALLOWED_USERNAME.length === 0) {
+    throw new Error('ALLOWED_USERNAME must not be empty when set');
+  }
+}
+
+export function isAllowedUsername(username: string): boolean {
+  if (!ALLOWED_USERNAME) return true;
+  return username === ALLOWED_USERNAME;
+}
 
 export interface TokenPair {
   accessToken: string;
@@ -86,6 +110,9 @@ export function verifyAccessToken(token: string): JwtPayload | null {
 
 // Register a new user
 export async function register(username: string, password: string): Promise<AuthResult> {
+  if (!isAllowedUsername(username)) {
+    throw new Error('Invalid credentials');
+  }
   // Check if username already exists
   const existing = getUserByUsername(username);
   if (existing) {
@@ -110,6 +137,9 @@ export async function register(username: string, password: string): Promise<Auth
 
 // Login with username and password
 export async function login(username: string, password: string): Promise<AuthResult> {
+  if (!isAllowedUsername(username)) {
+    throw new Error('Invalid credentials');
+  }
   const user = getUserByUsername(username);
   if (!user) {
     throw new Error('Invalid credentials');
@@ -153,6 +183,10 @@ export function refreshTokens(refreshToken: string): AuthResult {
   // Get user
   const user = getUserById(storedToken.user_id);
   if (!user) {
+    deleteRefreshToken(storedToken.id);
+    throw new Error('User not found');
+  }
+  if (!isAllowedUsername(user.username)) {
     deleteRefreshToken(storedToken.id);
     throw new Error('User not found');
   }
