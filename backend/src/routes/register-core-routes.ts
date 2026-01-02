@@ -13,11 +13,9 @@ import type { TerminalManager } from '../terminal/terminal-manager';
 import type { ClaudeCodeManager } from '../claude-code/claude-code-manager';
 import { scanForProjects, addCustomScanDirectory, removeCustomScanDirectory, getCustomScanDirectories } from '../services/project-scanner';
 import {
-  resolvePathInProjectRoot,
+  resolvePathAnywhere,
   isValidIdentifier,
-  PROJECT_ROOT,
-  getProjectRootRealPath,
-  isWithinBase
+  PROJECT_ROOT
 } from '../utils/path-security';
 
 export interface CoreRouteDependencies {
@@ -460,13 +458,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   app.get<{ Querystring: { path?: string } }>('/api/fs/list', async (request, reply) => {
     // Resolve to absolute path
     const requestedPath = resolve(request.query.path || PROJECT_ROOT);
-    const safePath = await resolvePathInProjectRoot(requestedPath);
-
-    // Sandboxing check
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside project root' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(requestedPath);
 
     try {
       const stats = await stat(safePath);
@@ -481,16 +473,9 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
         .map(entry => entry.name)
         .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
 
-      // Get parent directory (null if at root or outside SAFE_ROOT)
+      // Get parent directory (null if at filesystem root)
       const parsed = parse(safePath);
-      let parent: string | null = null;
-      if (parsed.root !== safePath) {
-        const potentialParent = dirname(safePath);
-        const baseRealPath = await getProjectRootRealPath();
-        if (potentialParent !== safePath && isWithinBase(baseRealPath, potentialParent)) {
-          parent = potentialParent;
-        }
-      }
+      const parent = parsed.root === safePath ? null : dirname(safePath);
 
       reply.send({
         path: safePath,
@@ -508,13 +493,7 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   // Filesystem: Download directory as zip
   app.get<{ Querystring: { path?: string } }>('/api/fs/download', async (request, reply) => {
     const requestedPath = resolve(request.query.path || PROJECT_ROOT);
-    const safePath = await resolvePathInProjectRoot(requestedPath);
-
-    // Sandboxing check
-    if (!safePath) {
-      reply.code(403).send({ error: 'Access denied: path is outside project root' });
-      return;
-    }
+    const safePath = await resolvePathAnywhere(requestedPath);
 
     let stats;
     try {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import supertest from 'supertest';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs/promises';
 import { createServer } from '../src/index';
 import { EventEmitter } from 'node:events';
@@ -24,45 +25,17 @@ async function withApp<T>(fn: (app: Awaited<ReturnType<typeof createServer>>) =>
 }
 
 describe('Filesystem & preview sandboxing', () => {
-  it('blocks prefix-escape paths for /api/fs/list and /api/fs/download', async () => {
-    const projectRoot = path.resolve(process.cwd(), '..');
-    const prefixEscape = `${projectRoot}-evil`;
-
-    await withApp(async (app) => {
-      await supertest(app.server)
-        .get('/api/fs/list')
-        .query({ path: prefixEscape })
-        .expect(403);
-
-      await supertest(app.server)
-        .get('/api/fs/download')
-        .query({ path: prefixEscape })
-        .expect(403);
-    });
-  });
-
-  it('blocks symlink escapes for /api/fs/list', async () => {
-    const projectRoot = path.resolve(process.cwd(), '..');
-    const linkPath = path.join(projectRoot, 'tmp-symlink-test');
-
-    // Point a symlink inside the repo to an external directory.
-    try {
-      await fs.symlink('/tmp', linkPath);
-    } catch (error) {
-      // If symlinks are not permitted in this environment, skip the assertion.
-      // (The core security check is still covered by the prefix-escape test.)
-      return;
-    }
-
+  it('allows /api/fs/list outside the project root', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'terminal-v4-fs-list-'));
     try {
       await withApp(async (app) => {
         await supertest(app.server)
           .get('/api/fs/list')
-          .query({ path: linkPath })
-          .expect(403);
+          .query({ path: tmpDir })
+          .expect(200);
       });
     } finally {
-      await fs.unlink(linkPath).catch(() => {});
+      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
@@ -86,8 +59,8 @@ describe('Filesystem & preview sandboxing', () => {
     });
   });
 
-  it('streams zip downloads for in-root directories', async () => {
-    const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-download-'));
+  it('streams zip downloads for directories', async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'terminal-v4-download-'));
 
     try {
       await fs.writeFile(path.join(tmpDir, 'hello.txt'), 'hello', 'utf-8');
@@ -105,5 +78,4 @@ describe('Filesystem & preview sandboxing', () => {
     }
   });
 });
-
 

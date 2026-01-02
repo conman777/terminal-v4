@@ -135,6 +135,24 @@ export async function resolvePathInUserHome(targetPath: string): Promise<string 
 }
 
 /**
+ * Resolve a path without sandboxing restrictions.
+ * Expands ~ to home directory and resolves symlinks when possible.
+ */
+export async function resolvePathAnywhere(targetPath: string): Promise<string> {
+  const expandedPath = targetPath.startsWith('~')
+    ? targetPath.replace(/^~/, USER_HOME)
+    : targetPath;
+
+  const resolvedTargetPath = resolve(expandedPath);
+
+  try {
+    return await realpath(resolvedTargetPath);
+  } catch {
+    return resolvedTargetPath;
+  }
+}
+
+/**
  * Sanitize a filename by removing dangerous characters
  */
 export function sanitizeFilename(filename: string): string {
