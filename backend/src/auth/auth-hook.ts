@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { verifyAccessToken } from './auth-service.js';
+import { verifyAccessToken, isAllowedUsername } from './auth-service.js';
 
 // Routes that don't require authentication
 const PUBLIC_ROUTES = [
@@ -7,6 +7,13 @@ const PUBLIC_ROUTES = [
   '/api/auth/login',
   '/api/auth/refresh',
   '/api/health'
+];
+
+// Route patterns that don't require authentication (for dynamic routes)
+const PUBLIC_ROUTE_PATTERNS = [
+  /^\/api\/preview\/\d+\/logs$/, // Preview logs per port
+  /^\/api\/preview\/logs$/,      // List all preview logs
+  /^\/api\/browser\//            // Browser automation API
 ];
 
 // Extend Fastify request type
@@ -19,8 +26,20 @@ declare module 'fastify' {
 
 export function registerAuthHook(app: FastifyInstance): void {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
+    // Skip auth for preview subdomains (they have their own auth)
+    const host = request.headers.host || '';
+    if (host.startsWith('preview-')) {
+      return;
+    }
+
     // Skip auth for public routes
     if (PUBLIC_ROUTES.some(route => request.url.startsWith(route))) {
+      return;
+    }
+
+    // Skip auth for public route patterns (preview logs endpoints)
+    const urlPath = request.url.split('?')[0]; // Remove query string
+    if (PUBLIC_ROUTE_PATTERNS.some(pattern => pattern.test(urlPath))) {
       return;
     }
 
@@ -54,6 +73,10 @@ export function registerAuthHook(app: FastifyInstance): void {
 
     if (!payload) {
       reply.status(401).send({ error: 'Invalid or expired token' });
+      return;
+    }
+    if (!isAllowedUsername(payload.username)) {
+      reply.status(401).send({ error: 'Unauthorized' });
       return;
     }
 

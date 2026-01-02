@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsup src/index.ts --format esm --sourcemap --dts",
+    "build": "tsup src/index.ts --format esm --sourcemap --dts --external ws",
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
     "test": "vitest run",
@@ -28,6 +28,7 @@
     "fastify": "^5.6.1",
     "jsonwebtoken": "^9.0.3",
     "pino": "^10.1.0",
+    "playwright": "^1.57.0",
     "unzipper": "^0.12.3",
     "zod": "^3.25.76"
   },
@@ -40,7 +41,7 @@
     "@types/supertest": "^6.0.3",
     "@types/unzipper": "^0.10.11",
     "supertest": "^7.1.4",
-    "tsup": "^8.5.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.1"

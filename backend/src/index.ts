@@ -12,6 +12,8 @@ import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
+import { registerPreviewLogsRoutes } from './routes/preview-logs-routes';
+import { registerBrowserRoutes } from './routes/browser-routes';
 import { registerProcessRoutes } from './routes/process-routes';
 import { registerSystemRoutes } from './routes/system-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
@@ -21,6 +23,7 @@ import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
+import { assertAuthConfig } from './auth/auth-service';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -52,6 +55,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize database
   getDatabase();
 
+  // Fail fast on insecure auth configuration
+  assertAuthConfig();
+
   // Register auth hook (must be before routes)
   registerAuthHook(app);
 
@@ -73,6 +79,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerCoreRoutes(app, { terminalManager, claudeCodeManager });
   await registerBookmarkRoutes(app);
   await registerPreviewRoutes(app);
+  await registerPreviewLogsRoutes(app);
   await registerTranscribeRoutes(app);
   await registerSettingsRoutes(app);
   await registerDevProxyRoutes(app);
@@ -80,6 +87,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerFileRoutes(app);
   await registerProcessRoutes(app);
   await registerSystemRoutes(app);
+  await registerBrowserRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
