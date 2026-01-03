@@ -579,43 +579,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       container.addEventListener('contextmenu', handleContextMenu);
 
-      // Mouse wheel scrolling for tmux
-      const wheelHandler = (e) => {
-        const buffer = term.buffer?.active;
-        const baseY = buffer?.baseY || 0;
-        // Only intercept if xterm has no scrollback (tmux managing it)
-        if (baseY === 0) {
-          e.preventDefault();
-          if (e.deltaY < 0) {
-            // Scroll up
-            if (!inCopyModeRef.current) {
-              const socket = socketRef.current;
-              if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send('\x02['); // Ctrl+B [ to enter copy mode
-              }
-              inCopyModeRef.current = true;
-            }
-            const socket = socketRef.current;
-            if (socket && socket.readyState === WebSocket.OPEN) {
-              socket.send('\x1b[5~'); // Page Up
-            }
-          } else if (e.deltaY > 0) {
-            // Scroll down
-            if (!inCopyModeRef.current) {
-              const socket = socketRef.current;
-              if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send('\x02['); // Ctrl+B [ to enter copy mode
-              }
-              inCopyModeRef.current = true;
-            }
-            const socket = socketRef.current;
-            if (socket && socket.readyState === WebSocket.OPEN) {
-              socket.send('\x1b[6~'); // Page Down
-            }
-          }
-        }
-      };
-      container.addEventListener('wheel', wheelHandler, { passive: false });
+      // Mouse wheel scrolling is handled natively by xterm + tmux mouse mode
 
       const handlePasteEvent = (e) => {
         if (suppressPasteEventRef.current) {
@@ -638,7 +602,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
         container.removeEventListener('contextmenu', handleContextMenu);
-        container.removeEventListener('wheel', wheelHandler);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
           textarea.removeEventListener('focus', handleTextareaFocus);
