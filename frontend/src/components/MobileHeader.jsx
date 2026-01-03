@@ -28,7 +28,9 @@ export function MobileHeader({
   previewUrl,
   showFileManager,
   onToggleFileManager,
-  onNavigateToPath
+  onNavigateToPath,
+  // Header collapse on scroll
+  isNavCollapsed = false
 }) {
   const [showSessionDropdown, setShowSessionDropdown] = useState(false);
   const [showDrawer, setShowDrawer] = useState(false);
@@ -38,7 +40,7 @@ export function MobileHeader({
 
   return (
     <>
-      <header className="mobile-header">
+      <header className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}`}>
         <div className="mobile-header-row">
           <button className="mobile-header-btn" onClick={() => setShowDrawer(true)} aria-label="Menu" type="button">
             ☰

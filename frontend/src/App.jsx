@@ -19,6 +19,7 @@ import { ProcessManagerModal } from './components/ProcessManagerModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
+import { useScrollDirection } from './hooks/useScrollDirection';
 import { apiFetch, apiGet } from './utils/api';
 import { getAccessToken } from './utils/auth';
 
@@ -670,6 +671,12 @@ function AppContent() {
   const restoreInFlightRef = useRef(new Set());
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
+  const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
+
+  // Reset header collapse when switching mobile views
+  useEffect(() => {
+    resetScrollDirection();
+  }, [mobileView, resetScrollDirection]);
 
   // Load recent folders from localStorage
   const [recentFolders, setRecentFolders] = useState(() => {
@@ -1612,7 +1619,7 @@ function AppContent() {
       : undefined;
 
   return (
-    <div className={`layout${isMobile ? ' mobile' : ''}`} style={layoutStyle}>
+    <div className={`layout${isMobile ? ' mobile' : ''}${isNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
       <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1671,6 +1678,7 @@ function AppContent() {
             showFileManager={showFileManager}
             onToggleFileManager={() => setShowFileManager(!showFileManager)}
             onNavigateToPath={handleNavigateToPath}
+            isNavCollapsed={isNavCollapsed}
           />
           <MobileKeybar
             sessionId={activeSessionId}
@@ -1952,6 +1960,7 @@ function AppContent() {
                   viewportHeight={viewportHeight}
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
+                  onScrollDirection={handleScrollDirection}
                 />
               </div>
             )}

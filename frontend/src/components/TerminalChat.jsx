@@ -7,7 +7,7 @@ import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -27,6 +27,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     setIsLoadingHistory(true);
   }, [sessionId]);
+
+  // Register image upload trigger for external components (like mobile status bar)
+  useEffect(() => {
+    if (onRegisterImageUpload) {
+      onRegisterImageUpload(() => imageInputRef.current?.click());
+    }
+  }, [onRegisterImageUpload]);
 
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
