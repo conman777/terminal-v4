@@ -7,7 +7,7 @@ import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -30,6 +30,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
+  const copyModeTimeoutRef = useRef(null);
 
   // Track scroll interval for press-and-hold continuous scrolling
   const scrollIntervalRef = useRef(null);
@@ -44,57 +45,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, []);
 
-  // Scroll handlers for mobile buttons
-  // Uses tmux copy-mode when xterm has no scrollback (baseY === 0)
-  const scrollUp = useCallback(() => {
-    const term = xtermRef.current;
-    if (!term) return;
-
-    const buffer = term.buffer?.active;
-    const baseY = buffer?.baseY || 0;
-
-    if (baseY > 0) {
-      // xterm has scrollback, use native scroll
-      term.scrollLines(-5);
-    } else {
-      // No xterm scrollback - likely tmux managing it
-      // Enter copy mode (Ctrl+B [) then Page Up
-      if (!inCopyModeRef.current) {
-        sendToTerminal('\x02['); // Ctrl+B [
-        inCopyModeRef.current = true;
-      }
-      sendToTerminal('\x1b[5~'); // Page Up
+  // Enter tmux copy-mode with automatic timeout reset
+  const enterCopyMode = useCallback(() => {
+    if (!inCopyModeRef.current) {
+      sendToTerminal('\x02['); // Ctrl+B [ to enter copy mode
+      inCopyModeRef.current = true;
     }
-  }, [sendToTerminal]);
-
-  const scrollDown = useCallback(() => {
-    const term = xtermRef.current;
-    if (!term) return;
-
-    const buffer = term.buffer?.active;
-    const baseY = buffer?.baseY || 0;
-
-    if (baseY > 0) {
-      // xterm has scrollback, use native scroll
-      term.scrollLines(5);
-    } else {
-      // No xterm scrollback - likely tmux managing it
-      // Enter copy mode (Ctrl+B [) then Page Down
-      if (!inCopyModeRef.current) {
-        sendToTerminal('\x02['); // Ctrl+B [
-        inCopyModeRef.current = true;
-      }
-      sendToTerminal('\x1b[6~'); // Page Down
-    }
-  }, [sendToTerminal]);
-
-  // Exit tmux copy mode when user types
-  const exitCopyMode = useCallback(() => {
-    if (inCopyModeRef.current) {
-      sendToTerminal('q'); // Exit copy mode
+    // Reset timeout - assume copy-mode exited after 10s of no scroll activity
+    clearTimeout(copyModeTimeoutRef.current);
+    copyModeTimeoutRef.current = setTimeout(() => {
       inCopyModeRef.current = false;
-    }
+    }, 10000);
   }, [sendToTerminal]);
+
+  // Scroll in tmux copy-mode (shared logic for buttons and wheel)
+  const scrollInTmux = useCallback((direction) => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    const baseY = term.buffer?.active?.baseY || 0;
+
+    if (baseY > 0) {
+      // xterm has scrollback, use native scroll
+      term.scrollLines(direction === 'up' ? -5 : 5);
+    } else {
+      // No xterm scrollback - tmux managing it
+      enterCopyMode();
+      sendToTerminal(direction === 'up' ? '\x1b[5~' : '\x1b[6~'); // Page Up/Down
+    }
+  }, [sendToTerminal, enterCopyMode]);
+
+  // Scroll handlers for mobile buttons
+  const scrollUp = useCallback(() => scrollInTmux('up'), [scrollInTmux]);
+  const scrollDown = useCallback(() => scrollInTmux('down'), [scrollInTmux]);
 
   // Start continuous scrolling with acceleration (called on press)
   const startScrolling = useCallback((direction) => {
@@ -358,6 +341,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         textarea.addEventListener('focus', handleTextareaFocus);
       }
 
+      // Scroll direction detection for header collapse
+      let lastScrollPos = 0;
+      const scrollDisposer = term.onScroll((newPos) => {
+        if (onScrollDirection && !disposed) {
+          const direction = newPos > lastScrollPos ? 'down' : 'up';
+          onScrollDirection(direction);
+        }
+        lastScrollPos = newPos;
+      });
+
       rafId = requestAnimationFrame(() => {
         if (!disposed && fitAddonRef.current) {
           fitAddonRef.current.fit();
@@ -522,10 +515,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           return;
         }
 
-        // Exit tmux copy mode when user types
+        // Reset copy-mode state when user types
+        // Don't send 'q' - if state is stale, it would inject 'q' into shell
+        // User's input will naturally exit copy-mode if they're in it
         if (inCopyModeRef.current) {
-          sendTerminalInput('q'); // Exit copy mode first
           inCopyModeRef.current = false;
+          clearTimeout(copyModeTimeoutRef.current);
         }
 
         console.log('[TerminalChat] onData triggered:', data.length, 'chars');
@@ -579,7 +574,62 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       container.addEventListener('contextmenu', handleContextMenu);
 
-      // Mouse wheel scrolling is handled natively by xterm + tmux mouse mode
+      // Mouse wheel scrolling for tmux - enter copy-mode and scroll
+      let scrollAccumulator = 0;
+      let lastScrollDirection = 0;
+      let pendingScroll = null;
+      const SCROLL_THRESHOLD = 150; // Accumulate scroll before sending page command
+
+      const wheelHandler = (e) => {
+        const buffer = term.buffer?.active;
+        const baseY = buffer?.baseY || 0;
+        // Only intercept if xterm has no scrollback (tmux managing it)
+        if (baseY === 0) {
+          e.preventDefault();
+          const socket = socketRef.current;
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+          // Reset accumulator on direction change
+          const currentDirection = Math.sign(e.deltaY);
+          if (currentDirection !== 0 && currentDirection !== lastScrollDirection) {
+            scrollAccumulator = 0;
+            lastScrollDirection = currentDirection;
+          }
+
+          // Accumulate scroll delta
+          scrollAccumulator += e.deltaY;
+
+          // Only send scroll command when accumulated enough
+          if (Math.abs(scrollAccumulator) >= SCROLL_THRESHOLD) {
+            const scrollDirection = scrollAccumulator < 0 ? 'up' : 'down';
+            scrollAccumulator = 0;
+
+            // Clear any pending scroll
+            if (pendingScroll) clearTimeout(pendingScroll);
+
+            // Always send copy-mode entry first
+            socket.send('\x02['); // Ctrl+B [ to enter copy mode
+            inCopyModeRef.current = true;
+
+            // Send scroll after a short delay to ensure copy-mode is active
+            pendingScroll = setTimeout(() => {
+              if (scrollDirection === 'up') {
+                socket.send('\x1b[5~'); // Page Up
+              } else {
+                socket.send('\x1b[6~'); // Page Down
+              }
+              pendingScroll = null;
+            }, 50);
+
+            // Reset timeout - assume copy-mode exited after 10s of no activity
+            clearTimeout(copyModeTimeoutRef.current);
+            copyModeTimeoutRef.current = setTimeout(() => {
+              inCopyModeRef.current = false;
+            }, 10000);
+          }
+        }
+      };
+      container.addEventListener('wheel', wheelHandler, { passive: false });
 
       const handlePasteEvent = (e) => {
         if (suppressPasteEventRef.current) {
@@ -602,6 +652,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
         container.removeEventListener('contextmenu', handleContextMenu);
+        container.removeEventListener('wheel', wheelHandler);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
           textarea.removeEventListener('focus', handleTextareaFocus);
