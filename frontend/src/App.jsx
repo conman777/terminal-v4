@@ -77,7 +77,7 @@ function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, r
     };
 
     fetchStats();
-    const interval = setInterval(fetchStats, 2000);
+    const interval = setInterval(fetchStats, 5000); // 5s is sufficient for system stats
     return () => clearInterval(interval);
   }, [isOpen]);
 
@@ -676,6 +676,7 @@ function AppContent() {
   const mainContentRef = useRef(null);
   const isMountedRef = useRef(true);
   const restoreInFlightRef = useRef(new Set());
+  const lastActivityRef = useRef(Date.now());
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
@@ -1094,11 +1095,59 @@ function AppContent() {
 
     initializeSessions();
 
-    // Poll consolidated state every 5 seconds to keep everything fresh
-    const interval = setInterval(fetchAppState, 5000);
+    // Visibility-aware polling with idle slowdown
+    let pollTimeoutId = null;
+
+    const getPollingInterval = () => {
+      // Don't poll when tab is hidden
+      if (document.visibilityState === 'hidden') return null;
+
+      const idleTime = Date.now() - lastActivityRef.current;
+      if (idleTime > 60000) return 30000;  // 30s after 1min idle
+      if (idleTime > 30000) return 15000;  // 15s after 30s idle
+      return 5000;  // Normal 5s polling
+    };
+
+    const schedulePoll = () => {
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      const interval = getPollingInterval();
+      if (interval !== null) {
+        pollTimeoutId = setTimeout(() => {
+          fetchAppState();
+          schedulePoll();
+        }, interval);
+      }
+    };
+
+    // Start polling
+    schedulePoll();
+
+    // Track user activity to reset idle timer
+    const handleActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
+    // Resume/pause polling on visibility change
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        lastActivityRef.current = Date.now();
+        fetchAppState(); // Immediate fetch on tab focus
+        schedulePoll();
+      } else {
+        if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      }
+    };
+
+    window.addEventListener('mousemove', handleActivity, { passive: true });
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
       isMountedRef.current = false;
-      clearInterval(interval);
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [loadSessions, loadBookmarks, fetchAppState]);
 

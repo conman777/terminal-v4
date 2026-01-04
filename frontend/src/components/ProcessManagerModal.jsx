@@ -30,12 +30,12 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
     }
   }, [projects]);
 
-  // Fetch on open and every 3 seconds while open
+  // Fetch on open and every 5 seconds while open
   useEffect(() => {
     if (!isOpen) return;
 
     fetchProcesses();
-    const interval = setInterval(fetchProcesses, 3000);
+    const interval = setInterval(fetchProcesses, 5000); // 5s is sufficient
     return () => clearInterval(interval);
   }, [isOpen, fetchProcesses]);
 

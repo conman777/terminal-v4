@@ -131,12 +131,24 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   const [modelPickerIndex, setModelPickerIndex] = useState(0);
   const [inputHistory, setInputHistory] = useState([]);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const isNearBottomRef = useRef(true);
   const eventSourceRef = useRef(null);
   const seenEventIdsRef = useRef(new Set());
 
-  // Auto-scroll to bottom on new events
+  // Track scroll position to know if user scrolled away
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
+  }, []);
+
+  // Auto-scroll to bottom on new events (only if user is near bottom)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isNearBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+    }
   }, [events]);
 
   // Model picker options
@@ -438,7 +450,7 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         </button>
       )}
 
-      <div className="claude-code-messages">
+      <div className="claude-code-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll}>
         {groupedEvents.length === 0 ? (
           <div className="claude-code-empty">
             <div className="empty-icon">🤖</div>

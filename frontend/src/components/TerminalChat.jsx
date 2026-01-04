@@ -100,17 +100,38 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const scrollUp = useCallback(() => scrollInTmux('up'), [scrollInTmux]);
   const scrollDown = useCallback(() => scrollInTmux('down'), [scrollInTmux]);
 
-  // Start continuous scrolling with acceleration (called on press)
+  // Jump to live output - exits tmux copy-mode and scrolls xterm to bottom
+  const jumpToLive = useCallback(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    // Exit tmux copy-mode by sending 'q' (quit copy-mode)
+    // First send ESC to cancel any pending operation, then 'q' to exit
+    sendToTerminal('\x1b'); // ESC
+    sendToTerminal('q');    // quit copy-mode
+    inCopyModeRef.current = false;
+    clearTimeout(copyModeTimeoutRef.current);
+
+    // Also scroll xterm to bottom in case it has its own scrollback
+    term.scrollToBottom();
+  }, [sendToTerminal]);
+
+  // Track last scroll time for acceleration
+  const lastScrollTimeRef = useRef(0);
+
+  // Start continuous scrolling with acceleration using requestAnimationFrame
   const startScrolling = useCallback((direction) => {
-    // Clear any existing timeout
+    // Cancel any existing animation
     if (scrollIntervalRef.current) {
-      clearTimeout(scrollIntervalRef.current);
+      cancelAnimationFrame(scrollIntervalRef.current);
       scrollIntervalRef.current = null;
     }
 
     // Track start time and direction
-    scrollStartTimeRef.current = Date.now();
+    const startTime = Date.now();
+    scrollStartTimeRef.current = startTime;
     scrollDirectionRef.current = direction;
+    lastScrollTimeRef.current = 0;
 
     // Scroll immediately on press
     if (direction === 'up') {
@@ -119,35 +140,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       scrollDown();
     }
 
-    // Acceleration settings (halved speed from original)
+    // Acceleration settings
     const INITIAL_DELAY = 400;  // Start slow (400ms between scrolls)
     const MIN_DELAY = 60;       // Maximum speed (60ms between scrolls)
     const ACCEL_TIME = 2000;    // Time to reach max speed (2 seconds)
 
-    // Recursive function for accelerating scroll
-    const scheduleNextScroll = () => {
-      const elapsed = Date.now() - scrollStartTimeRef.current;
+    // Animation loop using requestAnimationFrame
+    const animate = (timestamp) => {
+      if (!scrollDirectionRef.current) return;
 
-      // Calculate current delay (linear interpolation from INITIAL to MIN over ACCEL_TIME)
+      const elapsed = Date.now() - startTime;
+
+      // Calculate current delay based on acceleration
       const progress = Math.min(elapsed / ACCEL_TIME, 1);
       const currentDelay = INITIAL_DELAY - (INITIAL_DELAY - MIN_DELAY) * progress;
 
-      scrollIntervalRef.current = setTimeout(() => {
+      // Check if enough time has passed since last scroll
+      if (elapsed - lastScrollTimeRef.current >= currentDelay) {
+        lastScrollTimeRef.current = elapsed;
         if (scrollDirectionRef.current === 'up') {
           scrollUp();
         } else if (scrollDirectionRef.current === 'down') {
           scrollDown();
         }
+      }
 
-        // Continue if still scrolling
-        if (scrollDirectionRef.current) {
-          scheduleNextScroll();
-        }
-      }, currentDelay);
+      // Continue animation if still scrolling
+      if (scrollDirectionRef.current) {
+        scrollIntervalRef.current = requestAnimationFrame(animate);
+      }
     };
 
-    // Start the acceleration loop
-    scheduleNextScroll();
+    // Start the animation loop
+    scrollIntervalRef.current = requestAnimationFrame(animate);
   }, [scrollUp, scrollDown]);
 
   // Stop continuous scrolling (called on release)
@@ -155,7 +180,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     scrollDirectionRef.current = null;
     scrollStartTimeRef.current = null;
     if (scrollIntervalRef.current) {
-      clearTimeout(scrollIntervalRef.current);
+      cancelAnimationFrame(scrollIntervalRef.current);
       scrollIntervalRef.current = null;
     }
   }, []);
@@ -219,7 +244,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let rafId = null;
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: false, // Disabled - causes constant 500ms repaints
       fontSize: fontSize || (isMobile ? 20 : 14),
       fontFamily: isMobile
         ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
@@ -427,6 +452,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         return url.toString();
       };
 
+      let wsRetryCount = 0;
+      const MAX_WS_RETRY_DELAY = 30000;
+
       const connectSocket = () => {
         if (disposed) return;
         const existing = socketRef.current;
@@ -444,6 +472,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         socket.onopen = () => {
           if (disposed) return;
+          wsRetryCount = 0; // Reset retry count on successful connection
           if (hadConnectionError) {
             hadConnectionError = false;
             term.write('\r\n[Reconnected]\r\n');
@@ -507,7 +536,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             return;
           }
           if (shouldReconnect) {
-            setTimeout(connectSocket, 1000);
+            wsRetryCount++;
+            // Exponential backoff: 1s, 2s, 4s, 8s, ... up to 30s max
+            const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
+            setTimeout(connectSocket, delay);
           }
         };
 
@@ -708,7 +740,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         fitTimeoutRef.current = null;
       }
       if (scrollIntervalRef.current) {
-        clearTimeout(scrollIntervalRef.current);
+        cancelAnimationFrame(scrollIntervalRef.current);
         scrollIntervalRef.current = null;
       }
       if (resizeObserver) {
@@ -840,6 +872,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <button
+            className="scroll-btn scroll-live"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              jumpToLive();
+            }}
+            aria-label="Jump to live output"
+            title="Jump to live output"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="7 13 12 18 17 13" />
+              <polyline points="7 6 12 11 17 6" />
             </svg>
           </button>
       </div>

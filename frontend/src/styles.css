@@ -1247,6 +1247,9 @@ button {
 
 .scroll-btn:first-child {
   border-radius: 7px 7px 0 0;
+}
+
+.scroll-btn:not(:last-child) {
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -1257,6 +1260,17 @@ button {
 .scroll-btn:active {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+/* Jump to live button - highlighted style */
+.scroll-btn.scroll-live {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.scroll-btn.scroll-live:active {
+  background: #3b82f6;
+  color: #fff;
 }
 
 .scroll-btn svg {
@@ -1296,6 +1310,16 @@ button {
 .terminal-scroll-buttons.desktop .scroll-btn:hover {
   background: rgba(100, 100, 100, 0.95);
   border-color: rgba(255, 255, 255, 0.6);
+}
+
+.terminal-scroll-buttons.desktop .scroll-btn.scroll-live {
+  background: rgba(59, 130, 246, 0.9);
+  border-color: rgba(59, 130, 246, 0.6);
+}
+
+.terminal-scroll-buttons.desktop .scroll-btn.scroll-live:hover {
+  background: rgba(59, 130, 246, 1);
+  border-color: rgba(59, 130, 246, 0.8);
 }
 
 /* Terminal Input */

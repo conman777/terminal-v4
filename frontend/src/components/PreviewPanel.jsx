@@ -91,6 +91,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [showUrlInput, setShowUrlInput] = useState(false);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
+  const logsContainerRef = useRef(null);
+  const isLogsNearBottomRef = useRef(true);
   const urlInputRef = useRef(null);
 
   const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
@@ -112,10 +114,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // Auto-scroll logs to bottom
+  // Track if user scrolled away from bottom in logs
+  const handleLogsScroll = useCallback(() => {
+    const container = logsContainerRef.current;
+    if (!container) return;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    isLogsNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 50;
+  }, []);
+
+  // Auto-scroll logs to bottom (only if user is near bottom)
   useEffect(() => {
-    if (showLogs && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (showLogs && logsEndRef.current && isLogsNearBottomRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'instant' });
     }
   }, [logs, showLogs]);
 
@@ -324,7 +334,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               Clear
             </button>
           </div>
-          <div className="preview-console-content">
+          <div className="preview-console-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
             {logs.length === 0 ? (
               <div className="preview-logs-empty">No console output</div>
             ) : (
@@ -523,7 +533,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           </div>
         </div>
         {showLogs && (
-          <div className="preview-logs-content">
+          <div className="preview-logs-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
             {logs.length === 0 ? (
               <div className="preview-logs-empty">No console output yet</div>
             ) : (
