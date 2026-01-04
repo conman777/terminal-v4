@@ -24,11 +24,9 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
 
   useEffect(() => {
     const container = containerRef.current;
-    console.log('[Swipe] useEffect - container:', !!container, 'enabled:', enabled);
     if (!container) return;
 
     const handleTouchStart = (e) => {
-      console.log('[Swipe] touchstart, enabled:', enabledRef.current);
       if (!enabledRef.current) return;
 
       const touch = e.touches[0];
@@ -38,7 +36,6 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       };
       touchStartTimeRef.current = Date.now();
       swipeLockRef.current = null;
-      console.log('[Swipe] start at:', touchStartRef.current);
     };
 
     const handleTouchMove = (e) => {
@@ -53,7 +50,6 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
         // Determine intent once user moves enough.
         if (absX > 10 || absY > 10) {
           swipeLockRef.current = absX > absY ? 'horizontal' : 'vertical';
-          console.log('[Swipe] direction locked:', swipeLockRef.current, 'deltaX:', deltaX, 'deltaY:', deltaY);
         }
       }
 
@@ -64,12 +60,10 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
     };
 
     const handleTouchEnd = (e) => {
-      console.log('[Swipe] touchend, hasStart:', !!touchStartRef.current);
       if (!enabledRef.current || !touchStartRef.current) return;
 
       const touch = e.changedTouches[0];
       const deltaX = touch.clientX - touchStartRef.current.x;
-      const deltaY = touch.clientY - touchStartRef.current.y;
       const deltaTime = Date.now() - touchStartTimeRef.current;
 
       // Reset refs
@@ -78,11 +72,8 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       const swipeLock = swipeLockRef.current;
       swipeLockRef.current = null;
 
-      console.log('[Swipe] end - deltaX:', deltaX, 'deltaY:', deltaY, 'time:', deltaTime, 'lock:', swipeLock);
-
       // Ignore vertical intent to preserve scroll behavior
       if (swipeLock === 'vertical') {
-        console.log('[Swipe] ignored - vertical');
         return;
       }
 
@@ -93,20 +84,14 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       const isQuickSwipe = deltaTime < MAX_SWIPE_TIME && absX > MIN_SWIPE_DISTANCE;
       const isSlowSwipe = velocity > MIN_VELOCITY && absX > MIN_SWIPE_DISTANCE;
 
-      console.log('[Swipe] absX:', absX, 'velocity:', velocity, 'quick:', isQuickSwipe, 'slow:', isSlowSwipe);
-
       if (isQuickSwipe || isSlowSwipe) {
         if (deltaX < 0) {
           // Swiped left (go to next)
-          console.log('[Swipe] TRIGGERING swipe LEFT');
           onSwipeLeftRef.current?.();
         } else {
           // Swiped right (go to previous)
-          console.log('[Swipe] TRIGGERING swipe RIGHT');
           onSwipeRightRef.current?.();
         }
-      } else {
-        console.log('[Swipe] not enough distance/velocity');
       }
     };
 

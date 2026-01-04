@@ -98,11 +98,10 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        sendKey(text);
+        sendKeyRaw(text);
       }
     } catch (error) {
       console.error('Failed to read clipboard:', error);
-      alert('Clipboard access denied. Please enable clipboard permissions.');
     }
   };
 

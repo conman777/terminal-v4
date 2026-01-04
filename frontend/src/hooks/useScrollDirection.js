@@ -3,6 +3,8 @@ import { useState, useRef, useCallback } from 'react';
 export function useScrollDirection(threshold = 30) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const scrollAccumulator = useRef(0);
+  const isCollapsedRef = useRef(isCollapsed);
+  isCollapsedRef.current = isCollapsed;
 
   const handleScroll = useCallback((direction) => {
     // Accumulate scroll direction
@@ -13,12 +15,12 @@ export function useScrollDirection(threshold = 30) {
     scrollAccumulator.current = Math.max(-threshold, Math.min(threshold, scrollAccumulator.current));
 
     // Trigger state change when threshold exceeded
-    if (scrollAccumulator.current >= threshold && !isCollapsed) {
+    if (scrollAccumulator.current >= threshold && !isCollapsedRef.current) {
       setIsCollapsed(true);
-    } else if (scrollAccumulator.current <= -threshold && isCollapsed) {
+    } else if (scrollAccumulator.current <= -threshold && isCollapsedRef.current) {
       setIsCollapsed(false);
     }
-  }, [threshold, isCollapsed]);
+  }, [threshold]);
 
   const reset = useCallback(() => {
     setIsCollapsed(false);

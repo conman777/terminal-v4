@@ -1,4 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { PathBreadcrumb } from './PathBreadcrumb';
 
 export function MobileDrawer({
   isOpen,
@@ -6,26 +8,23 @@ export function MobileDrawer({
   onCreateSession,
   onOpenSettings,
   onOpenApiSettings,
+  onOpenBookmarks,
   projects = [],
   projectsLoading = false,
   onFolderSelect,
   currentPath,
-  onAddScanFolder = null
+  onAddScanFolder = null,
+  onNavigateToPath,
+  mobileView = 'terminal',
+  onViewChange,
+  previewUrl,
+  inactiveSessions = [],
+  onRestoreSession
 }) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-
-    return () => {
-      document.body.style.overflow = '';
-    };
-  }, [isOpen]);
+  useBodyScrollLock(isOpen);
 
   // Clear search when drawer closes
   useEffect(() => {
@@ -48,6 +47,21 @@ export function MobileDrawer({
     );
   }, [projects, searchQuery]);
 
+  const handleViewChange = (view) => {
+    onViewChange?.(view);
+    onClose();
+  };
+
+  const handleRestoreSession = (sessionId) => {
+    onRestoreSession?.(sessionId);
+    onClose();
+  };
+
+  const handleNavigate = (path) => {
+    onNavigateToPath?.(path);
+    onClose();
+  };
+
   return (
     <>
       <div className={`mobile-drawer-overlay${isOpen ? ' open' : ''}`} onClick={onClose}></div>
@@ -59,6 +73,66 @@ export function MobileDrawer({
           </button>
         </div>
         <div className="mobile-drawer-content">
+          {/* Breadcrumb Section */}
+          {currentPath && (
+            <div className="mobile-drawer-breadcrumb">
+              <PathBreadcrumb
+                cwd={currentPath}
+                onNavigate={handleNavigate}
+              />
+            </div>
+          )}
+
+          {/* Views Section */}
+          <div className="mobile-drawer-views">
+            <div className="mobile-drawer-views-title">Views</div>
+            <button
+              type="button"
+              className={`mobile-drawer-view-btn${mobileView === 'terminal' ? ' active' : ''}`}
+              onClick={() => handleViewChange('terminal')}
+            >
+              <span className="mobile-drawer-view-icon">⚡</span>
+              Terminal
+            </button>
+            <button
+              type="button"
+              className={`mobile-drawer-view-btn${mobileView === 'claude' ? ' active' : ''}`}
+              onClick={() => handleViewChange('claude')}
+            >
+              <span className="mobile-drawer-view-icon">🤖</span>
+              Claude
+            </button>
+            {previewUrl && (
+              <button
+                type="button"
+                className={`mobile-drawer-view-btn${mobileView === 'preview' ? ' active' : ''}`}
+                onClick={() => handleViewChange('preview')}
+              >
+                <span className="mobile-drawer-view-icon">👁</span>
+                Preview
+              </button>
+            )}
+          </div>
+
+          {/* Inactive Sessions Section */}
+          {inactiveSessions.length > 0 && (
+            <div className="mobile-drawer-inactive-sessions">
+              <div className="mobile-drawer-inactive-title">Inactive Sessions</div>
+              {inactiveSessions.map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  className="mobile-drawer-inactive-session"
+                  onClick={() => handleRestoreSession(session.id)}
+                >
+                  <span className="mobile-drawer-inactive-icon">⏸</span>
+                  {session.title || 'Terminal'}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Main Menu Items */}
           <button
             className="mobile-drawer-item"
             onClick={() => {
@@ -69,6 +143,17 @@ export function MobileDrawer({
           >
             <span className="mobile-drawer-icon">+</span>
             New Session
+          </button>
+          <button
+            className="mobile-drawer-item"
+            onClick={() => {
+              onOpenBookmarks?.();
+              onClose();
+            }}
+            type="button"
+          >
+            <span className="mobile-drawer-icon">📑</span>
+            Bookmarks
           </button>
           <button
             className="mobile-drawer-item"

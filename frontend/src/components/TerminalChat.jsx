@@ -21,7 +21,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const imageInputRef = useRef(null);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
+  const onScrollDirectionRef = useRef(onScrollDirection);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+  // Keep ref updated to avoid stale closures
+  useEffect(() => {
+    onScrollDirectionRef.current = onScrollDirection;
+  }, [onScrollDirection]);
 
   // Reset loading state when session changes
   useEffect(() => {
@@ -252,7 +258,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const sendTerminalInput = (text) => {
       if (!text || disposed) return;
-      console.log('[TerminalChat] Sending input:', text.length, 'chars');
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(text);
@@ -359,9 +364,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
       const scrollDisposer = term.onScroll((newPos) => {
-        if (onScrollDirection && !disposed) {
+        if (onScrollDirectionRef.current && !disposed) {
           const direction = newPos > lastScrollPos ? 'down' : 'up';
-          onScrollDirection(direction);
+          onScrollDirectionRef.current(direction);
         }
         lastScrollPos = newPos;
       });
@@ -526,7 +531,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         // DO NOT filter arrow keys (\x1b[A, \x1b[B, etc.) or other user input
         const isQueryResponse = /^\x1b\[[\?>\d;]*[cn]$/.test(data) || /^\x1b\]/.test(data);
         if (isQueryResponse) {
-          console.log('[TerminalChat] Filtering query response:', data.length, 'chars');
           return;
         }
 
@@ -539,7 +543,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           clearTimeout(copyModeTimeoutRef.current);
         }
 
-        console.log('[TerminalChat] onData triggered:', data.length, 'chars');
         sendTerminalInput(data);
       });
 
@@ -682,6 +685,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (resizeTimeout) {
           clearTimeout(resizeTimeout);
         }
+        scrollDisposer?.dispose();
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
         if (viewport) {
@@ -704,7 +708,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         fitTimeoutRef.current = null;
       }
       if (scrollIntervalRef.current) {
-        clearInterval(scrollIntervalRef.current);
+        clearTimeout(scrollIntervalRef.current);
         scrollIntervalRef.current = null;
       }
       if (resizeObserver) {
@@ -759,7 +763,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onDragLeave={handleDragLeave}
       onDrop={handleImageDrop}
     >
-      <div ref={terminalRef} className="xterm-container" style={{ height: '100%', width: '100%' }}></div>
+      <div ref={terminalRef} className="xterm-container"></div>
 
       {/* Image upload button */}
       <button

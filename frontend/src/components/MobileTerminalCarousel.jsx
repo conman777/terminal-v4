@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
@@ -35,16 +35,12 @@ export function MobileTerminalCarousel({
     }
   }, [currentIndex, onIndexChange]);
 
-  // Swipe gesture for changing sessions - attached to content area only
-  // (not the tab bar, which needs its own horizontal scroll)
+  // Swipe gesture for changing sessions
   const { containerRef: swipeRef } = useSwipeGesture({
     onSwipeLeft: handleSwipeLeft,
     onSwipeRight: handleSwipeRight,
     enabled: sessions.length > 1
   });
-
-  // Ref for auto-scrolling tab bar
-  const tabBarRef = useRef(null);
 
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
@@ -52,16 +48,6 @@ export function MobileTerminalCarousel({
   const handleRegisterImageUpload = useCallback((trigger) => {
     setTriggerImageUpload(() => trigger);
   }, []);
-
-  // Auto-scroll active tab into view
-  useEffect(() => {
-    if (tabBarRef.current && sessions.length > 1) {
-      const activeTab = tabBarRef.current.querySelector('.session-tab.active');
-      if (activeTab) {
-        activeTab.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-      }
-    }
-  }, [currentIndex, sessions.length]);
 
   // No sessions - show empty state
   if (sessions.length === 0) {
@@ -79,24 +65,7 @@ export function MobileTerminalCarousel({
 
   return (
     <div className="mobile-terminal-carousel">
-      {/* Session tab bar - horizontal scrollable */}
-      {sessions.length > 1 && (
-        <div className="session-tab-bar" ref={tabBarRef}>
-          {sessions.map((session, index) => (
-            <button
-              key={session.id}
-              type="button"
-              className={`session-tab${index === currentIndex ? ' active' : ''}`}
-              onClick={() => onIndexChange(index)}
-              aria-label={`Terminal ${index + 1}: ${session.title}`}
-            >
-              <span className="session-tab-title">{session.title || `Terminal ${index + 1}`}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Terminal content - swipe here to change sessions */}
+      {/* Terminal content - swipe to change sessions */}
       <div className="carousel-content" ref={swipeRef}>
         <TerminalChat
           sessionId={currentSession.id}

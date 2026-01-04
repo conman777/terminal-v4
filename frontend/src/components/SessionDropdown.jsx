@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 export function SessionDropdown({
   isOpen,
@@ -15,18 +16,14 @@ export function SessionDropdown({
   const [renamingId, setRenamingId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
 
+  useBodyScrollLock(isOpen);
+
+  // Reset rename state when dropdown closes
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
+    if (!isOpen) {
       setRenamingId(null);
       setRenameValue('');
     }
-
-    return () => {
-      document.body.style.overflow = '';
-    };
   }, [isOpen]);
 
   const startRename = (session) => {
