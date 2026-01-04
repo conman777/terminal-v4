@@ -6,8 +6,9 @@ import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
+import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onActivityChange }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -16,13 +17,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const suppressPasteEventRef = useRef(false);
   const clientIdRef = useRef(null);
   const isMobile = useMobileDetect();
+  const { activeSessionId, sessions } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [imageDragOver, setImageDragOver] = useState(false);
+  const [isActive, setIsActive] = useState(false);
   const imageInputRef = useRef(null);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
+  const idleTimerRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const faviconIntervalRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  const isActiveSession = sessionId === activeSessionId;
 
   // Keep ref updated to avoid stale closures
   useEffect(() => {
@@ -40,6 +47,43 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onRegisterImageUpload(() => imageInputRef.current?.click());
     }
   }, [onRegisterImageUpload]);
+
+  // Update document.title with active session name
+  useEffect(() => {
+    if (!isActiveSession) return;
+    const session = sessions.find(s => s.id === sessionId);
+    document.title = session?.title || 'Terminal';
+  }, [isActiveSession, sessionId, sessions]);
+
+  // Flash favicon while terminal is active
+  useEffect(() => {
+    if (!isActiveSession) return;
+
+    if (isActive) {
+      // Flash between active/idle favicons
+      const link = document.querySelector("link[rel='icon']");
+      if (!link) return;
+
+      let showActive = true;
+      faviconIntervalRef.current = setInterval(() => {
+        link.href = showActive ? '/favicon-active.svg' : '/favicon-idle.svg';
+        showActive = !showActive;
+      }, 500);
+
+      return () => {
+        if (faviconIntervalRef.current) {
+          clearInterval(faviconIntervalRef.current);
+          faviconIntervalRef.current = null;
+        }
+      };
+    } else {
+      // Set solid idle favicon
+      const link = document.querySelector("link[rel='icon']");
+      if (link) {
+        link.href = '/favicon-idle.svg';
+      }
+    }
+  }, [isActiveSession, isActive]);
 
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
@@ -452,6 +496,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         return url.toString();
       };
 
+      // Play a tone when terminal becomes idle (command finished)
+      const playIdleTone = () => {
+        try {
+          if (!audioCtxRef.current) {
+            audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          const ctx = audioCtxRef.current;
+          if (ctx.state === 'suspended') {
+            ctx.resume();
+          }
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = 600;
+          osc.type = 'sine';
+          gain.gain.setValueAtTime(0.15, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.15);
+        } catch (err) {
+          // Audio not supported or blocked
+        }
+      };
+
       let wsRetryCount = 0;
       const MAX_WS_RETRY_DELAY = 30000;
 
@@ -509,6 +578,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }
 
           term.write(data);
+
+          // Reset idle timer - play tone after 3s of no output
+          if (idleTimerRef.current) {
+            clearTimeout(idleTimerRef.current);
+          }
+          if (!skipUrlDetection) {
+            setIsActive(true);
+            onActivityChange?.(true);
+            idleTimerRef.current = setTimeout(() => {
+              playIdleTone();
+              setIsActive(false);
+              onActivityChange?.(false);
+            }, 3000);
+          }
 
           // Only detect URLs after initial history replay (skipUrlDetection = false)
           if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
@@ -738,6 +821,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (fitTimeoutRef.current) {
         clearTimeout(fitTimeoutRef.current);
         fitTimeoutRef.current = null;
+      }
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current);
+        idleTimerRef.current = null;
       }
       if (scrollIntervalRef.current) {
         cancelAnimationFrame(scrollIntervalRef.current);
