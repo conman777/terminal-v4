@@ -6,8 +6,10 @@ import { BookmarkModal } from './components/BookmarkModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
 import { PreviewPanel } from './components/PreviewPanel';
+import { PreviewPip } from './components/PreviewPip';
 import { PathBreadcrumb } from './components/PathBreadcrumb';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
+import { SessionTabBar } from './components/SessionTabBar';
 import ClaudeCodePanel from './components/ClaudeCodePanel';
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
@@ -20,6 +22,8 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
+import { useSessionActivity } from './hooks/useSessionActivity';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { apiFetch, apiGet } from './utils/api';
 import { getAccessToken } from './utils/auth';
 
@@ -620,6 +624,9 @@ function AppContent() {
     };
   });
 
+  // Fullscreen pane state (not persisted - temporary)
+  const [fullscreenPaneId, setFullscreenPaneId] = useState(null);
+
   const [loadingSessions, setLoadingSessions] = useState(false);
 
   const activeSessions = useMemo(
@@ -672,6 +679,19 @@ function AppContent() {
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
+
+  // Session activity tracking for unread indicators
+  const {
+    activity: sessionActivity,
+    markActivity,
+    setFocusedSession,
+    removeSession: removeSessionActivity
+  } = useSessionActivity();
+
+  // Preview PiP mode state
+  const [previewMode, setPreviewMode] = useState('docked'); // 'docked' | 'pip' | 'hidden'
+  const [pipPosition, setPipPosition] = useState({ x: window.innerWidth - 420, y: 80 });
+  const [pipSize, setPipSize] = useState({ width: 400, height: 300 });
 
   // Reset header collapse when switching mobile views
   useEffect(() => {
@@ -1228,6 +1248,11 @@ function AppContent() {
 
   // Handle pane close
   const handlePaneClose = useCallback((paneId) => {
+    // Exit fullscreen if closing the fullscreen pane
+    if (paneId === fullscreenPaneId) {
+      setFullscreenPaneId(null);
+    }
+
     setPaneLayout(prev => {
       if (prev.panes.length <= 1) return prev; // Can't close last pane
 
@@ -1255,7 +1280,26 @@ function AppContent() {
         activePaneId: newActivePaneId
       };
     });
+  }, [fullscreenPaneId]);
+
+  // Handle pane fullscreen toggle
+  const handlePaneFullscreen = useCallback((paneId) => {
+    setFullscreenPaneId(prev => prev === paneId ? null : paneId);
   }, []);
+
+  // Escape key to exit fullscreen
+  useEffect(() => {
+    if (!fullscreenPaneId) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setFullscreenPaneId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [fullscreenPaneId]);
 
   const handleRestoreSession = useCallback(
     async (sessionId) => {
@@ -1531,6 +1575,33 @@ function AppContent() {
   const togglePreview = useCallback(() => {
     setShowPreview(prev => !prev);
   }, []);
+
+  // Keyboard shortcuts (desktop only)
+  useKeyboardShortcuts({
+    onToggleSidebar: toggleSidebar,
+    onTogglePreview: togglePreview,
+    onToggleFullScreen: () => {
+      const activePaneId = paneLayout.activePaneId;
+      if (activePaneId) {
+        setFullscreenPaneId(prev => prev === activePaneId ? null : activePaneId);
+      }
+    },
+    onFocusPane: (index) => {
+      if (paneLayout.panes[index]) {
+        handlePaneFocus(paneLayout.panes[index].id);
+      }
+    },
+    onNewTerminal: handleCreateSession,
+    onCloseTerminal: () => {
+      if (activeSessionId) {
+        handleCloseSession(activeSessionId);
+      }
+    },
+    onExitFullScreen: () => setFullscreenPaneId(null),
+    isFullScreen: !!fullscreenPaneId,
+    paneCount: paneLayout.panes.length,
+    enabled: !isMobile
+  });
 
   const handleStartProject = useCallback(async (command) => {
     if (!activeSessionId || !command) return;
@@ -1847,6 +1918,19 @@ function AppContent() {
             </div>
           </header>
 
+          {/* Session tab bar - only show in terminal mode */}
+          {leftPanelMode === 'terminal' && activeSessions.length > 0 && (
+            <SessionTabBar
+              sessions={activeSessions}
+              activeSessionId={activeSessionId}
+              sessionActivity={sessionActivity}
+              onSelectSession={handleSelectSession}
+              onCreateSession={handleCreateSession}
+              onCloseSession={handleCloseSession}
+              onRenameSession={handleRenameSession}
+            />
+          )}
+
           {projectInfo?.cwd && (
             <div className="breadcrumb-bar">
               <PathBreadcrumb
@@ -1863,7 +1947,7 @@ function AppContent() {
             {/* Left pane - switches between Terminal and Claude Code */}
             <div
               className="terminal-pane"
-              style={showPreview ? { flex: `0 0 ${splitPosition}%` } : undefined}
+              style={showPreview && !fullscreenPaneId ? { flex: `0 0 ${splitPosition}%` } : undefined}
             >
               {leftPanelMode === 'terminal' ? (
                 activeSessions.length === 0 ? (
@@ -1882,10 +1966,14 @@ function AppContent() {
                     onPaneSplit={handlePaneSplit}
                     onPaneClose={handlePaneClose}
                     onPaneFocus={handlePaneFocus}
+                    onPaneFullscreen={handlePaneFullscreen}
+                    fullscreenPaneId={fullscreenPaneId}
                     keybarOpen={keybarOpen}
                     viewportHeight={viewportHeight}
                     onUrlDetected={handleUrlDetected}
                     fontSize={terminalFontSize}
+                    sessionActivity={sessionActivity}
+                    projectInfo={projectInfo}
                   />
                 )
               ) : (
@@ -1912,8 +2000,8 @@ function AppContent() {
               )}
             </div>
 
-            {/* Preview pane */}
-            {showPreview && (
+            {/* Preview pane - hidden during fullscreen */}
+            {showPreview && !fullscreenPaneId && (
               <>
                 <div
                   className={`split-handle${isDragging ? ' active' : ''}`}

@@ -73,7 +73,16 @@ function toPreviewUrl(inputUrl) {
     // Not a valid URL, fall through
   }
 
-  // Regular HTTP(S) URLs pass through
+  // External HTTP(S) URLs - route through proxy to bypass iframe restrictions
+  try {
+    const parsed = new URL(inputUrl);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return withAuthToken(`/api/proxy-external?url=${encodeURIComponent(inputUrl)}`);
+    }
+  } catch {
+    // Not a valid URL
+  }
+
   return inputUrl;
 }
 

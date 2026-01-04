@@ -9,21 +9,31 @@ export function SplitPaneContainer({
   onPaneSplit,
   onPaneClose,
   onPaneFocus,
+  onPaneFullscreen,
+  fullscreenPaneId,
   keybarOpen,
   viewportHeight,
   onUrlDetected,
-  fontSize
+  fontSize,
+  sessionActivity,
+  projectInfo
 }) {
   const { type, panes, activePaneId } = layout;
   const canSplit = panes.length < MAX_PANES;
 
+  // When in fullscreen mode, only render the fullscreen pane
+  const panesToRender = fullscreenPaneId
+    ? panes.filter(p => p.id === fullscreenPaneId)
+    : panes;
+
   return (
-    <div className={`split-pane-container ${type}`}>
-      {panes.map((pane, index) => (
+    <div className={`split-pane-container ${fullscreenPaneId ? 'fullscreen' : type}`}>
+      {panesToRender.map((pane) => (
         <TerminalPane
           key={pane.id}
           pane={pane}
           isActive={pane.id === activePaneId}
+          isFullscreen={pane.id === fullscreenPaneId}
           sessions={sessions}
           canSplit={canSplit}
           canClose={panes.length > 1}
@@ -31,10 +41,13 @@ export function SplitPaneContainer({
           onSplit={onPaneSplit}
           onClose={onPaneClose}
           onFocus={onPaneFocus}
+          onFullscreen={onPaneFullscreen}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
+          sessionActivity={sessionActivity}
+          projectInfo={projectInfo}
         />
       ))}
     </div>

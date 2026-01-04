@@ -1251,13 +1251,8 @@ button {
   border-color: rgba(255, 255, 255, 0.5);
 }
 
-/* Desktop scroll buttons - smaller and subtle */
+/* Desktop scroll buttons - always visible */
 .terminal-scroll-buttons.desktop {
-  opacity: 0.3;
-  transition: opacity 0.2s ease;
-}
-
-.terminal-scroll-buttons.desktop:hover {
   opacity: 1;
 }
 
@@ -1266,7 +1261,13 @@ button {
   height: 32px;
   font-size: 14px;
   border-width: 1px;
-  background: rgba(60, 60, 60, 0.8);
+  background: rgba(100, 100, 100, 0.9);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.terminal-scroll-buttons.desktop .scroll-btn:hover {
+  background: rgba(100, 100, 100, 0.95);
+  border-color: rgba(255, 255, 255, 0.6);
 }
 
 /* Terminal Input */
@@ -5896,6 +5897,21 @@ textarea:focus-visible {
   color: var(--error);
 }
 
+/* Fullscreen button */
+.pane-btn.pane-fullscreen-btn:hover {
+  box-shadow: 0 0 8px var(--accent-primary-dim);
+}
+
+/* Fullscreen mode - container takes full space with single pane */
+.split-pane-container.fullscreen {
+  grid-template: 1fr / 1fr !important;
+}
+
+/* Fullscreen pane styling */
+.split-terminal-pane.fullscreen {
+  border-color: var(--accent-primary);
+}
+
 /* Pane content area */
 .pane-content {
   flex: 1;
@@ -6295,4 +6311,557 @@ textarea:focus-visible {
 .process-stop-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ===========================================
+   Desktop Session Tab Bar
+   =========================================== */
+
+.session-tab-bar-container {
+  display: flex;
+  align-items: center;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 8px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+.session-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.session-tab-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.session-tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.session-tab-item:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.session-tab-item.active {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+.session-tab-item.unread::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+}
+
+.session-tab-item.unread {
+  padding-left: 16px;
+}
+
+.session-tab-item.dragging {
+  opacity: 0.5;
+}
+
+.session-tab-item.drag-over {
+  background: var(--accent-primary-dim);
+  border: 1px dashed var(--accent-primary);
+}
+
+.tab-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.tab-title {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-rename-input {
+  background: var(--bg-base);
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 2px 6px;
+  width: 100px;
+  outline: none;
+}
+
+.tab-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.session-tab-item:hover .tab-close-btn {
+  opacity: 1;
+}
+
+.tab-close-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--error);
+}
+
+.session-tab-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.session-tab-new:hover {
+  background: var(--bg-elevated);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+/* ===========================================
+   Context Menu
+   =========================================== */
+
+.context-menu {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  min-width: 160px;
+  z-index: 10000;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.context-menu-item:hover:not(:disabled) {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+.context-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.context-menu-item.danger:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--error);
+}
+
+.context-menu-icon {
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.context-menu-label {
+  flex: 1;
+}
+
+.context-menu-shortcut {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.context-menu-separator {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px 0;
+}
+
+/* ===========================================
+   Desktop Status Bar
+   =========================================== */
+
+.desktop-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-secondary);
+}
+
+.status-bar-left .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-bar-left .status-dot.connected {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.status-bar-left .status-dot.disconnected {
+  background: var(--error);
+}
+
+.status-cwd,
+.status-git-branch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+}
+
+.status-cwd svg,
+.status-git-branch svg {
+  opacity: 0.6;
+}
+
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-bar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.status-bar-btn:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.status-bar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Terminal with status bar layout */
+.terminal-with-status {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.terminal-with-status .terminal-chat-container {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ===========================================
+   Preview PiP (Picture-in-Picture)
+   =========================================== */
+
+.preview-pip {
+  position: fixed;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview-pip.dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.preview-pip.resizing {
+  user-select: none;
+}
+
+.preview-pip.minimized {
+  height: 36px !important;
+}
+
+.pip-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: grab;
+  flex-shrink: 0;
+}
+
+.pip-header:active {
+  cursor: grabbing;
+}
+
+.pip-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.pip-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pip-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pip-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.pip-btn.pip-close:hover {
+  background: rgba(244, 63, 94, 0.2);
+  color: var(--error);
+}
+
+.pip-content {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  background: var(--bg-base);
+}
+
+.pip-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.pip-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+}
+
+.pip-spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border-default);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.pip-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border-default) 50%);
+  border-radius: 0 0 var(--radius-md) 0;
+}
+
+.pip-resize-handle:hover {
+  background: linear-gradient(135deg, transparent 50%, var(--accent-primary) 50%);
+}
+
+/* ===========================================
+   Pane Session Menu (Split Pane)
+   =========================================== */
+
+.pane-session-tab {
+  position: relative;
+}
+
+.pane-session-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pane-session-btn:hover {
+  border-color: var(--accent-primary);
+}
+
+.pane-session-title {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-session-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  z-index: 1000;
+  padding: 4px;
+}
+
+.pane-session-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pane-session-option:hover {
+  background: var(--bg-surface);
+}
+
+.pane-session-option.active {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+.pane-session-option.unread .session-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.session-option-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-session-empty {
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Pane drag-over visual feedback */
+.split-terminal-pane.drag-over {
+  outline: 2px dashed var(--accent-primary);
+  outline-offset: -2px;
+}
+
+/* Hide floating mic container on desktop when using status bar */
+.layout:not(.mobile) .terminal-mic-container {
+  display: none !important;
+}
+
+/* Hide floating image button on desktop when using status bar */
+.layout:not(.mobile) .terminal-image-btn {
+  display: none !important;
 }

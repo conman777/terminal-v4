@@ -14,6 +14,7 @@ import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
 import { registerPreviewLogsRoutes } from './routes/preview-logs-routes';
 import { registerBrowserRoutes } from './routes/browser-routes';
+import { registerExternalProxyRoutes } from './routes/external-proxy-routes';
 import { registerProcessRoutes } from './routes/process-routes';
 import { registerSystemRoutes } from './routes/system-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
@@ -88,6 +89,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerProcessRoutes(app);
   await registerSystemRoutes(app);
   await registerBrowserRoutes(app);
+  await registerExternalProxyRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');

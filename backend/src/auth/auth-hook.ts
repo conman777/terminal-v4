@@ -13,6 +13,7 @@ const PUBLIC_ROUTES = [
 const PUBLIC_ROUTE_PATTERNS = [
   /^\/api\/preview\/\d+\/logs$/, // Preview logs per port
   /^\/api\/preview\/logs$/,      // List all preview logs
+  /^\/api\/preview\/external\/logs$/, // External preview logs
   /^\/api\/browser\//            // Browser automation API
 ];
 

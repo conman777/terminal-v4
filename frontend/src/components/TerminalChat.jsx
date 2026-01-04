@@ -54,15 +54,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Enter tmux copy-mode with automatic timeout reset
   const enterCopyMode = useCallback(() => {
-    if (!inCopyModeRef.current) {
-      sendToTerminal('\x02['); // Ctrl+B [ to enter copy mode
-      inCopyModeRef.current = true;
-    }
-    // Reset timeout - assume copy-mode exited after 10s of no scroll activity
+    // Send tmux prefix (Ctrl+B) first, then copy-mode command ([) after brief delay
+    // This ensures tmux recognizes the prefix before receiving the command
+    sendToTerminal('\x02'); // Ctrl+B (tmux prefix)
+    setTimeout(() => {
+      sendToTerminal('['); // copy-mode command
+    }, 10);
+    inCopyModeRef.current = true;
+
+    // Reset timeout - assume copy-mode exited after 3s of no scroll activity
     clearTimeout(copyModeTimeoutRef.current);
     copyModeTimeoutRef.current = setTimeout(() => {
       inCopyModeRef.current = false;
-    }, 10000);
+    }, 3000);
   }, [sendToTerminal]);
 
   // Scroll in tmux copy-mode (shared logic for buttons and wheel)
@@ -78,7 +82,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     } else {
       // No xterm scrollback - tmux managing it
       enterCopyMode();
-      sendToTerminal(direction === 'up' ? '\x1b[5~' : '\x1b[6~'); // Page Up/Down
+      // Send scroll after delay to ensure copy-mode is active
+      // Use Ctrl+U/Ctrl+D for half-page scroll in tmux copy-mode (vi bindings)
+      setTimeout(() => {
+        sendToTerminal(direction === 'up' ? '\x15' : '\x04'); // Ctrl+U / Ctrl+D
+      }, 60);
     }
   }, [sendToTerminal, enterCopyMode]);
 
@@ -522,10 +530,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           return;
         }
 
-        // Reset copy-mode state when user types
-        // Don't send 'q' - if state is stale, it would inject 'q' into shell
-        // User's input will naturally exit copy-mode if they're in it
+        // Exit copy-mode before sending user input
+        // Send ESC twice: first cancels pending operation (e.g., "Jump to forward:"),
+        // second exits copy-mode. ESC is safe in most contexts (shell, vim, etc.)
         if (inCopyModeRef.current) {
+          sendTerminalInput('\x1b\x1b'); // Double ESC to fully exit copy-mode
           inCopyModeRef.current = false;
           clearTimeout(copyModeTimeoutRef.current);
         }
@@ -614,25 +623,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             // Clear any pending scroll
             if (pendingScroll) clearTimeout(pendingScroll);
 
-            // Always send copy-mode entry first
+            // Send ESC first to cancel any pending copy-mode operation
+            // (e.g., "Jump to forward:" waiting for input)
+            socket.send('\x1b'); // ESC cancels pending operations
+
+            // Then send copy-mode entry
             socket.send('\x02['); // Ctrl+B [ to enter copy mode
             inCopyModeRef.current = true;
 
             // Send scroll after a short delay to ensure copy-mode is active
+            // Use Ctrl+U/Ctrl+D for half-page scroll in tmux copy-mode (vi bindings)
             pendingScroll = setTimeout(() => {
               if (scrollDirection === 'up') {
-                socket.send('\x1b[5~'); // Page Up
+                socket.send('\x15'); // Ctrl+U (scroll up half page)
               } else {
-                socket.send('\x1b[6~'); // Page Down
+                socket.send('\x04'); // Ctrl+D (scroll down half page)
               }
               pendingScroll = null;
             }, 50);
 
-            // Reset timeout - assume copy-mode exited after 10s of no activity
+            // Reset timeout - assume copy-mode exited after 3s of no activity
             clearTimeout(copyModeTimeoutRef.current);
             copyModeTimeoutRef.current = setTimeout(() => {
               inCopyModeRef.current = false;
-            }, 10000);
+            }, 3000);
           }
         }
       };

@@ -48,7 +48,8 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     }
   };
 
-  const sendKey = async (data) => {
+  // Send key directly without ESC prefix (for ESC button itself)
+  const sendKeyRaw = async (data) => {
     if (!sessionId) return;
 
     try {
@@ -61,9 +62,25 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     }
   };
 
+  // Send key with ESC prefix to exit any tmux copy-mode state
+  // ESC is safe: exits copy-mode, or does minimal harm at shell prompt
+  const sendKey = async (data) => {
+    if (!sessionId) return;
+
+    try {
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        body: { command: '\x1b' + data }
+      });
+    } catch (error) {
+      console.error('Failed to send key:', error);
+    }
+  };
+
   const keys = [
     // Row 1: Common control keys
     { label: 'ESC', key: '\x1b', title: 'Escape' },
+    { label: '^C', key: '\x03', title: 'Ctrl+C (Interrupt)' },
     { label: 'TAB', key: '\t', title: 'Tab' },
     { label: '⇧TAB', key: '\x1b[Z', title: 'Shift+Tab' },
     { label: '↵', key: '\r', title: 'Enter' },
@@ -94,6 +111,9 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
 
     if (keyData.special && keyData.key === 'paste') {
       handlePaste();
+    } else if (keyData.key === '\x1b') {
+      // ESC button - send as-is, don't prepend another ESC
+      sendKeyRaw(keyData.key);
     } else {
       sendKey(keyData.key);
     }
@@ -105,7 +125,7 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
         <div className="mobile-keybar-drag-indicator"></div>
       </div>
       <div className="mobile-keybar-row">
-        {keys.slice(0, 5).map((keyData) => (
+        {keys.slice(0, 6).map((keyData) => (
           <button
             key={keyData.label}
             className="mobile-key"
@@ -118,7 +138,7 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
         ))}
       </div>
       <div className="mobile-keybar-row">
-        {keys.slice(5).map((keyData) => (
+        {keys.slice(6).map((keyData) => (
           <button
             key={keyData.label}
             className={`mobile-key${keyData.special ? ' mobile-key-special' : ''}`}

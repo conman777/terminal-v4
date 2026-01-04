@@ -213,7 +213,8 @@ const PREVIEW_DEBUG_SCRIPT = `
 
 function getPreviewPort(host: string | undefined): number | null {
   if (!host) return null;
-  const match = host.match(PREVIEW_SUBDOMAIN_PATTERN);
+  const hostname = host.split(':')[0];
+  const match = hostname.match(PREVIEW_SUBDOMAIN_PATTERN);
   if (!match) return null;
 
   const port = parseInt(match[1], 10);
@@ -225,11 +226,54 @@ function getPreviewPort(host: string | undefined): number | null {
 export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Promise<void> {
   // Handle all HTTP requests on preview subdomains
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    const port = getPreviewPort(request.headers.host);
+    const forwardedHost = request.headers['x-forwarded-host'];
+    const forwardedHostValue = Array.isArray(forwardedHost)
+      ? forwardedHost[0]
+      : forwardedHost;
+    const rawHost =
+      (typeof forwardedHostValue === 'string' ? forwardedHostValue.split(',')[0].trim() : undefined) ||
+      (typeof request.headers[':authority'] === 'string' ? request.headers[':authority'] : undefined) ||
+      request.headers.host;
+    let port = getPreviewPort(rawHost);
+    let originHost: string | undefined;
+    const origin = request.headers.origin;
+    if (!port && typeof origin === 'string') {
+      try {
+        originHost = new URL(origin).host;
+        port = getPreviewPort(originHost);
+      } catch {
+        // Ignore invalid Origin values
+      }
+    }
     if (!port) return; // Not a preview subdomain, continue to other routes
 
     // Store port for WebSocket handler
     (request as any).previewPort = port;
+
+    // Handle CORS preflight without proxying upstream
+    if (request.method === 'OPTIONS') {
+      if (origin) {
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Vary', 'Origin');
+      }
+      reply.header('Access-Control-Allow-Credentials', 'true');
+      const reqMethods = request.headers['access-control-request-method'];
+      reply.header(
+        'Access-Control-Allow-Methods',
+        typeof reqMethods === 'string'
+          ? reqMethods
+          : 'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+      );
+      const reqHeaders = request.headers['access-control-request-headers'];
+      reply.header(
+        'Access-Control-Allow-Headers',
+        typeof reqHeaders === 'string'
+          ? reqHeaders
+          : 'authorization, content-type, x-csrftoken, x-csrf-token'
+      );
+      reply.code(204).send();
+      return reply;
+    }
 
     const targetUrl = `http://localhost:${port}${request.url}`;
 
@@ -245,7 +289,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       forwardHeaders['host'] = `localhost:${port}`;
 
       // Set X-Forwarded headers for apps that need to know the original request details
-      const originalHost = request.headers.host || `preview-${port}.conordart.com`;
+      const originalHost = rawHost || originHost || request.headers.host || `preview-${port}.conordart.com`;
       forwardHeaders['x-forwarded-host'] = originalHost;
       forwardHeaders['x-forwarded-proto'] = 'https';
       forwardHeaders['x-forwarded-port'] = '443';
@@ -291,6 +335,14 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         if (lowerKey === 'set-cookie') continue;
 
         reply.header(key, value);
+      }
+
+      // Allow cross-origin access when preview is embedded elsewhere
+      const origin = request.headers.origin;
+      if (origin) {
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+        reply.header('Vary', 'Origin');
       }
 
       // Handle Set-Cookie headers specially - entries() doesn't handle multiple cookies correctly
