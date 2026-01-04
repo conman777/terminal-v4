@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getAccessToken } from '../utils/auth';
+import { useMobileDetect } from '../hooks/useMobileDetect';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -30,7 +31,6 @@ function toPreviewUrl(inputUrl) {
   // Handle file:// URLs
   if (inputUrl.startsWith('file:///')) {
     const filePath = decodeURIComponent(inputUrl.replace('file:///', ''));
-    // Extract directory and filename
     const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
     const directory = filePath.substring(0, lastSlash);
     const filename = filePath.substring(lastSlash + 1);
@@ -54,18 +54,13 @@ function toPreviewUrl(inputUrl) {
   }
 
   // Handle localhost/local network URLs - use preview subdomain
-  // This allows previewing dev servers running on the remote server
   try {
     const parsed = new URL(inputUrl);
     const hostname = parsed.hostname;
-
-    // Check if it's a local address that needs proxying
     const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
     const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
 
     if ((isLocalhost || isPrivateIP) && parsed.port) {
-      // Use preview subdomain instead of path-based proxy
-      // This properly supports SPA navigation since URL paths stay natural
       const path = parsed.pathname + parsed.search + parsed.hash;
       return `https://preview-${parsed.port}.conordart.com${path}`;
     }
@@ -73,7 +68,7 @@ function toPreviewUrl(inputUrl) {
     // Not a valid URL, fall through
   }
 
-  // External HTTP(S) URLs - route through proxy to bypass iframe restrictions
+  // External HTTP(S) URLs - route through proxy
   try {
     const parsed = new URL(inputUrl);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
@@ -87,21 +82,20 @@ function toPreviewUrl(inputUrl) {
 }
 
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject }) {
+  const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inputUrl, setInputUrl] = useState(url || '');
   const [logs, setLogs] = useState([]);
-  const [showLogs, setShowLogs] = useState(true);
+  const [showLogs, setShowLogs] = useState(false);
+  const [showUrlInput, setShowUrlInput] = useState(false);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
+  const urlInputRef = useRef(null);
 
-  // Convert the URL for iframe display
   const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
-
-  // Track the actual iframe src (including cache buster for refreshes)
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
 
-  // Update iframeSrc when baseIframeSrc changes (new URL entered)
   useEffect(() => {
     setIframeSrc(baseIframeSrc);
   }, [baseIframeSrc]);
@@ -130,6 +124,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setLogs([]);
   }, [url]);
 
+  // Focus URL input when shown
+  useEffect(() => {
+    if (showUrlInput && urlInputRef.current) {
+      urlInputRef.current.focus();
+      urlInputRef.current.select();
+    }
+  }, [showUrlInput]);
+
   const handleClearLogs = useCallback(() => {
     setLogs([]);
   }, []);
@@ -152,8 +154,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (baseIframeSrc) {
       setIsLoading(true);
       setError(null);
-      setLogs([]); // Clear logs on refresh
-      // Add cache-busting timestamp to force hard refresh
+      setLogs([]);
       const cacheBuster = `_cb=${Date.now()}`;
       const separator = baseIframeSrc.includes('?') ? '&' : '?';
       setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
@@ -165,15 +166,212 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (inputUrl && onUrlChange) {
       onUrlChange(inputUrl);
     }
+    setShowUrlInput(false);
   }, [inputUrl, onUrlChange]);
 
   const handleOpenExternal = useCallback(() => {
-    // Open the preview URL (subdomain) rather than original localhost URL
     if (iframeSrc) {
       window.open(iframeSrc, '_blank', 'noopener,noreferrer');
     }
   }, [iframeSrc]);
 
+  // Truncate URL for display
+  const displayUrl = useMemo(() => {
+    if (!url) return 'No URL';
+    try {
+      const parsed = new URL(url);
+      return `${parsed.hostname}${parsed.port ? ':' + parsed.port : ''}${parsed.pathname !== '/' ? parsed.pathname : ''}`;
+    } catch {
+      return url.length > 30 ? url.substring(0, 30) + '...' : url;
+    }
+  }, [url]);
+
+  // Mobile layout
+  if (isMobile) {
+    return (
+      <div className="preview-panel preview-panel-mobile">
+        {/* Full-screen iframe */}
+        <div className="preview-content-mobile">
+          {!iframeSrc ? (
+            <div className="preview-empty">
+              {projectInfo && projectInfo.projectType !== 'unknown' ? (
+                <>
+                  <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
+                  <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
+                  {projectInfo.projectType === 'static' ? (
+                    <>
+                      <p>Static site detected.</p>
+                      <button
+                        type="button"
+                        className="btn-primary project-action-btn"
+                        onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
+                      >
+                        Preview Static Site
+                      </button>
+                    </>
+                  ) : projectInfo.startCommand ? (
+                    <>
+                      <p>Run the dev server:</p>
+                      <button
+                        type="button"
+                        className="btn-primary project-action-btn"
+                        onClick={() => onStartProject && onStartProject(projectInfo.startCommand)}
+                      >
+                        {projectInfo.startCommand}
+                      </button>
+                    </>
+                  ) : (
+                    <p>No start script detected.</p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
+                  <h3>No Preview URL</h3>
+                  <p>Start a dev server or enter a URL</p>
+                </>
+              )}
+            </div>
+          ) : error ? (
+            <div className="preview-error">
+              <div className="preview-error-icon">{'\u26A0'}</div>
+              <h3>Preview Error</h3>
+              <p>{error}</p>
+              <button type="button" className="btn-primary" onClick={handleRefresh}>
+                Try Again
+              </button>
+            </div>
+          ) : (
+            <>
+              {isLoading && (
+                <div className="preview-loading">
+                  <div className="preview-spinner"></div>
+                  <p>Loading...</p>
+                </div>
+              )}
+              <iframe
+                ref={iframeRef}
+                src={iframeSrc}
+                className="preview-iframe"
+                onLoad={handleLoad}
+                onError={handleError}
+                title="App Preview"
+                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+                style={{ opacity: isLoading ? 0 : 1 }}
+              />
+            </>
+          )}
+        </div>
+
+        {/* Floating URL bar at top */}
+        <div className="preview-floating-url">
+          {showUrlInput ? (
+            <form className="preview-url-form-mobile" onSubmit={handleUrlSubmit}>
+              <input
+                ref={urlInputRef}
+                type="text"
+                className="preview-url-input-mobile"
+                value={inputUrl}
+                onChange={(e) => setInputUrl(e.target.value)}
+                placeholder="Enter URL..."
+                onBlur={() => setTimeout(() => setShowUrlInput(false), 200)}
+              />
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="preview-url-display"
+              onClick={() => setShowUrlInput(true)}
+            >
+              {displayUrl}
+            </button>
+          )}
+          <button
+            type="button"
+            className="preview-floating-btn"
+            onClick={handleRefresh}
+            disabled={!iframeSrc}
+            aria-label="Refresh"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="preview-floating-btn preview-close-btn-mobile"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Console bottom sheet */}
+        <div className={`preview-console-sheet ${showLogs ? 'open' : ''}`}>
+          <div className="preview-console-header" onClick={() => setShowLogs(!showLogs)}>
+            <div className="preview-console-handle" />
+            <span className="preview-console-title">Console {logs.length > 0 && `(${logs.length})`}</span>
+            <button
+              type="button"
+              className="preview-console-clear"
+              onClick={(e) => { e.stopPropagation(); handleClearLogs(); }}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="preview-console-content">
+            {logs.length === 0 ? (
+              <div className="preview-logs-empty">No console output</div>
+            ) : (
+              logs.map((log) => (
+                <div key={log.id} className={`preview-log-entry preview-log-${log.level}`}>
+                  <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                  <span className="preview-log-message">{log.message}</span>
+                </div>
+              ))
+            )}
+            <div ref={logsEndRef} />
+          </div>
+        </div>
+
+        {/* Floating action buttons bottom-right */}
+        <div className="preview-floating-actions">
+          <button
+            type="button"
+            className="preview-floating-btn"
+            onClick={handleOpenExternal}
+            disabled={!iframeSrc}
+            aria-label="Open in new tab"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className={`preview-floating-btn ${showLogs ? 'active' : ''}`}
+            onClick={() => setShowLogs(!showLogs)}
+            aria-label="Toggle console"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            {logs.length > 0 && <span className="preview-log-badge">{logs.length}</span>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Desktop layout (unchanged)
   return (
     <div className="preview-panel">
       <div className="preview-header">
