@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import ToolCallBlock from './ToolCallBlock';
 import ClaudeCodeInput from './ClaudeCodeInput';
 import { FolderBrowserModal } from './FolderBrowserModal';
@@ -6,7 +6,7 @@ import { apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 
 // Status bar component
-function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
+const StatusBar = memo(function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
   return (
     <div className="claude-status-bar">
       <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
@@ -37,7 +37,7 @@ function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) 
       )}
     </div>
   );
-}
+});
 
 // Format relative time
 function formatRelativeTime(timestamp) {
@@ -56,7 +56,7 @@ function formatRelativeTime(timestamp) {
 }
 
 // Section header component
-function SectionHeader({ turnNumber, timestamp }) {
+const SectionHeader = memo(function SectionHeader({ turnNumber, timestamp }) {
   return (
     <div className="cc-section-header">
       <span className="cc-section-turn">Turn {turnNumber}</span>
@@ -65,7 +65,7 @@ function SectionHeader({ turnNumber, timestamp }) {
       )}
     </div>
   );
-}
+});
 
 // Helper to group tool_use with tool_result and add section headers
 function groupEvents(events) {
@@ -417,7 +417,7 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   }, [sessionId, isProcessing]);
 
   // Group tool_use with its corresponding tool_result
-  const groupedEvents = groupEvents(events);
+  const groupedEvents = useMemo(() => groupEvents(events), [events]);
 
   const handleFolderSelect = (newPath) => {
     if (onFolderChange) {

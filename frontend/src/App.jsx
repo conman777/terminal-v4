@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } from 'react';
 import { TerminalChat } from './components/TerminalChat';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
@@ -10,7 +10,7 @@ import { PreviewPip } from './components/PreviewPip';
 import { PathBreadcrumb } from './components/PathBreadcrumb';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { SessionTabBar } from './components/SessionTabBar';
-import ClaudeCodePanel from './components/ClaudeCodePanel';
+const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
 import { FileManager } from './components/FileManager';
@@ -2036,15 +2036,17 @@ function AppContent() {
                     </button>
                   </div>
                 ) : (
-                  <ClaudeCodePanel
-                    sessionId={activeClaudeCodeId}
-                    cwd={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.cwd}
-                    model={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.model}
-                    recentFolders={recentFolders}
-                    onFolderChange={handleClaudeCodeFolderChange}
-                    onModelChange={handleClaudeCodeModelChange}
-                    onSessionEnd={() => setLeftPanelMode('terminal')}
-                  />
+                  <Suspense fallback={<div className="empty-state"><p>Loading Claude Code...</p></div>}>
+                    <ClaudeCodePanel
+                      sessionId={activeClaudeCodeId}
+                      cwd={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.cwd}
+                      model={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.model}
+                      recentFolders={recentFolders}
+                      onFolderChange={handleClaudeCodeFolderChange}
+                      onModelChange={handleClaudeCodeModelChange}
+                      onSessionEnd={() => setLeftPanelMode('terminal')}
+                    />
+                  </Suspense>
                 )
               )}
             </div>
@@ -2105,10 +2107,12 @@ function AppContent() {
             {/* Claude Code pane */}
             {mobileView === 'claude' && (
               <div className="claude-code-pane">
-                <ClaudeCodePanel
-                  sessionId={activeClaudeCodeId}
-                  onSessionChange={handleClaudeCodeSessionChange}
-                />
+                <Suspense fallback={<div className="empty-state"><p>Loading...</p></div>}>
+                  <ClaudeCodePanel
+                    sessionId={activeClaudeCodeId}
+                    onSessionChange={handleClaudeCodeSessionChange}
+                  />
+                </Suspense>
               </div>
             )}
 

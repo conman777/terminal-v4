@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -39,7 +39,7 @@ const TOOL_COLORS = {
 const FILE_LINE_REGEX = /([\/\w\-\.]+\.[a-zA-Z0-9]+):(\d+)/g;
 
 // File link component
-function FileLink({ path, line, onClick }) {
+const FileLink = memo(function FileLink({ path, line, onClick }) {
   const handleClick = (e) => {
     e.preventDefault();
     if (onClick) onClick(path, line);
@@ -50,7 +50,7 @@ function FileLink({ path, line, onClick }) {
       {path}:{line}
     </button>
   );
-}
+});
 
 // Parse text and replace file:line patterns with clickable links
 function parseFileLinks(text, onClick) {
@@ -85,7 +85,7 @@ function parseFileLinks(text, onClick) {
 }
 
 // Copy button component
-function CopyButton({ text }) {
+const CopyButton = memo(function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -108,7 +108,7 @@ function CopyButton({ text }) {
       {copied ? '✓' : '⧉'}
     </button>
   );
-}
+});
 
 // Todo List Widget - renders checkboxes like the official UI
 function TodoWidget({ todos }) {
@@ -288,7 +288,7 @@ function generateToolSummary(tool, input, output, isError) {
 }
 
 // Custom code block renderer
-function CodeBlock({ node, inline, className, children, ...props }) {
+const CodeBlock = memo(function CodeBlock({ node, inline, className, children, ...props }) {
   const match = /language-(\w+)/.exec(className || '');
   const codeString = String(children).replace(/\n$/, '');
 
@@ -315,10 +315,10 @@ function CodeBlock({ node, inline, className, children, ...props }) {
   }
 
   return <code className="inline-code" {...props}>{children}</code>;
-}
+});
 
 // Markdown renderer
-function MarkdownContent({ content }) {
+const MarkdownContent = memo(function MarkdownContent({ content }) {
   if (!content) return null;
 
   return (
@@ -339,9 +339,9 @@ function MarkdownContent({ content }) {
       {content}
     </ReactMarkdown>
   );
-}
+});
 
-export default function ToolCallBlock({ item, onFileClick }) {
+export default memo(function ToolCallBlock({ item, onFileClick }) {
   // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
   const [showFullOutput, setShowFullOutput] = useState(false);
@@ -500,4 +500,4 @@ export default function ToolCallBlock({ item, onFileClick }) {
   }
 
   return null;
-}
+});

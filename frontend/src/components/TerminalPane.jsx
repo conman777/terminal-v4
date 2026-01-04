@@ -1,8 +1,8 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, memo } from 'react';
 import { TerminalChat } from './TerminalChat';
 import { DesktopStatusBar } from './DesktopStatusBar';
 
-export function TerminalPane({
+export const TerminalPane = memo(function TerminalPane({
   pane,
   isActive,
   isFullscreen,
@@ -201,4 +201,4 @@ export function TerminalPane({
       </div>
     </div>
   );
-}
+});

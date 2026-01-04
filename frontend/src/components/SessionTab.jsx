@@ -1,9 +1,9 @@
-import { useCallback, useState, useRef, useEffect } from 'react';
+import { useCallback, useState, useRef, useEffect, memo } from 'react';
 
 /**
  * Individual session tab with drag support and right-click menu.
  */
-export function SessionTab({
+export const SessionTab = memo(function SessionTab({
   session,
   isActive,
   hasUnread,
@@ -158,4 +158,4 @@ export function SessionTab({
       </button>
     </div>
   );
-}
+});
