@@ -89,6 +89,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inCopyModeRef = useRef(false);
   const copyModeTimeoutRef = useRef(null);
 
+  // Track if user is actively scrolling (to suppress idle sound)
+  const isScrollingRef = useRef(false);
+  const scrollCooldownRef = useRef(null);
+
+  // Track if user has typed anything (only play idle sound after user input)
+  const hasUserInputRef = useRef(false);
+
   // Track scroll interval for press-and-hold continuous scrolling
   const scrollIntervalRef = useRef(null);
   const scrollStartTimeRef = useRef(null);
@@ -112,9 +119,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }, 10);
     inCopyModeRef.current = true;
 
-    // Reset timeout - assume copy-mode exited after 3s of no scroll activity
+    // Auto-exit copy-mode after 3s of no scroll activity
     clearTimeout(copyModeTimeoutRef.current);
     copyModeTimeoutRef.current = setTimeout(() => {
+      // Actually exit tmux copy-mode by sending 'q'
+      sendToTerminal('q');
       inCopyModeRef.current = false;
     }, 3000);
   }, [sendToTerminal]);
@@ -123,6 +132,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const scrollInTmux = useCallback((direction) => {
     const term = xtermRef.current;
     if (!term) return;
+
+    // Mark scrolling active to suppress idle sound
+    isScrollingRef.current = true;
+    if (scrollCooldownRef.current) {
+      clearTimeout(scrollCooldownRef.current);
+    }
+    scrollCooldownRef.current = setTimeout(() => {
+      isScrollingRef.current = false;
+    }, 500);
 
     const baseY = term.buffer?.active?.baseY || 0;
 
@@ -423,19 +441,40 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const handleTextareaFocus = () => {
         term.scrollToBottom();
       };
+
+      // Track composition state for iOS voice dictation fix
+      let isComposing = false;
+      const handleCompositionStart = () => {
+        isComposing = true;
+      };
+      const handleCompositionEnd = () => {
+        isComposing = false;
+      };
+      // Expose composition state for onData handler
+      term._isComposing = () => isComposing;
+
       if (textarea) {
         textarea.style.position = 'fixed';
         textarea.style.top = '0';
         textarea.style.left = '-9999px';
         textarea.addEventListener('focus', handleTextareaFocus);
+        textarea.addEventListener('compositionstart', handleCompositionStart);
+        textarea.addEventListener('compositionend', handleCompositionEnd);
       }
 
-      // Scroll direction detection for header collapse
+      // Scroll direction detection for header collapse (throttled to max 10 calls/sec)
       let lastScrollPos = 0;
+      let scrollThrottleTimer = null;
       const scrollDisposer = term.onScroll((newPos) => {
         if (onScrollDirectionRef.current && !disposed) {
           const direction = newPos > lastScrollPos ? 'down' : 'up';
-          onScrollDirectionRef.current(direction);
+          // Throttle callback to prevent excessive state updates
+          if (!scrollThrottleTimer) {
+            onScrollDirectionRef.current(direction);
+            scrollThrottleTimer = setTimeout(() => {
+              scrollThrottleTimer = null;
+            }, 100);
+          }
         }
         lastScrollPos = newPos;
       });
@@ -542,9 +581,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         socket.onopen = () => {
           if (disposed) return;
           wsRetryCount = 0; // Reset retry count on successful connection
+          // Reset user input flag - don't play idle sound until user types again
+          hasUserInputRef.current = false;
           if (hadConnectionError) {
             hadConnectionError = false;
-            term.write('\r\n[Reconnected]\r\n');
+            // Clear terminal before history replay to avoid duplicates
+            term.reset();
           }
           // Enable URL detection after history replay settles
           skipUrlTimeout = setTimeout(() => {
@@ -580,10 +622,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           term.write(data);
 
           // Reset idle timer - play tone after 3s of no output
+          // Only after user has typed something (not on initial history load)
+          // Skip when scrolling (generates output but isn't a command finishing)
           if (idleTimerRef.current) {
             clearTimeout(idleTimerRef.current);
           }
-          if (!skipUrlDetection) {
+          if (!skipUrlDetection && !isScrollingRef.current && hasUserInputRef.current) {
             setIsActive(true);
             onActivityChange?.(true);
             idleTimerRef.current = setTimeout(() => {
@@ -640,6 +684,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const dataDisposer = term.onData((data) => {
         if (disposed) return;
 
+        // Skip input during composition (iOS voice dictation fix)
+        // This prevents duplicate text when using voice-to-text
+        if (term._isComposing && term._isComposing()) {
+          return;
+        }
+
         // Filter out terminal query RESPONSES that shouldn't be sent as input
         // These are responses like DA (Device Attributes), DSR (Device Status Report)
         // Examples: \x1b[?1;2c, \x1b[0n, \x1b[>0;0;0c
@@ -657,6 +707,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           inCopyModeRef.current = false;
           clearTimeout(copyModeTimeoutRef.current);
         }
+
+        // Mark that user has typed - enables idle sound
+        hasUserInputRef.current = true;
 
         sendTerminalInput(data);
       });
@@ -760,9 +813,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               pendingScroll = null;
             }, 50);
 
-            // Reset timeout - assume copy-mode exited after 3s of no activity
+            // Auto-exit copy-mode after 3s of no activity
             clearTimeout(copyModeTimeoutRef.current);
             copyModeTimeoutRef.current = setTimeout(() => {
+              // Actually exit tmux copy-mode by sending 'q'
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send('q');
+              }
               inCopyModeRef.current = false;
             }, 3000);
           }
@@ -795,6 +852,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
           textarea.removeEventListener('focus', handleTextareaFocus);
+          textarea.removeEventListener('compositionstart', handleCompositionStart);
+          textarea.removeEventListener('compositionend', handleCompositionEnd);
         }
         closeSocket?.();
         if (resizeTimeout) {
@@ -815,6 +874,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       disposed = true;
       detectedUrlsRef.current.clear();
       clientIdRef.current = null;
+      hasUserInputRef.current = false;
       if (rafId) {
         cancelAnimationFrame(rafId);
       }
@@ -825,6 +885,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (idleTimerRef.current) {
         clearTimeout(idleTimerRef.current);
         idleTimerRef.current = null;
+      }
+      if (scrollCooldownRef.current) {
+        clearTimeout(scrollCooldownRef.current);
+        scrollCooldownRef.current = null;
       }
       if (scrollIntervalRef.current) {
         cancelAnimationFrame(scrollIntervalRef.current);
@@ -921,19 +985,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"
-            onPointerDown={(e) => {
+            onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              startScrolling('up');
+              scrollUp();
             }}
-            onPointerUp={stopScrolling}
-            onPointerLeave={stopScrolling}
             onTouchStart={(e) => {
-              e.preventDefault();
               e.stopPropagation();
               startScrolling('up');
             }}
-            onTouchEnd={stopScrolling}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+              stopScrolling();
+            }}
+            onMouseDown={() => startScrolling('up')}
+            onMouseUp={stopScrolling}
+            onMouseLeave={stopScrolling}
             aria-label="Scroll up"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -942,19 +1009,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           </button>
           <button
             className="scroll-btn scroll-down"
-            onPointerDown={(e) => {
+            onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              startScrolling('down');
+              scrollDown();
             }}
-            onPointerUp={stopScrolling}
-            onPointerLeave={stopScrolling}
             onTouchStart={(e) => {
-              e.preventDefault();
               e.stopPropagation();
               startScrolling('down');
             }}
-            onTouchEnd={stopScrolling}
+            onTouchEnd={(e) => {
+              e.stopPropagation();
+              stopScrolling();
+            }}
+            onMouseDown={() => startScrolling('down')}
+            onMouseUp={stopScrolling}
+            onMouseLeave={stopScrolling}
             aria-label="Scroll down"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

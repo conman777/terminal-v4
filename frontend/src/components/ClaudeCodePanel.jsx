@@ -5,6 +5,9 @@ import { FolderBrowserModal } from './FolderBrowserModal';
 import { apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 
+// Check if we're on mobile
+const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+
 // Status bar component
 const StatusBar = memo(function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
   return (
@@ -144,6 +147,40 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
     isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
   }, []);
 
+  // Mobile scroll button handlers
+  const scrollIntervalRef = useRef(null);
+  const scrollDirectionRef = useRef(null);
+
+  const scrollMessages = useCallback((direction) => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const amount = direction === 'up' ? -150 : 150;
+    container.scrollBy({ top: amount, behavior: 'smooth' });
+  }, []);
+
+  const startScrolling = useCallback((direction) => {
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+    }
+    scrollDirectionRef.current = direction;
+    scrollMessages(direction);
+    scrollIntervalRef.current = setInterval(() => {
+      scrollMessages(direction);
+    }, 150);
+  }, [scrollMessages]);
+
+  const stopScrolling = useCallback(() => {
+    scrollDirectionRef.current = null;
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
+    }
+  }, []);
+
+  const jumpToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
   // Auto-scroll to bottom on new events (only if user is near bottom)
   useEffect(() => {
     if (isNearBottomRef.current) {
@@ -239,7 +276,20 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         }
         seenEventIdsRef.current.add(eventId);
 
-        setEvents(prev => [...prev, { ...event, id: event.id || eventId }]);
+        // Cap events at 300 to prevent unbounded memory growth
+        const MAX_EVENTS = 300;
+        setEvents(prev => {
+          const newEvents = [...prev, { ...event, id: event.id || eventId }];
+          if (newEvents.length > MAX_EVENTS) {
+            return newEvents.slice(-MAX_EVENTS);
+          }
+          return newEvents;
+        });
+
+        // Trim seenEventIds to prevent memory leak
+        if (seenEventIdsRef.current.size > MAX_EVENTS * 2) {
+          seenEventIdsRef.current.clear();
+        }
 
         // Track processing state
         if (event.type === 'tool_use') {
@@ -505,6 +555,54 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Mobile scroll buttons */}
+      {isMobile && (
+        <div className="claude-scroll-buttons">
+          <button
+            className="scroll-btn scroll-up"
+            onTouchStart={(e) => {
+              e.preventDefault();
+              startScrolling('up');
+            }}
+            onTouchEnd={stopScrolling}
+            onMouseDown={() => startScrolling('up')}
+            onMouseUp={stopScrolling}
+            onMouseLeave={stopScrolling}
+            aria-label="Scroll up"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="18 15 12 9 6 15" />
+            </svg>
+          </button>
+          <button
+            className="scroll-btn scroll-down"
+            onTouchStart={(e) => {
+              e.preventDefault();
+              startScrolling('down');
+            }}
+            onTouchEnd={stopScrolling}
+            onMouseDown={() => startScrolling('down')}
+            onMouseUp={stopScrolling}
+            onMouseLeave={stopScrolling}
+            aria-label="Scroll down"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </button>
+          <button
+            className="scroll-btn scroll-live"
+            onClick={jumpToBottom}
+            aria-label="Jump to bottom"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="7 13 12 18 17 13" />
+              <polyline points="7 6 12 11 17 6" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       <StatusBar
         sessionId={sessionId}

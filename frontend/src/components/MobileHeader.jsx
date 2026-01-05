@@ -1,5 +1,40 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { MobileDrawer } from './MobileDrawer';
+import { ContextMenu } from './ContextMenu';
+import { useLongPress } from '../hooks/useLongPress';
+
+// Separate component for mobile tab to use hooks properly
+function MobileTab({ session, isActive, onSelect, onLongPress, isRenaming, renameValue, onRenameChange, onRenameSubmit, onRenameKeyDown, inputRef }) {
+  const longPressHandlers = useLongPress((coords) => {
+    onLongPress(session.id, coords);
+  });
+
+  if (isRenaming) {
+    return (
+      <input
+        ref={inputRef}
+        type="text"
+        className="mobile-header-tab-input"
+        value={renameValue}
+        onChange={(e) => onRenameChange(e.target.value)}
+        onBlur={onRenameSubmit}
+        onKeyDown={onRenameKeyDown}
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`mobile-header-tab${isActive ? ' active' : ''}`}
+      onClick={() => onSelect(session.id)}
+      {...longPressHandlers}
+    >
+      {session.title || 'Terminal'}
+    </button>
+  );
+}
 
 export function MobileHeader({
   activeSessions,
@@ -29,7 +64,49 @@ export function MobileHeader({
   isNavCollapsed = false
 }) {
   const [showDrawer, setShowDrawer] = useState(false);
+  const [tabContextMenu, setTabContextMenu] = useState(null);
+  const [renamingSessionId, setRenamingSessionId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
   const tabsRef = useRef(null);
+  const renameInputRef = useRef(null);
+
+  const handleTabLongPress = useCallback((sessionId, coords) => {
+    setTabContextMenu({ sessionId, x: coords.x, y: coords.y });
+  }, []);
+
+  const handleStartRename = useCallback((sessionId) => {
+    const session = activeSessions.find(s => s.id === sessionId);
+    if (session) {
+      setRenameValue(session.title || 'Terminal');
+      setRenamingSessionId(sessionId);
+      setTabContextMenu(null);
+    }
+  }, [activeSessions]);
+
+  const handleRenameSubmit = useCallback(() => {
+    if (renamingSessionId) {
+      const trimmed = renameValue.trim();
+      if (trimmed) {
+        onRenameSession(renamingSessionId, trimmed);
+      }
+      setRenamingSessionId(null);
+      setRenameValue('');
+    }
+  }, [renamingSessionId, renameValue, onRenameSession]);
+
+  const handleRenameKeyDown = useCallback((e) => {
+    if (e.key === 'Enter') {
+      handleRenameSubmit();
+    } else if (e.key === 'Escape') {
+      setRenamingSessionId(null);
+      setRenameValue('');
+    }
+  }, [handleRenameSubmit]);
+
+  const handleCloseFromMenu = useCallback((sessionId) => {
+    onCloseSession(sessionId);
+    setTabContextMenu(null);
+  }, [onCloseSession]);
 
   // Auto-scroll active tab into view
   useEffect(() => {
@@ -61,14 +138,19 @@ export function MobileHeader({
         {/* Inline session tabs */}
         <div className="mobile-header-tabs" ref={tabsRef}>
           {activeSessions.map((session) => (
-            <button
+            <MobileTab
               key={session.id}
-              type="button"
-              className={`mobile-header-tab${session.id === activeSessionId ? ' active' : ''}`}
-              onClick={() => onSelectSession(session.id)}
-            >
-              {session.title || 'Terminal'}
-            </button>
+              session={session}
+              isActive={session.id === activeSessionId}
+              onSelect={onSelectSession}
+              onLongPress={handleTabLongPress}
+              isRenaming={renamingSessionId === session.id}
+              renameValue={renameValue}
+              onRenameChange={setRenameValue}
+              onRenameSubmit={handleRenameSubmit}
+              onRenameKeyDown={handleRenameKeyDown}
+              inputRef={renameInputRef}
+            />
           ))}
           <button
             type="button"
@@ -82,19 +164,27 @@ export function MobileHeader({
 
         {/* Action buttons */}
         <div className="mobile-header-actions">
-          {previewUrl && (
-            <button
-              className="mobile-header-btn"
-              onClick={() => onViewChange?.('preview')}
-              aria-label="Preview"
-              type="button"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </button>
-          )}
+          <button
+            className="mobile-header-btn"
+            onClick={onOpenBookmarks}
+            aria-label="Bookmarks"
+            type="button"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+          </button>
+          <button
+            className="mobile-header-btn"
+            onClick={() => onViewChange?.('preview')}
+            aria-label="Preview"
+            type="button"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </button>
           <button
             className="mobile-header-btn"
             onClick={onToggleFileManager}
@@ -145,6 +235,37 @@ export function MobileHeader({
         inactiveSessions={inactiveSessions}
         onRestoreSession={onRestoreSession}
       />
+
+      {tabContextMenu && (
+        <ContextMenu
+          x={tabContextMenu.x}
+          y={tabContextMenu.y}
+          items={[
+            {
+              label: 'Rename',
+              icon: (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                </svg>
+              ),
+              onClick: () => handleStartRename(tabContextMenu.sessionId)
+            },
+            { separator: true },
+            {
+              label: 'Close',
+              icon: (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              ),
+              onClick: () => handleCloseFromMenu(tabContextMenu.sessionId),
+              danger: true
+            }
+          ]}
+          onClose={() => setTabContextMenu(null)}
+        />
+      )}
     </>
   );
 }

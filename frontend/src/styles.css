@@ -1214,7 +1214,7 @@ button {
   bottom: 52px; /* Above status bar */
   display: flex;
   flex-direction: column;
-  z-index: 100;
+  z-index: 9999;
   pointer-events: auto;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -1223,7 +1223,8 @@ button {
 }
 
 .terminal-scroll-buttons.mobile {
-  bottom: 52px;
+  bottom: 60px;
+  right: 10px;
 }
 
 .scroll-btn {
@@ -2940,6 +2941,26 @@ button {
   justify-content: center;
 }
 
+.mobile-header-tab-input {
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  min-width: 60px;
+  max-width: 120px;
+  min-height: 32px;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-header-tab-input:focus {
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.3);
+}
+
 .mobile-header-btn {
   background: transparent;
   border: none;
@@ -3931,6 +3952,73 @@ textarea:focus-visible {
   flex-direction: column;
   height: 100%;
   background: var(--bg-base);
+  position: relative;
+}
+
+/* Claude Code Mobile Scroll Buttons */
+.claude-scroll-buttons {
+  position: absolute;
+  right: 14px;
+  bottom: 120px;
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  pointer-events: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.claude-scroll-buttons .scroll-btn {
+  width: 36px;
+  height: 44px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  pointer-events: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: all 0.15s ease;
+}
+
+.claude-scroll-buttons .scroll-btn:first-child {
+  border-radius: 7px 7px 0 0;
+}
+
+.claude-scroll-buttons .scroll-btn:not(:last-child) {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.claude-scroll-buttons .scroll-btn:last-child {
+  border-radius: 0 0 7px 7px;
+}
+
+.claude-scroll-buttons .scroll-btn:active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.claude-scroll-buttons .scroll-btn.scroll-live {
+  background: rgba(59, 130, 246, 0.15);
+  color: #3b82f6;
+}
+
+.claude-scroll-buttons .scroll-btn.scroll-live:active {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.claude-scroll-buttons .scroll-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* Claude Code Header - clickable folder path */
@@ -4136,6 +4224,8 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* Centered content column like Anthropic */
