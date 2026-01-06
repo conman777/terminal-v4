@@ -1,0 +1,635 @@
+import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { apiFetch, apiGet } from '../utils/api';
+
+const TerminalSessionContext = createContext(null);
+
+export function TerminalSessionProvider({ children }) {
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(() => {
+    try {
+      return localStorage.getItem('lastActiveSession') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [restoringSessionId, setRestoringSessionId] = useState(null);
+  const [projectInfo, setProjectInfo] = useState(null);
+
+  // Folder state
+  const [recentFolders, setRecentFolders] = useState(() => {
+    try {
+      const stored = localStorage.getItem('recentFolders');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [pinnedFolders, setPinnedFolders] = useState(() => {
+    try {
+      const stored = localStorage.getItem('pinnedFolders');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Projects state
+  const [projects, setProjects] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+
+  // Bookmarks state
+  const [bookmarks, setBookmarks] = useState([]);
+
+  // Refs
+  const isMountedRef = useRef(true);
+  const restoreInFlightRef = useRef(new Set());
+  const lastActivityRef = useRef(Date.now());
+  const lastCwdRef = useRef(null);
+
+  // Derived state
+  const activeSessions = useMemo(
+    () => sessions.filter((session) => session.isActive),
+    [sessions]
+  );
+  const inactiveSessions = useMemo(
+    () => sessions.filter((session) => !session.isActive),
+    [sessions]
+  );
+
+  // Add a folder to recent list (max 10, no duplicates)
+  const addRecentFolder = useCallback((folder) => {
+    if (!folder) return;
+    setRecentFolders(prev => {
+      const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
+      const updated = [folder, ...filtered].slice(0, 10);
+      try {
+        localStorage.setItem('recentFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save recent folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Pin a folder (max 20)
+  const pinFolder = useCallback((folder) => {
+    if (!folder) return;
+    setPinnedFolders(prev => {
+      if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
+        return prev;
+      }
+      const updated = [...prev, folder].slice(0, 20);
+      try {
+        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save pinned folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Unpin a folder
+  const unpinFolder = useCallback((folder) => {
+    setPinnedFolders(prev => {
+      const updated = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
+      try {
+        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save pinned folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Load sessions
+  const loadSessions = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    setLoadingSessions(true);
+    try {
+      const response = await apiFetch('/api/terminal');
+      if (!response.ok) {
+        throw new Error(`Failed to load sessions (${response.status})`);
+      }
+      const data = await response.json();
+      if (isMountedRef.current) {
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
+    } catch (error) {
+      console.error('Failed to load sessions', error);
+    } finally {
+      if (isMountedRef.current) {
+        setLoadingSessions(false);
+      }
+    }
+  }, []);
+
+  // Load bookmarks
+  const loadBookmarks = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      const response = await apiFetch('/api/bookmarks');
+      if (!response.ok) {
+        throw new Error(`Failed to load bookmarks (${response.status})`);
+      }
+      const data = await response.json();
+      if (isMountedRef.current) {
+        setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
+      }
+    } catch (error) {
+      console.error('Failed to load bookmarks', error);
+    }
+  }, []);
+
+  // Load projects
+  const loadProjects = useCallback(async () => {
+    setProjectsLoading(true);
+    try {
+      const response = await apiFetch('/api/projects/scan');
+      if (response.ok) {
+        const data = await response.json();
+        setProjects(data.projects || []);
+      }
+    } catch (error) {
+      console.error('Failed to load projects', error);
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, []);
+
+  // Add scan folder
+  const handleAddScanFolder = useCallback(async () => {
+    const folderPath = prompt('Enter folder path to scan for git repositories:');
+    if (!folderPath || !folderPath.trim()) return;
+
+    setProjectsLoading(true);
+    try {
+      const response = await apiFetch('/api/projects/scan-dirs', {
+        method: 'POST',
+        body: { path: folderPath.trim() }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.projects) {
+          setProjects(data.projects);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to add scan folder', error);
+    } finally {
+      setProjectsLoading(false);
+    }
+  }, []);
+
+  // Consolidated state fetcher
+  const fetchAppState = useCallback(async () => {
+    if (!isMountedRef.current) return;
+
+    try {
+      const url = activeSessionId
+        ? `/api/state?sessionId=${activeSessionId}`
+        : '/api/state';
+
+      const response = await apiFetch(url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch app state (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      if (data.sessions && isMountedRef.current) {
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+      }
+
+      if (data.projectInfo && isMountedRef.current) {
+        setProjectInfo(data.projectInfo);
+        if (data.projectInfo.cwd && data.projectInfo.cwd !== lastCwdRef.current) {
+          lastCwdRef.current = data.projectInfo.cwd;
+          addRecentFolder(data.projectInfo.cwd);
+        }
+      } else if (!activeSessionId && isMountedRef.current) {
+        setProjectInfo(null);
+        lastCwdRef.current = null;
+      }
+    } catch (error) {
+      console.error('Failed to fetch app state:', error);
+    }
+  }, [activeSessionId, addRecentFolder]);
+
+  // Session CRUD operations
+  const createSession = useCallback(async () => {
+    try {
+      const requestBody = {};
+      if (recentFolders.length > 0) {
+        requestBody.cwd = recentFolders[0];
+      }
+
+      const response = await apiFetch('/api/terminal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create session (${response.status})`);
+      }
+
+      const data = await response.json();
+      setActiveSessionId(data.session.id);
+      await loadSessions();
+      return data.session;
+    } catch (error) {
+      console.error('Failed to create session', error);
+      throw error;
+    }
+  }, [loadSessions, recentFolders]);
+
+  const selectSession = useCallback((sessionId) => {
+    setActiveSessionId(sessionId);
+    try {
+      localStorage.setItem('lastActiveSession', sessionId);
+    } catch (error) {
+      console.error('Failed to save last active session', error);
+    }
+  }, []);
+
+  const restoreSession = useCallback(async (sessionId) => {
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to restore session (${response.status})`);
+      }
+
+      setActiveSessionId(sessionId);
+      await loadSessions();
+
+      try {
+        localStorage.setItem('lastActiveSession', sessionId);
+      } catch (error) {
+        console.error('Failed to save last active session', error);
+      }
+    } catch (error) {
+      console.error('Failed to restore session', error);
+      await loadSessions();
+      throw error;
+    }
+  }, [loadSessions]);
+
+  const renameSession = useCallback(async (sessionId, title) => {
+    const trimmed = title.trim().slice(0, 60);
+    if (!trimmed) return;
+    const currentTitle = sessions.find((session) => session.id === sessionId)?.title;
+    if (currentTitle === trimmed) return;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to rename session (${response.status})`);
+      }
+
+      const data = await response.json();
+      const updated = data.session;
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === sessionId ? { ...session, title: updated.title, updatedAt: updated.updatedAt } : session
+        )
+      );
+    } catch (error) {
+      console.error('Failed to rename session', error);
+    }
+  }, [sessions]);
+
+  const closeSession = useCallback(async (sessionId) => {
+    try {
+      await apiFetch(`/api/terminal/${sessionId}`, {
+        method: 'DELETE'
+      });
+
+      setSessions((currentSessions) => {
+        const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
+        setActiveSessionId((currentActiveId) => {
+          if (sessionId === currentActiveId) {
+            const nextActive = remainingSessions.find((session) => session.isActive);
+            return nextActive ? nextActive.id : null;
+          }
+          return currentActiveId;
+        });
+        return remainingSessions;
+      });
+
+      await loadSessions();
+    } catch (error) {
+      console.error('Failed to close session', error);
+    }
+  }, [loadSessions]);
+
+  // Navigate session to path
+  const navigateSession = useCallback(async (sessionId, path) => {
+    if (!sessionId || !path) return;
+
+    try {
+      const cdCommand = `cd "${path}"\r`;
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cdCommand })
+      });
+      addRecentFolder(path);
+    } catch (error) {
+      console.error('Failed to navigate session', error);
+    }
+  }, [addRecentFolder]);
+
+  // Bookmark handlers
+  const addBookmark = useCallback(async (name, command, category) => {
+    try {
+      const response = await apiFetch('/api/bookmarks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, command, category })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create bookmark (${response.status})`);
+      }
+
+      await loadBookmarks();
+    } catch (error) {
+      console.error('Failed to create bookmark', error);
+    }
+  }, [loadBookmarks]);
+
+  const updateBookmark = useCallback(async (id, updates) => {
+    try {
+      const response = await apiFetch(`/api/bookmarks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update bookmark (${response.status})`);
+      }
+
+      await loadBookmarks();
+    } catch (error) {
+      console.error('Failed to update bookmark', error);
+    }
+  }, [loadBookmarks]);
+
+  const deleteBookmark = useCallback(async (id) => {
+    try {
+      const response = await apiFetch(`/api/bookmarks/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete bookmark (${response.status})`);
+      }
+
+      await loadBookmarks();
+    } catch (error) {
+      console.error('Failed to delete bookmark', error);
+    }
+  }, [loadBookmarks]);
+
+  const executeBookmark = useCallback(async (command) => {
+    if (!activeSessionId) {
+      alert('Please select a terminal session first');
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: command + '\r' })
+      });
+    } catch (error) {
+      console.error('Failed to execute bookmark command', error);
+      alert('Failed to execute command');
+    }
+  }, [activeSessionId]);
+
+  // Track activity for polling
+  const trackActivity = useCallback(() => {
+    lastActivityRef.current = Date.now();
+  }, []);
+
+  // Initial load and polling setup
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    const initializeSessions = async () => {
+      await loadSessions();
+      await loadBookmarks();
+
+      const lastSessionId = localStorage.getItem('lastActiveSession');
+      if (lastSessionId) {
+        try {
+          const response = await apiFetch('/api/terminal');
+          if (response.ok) {
+            const data = await response.json();
+            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
+            const lastSession = sessionList.find(s => s.id === lastSessionId);
+
+            if (lastSession) {
+              if (!lastSession.isActive) {
+                const restoreResponse = await apiFetch(`/api/terminal/${lastSessionId}/restore`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({})
+                });
+                if (restoreResponse.ok) {
+                  await loadSessions();
+                }
+              }
+            } else {
+              const activeSession = sessionList.find(s => s.isActive);
+              if (activeSession) {
+                setActiveSessionId(activeSession.id);
+                localStorage.setItem('lastActiveSession', activeSession.id);
+              } else {
+                localStorage.removeItem('lastActiveSession');
+                setActiveSessionId(null);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Failed to restore last session', error);
+        }
+      } else {
+        try {
+          const response = await apiFetch('/api/terminal');
+          if (response.ok) {
+            const data = await response.json();
+            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
+            const activeSession = sessionList.find(s => s.isActive);
+            if (activeSession) {
+              setActiveSessionId(activeSession.id);
+              localStorage.setItem('lastActiveSession', activeSession.id);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to find active session', error);
+        }
+      }
+    };
+
+    initializeSessions();
+    loadProjects();
+
+    // Visibility-aware polling
+    let pollTimeoutId = null;
+
+    const getPollingInterval = () => {
+      if (document.visibilityState === 'hidden') return null;
+      const idleTime = Date.now() - lastActivityRef.current;
+      if (idleTime > 60000) return 30000;
+      if (idleTime > 30000) return 15000;
+      return 5000;
+    };
+
+    const schedulePoll = () => {
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      const interval = getPollingInterval();
+      if (interval !== null) {
+        pollTimeoutId = setTimeout(() => {
+          fetchAppState();
+          schedulePoll();
+        }, interval);
+      }
+    };
+
+    schedulePoll();
+
+    const handleActivity = () => {
+      lastActivityRef.current = Date.now();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        lastActivityRef.current = Date.now();
+        fetchAppState();
+        schedulePoll();
+      } else {
+        if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      }
+    };
+
+    window.addEventListener('mousemove', handleActivity, { passive: true });
+    window.addEventListener('keydown', handleActivity, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isMountedRef.current = false;
+      if (pollTimeoutId) clearTimeout(pollTimeoutId);
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [loadSessions, loadBookmarks, loadProjects, fetchAppState]);
+
+  // Auto-restore inactive sessions
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
+    if (!activeSnapshot || activeSnapshot.isActive) return;
+    if (restoreInFlightRef.current.has(activeSessionId)) return;
+
+    restoreInFlightRef.current.add(activeSessionId);
+    setRestoringSessionId(activeSessionId);
+    const retryTimeout = setTimeout(() => {
+      restoreInFlightRef.current.delete(activeSessionId);
+    }, 10000);
+
+    restoreSession(activeSessionId)
+      .catch((error) => {
+        console.error('Session restore failed, clearing selection:', error);
+        setActiveSessionId(null);
+      })
+      .finally(() => {
+        clearTimeout(retryTimeout);
+        restoreInFlightRef.current.delete(activeSessionId);
+      });
+  }, [activeSessionId, sessions, restoreSession]);
+
+  // Clear restoring state when session becomes active
+  useEffect(() => {
+    if (!activeSessionId) {
+      setRestoringSessionId(null);
+      return;
+    }
+    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
+    if (!activeSnapshot || activeSnapshot.isActive) {
+      setRestoringSessionId(null);
+    }
+  }, [activeSessionId, sessions]);
+
+  const value = {
+    // Session state
+    sessions,
+    activeSessionId,
+    activeSessions,
+    inactiveSessions,
+    loadingSessions,
+    restoringSessionId,
+    projectInfo,
+
+    // Session actions
+    createSession,
+    selectSession,
+    restoreSession,
+    renameSession,
+    closeSession,
+    navigateSession,
+
+    // Folder state
+    recentFolders,
+    pinnedFolders,
+    addRecentFolder,
+    pinFolder,
+    unpinFolder,
+
+    // Projects state
+    projects,
+    projectsLoading,
+    loadProjects,
+    handleAddScanFolder,
+
+    // Bookmarks
+    bookmarks,
+    addBookmark,
+    updateBookmark,
+    deleteBookmark,
+    executeBookmark,
+
+    // Activity tracking
+    trackActivity
+  };
+
+  return (
+    <TerminalSessionContext.Provider value={value}>
+      {children}
+    </TerminalSessionContext.Provider>
+  );
+}
+
+export function useTerminalSession() {
+  const context = useContext(TerminalSessionContext);
+  if (!context) {
+    throw new Error('useTerminalSession must be used within a TerminalSessionProvider');
+  }
+  return context;
+}

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import SidebarItem from './SidebarItem';
 
 export default function SidebarSection({
@@ -18,6 +18,15 @@ export default function SidebarSection({
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [searchQuery, setSearchQuery] = useState('');
+  const [inputValue, setInputValue] = useState('');
+  const debounceTimerRef = useRef(null);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, []);
 
   // Normalize path for comparison
   const normalizePath = (p) => p?.toLowerCase().replace(/\/$/, '');
@@ -131,16 +140,26 @@ export default function SidebarSection({
                 type="text"
                 className="sidebar-search-input"
                 placeholder="Search projects..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={inputValue}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInputValue(value);
+                  // Debounce actual search by 250ms
+                  if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+                  debounceTimerRef.current = setTimeout(() => {
+                    setSearchQuery(value);
+                  }, 250);
+                }}
                 onClick={(e) => e.stopPropagation()}
               />
-              {searchQuery && (
+              {inputValue && (
                 <button
                   className="sidebar-search-clear"
                   onClick={(e) => {
                     e.stopPropagation();
+                    setInputValue('');
                     setSearchQuery('');
+                    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
                   }}
                   type="button"
                   aria-label="Clear search"

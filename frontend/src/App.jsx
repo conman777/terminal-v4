@@ -19,6 +19,10 @@ import LoginPage from './components/LoginPage';
 import ApiSettingsModal from './components/ApiSettingsModal';
 import { ProcessManagerModal } from './components/ProcessManagerModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
+import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
+import { ClaudeCodeProvider, useClaudeCode } from './contexts/ClaudeCodeContext';
+import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
@@ -599,84 +603,92 @@ function SessionSelector({
 
 function AppContent() {
   const { logout, user } = useAuth();
-  const [sessions, setSessions] = useState([]);
-  // Restore terminal session from localStorage
-  const [activeSessionId, setActiveSessionId] = useState(() => {
-    try {
-      return localStorage.getItem('lastActiveSession') || null;
-    } catch {
-      return null;
-    }
-  });
 
-  // Split pane layout state
-  const [paneLayout, setPaneLayout] = useState(() => {
-    try {
-      const saved = localStorage.getItem('paneLayout');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {}
-    return {
-      type: 'single',
-      panes: [{ id: 'pane-1', sessionId: null }],
-      activePaneId: 'pane-1'
-    };
-  });
+  // Context hooks
+  const {
+    sessions,
+    activeSessionId,
+    activeSessions,
+    inactiveSessions,
+    loadingSessions,
+    restoringSessionId,
+    projectInfo,
+    createSession,
+    selectSession,
+    restoreSession,
+    renameSession,
+    closeSession,
+    navigateSession,
+    recentFolders,
+    pinnedFolders,
+    addRecentFolder,
+    pinFolder,
+    unpinFolder,
+    projects,
+    projectsLoading,
+    handleAddScanFolder,
+    bookmarks,
+    addBookmark,
+    updateBookmark,
+    deleteBookmark,
+    executeBookmark
+  } = useTerminalSession();
 
-  // Fullscreen pane state (not persisted - temporary)
-  const [fullscreenPaneId, setFullscreenPaneId] = useState(null);
+  const {
+    paneLayout,
+    fullscreenPaneId,
+    splitPosition,
+    isDragging,
+    initializePaneWithSession,
+    setPaneSession,
+    focusPane,
+    splitPane,
+    closePane,
+    toggleFullscreen,
+    exitFullscreen,
+    startDragging,
+    updateSplitPosition,
+    stopDragging,
+    setIsDragging
+  } = usePaneLayout();
 
-  const [loadingSessions, setLoadingSessions] = useState(false);
+  const {
+    leftPanelMode,
+    claudeCodeSessions,
+    activeClaudeCodeId,
+    setLeftPanelMode,
+    startClaudeCode,
+    selectClaudeCode,
+    deleteClaudeCode,
+    handleModelChange: handleClaudeCodeModelChange,
+    handleFolderChange: handleClaudeCodeFolderChange
+  } = useClaudeCode();
 
-  const activeSessions = useMemo(
-    () => sessions.filter((session) => session.isActive),
-    [sessions]
-  );
-  const inactiveSessions = useMemo(
-    () => sessions.filter((session) => !session.isActive),
-    [sessions]
-  );
-  const activeSessionSnapshot = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) || null,
-    [sessions, activeSessionId]
-  );
+  const {
+    previewUrl,
+    showPreview,
+    previewMode,
+    pipPosition,
+    pipSize,
+    handleUrlDetected,
+    handlePreviewClose,
+    handlePreviewUrlChange,
+    togglePreview,
+    setShowPreview
+  } = usePreview();
+
+  // Local UI state (not shared across components)
   const [showSettings, setShowSettings] = useState(false);
   const [showApiSettings, setShowApiSettings] = useState(false);
-  const [bookmarks, setBookmarks] = useState([]);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showProcessManager, setShowProcessManager] = useState(false);
+  const [showFileManager, setShowFileManager] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const [showPreview, setShowPreview] = useState(false);
-  const [showFileManager, setShowFileManager] = useState(false);
-  const [mobileView, setMobileView] = useState('terminal'); // 'terminal' | 'claude' | 'preview'
-  const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0); // Index for mobile terminal carousel
-  const [splitPosition, setSplitPosition] = useState(50); // percentage
-  const [isDragging, setIsDragging] = useState(false);
-  const [restoringSessionId, setRestoringSessionId] = useState(null);
-  const [projectInfo, setProjectInfo] = useState(null);
-  // Claude Code state - restore from localStorage
-  const [leftPanelMode, setLeftPanelMode] = useState(() => {
-    try {
-      return localStorage.getItem('leftPanelMode') || 'terminal';
-    } catch {
-      return 'terminal';
-    }
-  });
-  const [claudeCodeSessions, setClaudeCodeSessions] = useState([]);
-  const [activeClaudeCodeId, setActiveClaudeCodeId] = useState(() => {
-    try {
-      return localStorage.getItem('lastActiveClaudeCodeId') || null;
-    } catch {
-      return null;
-    }
-  });
+  const [mobileView, setMobileView] = useState('terminal');
+  const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
+
   const mainContentRef = useRef(null);
-  const isMountedRef = useRef(true);
-  const restoreInFlightRef = useRef(new Set());
-  const lastActivityRef = useRef(Date.now());
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
@@ -689,41 +701,12 @@ function AppContent() {
     removeSession: removeSessionActivity
   } = useSessionActivity();
 
-  // Preview PiP mode state
-  const [previewMode, setPreviewMode] = useState('docked'); // 'docked' | 'pip' | 'hidden'
-  const [pipPosition, setPipPosition] = useState({ x: window.innerWidth - 420, y: 80 });
-  const [pipSize, setPipSize] = useState({ width: 400, height: 300 });
-
   // Reset header collapse when switching mobile views
   useEffect(() => {
     resetScrollDirection();
   }, [mobileView, resetScrollDirection]);
 
-  // Load recent folders from localStorage
-  const [recentFolders, setRecentFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('recentFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Load pinned folders from localStorage
-  const [pinnedFolders, setPinnedFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('pinnedFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Projects (git repos) state
-  const [projects, setProjects] = useState([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
-
-  // Sidebar collapsed state
+  // Sidebar collapsed state (local UI setting)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem('sidebarCollapsed') === 'true';
@@ -732,7 +715,7 @@ function AppContent() {
     }
   });
 
-  // Terminal font size (stored in localStorage)
+  // Terminal font size (local UI setting)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
     try {
       const stored = localStorage.getItem('terminalFontSize');
@@ -743,7 +726,6 @@ function AppContent() {
     }
   });
 
-  // Update font size and persist to localStorage
   const updateTerminalFontSize = useCallback((size) => {
     setTerminalFontSize(size);
     try {
@@ -753,52 +735,6 @@ function AppContent() {
     }
   }, []);
 
-  // Add a folder to recent list (max 10, no duplicates)
-  const addRecentFolder = useCallback((folder) => {
-    if (!folder) return;
-    setRecentFolders(prev => {
-      const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      const updated = [folder, ...filtered].slice(0, 10);
-      try {
-        localStorage.setItem('recentFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save recent folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Pin a folder (max 20)
-  const pinFolder = useCallback((folder) => {
-    if (!folder) return;
-    setPinnedFolders(prev => {
-      if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
-        return prev; // Already pinned
-      }
-      const updated = [...prev, folder].slice(0, 20);
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Unpin a folder
-  const unpinFolder = useCallback((folder) => {
-    setPinnedFolders(prev => {
-      const updated = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Toggle sidebar collapsed state
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
       const newValue = !prev;
@@ -811,818 +747,53 @@ function AppContent() {
     });
   }, []);
 
-  // Fetch projects (git repos) on mount
-  const loadProjects = useCallback(async () => {
-    setProjectsLoading(true);
-    try {
-      const response = await apiFetch('/api/projects/scan');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
-      }
-    } catch (error) {
-      console.error('Failed to load projects', error);
-    } finally {
-      setProjectsLoading(false);
-    }
-  }, []);
-
-  // Add a custom folder to scan for projects
-  const handleAddScanFolder = useCallback(async () => {
-    const folderPath = prompt('Enter folder path to scan for git repositories:');
-    if (!folderPath || !folderPath.trim()) return;
-
-    setProjectsLoading(true);
-    try {
-      const response = await apiFetch('/api/projects/scan-dirs', {
-        method: 'POST',
-        body: { path: folderPath.trim() }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.projects) {
-          setProjects(data.projects);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to add scan folder', error);
-    } finally {
-      setProjectsLoading(false);
-    }
-  }, []);
-
-  const loadSessions = useCallback(async () => {
-    if (!isMountedRef.current) return;
-    setLoadingSessions(true);
-    try {
-      const response = await apiFetch('/api/terminal');
-      if (!response.ok) {
-        throw new Error(`Failed to load sessions (${response.status})`);
-      }
-
-      const data = await response.json();
-      if (isMountedRef.current) {
-        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
-      }
-    } catch (error) {
-      console.error('Failed to load sessions', error);
-    } finally {
-      if (isMountedRef.current) {
-        setLoadingSessions(false);
-      }
-    }
-  }, []);
-
-  const loadBookmarks = useCallback(async () => {
-    if (!isMountedRef.current) return;
-    try {
-      const response = await apiFetch('/api/bookmarks');
-      if (!response.ok) {
-        throw new Error(`Failed to load bookmarks (${response.status})`);
-      }
-
-      const data = await response.json();
-      if (isMountedRef.current) {
-        setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
-      }
-    } catch (error) {
-      console.error('Failed to load bookmarks', error);
-    }
-  }, []);
-
-  // Consolidated state fetcher - replaces three separate polling endpoints
-  const lastCwdRef = useRef(null);
-  const fetchAppState = useCallback(async () => {
-    if (!isMountedRef.current) return;
-
-    try {
-      const url = activeSessionId
-        ? `/api/state?sessionId=${activeSessionId}`
-        : '/api/state';
-
-      const response = await apiFetch(url);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch app state (${response.status})`);
-      }
-
-      const data = await response.json();
-
-      // Update sessions list
-      if (data.sessions && isMountedRef.current) {
-        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
-      }
-
-      // Update project info
-      if (data.projectInfo && isMountedRef.current) {
-        setProjectInfo(data.projectInfo);
-
-        // Track directory changes as recent folders
-        if (data.projectInfo.cwd && data.projectInfo.cwd !== lastCwdRef.current) {
-          lastCwdRef.current = data.projectInfo.cwd;
-          addRecentFolder(data.projectInfo.cwd);
-        }
-      } else if (!activeSessionId && isMountedRef.current) {
-        // Clear project info if no active session
-        setProjectInfo(null);
-        lastCwdRef.current = null;
-      }
-
-      // Update Claude Code sessions
-      if (data.claudeCodeSessions && isMountedRef.current) {
-        setClaudeCodeSessions(Array.isArray(data.claudeCodeSessions) ? data.claudeCodeSessions : []);
-      }
-    } catch (error) {
-      console.error('Failed to fetch app state:', error);
-    }
-  }, [activeSessionId, addRecentFolder]);
-
-  const handleAddBookmark = useCallback(
-    async (name, command, category) => {
-      try {
-        const response = await apiFetch('/api/bookmarks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, command, category })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to create bookmark (${response.status})`);
-        }
-
-        await loadBookmarks();
-      } catch (error) {
-        console.error('Failed to create bookmark', error);
-      }
-    },
-    [loadBookmarks]
-  );
-
-  const handleUpdateBookmark = useCallback(
-    async (id, updates) => {
-      try {
-        const response = await apiFetch(`/api/bookmarks/${id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updates)
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to update bookmark (${response.status})`);
-        }
-
-        await loadBookmarks();
-      } catch (error) {
-        console.error('Failed to update bookmark', error);
-      }
-    },
-    [loadBookmarks]
-  );
-
-  const handleDeleteBookmark = useCallback(
-    async (id) => {
-      try {
-        const response = await apiFetch(`/api/bookmarks/${id}`, {
-          method: 'DELETE'
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to delete bookmark (${response.status})`);
-        }
-
-        await loadBookmarks();
-      } catch (error) {
-        console.error('Failed to delete bookmark', error);
-      }
-    },
-    [loadBookmarks]
-  );
-
-  // Use ref to always have latest activeSessionId (avoids stale closure in modal)
-  const activeSessionIdRef = useRef(activeSessionId);
+  // Initialize first pane with active session
   useEffect(() => {
-    activeSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
-
-  const handleExecuteBookmark = useCallback(
-    async (command) => {
-      const sessionId = activeSessionIdRef.current;
-      if (!sessionId) {
-        alert('Please select a terminal session first');
-        return;
-      }
-
-      try {
-        await apiFetch(`/api/terminal/${sessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: command + '\r' })
-        });
-      } catch (error) {
-        console.error('Failed to execute bookmark command', error);
-        alert('Failed to execute command');
-      }
-    },
-    []
-  );
-
-  // Initial load - restore last active session if needed
-  useEffect(() => {
-    // Reset mounted ref (needed for React StrictMode double-invocation)
-    isMountedRef.current = true;
-
-    const initializeSessions = async () => {
-      await loadSessions();
-      await loadBookmarks();
-
-      // If we have a session ID from localStorage, ensure it's restored
-      const lastSessionId = localStorage.getItem('lastActiveSession');
-      if (lastSessionId) {
-        try {
-          // Fetch fresh session list to check session status
-          const response = await apiFetch('/api/terminal');
-          if (response.ok) {
-            const data = await response.json();
-            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
-            const lastSession = sessionList.find(s => s.id === lastSessionId);
-
-            if (lastSession) {
-              if (!lastSession.isActive) {
-                // Session is persisted but not active, restore it
-                const restoreResponse = await apiFetch(`/api/terminal/${lastSessionId}/restore`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({})
-                });
-                if (restoreResponse.ok) {
-                  await loadSessions();
-                }
-              }
-              // Session exists and is active (or just restored) - keep activeSessionId as is
-            } else {
-              // Session doesn't exist anymore, try to find an active session
-              const activeSession = sessionList.find(s => s.isActive);
-              if (activeSession) {
-                setActiveSessionId(activeSession.id);
-                localStorage.setItem('lastActiveSession', activeSession.id);
-              } else {
-                // No sessions at all
-                localStorage.removeItem('lastActiveSession');
-                setActiveSessionId(null);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('Failed to restore last session', error);
-        }
-      } else {
-        // No stored session ID, try to select an active session
-        try {
-          const response = await apiFetch('/api/terminal');
-          if (response.ok) {
-            const data = await response.json();
-            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
-            const activeSession = sessionList.find(s => s.isActive);
-            if (activeSession) {
-              setActiveSessionId(activeSession.id);
-              localStorage.setItem('lastActiveSession', activeSession.id);
-            }
-          }
-        } catch (error) {
-          console.error('Failed to find active session', error);
-        }
-      }
-    };
-
-    initializeSessions();
-
-    // Visibility-aware polling with idle slowdown
-    let pollTimeoutId = null;
-
-    const getPollingInterval = () => {
-      // Don't poll when tab is hidden
-      if (document.visibilityState === 'hidden') return null;
-
-      const idleTime = Date.now() - lastActivityRef.current;
-      if (idleTime > 60000) return 30000;  // 30s after 1min idle
-      if (idleTime > 30000) return 15000;  // 15s after 30s idle
-      return 5000;  // Normal 5s polling
-    };
-
-    const schedulePoll = () => {
-      if (pollTimeoutId) clearTimeout(pollTimeoutId);
-      const interval = getPollingInterval();
-      if (interval !== null) {
-        pollTimeoutId = setTimeout(() => {
-          fetchAppState();
-          schedulePoll();
-        }, interval);
-      }
-    };
-
-    // Start polling
-    schedulePoll();
-
-    // Track user activity to reset idle timer
-    const handleActivity = () => {
-      lastActivityRef.current = Date.now();
-    };
-
-    // Resume/pause polling on visibility change
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        lastActivityRef.current = Date.now();
-        fetchAppState(); // Immediate fetch on tab focus
-        schedulePoll();
-      } else {
-        if (pollTimeoutId) clearTimeout(pollTimeoutId);
-      }
-    };
-
-    window.addEventListener('mousemove', handleActivity, { passive: true });
-    window.addEventListener('keydown', handleActivity, { passive: true });
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      isMountedRef.current = false;
-      if (pollTimeoutId) clearTimeout(pollTimeoutId);
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [loadSessions, loadBookmarks, fetchAppState]);
-
-  // Load projects on mount
-  useEffect(() => {
-    loadProjects();
-  }, [loadProjects]);
-
-  // Persist Claude Code state to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem('leftPanelMode', leftPanelMode);
-    } catch (e) {
-      console.error('Failed to save leftPanelMode', e);
+    if (activeSessionId) {
+      initializePaneWithSession(activeSessionId);
     }
-  }, [leftPanelMode]);
+  }, [activeSessionId, initializePaneWithSession]);
 
-  useEffect(() => {
-    try {
-      if (activeClaudeCodeId) {
-        localStorage.setItem('lastActiveClaudeCodeId', activeClaudeCodeId);
-      }
-    } catch (e) {
-      console.error('Failed to save lastActiveClaudeCodeId', e);
-    }
-  }, [activeClaudeCodeId]);
+  // Handlers that wrap context functions with local logic
+  const handleSelectSession = useCallback((sessionId) => {
+    selectSession(sessionId);
+    setShowPreview(false);
+  }, [selectSession, setShowPreview]);
 
-  const handleCreateSession = useCallback(async () => {
-    try {
-      const requestBody = {};
-      // Use most recent folder as default for new sessions
-      if (recentFolders.length > 0) {
-        requestBody.cwd = recentFolders[0];
-      }
+  const handleRestoreSession = useCallback(async (sessionId) => {
+    await restoreSession(sessionId);
+    setShowPreview(false);
+  }, [restoreSession, setShowPreview]);
 
-      const response = await apiFetch('/api/terminal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to create session (${response.status})`);
-      }
-
-      const data = await response.json();
-      setActiveSessionId(data.session.id);
-      await loadSessions();
-    } catch (error) {
-      console.error('Failed to create session', error);
-    }
-  }, [loadSessions, recentFolders]);
-
-  const handleSelectSession = useCallback(
-    (sessionId) => {
-      setActiveSessionId(sessionId);
-      setShowPreview(false); // Reset preview when switching sessions
-      // Remember the last active session
-      try {
-        localStorage.setItem('lastActiveSession', sessionId);
-      } catch (error) {
-        console.error('Failed to save last active session', error);
-      }
-    },
-    []
-  );
-
-  // Save pane layout to localStorage when it changes
-  useEffect(() => {
-    try {
-      localStorage.setItem('paneLayout', JSON.stringify(paneLayout));
-    } catch {}
-  }, [paneLayout]);
-
-  // Initialize first pane with active session if not set
-  useEffect(() => {
-    if (activeSessionId && paneLayout.panes[0]?.sessionId === null) {
-      setPaneLayout(prev => ({
-        ...prev,
-        panes: prev.panes.map((pane, i) =>
-          i === 0 ? { ...pane, sessionId: activeSessionId } : pane
-        )
-      }));
-    }
-  }, [activeSessionId]);
-
-  // Handle session selection in a specific pane
   const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
-    setPaneLayout(prev => ({
-      ...prev,
-      panes: prev.panes.map(pane =>
-        pane.id === paneId ? { ...pane, sessionId } : pane
-      )
-    }));
-    if (sessionId) {
-      setActiveSessionId(sessionId);
+    const newSessionId = setPaneSession(paneId, sessionId);
+    if (newSessionId) {
+      selectSession(newSessionId);
     }
-  }, []);
+  }, [setPaneSession, selectSession]);
 
-  // Handle pane focus
   const handlePaneFocus = useCallback((paneId) => {
-    setPaneLayout(prev => ({
-      ...prev,
-      activePaneId: paneId
-    }));
-    // Also set the active session to the focused pane's session
-    const pane = paneLayout.panes.find(p => p.id === paneId);
-    if (pane?.sessionId) {
-      setActiveSessionId(pane.sessionId);
+    const sessionId = focusPane(paneId);
+    if (sessionId) {
+      selectSession(sessionId);
     }
-  }, [paneLayout.panes]);
-
-  // Handle pane split
-  const handlePaneSplit = useCallback((paneId, direction) => {
-    setPaneLayout(prev => {
-      if (prev.panes.length >= 4) return prev; // Max 4 panes
-
-      const newPaneId = `pane-${Date.now()}`;
-      let newType = prev.type;
-      let newPanes = [...prev.panes];
-
-      if (prev.type === 'single') {
-        newType = direction === 'horizontal' ? 'horizontal' : 'vertical';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'horizontal' && direction === 'vertical') {
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'vertical' && direction === 'horizontal') {
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'horizontal' || prev.type === 'vertical') {
-        // Already 2 panes, add a third
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'grid' && prev.panes.length < 4) {
-        // Already grid, just add another pane
-        newPanes.push({ id: newPaneId, sessionId: null });
-      }
-
-      return {
-        ...prev,
-        type: newType,
-        panes: newPanes
-      };
-    });
-  }, []);
-
-  // Handle pane close
-  const handlePaneClose = useCallback((paneId) => {
-    // Exit fullscreen if closing the fullscreen pane
-    if (paneId === fullscreenPaneId) {
-      setFullscreenPaneId(null);
-    }
-
-    setPaneLayout(prev => {
-      if (prev.panes.length <= 1) return prev; // Can't close last pane
-
-      const newPanes = prev.panes.filter(p => p.id !== paneId);
-      let newType = prev.type;
-
-      if (newPanes.length === 1) {
-        newType = 'single';
-      } else if (newPanes.length === 2) {
-        // Keep current orientation or default to horizontal
-        newType = prev.type === 'vertical' ? 'vertical' : 'horizontal';
-      } else if (newPanes.length === 3) {
-        newType = 'grid';
-      }
-
-      // If we closed the active pane, focus the first remaining pane
-      let newActivePaneId = prev.activePaneId;
-      if (paneId === prev.activePaneId) {
-        newActivePaneId = newPanes[0]?.id || 'pane-1';
-      }
-
-      return {
-        type: newType,
-        panes: newPanes,
-        activePaneId: newActivePaneId
-      };
-    });
-  }, [fullscreenPaneId]);
-
-  // Handle pane fullscreen toggle
-  const handlePaneFullscreen = useCallback((paneId) => {
-    setFullscreenPaneId(prev => prev === paneId ? null : paneId);
-  }, []);
-
-  // Escape key to exit fullscreen
-  useEffect(() => {
-    if (!fullscreenPaneId) return;
-
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        setFullscreenPaneId(null);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [fullscreenPaneId]);
-
-  const handleRestoreSession = useCallback(
-    async (sessionId) => {
-      try {
-        const response = await apiFetch(`/api/terminal/${sessionId}/restore`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to restore session (${response.status})`);
-        }
-
-        setActiveSessionId(sessionId);
-        setShowPreview(false); // Reset preview when restoring sessions
-        await loadSessions();
-
-        // Remember the last active session
-        try {
-          localStorage.setItem('lastActiveSession', sessionId);
-        } catch (error) {
-          console.error('Failed to save last active session', error);
-        }
-      } catch (error) {
-        console.error('Failed to restore session', error);
-        // Refresh session list to remove stale entries
-        await loadSessions();
-        throw error; // Re-throw so callers know it failed
-      }
-    },
-    [loadSessions]
-  );
-
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
-    if (!activeSnapshot || activeSnapshot.isActive) return;
-    if (restoreInFlightRef.current.has(activeSessionId)) return;
-
-    restoreInFlightRef.current.add(activeSessionId);
-    setRestoringSessionId(activeSessionId);
-    const retryTimeout = setTimeout(() => {
-      restoreInFlightRef.current.delete(activeSessionId);
-    }, 10000);
-
-    handleRestoreSession(activeSessionId)
-      .catch((error) => {
-        console.error('Session restore failed, clearing selection:', error);
-        // Clear active session since restore failed - session may no longer exist
-        setActiveSessionId(null);
-      })
-      .finally(() => {
-        clearTimeout(retryTimeout);
-        restoreInFlightRef.current.delete(activeSessionId);
-      });
-  }, [activeSessionId, sessions, handleRestoreSession]);
-
-  useEffect(() => {
-    if (!activeSessionId) {
-      setRestoringSessionId(null);
-      return;
-    }
-    const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
-    if (!activeSnapshot || activeSnapshot.isActive) {
-      setRestoringSessionId(null);
-    }
-  }, [activeSessionId, sessions]);
-
-  const handleRenameSession = useCallback(
-    async (sessionId, title) => {
-      const trimmed = title.trim().slice(0, 60);
-      if (!trimmed) return;
-      const currentTitle = sessions.find((session) => session.id === sessionId)?.title;
-      if (currentTitle === trimmed) return;
-
-      try {
-        const response = await apiFetch(`/api/terminal/${sessionId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: trimmed })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to rename session (${response.status})`);
-        }
-
-        const data = await response.json();
-        const updated = data.session;
-        setSessions((currentSessions) =>
-          currentSessions.map((session) =>
-            session.id === sessionId ? { ...session, title: updated.title, updatedAt: updated.updatedAt } : session
-          )
-        );
-      } catch (error) {
-        console.error('Failed to rename session', error);
-      }
-    },
-    [sessions]
-  );
-
-  const handleCloseSession = useCallback(
-    async (sessionId) => {
-      try {
-        await apiFetch(`/api/terminal/${sessionId}`, {
-          method: 'DELETE'
-        });
-
-        // If we just closed the active terminal, switch to another one or clear
-        // Use functional updates to avoid stale state
-        setSessions((currentSessions) => {
-          const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
-          setActiveSessionId((currentActiveId) => {
-            if (sessionId === currentActiveId) {
-              const nextActive = remainingSessions.find((session) => session.isActive);
-              return nextActive ? nextActive.id : null;
-            }
-            return currentActiveId;
-          });
-          return remainingSessions;
-        });
-
-        // Reload the session list to ensure sync with server
-        await loadSessions();
-      } catch (error) {
-        console.error('Failed to close session', error);
-      }
-    },
-    [loadSessions]
-  );
+  }, [focusPane, selectSession]);
 
   const handleOpenSettings = useCallback(() => {
     setShowSettings(true);
   }, []);
 
-  // Claude Code handlers - uses styled panel with JSON output parsing
-  const handleStartClaudeCode = useCallback(async (model = 'sonnet') => {
-    const cwd = sessions.find(s => s.id === activeSessionId)?.cwd || projectInfo?.cwd || '.';
-
-    try {
-      const res = await apiFetch('/api/claude-code/start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, model })
-      });
-      const session = await res.json();
-      setClaudeCodeSessions(prev => [session, ...prev]);
-      setActiveClaudeCodeId(session.id);
-      setLeftPanelMode('claude-code');
-    } catch (error) {
-      console.error('Failed to start Claude Code:', error);
-    }
-  }, [sessions, activeSessionId, projectInfo]);
-
-  const handleSelectClaudeCode = useCallback(async (id) => {
-    const session = claudeCodeSessions.find(s => s.id === id);
-    if (session && !session.isActive) {
-      // Restore inactive session
-      try {
-        await apiFetch(`/api/claude-code/${id}/restore`, { method: 'POST' });
-      } catch (error) {
-        console.error('Failed to restore session:', error);
-      }
-    }
-    setActiveClaudeCodeId(id);
-    setLeftPanelMode('claude-code');
-  }, [claudeCodeSessions]);
-
-  const handleDeleteClaudeCode = useCallback(async (id) => {
-    try {
-      await apiFetch(`/api/claude-code/${id}`, { method: 'DELETE' });
-      setClaudeCodeSessions(prev => prev.filter(s => s.id !== id));
-      if (activeClaudeCodeId === id) {
-        setActiveClaudeCodeId(null);
-        setLeftPanelMode('terminal');
-      }
-    } catch (error) {
-      console.error('Failed to delete session:', error);
-    }
-  }, [activeClaudeCodeId]);
-
-  const handleClaudeCodeModelChange = useCallback((updatedSession) => {
-    setClaudeCodeSessions(prev =>
-      prev.map(s => s.id === updatedSession.id ? updatedSession : s)
-    );
-  }, []);
-
-  // Handle folder change from Claude Code panel - syncs both Claude Code and Terminal
-  const handleClaudeCodeFolderChange = useCallback(async (newPath) => {
-    // 1. Send cd command to active Terminal session
-    if (activeSessionId) {
-      try {
-        await apiFetch(`/api/terminal/${activeSessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: `cd "${newPath}"\r` })
-        });
-      } catch (error) {
-        console.error('Failed to change terminal directory:', error);
-      }
-    }
-
-    // 2. Update Claude Code session's cwd (persist to backend)
-    if (activeClaudeCodeId) {
-      try {
-        const res = await apiFetch(`/api/claude-code/${activeClaudeCodeId}/cwd`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cwd: newPath })
-        });
-        if (res.ok) {
-          const updatedSession = await res.json();
-          setClaudeCodeSessions(prev =>
-            prev.map(s => s.id === activeClaudeCodeId ? { ...s, cwd: updatedSession.cwd } : s)
-          );
-        }
-      } catch (error) {
-        console.error('Failed to update Claude Code cwd:', error);
-      }
-    }
-
-    // 3. Add to recent folders
-    addRecentFolder(newPath);
-  }, [activeSessionId, activeClaudeCodeId, addRecentFolder]);
-
-  // Navigate a session to a specific directory
-  const handleNavigateSession = useCallback(async (sessionId, path) => {
-    if (!sessionId || !path) return;
-
-    try {
-      const cdCommand = `cd "${path}"\r`;
-      await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cdCommand })
-      });
-      // Add to recent folders
-      addRecentFolder(path);
-    } catch (error) {
-      console.error('Failed to navigate session', error);
-    }
-  }, [addRecentFolder]);
-
-  // Handle folder selection from sidebar
   const handleSidebarFolderSelect = useCallback((path) => {
     if (!path) return;
-
     if (activeSessionId) {
-      handleNavigateSession(activeSessionId, path);
+      navigateSession(activeSessionId, path);
     } else {
-      // No active session, just add to recent folders
       addRecentFolder(path);
     }
-  }, [activeSessionId, handleNavigateSession, addRecentFolder]);
+  }, [activeSessionId, navigateSession, addRecentFolder]);
 
   const handleKeybarHeightChange = useCallback((height) => {
     setKeybarHeight(Math.max(0, Math.round(height)));
-  }, []);
-
-  const handleUrlDetected = useCallback((url) => {
-    setPreviewUrl(url);
-    // Don't auto-open preview - user can click the preview button to see it
-  }, []);
-
-  const handlePreviewClose = useCallback(() => {
-    setShowPreview(false);
-  }, []);
-
-  const handlePreviewUrlChange = useCallback((url) => {
-    setPreviewUrl(url);
-  }, []);
-
-  const togglePreview = useCallback(() => {
-    setShowPreview(prev => !prev);
   }, []);
 
   // Keyboard shortcuts (desktop only)
@@ -1632,7 +803,7 @@ function AppContent() {
     onToggleFullScreen: () => {
       const activePaneId = paneLayout.activePaneId;
       if (activePaneId) {
-        setFullscreenPaneId(prev => prev === activePaneId ? null : activePaneId);
+        toggleFullscreen(activePaneId);
       }
     },
     onFocusPane: (index) => {
@@ -1640,13 +811,13 @@ function AppContent() {
         handlePaneFocus(paneLayout.panes[index].id);
       }
     },
-    onNewTerminal: handleCreateSession,
+    onNewTerminal: createSession,
     onCloseTerminal: () => {
       if (activeSessionId) {
-        handleCloseSession(activeSessionId);
+        closeSession(activeSessionId);
       }
     },
-    onExitFullScreen: () => setFullscreenPaneId(null),
+    onExitFullScreen: exitFullscreen,
     isFullScreen: !!fullscreenPaneId,
     paneCount: paneLayout.panes.length,
     enabled: !isMobile
@@ -1687,9 +858,9 @@ function AppContent() {
     setMobileTerminalIndex(newIndex);
     // Update activeSessionId to match the carousel selection
     if (activeSessions[newIndex]) {
-      setActiveSessionId(activeSessions[newIndex].id);
+      selectSession(activeSessions[newIndex].id);
     }
-  }, [activeSessions]);
+  }, [activeSessions, selectSession]);
 
   // Sync carousel index when activeSessionId changes (e.g., from header dropdown)
   useEffect(() => {
@@ -1703,8 +874,8 @@ function AppContent() {
   // Split handle drag handlers
   const handleSplitMouseDown = useCallback((e) => {
     e.preventDefault();
-    setIsDragging(true);
-  }, []);
+    startDragging(e);
+  }, [startDragging]);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -1713,12 +884,11 @@ function AppContent() {
       if (!mainContentRef.current) return;
       const rect = mainContentRef.current.getBoundingClientRect();
       const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
-      // Clamp between 20% and 80%
-      setSplitPosition(Math.min(80, Math.max(20, newPosition)));
+      updateSplitPosition(newPosition);
     };
 
     const handleMouseUp = () => {
-      setIsDragging(false);
+      stopDragging();
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -1728,7 +898,7 @@ function AppContent() {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging]);
+  }, [isDragging, updateSplitPosition, stopDragging]);
 
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
@@ -1747,7 +917,7 @@ function AppContent() {
         sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
         currentCwd={projectInfo?.cwd}
         recentFolders={recentFolders}
-        onSave={handleNavigateSession}
+        onSave={navigateSession}
         onAddRecentFolder={addRecentFolder}
         terminalFontSize={terminalFontSize}
         onFontSizeChange={updateTerminalFontSize}
@@ -1756,10 +926,10 @@ function AppContent() {
         isOpen={showBookmarks}
         onClose={() => setShowBookmarks(false)}
         bookmarks={bookmarks}
-        onAdd={handleAddBookmark}
-        onUpdate={handleUpdateBookmark}
-        onDelete={handleDeleteBookmark}
-        onExecute={handleExecuteBookmark}
+        onAdd={addBookmark}
+        onUpdate={updateBookmark}
+        onDelete={deleteBookmark}
+        onExecute={executeBookmark}
       />
       <ApiSettingsModal
         isOpen={showApiSettings}
@@ -1779,9 +949,9 @@ function AppContent() {
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
             onRestoreSession={handleRestoreSession}
-            onCreateSession={handleCreateSession}
-            onRenameSession={handleRenameSession}
-            onCloseSession={handleCloseSession}
+            onCreateSession={createSession}
+            onRenameSession={renameSession}
+            onCloseSession={closeSession}
             onOpenSettings={handleOpenSettings}
             onOpenApiSettings={() => setShowApiSettings(true)}
             onOpenBookmarks={() => setShowBookmarks(true)}
@@ -1858,18 +1028,18 @@ function AppContent() {
                   activeSessionId={activeSessionId}
                   onSelectSession={handleSelectSession}
                   onRestoreSession={handleRestoreSession}
-                  onCreateSession={handleCreateSession}
-                  onCloseSession={handleCloseSession}
-                  onRenameSession={handleRenameSession}
+                  onCreateSession={createSession}
+                  onCloseSession={closeSession}
+                  onRenameSession={renameSession}
                   isLoading={loadingSessions}
                 />
               ) : (
                 <ClaudeCodeSessionSelector
                   sessions={claudeCodeSessions}
                   activeId={activeClaudeCodeId}
-                  onSelect={handleSelectClaudeCode}
-                  onNew={handleStartClaudeCode}
-                  onDelete={handleDeleteClaudeCode}
+                  onSelect={selectClaudeCode}
+                  onNew={startClaudeCode}
+                  onDelete={deleteClaudeCode}
                 />
               )}
             </div>
@@ -1974,9 +1144,9 @@ function AppContent() {
               activeSessionId={activeSessionId}
               sessionActivity={sessionActivity}
               onSelectSession={handleSelectSession}
-              onCreateSession={handleCreateSession}
-              onCloseSession={handleCloseSession}
-              onRenameSession={handleRenameSession}
+              onCreateSession={createSession}
+              onCloseSession={closeSession}
+              onRenameSession={renameSession}
             />
           )}
 
@@ -2003,7 +1173,7 @@ function AppContent() {
                   <div className="empty-state">
                     <h2>Welcome to Terminal</h2>
                     <p>Create a new terminal session to get started.</p>
-                    <button className="btn-primary" onClick={handleCreateSession}>
+                    <button className="btn-primary" onClick={createSession}>
                       + New Terminal
                     </button>
                   </div>
@@ -2012,10 +1182,10 @@ function AppContent() {
                     layout={paneLayout}
                     sessions={activeSessions}
                     onPaneSessionSelect={handlePaneSessionSelect}
-                    onPaneSplit={handlePaneSplit}
-                    onPaneClose={handlePaneClose}
+                    onPaneSplit={splitPane}
+                    onPaneClose={closePane}
                     onPaneFocus={handlePaneFocus}
-                    onPaneFullscreen={handlePaneFullscreen}
+                    onPaneFullscreen={toggleFullscreen}
                     fullscreenPaneId={fullscreenPaneId}
                     keybarOpen={keybarOpen}
                     viewportHeight={viewportHeight}
@@ -2031,7 +1201,7 @@ function AppContent() {
                     <h2>Claude Code</h2>
                     <p>Start a new Claude Code session to get AI-powered assistance.</p>
                     <p className="empty-hint">Use /model to change models</p>
-                    <button className="btn-primary" onClick={() => handleStartClaudeCode('sonnet')}>
+                    <button className="btn-primary" onClick={() => startClaudeCode('sonnet')}>
                       + New Session
                     </button>
                   </div>
@@ -2180,5 +1350,15 @@ function AuthenticatedApp() {
     return <LoginPage />;
   }
 
-  return <AppContent />;
+  return (
+    <TerminalSessionProvider>
+      <PaneLayoutProvider>
+        <ClaudeCodeProvider>
+          <PreviewProvider>
+            <AppContent />
+          </PreviewProvider>
+        </ClaudeCodeProvider>
+      </PaneLayoutProvider>
+    </TerminalSessionProvider>
+  );
 }

@@ -25,7 +25,7 @@ export function SessionTabBar({
     if (tabBarRef.current) {
       const activeTab = tabBarRef.current.querySelector('.session-tab-item.active');
       if (activeTab) {
-        activeTab.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        activeTab.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
       }
     }
   }, [activeSessionId]);

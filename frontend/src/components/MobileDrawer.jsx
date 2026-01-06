@@ -102,16 +102,14 @@ export function MobileDrawer({
               <span className="mobile-drawer-view-icon">🤖</span>
               Claude
             </button>
-            {previewUrl && (
-              <button
-                type="button"
-                className={`mobile-drawer-view-btn${mobileView === 'preview' ? ' active' : ''}`}
-                onClick={() => handleViewChange('preview')}
-              >
-                <span className="mobile-drawer-view-icon">👁</span>
-                Preview
-              </button>
-            )}
+            <button
+              type="button"
+              className={`mobile-drawer-view-btn${mobileView === 'preview' ? ' active' : ''}`}
+              onClick={() => handleViewChange('preview')}
+            >
+              <span className="mobile-drawer-view-icon">👁</span>
+              Preview
+            </button>
           </div>
 
           {/* Inactive Sessions Section */}

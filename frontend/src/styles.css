@@ -1214,7 +1214,7 @@ button {
   bottom: 52px; /* Above status bar */
   display: flex;
   flex-direction: column;
-  z-index: 9999;
+  z-index: 100; /* Below modals (1000+) but above terminal content */
   pointer-events: auto;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -5081,6 +5081,105 @@ textarea:focus-visible {
   border-top: 1px solid var(--border-subtle);
   min-height: 44px;
   flex-shrink: 0;
+  gap: 8px;
+}
+
+.mobile-status-bar.expanded {
+  padding: 6px 8px;
+}
+
+/* Mobile Input Toggle Button */
+.mobile-input-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-input-toggle:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Mobile Input Form (expanded state) */
+.mobile-input-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  width: 100%;
+}
+
+.mobile-terminal-input {
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-terminal-input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+}
+
+.mobile-terminal-input::placeholder {
+  color: var(--text-muted);
+}
+
+.mobile-input-send,
+.mobile-input-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+
+.mobile-input-send {
+  background: var(--accent-primary);
+  color: #000;
+}
+
+.mobile-input-send:disabled {
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.mobile-input-send:not(:disabled):active {
+  transform: scale(0.95);
+  background: var(--accent-primary-bright);
+}
+
+.mobile-input-close {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+.mobile-input-close:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .mobile-status-left {
