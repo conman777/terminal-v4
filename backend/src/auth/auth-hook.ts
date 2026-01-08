@@ -11,7 +11,7 @@ const PUBLIC_ROUTES = [
 
 // Route patterns that don't require authentication (for dynamic routes)
 const PUBLIC_ROUTE_PATTERNS = [
-  /^\/api\/preview\/\d+\/logs$/, // Preview logs per port
+  /^\/api\/preview\/\d+\/logs$/, // Preview logs per port (client-side)
   /^\/api\/preview\/logs$/,      // List all preview logs
   /^\/api\/preview\/external\/logs$/, // External preview logs
   /^\/api\/browser\//            // Browser automation API

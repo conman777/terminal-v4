@@ -8,7 +8,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: process.env.BASE_URL || 'http://localhost:3020',
     trace: 'on-first-retry',
   },
   projects: [
@@ -17,9 +17,7 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: true,
-  },
+  // Use production server at localhost:3020 instead of starting dev server
+  // Set BASE_URL=http://localhost:5173 to use dev server instead
+  webServer: process.env.BASE_URL ? undefined : undefined,
 });

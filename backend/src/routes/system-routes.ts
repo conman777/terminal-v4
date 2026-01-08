@@ -67,13 +67,24 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
     const freeMem = os.freemem();
     const usedMem = totalMem - freeMem;
 
-    // CPU stats (average usage across all cores since boot)
-    const cpus = os.cpus();
-    const cpuUsage = cpus.reduce((acc, cpu) => {
-      const total = Object.values(cpu.times).reduce((a, b) => a + b, 0);
-      const idle = cpu.times.idle;
-      return acc + ((total - idle) / total) * 100;
-    }, 0) / cpus.length;
+    // CPU stats - sample twice with 100ms delay for instantaneous usage
+    const getCpuTimes = () => {
+      return os.cpus().map(cpu => ({
+        idle: cpu.times.idle,
+        total: Object.values(cpu.times).reduce((a, b) => a + b, 0)
+      }));
+    };
+
+    const startTimes = getCpuTimes();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const endTimes = getCpuTimes();
+
+    const cpuUsage = startTimes.reduce((acc, start, i) => {
+      const end = endTimes[i];
+      const idleDiff = end.idle - start.idle;
+      const totalDiff = end.total - start.total;
+      return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
+    }, 0) / startTimes.length;
 
     return {
       memory: {
@@ -84,7 +95,7 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       },
       cpu: {
         percentage: Math.round(cpuUsage),
-        cores: cpus.length
+        cores: os.cpus().length
       }
     };
   });

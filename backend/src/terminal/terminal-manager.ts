@@ -924,10 +924,20 @@ export class TerminalManager {
 
     const normalized = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = normalized.split('\n');
+    const previousCwd = session.cwd;
 
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
+
+      // Handle bare 'cd' command (goes to home directory)
+      if (trimmed === 'cd') {
+        const home = process.env.HOME;
+        if (home && fs.existsSync(home)) {
+          session.cwd = home;
+        }
+        continue;
+      }
 
       const match = trimmed.match(/^cd(?:\s+\/d)?\s+(?<path>.+)$/i);
       if (!match?.groups?.path) continue;
@@ -958,6 +968,14 @@ export class TerminalManager {
       } catch {
         // Ignore invalid paths.
       }
+    }
+
+    // Notify subscribers if cwd changed
+    if (session.cwd !== previousCwd) {
+      const cwdMessage = JSON.stringify({ type: 'cwd', cwd: session.cwd });
+      session.subscribers.forEach((subscriber) => {
+        subscriber({ text: cwdMessage, ts: Date.now() });
+      });
     }
   }
 }

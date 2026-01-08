@@ -1,4 +1,9 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import WebSocket from 'ws';
+import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
+import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
+import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
+import { addProxyLog } from '../preview/request-log-store.js';
 
 // Pattern to match preview subdomains: preview-{port}.conordart.com
 const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
@@ -12,6 +17,20 @@ const SKIP_HEADERS = new Set([
   'upgrade',
   'http2-settings'
 ]);
+
+const WS_SKIP_HEADERS = new Set([
+  'host',
+  'connection',
+  'upgrade',
+  'sec-websocket-key',
+  'sec-websocket-version',
+  'sec-websocket-extensions',
+  'sec-websocket-protocol'
+]);
+
+function getPreviewHostConstraint(): RegExp {
+  return PREVIEW_SUBDOMAIN_PATTERN;
+}
 
 // Debug script injected into HTML pages
 // Captures console logs, errors, and network requests
@@ -223,7 +242,165 @@ function getPreviewPort(host: string | undefined): number | null {
   return port;
 }
 
+function getPreviewHost(host: string | undefined): string | null {
+  if (!host) return null;
+  return host.split(':')[0];
+}
+
+function isSecureRequest(request: FastifyRequest): boolean {
+  const forwardedProto = request.headers['x-forwarded-proto'];
+  if (typeof forwardedProto === 'string') {
+    const proto = forwardedProto.split(',')[0]?.trim();
+    if (proto === 'https') return true;
+  }
+  const cfVisitor = request.headers['cf-visitor'];
+  if (typeof cfVisitor === 'string' && cfVisitor.includes('"scheme":"https"')) {
+    return true;
+  }
+  return false;
+}
+
+function isWebSocketUpgrade(request: FastifyRequest): boolean {
+  const upgradeHeader = request.headers.upgrade;
+  if (typeof upgradeHeader === 'string' && upgradeHeader.toLowerCase() === 'websocket') {
+    return true;
+  }
+  const connectionHeader = request.headers.connection;
+  if (typeof connectionHeader === 'string' && connectionHeader.toLowerCase().includes('upgrade')) {
+    return true;
+  }
+  return false;
+}
+
+function mergeCookieHeaders(requestCookies: string, storedCookies: string): string {
+  const merged = new Map<string, string>();
+
+  for (const cookiePart of requestCookies.split(';')) {
+    const trimmed = cookiePart.trim();
+    if (!trimmed) continue;
+    const eqIndex = trimmed.indexOf('=');
+    if (eqIndex < 0) continue;
+    const name = trimmed.slice(0, eqIndex).trim();
+    const value = trimmed.slice(eqIndex + 1).trim();
+    if (!merged.has(name)) {
+      merged.set(name, value);
+    }
+  }
+
+  for (const cookiePart of storedCookies.split(';')) {
+    const trimmed = cookiePart.trim();
+    if (!trimmed) continue;
+    const eqIndex = trimmed.indexOf('=');
+    if (eqIndex < 0) continue;
+    const name = trimmed.slice(0, eqIndex).trim();
+    if (merged.has(name)) continue;
+    const value = trimmed.slice(eqIndex + 1).trim();
+    merged.set(name, value);
+  }
+
+  return Array.from(merged.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+function getWebSocketProtocols(request: FastifyRequest): string[] | undefined {
+  const protocolHeader = request.headers['sec-websocket-protocol'];
+  if (typeof protocolHeader !== 'string') return undefined;
+  const protocols = protocolHeader
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return protocols.length > 0 ? protocols : undefined;
+}
+
+function buildWebSocketForwardHeaders(request: FastifyRequest, port: number, previewHost: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (!WS_SKIP_HEADERS.has(key.toLowerCase()) && typeof value === 'string') {
+      headers[key] = value;
+    }
+  }
+
+  headers['host'] = `localhost:${port}`;
+  headers['x-forwarded-host'] = previewHost;
+  headers['x-forwarded-proto'] = 'https';
+  headers['x-forwarded-port'] = '443';
+  headers['x-forwarded-for'] = request.ip || '127.0.0.1';
+
+  return headers;
+}
+
+function openWebSocket(targetUrl: string, request: FastifyRequest, forwardHeaders: Record<string, string>): WebSocket {
+  const protocols = getWebSocketProtocols(request);
+  if (protocols) {
+    return new WebSocket(targetUrl, protocols, { headers: forwardHeaders });
+  }
+  return new WebSocket(targetUrl, { headers: forwardHeaders });
+}
+
 export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Promise<void> {
+  // WebSocket proxy for preview subdomains (HMR, dev tooling, etc.)
+  app.get('/*', { websocket: true, constraints: { host: getPreviewHostConstraint() } }, (socket, request) => {
+    const port = getPreviewPort(request.headers.host);
+    if (!port) {
+      socket.close(1008, 'Preview port not found');
+      return;
+    }
+
+    const previewHost = getPreviewHost(request.headers.host) || `preview-${port}.conordart.com`;
+    const targetUrl = `ws://localhost:${port}${request.url}`;
+    const forwardHeaders = buildWebSocketForwardHeaders(request, port, previewHost);
+    const targetWs = openWebSocket(targetUrl, request, forwardHeaders);
+
+    const closeBoth = (code: number, reason: string) => {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close(code, reason);
+      }
+      if (targetWs.readyState === WebSocket.OPEN || targetWs.readyState === WebSocket.CONNECTING) {
+        targetWs.close();
+      }
+    };
+
+    socket.on('message', (data: Buffer | string, isBinary: boolean) => {
+      if (targetWs.readyState === WebSocket.OPEN) {
+        targetWs.send(data, { binary: isBinary });
+      }
+    });
+
+    targetWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data, { binary: isBinary });
+      }
+    });
+
+    targetWs.on('open', () => {
+      // no-op, allows queued messages to flush
+    });
+
+    targetWs.on('error', (error: Error) => {
+      console.error(`Preview WS proxy error for port ${port}:`, error.message);
+      closeBoth(1011, 'Preview WebSocket upstream error');
+    });
+
+    targetWs.on('close', () => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1000, 'Preview WebSocket upstream closed');
+      }
+    });
+
+    socket.on('close', () => {
+      if (targetWs.readyState === WebSocket.OPEN) {
+        targetWs.close();
+      }
+    });
+
+    socket.on('error', () => {
+      if (targetWs.readyState === WebSocket.OPEN) {
+        targetWs.close();
+      }
+    });
+  });
+
   // Handle all HTTP requests on preview subdomains
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     const forwardedHost = request.headers['x-forwarded-host'];
@@ -235,17 +412,28 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       (typeof request.headers[':authority'] === 'string' ? request.headers[':authority'] : undefined) ||
       request.headers.host;
     let port = getPreviewPort(rawHost);
+    let previewHost = port ? getPreviewHost(rawHost) : null;
     let originHost: string | undefined;
     const origin = request.headers.origin;
     if (!port && typeof origin === 'string') {
       try {
         originHost = new URL(origin).host;
         port = getPreviewPort(originHost);
+        if (port) {
+          previewHost = getPreviewHost(originHost);
+        }
       } catch {
         // Ignore invalid Origin values
       }
     }
     if (!port) return; // Not a preview subdomain, continue to other routes
+    if (!previewHost) {
+      previewHost = getPreviewHost(rawHost) || getPreviewHost(originHost) || request.headers.host?.split(':')[0] || null;
+    }
+
+    if (isWebSocketUpgrade(request)) {
+      return;
+    }
 
     // Store port for WebSocket handler
     (request as any).previewPort = port;
@@ -295,6 +483,17 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       forwardHeaders['x-forwarded-port'] = '443';
       forwardHeaders['x-forwarded-for'] = request.ip || '127.0.0.1';
 
+      // Inject server-side stored cookies (browser-like cookie jar)
+      const requestPath = new URL(request.url, `http://localhost:${port}`).pathname;
+      const storedCookies = getCookieHeader(port, requestPath);
+      if (storedCookies) {
+        // Merge with any cookies from the request (prefer browser cookies)
+        const existingCookies = forwardHeaders['cookie'] || '';
+        forwardHeaders['cookie'] = existingCookies
+          ? mergeCookieHeaders(existingCookies, storedCookies)
+          : storedCookies;
+      }
+
       // Buffer request body for non-GET requests (onRequest runs before body parsing)
       let body: Buffer | undefined = undefined;
       if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -312,21 +511,30 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         delete forwardHeaders['content-length'];
       }
 
-      // Make proxied request
+      // Make proxied request with timing
+      const startTime = Date.now();
       const response = await fetch(targetUrl, {
         method: request.method,
         headers: forwardHeaders,
         body,
         redirect: 'manual'
       });
+      const duration = Date.now() - startTime;
 
       // Set response status
       reply.code(response.status);
+
+      // Get response info for logging
+      const contentLength = response.headers.get('content-length');
+      const contentType = response.headers.get('content-type');
+      let responseSize: number = contentLength ? parseInt(contentLength, 10) : 0;
+      const requestBodySize = body ? body.byteLength : null;
 
       // Forward response headers
       for (const [key, value] of response.headers.entries()) {
         const lowerKey = key.toLowerCase();
         if (lowerKey === 'transfer-encoding' || lowerKey === 'connection') continue;
+        if (lowerKey === 'content-length') continue;
 
         // Remove X-Frame-Options to allow iframe embedding
         if (lowerKey === 'x-frame-options') continue;
@@ -352,7 +560,17 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           : (response.headers as any).raw?.()['set-cookie'] ??
             (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
       if (setCookieHeaders.length > 0) {
-        reply.header('set-cookie', setCookieHeaders);
+        const rewrittenCookies = previewHost
+          ? rewriteSetCookieHeaders(setCookieHeaders, {
+            previewHost,
+            isSecureRequest: isSecureRequest(request),
+            defaultSameSite: 'lax'
+          })
+          : setCookieHeaders;
+        // Store cookies server-side for browser-like behavior in iframe
+        storeCookies(port, rewrittenCookies);
+        // Forward rewritten cookies to browser for client-side access
+        reply.header('set-cookie', rewrittenCookies);
       }
 
       // Allow iframe embedding
@@ -407,7 +625,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             (match, prefix, quote, srcUrl) => {
               // Skip external URLs and data URIs
               if (srcUrl.startsWith('http://') || srcUrl.startsWith('https://') ||
-                  srcUrl.startsWith('//') || srcUrl.startsWith('data:')) {
+                  srcUrl.startsWith('//') || srcUrl.startsWith('data:') ||
+                  srcUrl.startsWith('/_next/')) {
                 return match;
               }
               const separator = srcUrl.includes('?') ? '&' : '?';
@@ -421,7 +640,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             (match, prefix, quote, hrefUrl) => {
               // Skip external URLs and data URIs
               if (hrefUrl.startsWith('http://') || hrefUrl.startsWith('https://') ||
-                  hrefUrl.startsWith('//') || hrefUrl.startsWith('data:')) {
+                  hrefUrl.startsWith('//') || hrefUrl.startsWith('data:') ||
+                  hrefUrl.startsWith('/_next/')) {
                 return match;
               }
               const separator = hrefUrl.includes('?') ? '&' : '?';
@@ -429,15 +649,19 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
-          // Inject debug script at start of <head> to run before app code
+          // Inject debug script and inspector script at start of <head> to run before app code
+          // TEMPORARILY DISABLED for debugging iframe animation issues
+          const injectedScripts = ''; // PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
           if (html.includes('<head>')) {
-            html = html.replace('<head>', '<head>' + PREVIEW_DEBUG_SCRIPT);
+            html = html.replace('<head>', '<head>' + injectedScripts);
           } else if (html.includes('<html>')) {
-            html = html.replace('<html>', '<html><head>' + PREVIEW_DEBUG_SCRIPT + '</head>');
+            html = html.replace('<html>', '<html><head>' + injectedScripts + '</head>');
           } else {
-            html = PREVIEW_DEBUG_SCRIPT + html;
+            html = injectedScripts + html;
           }
 
+          reply.header('content-length', String(Buffer.byteLength(html)));
+          reply.raw.removeHeader('content-encoding');
           reply.send(html);
         } else if (contentType.includes('text/css') || request.url.endsWith('.css') || request.url.includes('.css?')) {
           // For CSS files, rewrite url() references
@@ -450,7 +674,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
               // Skip external URLs, data URIs, and already cache-busted URLs
               if (urlValue.startsWith('http://') || urlValue.startsWith('https://') ||
                   urlValue.startsWith('//') || urlValue.startsWith('data:') ||
-                  urlValue.includes('_cb=')) {
+                  urlValue.startsWith('/_next/') || urlValue.includes('_cb=')) {
                 return match;
               }
               const separator = urlValue.includes('?') ? '&' : '?';
@@ -463,7 +687,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             /@import\s+(["'])([^"']+)\1/gi,
             (match, quote, importUrl) => {
               if (importUrl.startsWith('http://') || importUrl.startsWith('https://') ||
-                  importUrl.startsWith('//') || importUrl.includes('_cb=')) {
+                  importUrl.startsWith('//') || importUrl.startsWith('/_next/') ||
+                  importUrl.includes('_cb=')) {
                 return match;
               }
               const separator = importUrl.includes('?') ? '&' : '?';
@@ -471,18 +696,51 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
+          reply.header('content-length', String(Buffer.byteLength(css)));
+          reply.raw.removeHeader('content-encoding');
           reply.send(css);
         } else {
+          reply.header('content-length', String(body.byteLength));
           reply.send(body);
         }
+        responseSize = body.byteLength;
       } else {
         reply.send();
+        responseSize = 0;
       }
+
+      // Log the successful request
+      addProxyLog(port, {
+        timestamp: startTime,
+        method: request.method,
+        url: request.url,
+        status: response.status,
+        statusText: response.statusText,
+        duration,
+        requestSize: requestBodySize,
+        responseSize,
+        contentType,
+        error: null
+      });
 
       // Return to prevent further processing
       return reply;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+
+      // Log the failed request
+      addProxyLog(port, {
+        timestamp: Date.now(),
+        method: request.method,
+        url: request.url,
+        status: null,
+        statusText: null,
+        duration: 0,
+        requestSize: null,
+        responseSize: null,
+        contentType: null,
+        error: message
+      });
 
       if (message.includes('ECONNREFUSED') || message.includes('fetch failed')) {
         reply.code(502).send({

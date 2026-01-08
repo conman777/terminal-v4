@@ -693,6 +693,25 @@ function AppContent() {
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
 
+  // Wrap scroll handler to prevent header collapse when keybar is open
+  const handleScrollDirectionSafe = useCallback((direction) => {
+    // Don't collapse header when keybar is open - user needs access to header controls
+    if (keybarOpen) {
+      return;
+    }
+    handleScrollDirection(direction);
+  }, [keybarOpen, handleScrollDirection]);
+
+  // Toggle keybar and reset header collapse when opening
+  const handleToggleKeybar = useCallback(() => {
+    const willOpen = !keybarOpen;
+    setKeybarOpen(willOpen);
+    // When opening keybar, ensure header is visible
+    if (willOpen) {
+      resetScrollDirection();
+    }
+  }, [keybarOpen, resetScrollDirection]);
+
   // Session activity tracking for unread indicators
   const {
     activity: sessionActivity,
@@ -837,6 +856,21 @@ function AppContent() {
     }
   }, [activeSessionId]);
 
+  // Send text to terminal from preview inspector
+  const handleSendToTerminal = useCallback(async (text) => {
+    if (!activeSessionId || !text) return;
+
+    try {
+      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: text })
+      });
+    } catch (error) {
+      console.error('Failed to send to terminal', error);
+    }
+  }, [activeSessionId]);
+
   const handleNavigateToPath = useCallback(async (path) => {
     if (!activeSessionId || !path) return;
 
@@ -956,7 +990,7 @@ function AppContent() {
             onOpenApiSettings={() => setShowApiSettings(true)}
             onOpenBookmarks={() => setShowBookmarks(true)}
             keybarOpen={keybarOpen}
-            onToggleKeybar={() => setKeybarOpen(!keybarOpen)}
+            onToggleKeybar={handleToggleKeybar}
             projects={projects}
             projectsLoading={projectsLoading}
             onFolderSelect={handleSidebarFolderSelect}
@@ -1234,6 +1268,7 @@ function AppContent() {
                   onUrlChange={handlePreviewUrlChange}
                   projectInfo={projectInfo}
                   onStartProject={handleStartProject}
+                  onSendToTerminal={handleSendToTerminal}
                 />
               </>
             )}
@@ -1269,7 +1304,7 @@ function AppContent() {
                   viewportHeight={viewportHeight}
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
-                  onScrollDirection={handleScrollDirection}
+                  onScrollDirection={handleScrollDirectionSafe}
                 />
               </div>
             )}
@@ -1294,6 +1329,7 @@ function AppContent() {
                 onUrlChange={handlePreviewUrlChange}
                 projectInfo={projectInfo}
                 onStartProject={handleStartProject}
+                onSendToTerminal={handleSendToTerminal}
               />
             )}
           </main>

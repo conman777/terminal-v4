@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
@@ -8,7 +9,7 @@ import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onActivityChange }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onActivityChange, onConnectionChange, onCwdChange }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -20,7 +21,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const { activeSessionId, sessions } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [imageDragOver, setImageDragOver] = useState(false);
-  const [isActive, setIsActive] = useState(false);
+  const isActiveRef = useRef(false);
   const imageInputRef = useRef(null);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
@@ -55,35 +56,37 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     document.title = session?.title || 'Terminal';
   }, [isActiveSession, sessionId, sessions]);
 
-  // Flash favicon while terminal is active
-  useEffect(() => {
-    if (!isActiveSession) return;
+  // Favicon flashing helpers (no state, managed via ref)
+  const startFaviconFlash = useCallback(() => {
+    if (!isActiveSession || faviconIntervalRef.current) return;
+    const link = document.querySelector("link[rel='icon']");
+    if (!link) return;
 
-    if (isActive) {
-      // Flash between active/idle favicons
-      const link = document.querySelector("link[rel='icon']");
-      if (!link) return;
+    let showActive = true;
+    faviconIntervalRef.current = setInterval(() => {
+      link.href = showActive ? '/favicon-active.svg' : '/favicon-idle.svg';
+      showActive = !showActive;
+    }, 500);
+  }, [isActiveSession]);
 
-      let showActive = true;
-      faviconIntervalRef.current = setInterval(() => {
-        link.href = showActive ? '/favicon-active.svg' : '/favicon-idle.svg';
-        showActive = !showActive;
-      }, 500);
-
-      return () => {
-        if (faviconIntervalRef.current) {
-          clearInterval(faviconIntervalRef.current);
-          faviconIntervalRef.current = null;
-        }
-      };
-    } else {
-      // Set solid idle favicon
-      const link = document.querySelector("link[rel='icon']");
-      if (link) {
-        link.href = '/favicon-idle.svg';
-      }
+  const stopFaviconFlash = useCallback(() => {
+    if (faviconIntervalRef.current) {
+      clearInterval(faviconIntervalRef.current);
+      faviconIntervalRef.current = null;
     }
-  }, [isActiveSession, isActive]);
+    const link = document.querySelector("link[rel='icon']");
+    if (link) {
+      link.href = '/favicon-idle.svg';
+    }
+  }, []);
+
+  // Cleanup favicon on session change or unmount
+  useEffect(() => {
+    if (!isActiveSession) {
+      stopFaviconFlash();
+    }
+    return () => stopFaviconFlash();
+  }, [isActiveSession, stopFaviconFlash]);
 
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
@@ -437,10 +440,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       hasOpened = true;
       term.open(container);
+
+      // Load WebGL addon for GPU-accelerated rendering
+      let webglAddon = null;
+      try {
+        webglAddon = new WebglAddon();
+        webglAddon.onContextLoss(() => {
+          webglAddon?.dispose();
+        });
+        term.loadAddon(webglAddon);
+      } catch (e) {
+        console.warn('WebGL addon failed to load, using DOM renderer:', e);
+      }
+
       const textarea = term.textarea;
-      const handleTextareaFocus = () => {
-        term.scrollToBottom();
-      };
+      // Note: Removed scrollToBottom on focus - it interfered with intentional scrolling
+      // (user scrolls up, clicks terminal, loses scroll position)
 
       // Track composition state for iOS voice dictation fix
       let isComposing = false;
@@ -457,7 +472,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         textarea.style.position = 'fixed';
         textarea.style.top = '0';
         textarea.style.left = '-9999px';
-        textarea.addEventListener('focus', handleTextareaFocus);
         textarea.addEventListener('compositionstart', handleCompositionStart);
         textarea.addEventListener('compositionend', handleCompositionEnd);
       }
@@ -583,6 +597,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           wsRetryCount = 0; // Reset retry count on successful connection
           // Reset user input flag - don't play idle sound until user types again
           hasUserInputRef.current = false;
+          // Notify parent of connection status
+          onConnectionChange?.(true);
           if (hadConnectionError) {
             hadConnectionError = false;
             // Clear terminal before history replay to avoid duplicates
@@ -597,9 +613,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         socket.onmessage = (event) => {
           if (disposed) return;
-          const data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+          let data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
 
-          // Check if this is a clientId message from the server
+          // Check if this is a JSON control message from the server
           if (data.startsWith('{')) {
             try {
               const msg = JSON.parse(data);
@@ -613,13 +629,33 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     body: { cols, rows, clientId: msg.clientId }
                   }).catch(() => {});
                 }
+                return; // Don't write JSON to terminal
+              }
+              if (msg.type === 'cwd' && msg.cwd) {
+                onCwdChange?.(msg.cwd);
+                return; // Don't write JSON to terminal
               }
             } catch {
-              // Not JSON, write to terminal
+              // Not valid JSON, continue to write to terminal
             }
           }
 
+          // Preserve scroll position - only auto-scroll if user is at bottom
+          const buffer = term.buffer?.active;
+          const viewportYBefore = buffer?.viewportY ?? 0;
+          const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+
           term.write(data);
+
+          // xterm auto-scrolls on write - restore position if user had scrolled up
+          if (!wasAtBottom) {
+            const newBuffer = term.buffer?.active;
+            const viewportYAfter = newBuffer?.viewportY ?? 0;
+            const delta = viewportYBefore - viewportYAfter;
+            if (delta !== 0) {
+              term.scrollLines(delta);
+            }
+          }
 
           // Reset idle timer - play tone after 3s of no output
           // Only after user has typed something (not on initial history load)
@@ -628,11 +664,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             clearTimeout(idleTimerRef.current);
           }
           if (!skipUrlDetection && !isScrollingRef.current && hasUserInputRef.current) {
-            setIsActive(true);
-            onActivityChange?.(true);
+            // Only notify on state transition (not every message)
+            if (!isActiveRef.current) {
+              isActiveRef.current = true;
+              startFaviconFlash();
+              onActivityChange?.(true);
+            }
             idleTimerRef.current = setTimeout(() => {
               playIdleTone();
-              setIsActive(false);
+              isActiveRef.current = false;
+              stopFaviconFlash();
               onActivityChange?.(false);
             }, 3000);
           }
@@ -649,6 +690,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         socket.onerror = () => {
           if (disposed) return;
+          onConnectionChange?.(false);
           if (!hadConnectionError) {
             hadConnectionError = true;
             term.write('\r\n[Connection lost – attempting to reconnect…]\r\n');
@@ -657,6 +699,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         socket.onclose = (event) => {
           if (disposed) return;
+          onConnectionChange?.(false);
           if (event.reason === 'Session ended') {
             shouldReconnect = false;
             term.write('\r\n[Terminal session ended]\r\n');
@@ -851,7 +894,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         container.removeEventListener('wheel', wheelHandler);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
-          textarea.removeEventListener('focus', handleTextareaFocus);
           textarea.removeEventListener('compositionstart', handleCompositionStart);
           textarea.removeEventListener('compositionend', handleCompositionEnd);
         }

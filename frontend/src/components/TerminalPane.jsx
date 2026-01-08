@@ -19,12 +19,15 @@ export const TerminalPane = memo(function TerminalPane({
   onUrlDetected,
   fontSize,
   sessionActivity,
-  projectInfo
+  projectInfo,
+  onCwdChange
 }) {
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showSessionMenu, setShowSessionMenu] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [currentCwd, setCurrentCwd] = useState(null);
 
   const currentSession = sessions.find(s => s.id === pane.sessionId);
 
@@ -68,6 +71,15 @@ export const TerminalPane = memo(function TerminalPane({
   const handleImageUpload = useCallback(() => {
     imageInputRef.current?.click();
   }, []);
+
+  const handleConnectionChange = useCallback((connected) => {
+    setIsConnected(connected);
+  }, []);
+
+  const handleCwdChange = useCallback((cwd) => {
+    setCurrentCwd(cwd);
+    onCwdChange?.(cwd);
+  }, [onCwdChange]);
 
   return (
     <div
@@ -185,12 +197,15 @@ export const TerminalPane = memo(function TerminalPane({
               onUrlDetected={onUrlDetected}
               fontSize={fontSize}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
+              onConnectionChange={handleConnectionChange}
+              onCwdChange={handleCwdChange}
             />
             <DesktopStatusBar
               sessionId={pane.sessionId}
-              cwd={projectInfo?.cwd}
+              cwd={currentCwd || projectInfo?.cwd}
               gitBranch={projectInfo?.gitBranch}
               onImageUpload={handleImageUpload}
+              isConnected={isConnected}
             />
           </div>
         ) : (

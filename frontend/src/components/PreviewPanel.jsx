@@ -81,14 +81,19 @@ function toPreviewUrl(inputUrl) {
   return inputUrl;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal }) {
   const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inputUrl, setInputUrl] = useState(url || '');
-  const [logs, setLogs] = useState([]);
+  const [logs, setLogs] = useState([]);  // Client-side logs from injected script
+  const [proxyLogs, setProxyLogs] = useState([]);  // Server-side proxy logs
   const [showLogs, setShowLogs] = useState(false);
+  const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy'
   const [showUrlInput, setShowUrlInput] = useState(false);
+  const [inspectMode, setInspectMode] = useState(false);
+  const [selectedElement, setSelectedElement] = useState(null);
+  const [hasCookies, setHasCookies] = useState(false);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
@@ -98,21 +103,145 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
 
+  // Extract port from preview URL for cookie management
+  const previewPort = useMemo(() => {
+    if (!iframeSrc) return null;
+    try {
+      const match = iframeSrc.match(/preview-(\d+)\.conordart\.com/);
+      return match ? parseInt(match[1], 10) : null;
+    } catch {
+      return null;
+    }
+  }, [iframeSrc]);
+
+  // Check for cookies when preview loads or port changes
+  useEffect(() => {
+    if (!previewPort) {
+      setHasCookies(false);
+      return;
+    }
+    const checkCookies = async () => {
+      try {
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/preview/${previewPort}/cookies`, { headers });
+        const data = await res.json();
+        setHasCookies(data.hasCookies);
+      } catch {
+        setHasCookies(false);
+      }
+    };
+    checkCookies();
+    // Re-check periodically while preview is active
+    const interval = setInterval(checkCookies, 5000);
+    return () => clearInterval(interval);
+  }, [previewPort]);
+
+  const handleClearCookies = useCallback(async () => {
+    if (!previewPort) return;
+    try {
+      const token = getAccessToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+      await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
+      setHasCookies(false);
+      // Refresh the preview to apply cleared cookies
+      if (baseIframeSrc) {
+        setIsLoading(true);
+        setError(null);
+        setLogs([]);
+        setProxyLogs([]);
+        const cacheBuster = `_cb=${Date.now()}`;
+        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+      }
+    } catch (err) {
+      console.error('Failed to clear cookies:', err);
+    }
+  }, [previewPort, baseIframeSrc]);
+
+  // Poll for proxy logs (server-side network requests)
+  const lastProxyLogTimestamp = useRef(0);
+  useEffect(() => {
+    if (!previewPort) {
+      setProxyLogs([]);
+      lastProxyLogTimestamp.current = 0;
+      return;
+    }
+    const fetchProxyLogs = async () => {
+      try {
+        const token = getAccessToken();
+        const since = lastProxyLogTimestamp.current;
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/preview/${previewPort}/proxy-logs?since=${since}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.logs && data.logs.length > 0) {
+          setProxyLogs(prev => {
+            const newLogs = [...prev, ...data.logs];
+            // Keep max 200 logs
+            return newLogs.slice(-200);
+          });
+          // Update last timestamp
+          const lastLog = data.logs[data.logs.length - 1];
+          if (lastLog) {
+            lastProxyLogTimestamp.current = lastLog.timestamp;
+          }
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    };
+    // Initial fetch (get all logs)
+    fetchProxyLogs();
+    // Poll every second
+    const interval = setInterval(fetchProxyLogs, 1000);
+    return () => clearInterval(interval);
+  }, [previewPort]);
+
   useEffect(() => {
     setIframeSrc(baseIframeSrc);
   }, [baseIframeSrc]);
 
-  // Listen for console messages from iframe
+  // Listen for messages from iframe (console logs and element selection)
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.data?.type === 'preview-console') {
         const { level, message, timestamp } = event.data;
         setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp }]);
+      } else if (event.data?.type === 'preview-element-selected') {
+        setSelectedElement(event.data.element);
+      } else if (event.data?.type === 'preview-inspector-ready') {
+        // Inspector is ready, sync inspect mode state
+        if (inspectMode && iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: true }, '*');
+        }
+      } else if (event.data?.type === 'preview-send-to-terminal') {
+        // Send element info to terminal
+        if (onSendToTerminal && event.data.element) {
+          const el = event.data.element;
+          // Format element info for terminal - include selector and key details
+          const parts = [`Element: ${el.selector}`];
+          if (el.rect) {
+            parts.push(`Size: ${el.rect.width}x${el.rect.height}px`);
+          }
+          if (el.className) {
+            parts.push(`Classes: ${el.className}`);
+          }
+          // Get the outer HTML structure hint
+          let htmlHint = `<${el.tagName}`;
+          if (el.id) htmlHint += ` id="${el.id}"`;
+          if (el.className) htmlHint += ` class="${el.className}"`;
+          htmlHint += '>';
+          parts.push(`HTML: ${htmlHint}`);
+
+          const text = parts.join(' | ');
+          onSendToTerminal(text);
+        }
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [inspectMode, onSendToTerminal]);
 
   // Track if user scrolled away from bottom in logs
   const handleLogsScroll = useCallback(() => {
@@ -129,9 +258,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [logs, showLogs]);
 
-  // Clear logs when URL changes
+  // Clear logs and selection when URL changes
   useEffect(() => {
     setLogs([]);
+    setSelectedElement(null);
+    setInspectMode(false);
   }, [url]);
 
   // Focus URL input when shown
@@ -142,8 +273,43 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [showUrlInput]);
 
-  const handleClearLogs = useCallback(() => {
+  const handleClearLogs = useCallback(async () => {
     setLogs([]);
+    setProxyLogs([]);
+    lastProxyLogTimestamp.current = 0;
+    // Also clear on server
+    if (previewPort) {
+      try {
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        // Clear both client-side logs and proxy logs
+        await Promise.all([
+          fetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE' }),
+          fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers })
+        ]);
+      } catch {
+        // Ignore
+      }
+    }
+  }, [previewPort]);
+
+  const handleToggleInspect = useCallback(() => {
+    const newMode = !inspectMode;
+    setInspectMode(newMode);
+    if (!newMode) {
+      setSelectedElement(null);
+    }
+    // Send message to iframe
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: newMode }, '*');
+    }
+  }, [inspectMode]);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedElement(null);
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage({ type: 'preview-clear-selection' }, '*');
+    }
   }, []);
 
   useEffect(() => {
@@ -154,6 +320,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setIsLoading(false);
     setError(null);
   }, []);
+
+  // Fallback: if iframe doesn't fire onLoad within 5s, show it anyway
+  // (some apps like Next.js dev mode may delay the load event)
+  useEffect(() => {
+    if (!isLoading || !iframeSrc) return;
+    const timeout = setTimeout(() => {
+      if (isLoading) {
+        console.log('[Preview] Load timeout - showing iframe anyway');
+        setIsLoading(false);
+      }
+    }, 5000);
+    return () => clearTimeout(timeout);
+  }, [isLoading, iframeSrc]);
 
   const handleError = useCallback(() => {
     setIsLoading(false);
@@ -195,6 +374,31 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return url.length > 30 ? url.substring(0, 30) + '...' : url;
     }
   }, [url]);
+
+  // Merge and filter logs (memoized for performance)
+  const filteredLogs = useMemo(() => {
+    const allLogs = [];
+    if (logFilter !== 'proxy') {
+      logs.forEach(log => allLogs.push({ ...log, source: 'client' }));
+    }
+    if (logFilter !== 'client') {
+      proxyLogs.forEach(log => allLogs.push({
+        id: log.id,
+        timestamp: log.timestamp,
+        source: 'proxy',
+        method: log.method,
+        url: log.url,
+        status: log.status,
+        duration: log.duration,
+        error: log.error,
+        contentType: log.contentType,
+        responseSize: log.responseSize
+      }));
+    }
+    // Sort by timestamp
+    allLogs.sort((a, b) => a.timestamp - b.timestamp);
+    return allLogs;
+  }, [logs, proxyLogs, logFilter]);
 
   // Mobile layout
   if (isMobile) {
@@ -266,8 +470,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 onLoad={handleLoad}
                 onError={handleError}
                 title="App Preview"
-                sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
-                style={{ opacity: isLoading ? 0 : 1 }}
+                                style={{ opacity: isLoading ? 0 : 1 }}
               />
             </>
           )}
@@ -402,6 +605,35 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         <div className="preview-actions">
           <button
             type="button"
+            className={`preview-action-btn ${inspectMode ? 'active' : ''}`}
+            onClick={handleToggleInspect}
+            title={inspectMode ? 'Exit inspect mode' : 'Inspect elements'}
+            disabled={!iframeSrc}
+            aria-label="Inspect elements"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+              <path d="M13 13l6 6" />
+            </svg>
+          </button>
+          {previewPort && (
+            <button
+              type="button"
+              className={`preview-action-btn ${hasCookies ? 'has-cookies' : ''}`}
+              onClick={handleClearCookies}
+              title={hasCookies ? 'Clear stored cookies (logged in)' : 'No cookies stored'}
+              disabled={!hasCookies}
+              aria-label="Clear cookies"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 12h8" />
+                {hasCookies && <circle cx="12" cy="12" r="3" fill="currentColor" />}
+              </svg>
+            </button>
+          )}
+          <button
+            type="button"
             className="preview-action-btn"
             onClick={handleRefresh}
             title="Refresh"
@@ -503,8 +735,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               onLoad={handleLoad}
               onError={handleError}
               title="App Preview"
-              sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
-              style={{ opacity: isLoading ? 0 : 1 }}
+                            style={{ opacity: isLoading ? 0 : 1 }}
             />
           </>
         )}
@@ -515,40 +746,156 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         <div className="preview-logs-header" onClick={() => setShowLogs(!showLogs)}>
           <span className="preview-logs-title">
             <span className="preview-logs-icon">{'\u{1F4CB}'}</span>
-            Console
-            {logs.length > 0 && <span className="preview-logs-count">{logs.length}</span>}
+            Logs
+            {(logs.length + proxyLogs.length) > 0 && (
+              <span className="preview-logs-count">{logs.length + proxyLogs.length}</span>
+            )}
           </span>
           <div className="preview-logs-actions">
             {showLogs && (
-              <button
-                type="button"
-                className="preview-logs-btn"
-                onClick={(e) => { e.stopPropagation(); handleClearLogs(); }}
-                title="Clear logs"
-              >
-                Clear
-              </button>
+              <>
+                <select
+                  className="preview-logs-filter"
+                  value={logFilter}
+                  onChange={(e) => { e.stopPropagation(); setLogFilter(e.target.value); }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <option value="all">All</option>
+                  <option value="proxy">Network ({proxyLogs.length})</option>
+                  <option value="client">Console ({logs.length})</option>
+                </select>
+                <button
+                  type="button"
+                  className="preview-logs-btn"
+                  onClick={(e) => { e.stopPropagation(); handleClearLogs(); }}
+                  title="Clear logs"
+                >
+                  Clear
+                </button>
+              </>
             )}
             <span className="preview-logs-toggle">{showLogs ? '\u25BC' : '\u25B2'}</span>
           </div>
         </div>
         {showLogs && (
           <div className="preview-logs-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
-            {logs.length === 0 ? (
-              <div className="preview-logs-empty">No console output yet</div>
+            {filteredLogs.length === 0 ? (
+              <div className="preview-logs-empty">No logs yet</div>
             ) : (
-              logs.map((log) => (
-                <div key={log.id} className={`preview-log-entry preview-log-${log.level}`}>
-                  <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                  <span className="preview-log-level">{log.level}</span>
-                  <span className="preview-log-message">{log.message}</span>
-                </div>
-              ))
+              filteredLogs.map((log) => {
+                if (log.source === 'client') {
+                  return (
+                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className="preview-log-level">{log.level}</span>
+                      <span className="preview-log-message">{log.message}</span>
+                    </div>
+                  );
+                } else {
+                  // Proxy log
+                  const statusClass = log.error ? 'error' : (log.status >= 400 ? 'warn' : 'info');
+                  const statusText = log.error ? 'ERR' : log.status;
+                  const sizeText = log.responseSize ? `${(log.responseSize / 1024).toFixed(1)}KB` : '';
+                  return (
+                    <div key={`p-${log.id}`} className={`preview-log-entry preview-log-${statusClass} preview-log-network`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className={`preview-log-status preview-log-status-${statusClass}`}>{statusText}</span>
+                      <span className="preview-log-method">{log.method}</span>
+                      <span className="preview-log-url" title={log.url}>{log.url}</span>
+                      <span className="preview-log-meta">
+                        {log.duration}ms {sizeText}
+                      </span>
+                      {log.error && <span className="preview-log-error">{log.error}</span>}
+                    </div>
+                  );
+                }
+              })
             )}
             <div ref={logsEndRef} />
           </div>
         )}
       </div>
+
+      {/* Element Inspector Panel */}
+      {selectedElement && (
+        <div className="preview-inspector">
+          <div className="preview-inspector-header">
+            <span className="preview-inspector-title">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+              </svg>
+              Element Inspector
+            </span>
+            <button
+              type="button"
+              className="preview-inspector-close"
+              onClick={handleClearSelection}
+              aria-label="Close inspector"
+            >
+              {'\u00D7'}
+            </button>
+          </div>
+          <div className="preview-inspector-content">
+            <div className="preview-inspector-selector">
+              <code>{selectedElement.selector}</code>
+            </div>
+            <div className="preview-inspector-section">
+              <div className="preview-inspector-label">Element</div>
+              <div className="preview-inspector-value">
+                <span className="preview-inspector-tag">&lt;{selectedElement.tagName}</span>
+                {selectedElement.id && <span className="preview-inspector-id">#{selectedElement.id}</span>}
+                {selectedElement.className && (
+                  <span className="preview-inspector-class">
+                    .{selectedElement.className.split(' ').filter(c => c).join('.')}
+                  </span>
+                )}
+                <span className="preview-inspector-tag">&gt;</span>
+              </div>
+            </div>
+            <div className="preview-inspector-section">
+              <div className="preview-inspector-label">Dimensions</div>
+              <div className="preview-inspector-value">
+                {selectedElement.rect.width} × {selectedElement.rect.height}px
+                <span className="preview-inspector-muted"> at ({selectedElement.rect.x}, {selectedElement.rect.y})</span>
+              </div>
+            </div>
+            {Object.keys(selectedElement.attributes).length > 0 && (
+              <div className="preview-inspector-section">
+                <div className="preview-inspector-label">Attributes</div>
+                <div className="preview-inspector-attrs">
+                  {Object.entries(selectedElement.attributes).map(([name, value]) => (
+                    <div key={name} className="preview-inspector-attr">
+                      <span className="preview-inspector-attr-name">{name}</span>
+                      <span className="preview-inspector-attr-value">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="preview-inspector-section">
+              <div className="preview-inspector-label">Computed Styles</div>
+              <div className="preview-inspector-styles">
+                {Object.entries(selectedElement.computedStyle).map(([prop, value]) => (
+                  <div key={prop} className="preview-inspector-style">
+                    <span className="preview-inspector-style-prop">{prop}</span>
+                    <span className="preview-inspector-style-value">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {selectedElement.textContent && (
+              <div className="preview-inspector-section">
+                <div className="preview-inspector-label">Text Content</div>
+                <div className="preview-inspector-text">
+                  {selectedElement.textContent.length > 100
+                    ? selectedElement.textContent.substring(0, 100) + '...'
+                    : selectedElement.textContent}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

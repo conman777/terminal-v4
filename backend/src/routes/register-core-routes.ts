@@ -17,6 +17,8 @@ import {
   isValidIdentifier,
   PROJECT_ROOT
 } from '../utils/path-security';
+import { clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
+import { getProxyLogs, clearProxyLogs } from '../preview/request-log-store';
 
 export interface CoreRouteDependencies {
   terminalManager: TerminalManager;
@@ -589,5 +591,63 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
 
     const removed = removeCustomScanDirectory(dirPath);
     reply.send({ success: removed, directories: getCustomScanDirectories() });
+  });
+
+  // Preview: Get stored cookies for a port
+  app.get<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
+    const port = parseInt(request.params.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    reply.send({
+      port,
+      hasCookies: hasCookies(port),
+      cookies: listCookies(port)
+    });
+  });
+
+  // Preview: Clear stored cookies for a port
+  app.delete<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
+    const port = parseInt(request.params.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    clearCookies(port);
+    reply.send({ success: true, port });
+  });
+
+  // Preview: Get server-side proxy request logs for a port
+  app.get<{ Params: { port: string }; Querystring: { since?: string } }>('/api/preview/:port/proxy-logs', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const port = parseInt(request.params.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    const since = request.query.since ? parseInt(request.query.since, 10) : undefined;
+    const logs = getProxyLogs(port, since);
+    reply.send({ port, logs });
+  });
+
+  // Preview: Clear server-side proxy logs for a port
+  app.delete<{ Params: { port: string } }>('/api/preview/:port/proxy-logs', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const port = parseInt(request.params.port, 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    clearProxyLogs(port);
+    reply.send({ success: true, port });
   });
 }
