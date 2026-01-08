@@ -1,6 +1,12 @@
-import { execSync, spawn } from 'child_process';
+import { execSync, spawn, ChildProcess } from 'child_process';
 import { existsSync, readlinkSync, readFileSync } from 'fs';
 import { join, basename } from 'path';
+import {
+  registerProcess,
+  addProcessLog,
+  associatePort,
+  markProcessExited
+} from '../preview/process-log-store.js';
 
 export interface PortInfo {
   port: number;
@@ -197,10 +203,22 @@ function getStartCommand(repoPath: string, projectType: 'node' | 'python' | 'unk
   return null;
 }
 
+// Track spawned processes for log capture
+const spawnedProcesses = new Map<number, ChildProcess>();
+
+// Patterns to detect port from process output
+const PORT_PATTERNS = [
+  /(?:listening|running|started|server|http).*?(?:on|at|port|:)\s*(\d{4,5})/i,
+  /localhost:(\d{4,5})/i,
+  /127\.0\.0\.1:(\d{4,5})/i,
+  /0\.0\.0\.0:(\d{4,5})/i,
+  /port\s*[=:]\s*(\d{4,5})/i,
+];
+
 /**
- * Start a repo's application in the background
+ * Start a repo's application in the background with log capture
  */
-export async function startRepo(repoPath: string): Promise<{ success: boolean; error?: string }> {
+export async function startRepo(repoPath: string): Promise<{ success: boolean; pid?: number; error?: string }> {
   const projectType = detectProjectType(repoPath);
   const startCmd = getStartCommand(repoPath, projectType);
 
@@ -209,23 +227,90 @@ export async function startRepo(repoPath: string): Promise<{ success: boolean; e
   }
 
   try {
-    // Spawn detached process with output redirected to /dev/null
+    // Spawn process with stdout/stderr piped for log capture
     const child = spawn(startCmd.cmd, startCmd.args, {
       cwd: repoPath,
       detached: true,
-      stdio: ['ignore', 'ignore', 'ignore'],
-      env: { ...process.env, NODE_ENV: 'production' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, NODE_ENV: 'development' },
     });
 
+    if (!child.pid) {
+      return { success: false, error: 'Failed to get process PID' };
+    }
+
+    const pid = child.pid;
+    const commandStr = `${startCmd.cmd} ${startCmd.args.join(' ')}`;
+
+    // Register process for log capture
+    registerProcess(pid, commandStr, repoPath);
+    spawnedProcesses.set(pid, child);
+
+    // Capture stdout
+    child.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      addProcessLog(pid, 'stdout', text);
+
+      // Try to detect port from output
+      for (const pattern of PORT_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+          const port = parseInt(match[1], 10);
+          if (port >= 3000 && port <= 65535) {
+            associatePort(pid, port);
+            break;
+          }
+        }
+      }
+    });
+
+    // Capture stderr
+    child.stderr?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      addProcessLog(pid, 'stderr', text);
+
+      // Also check stderr for port info (some frameworks log there)
+      for (const pattern of PORT_PATTERNS) {
+        const match = text.match(pattern);
+        if (match) {
+          const port = parseInt(match[1], 10);
+          if (port >= 3000 && port <= 65535) {
+            associatePort(pid, port);
+            break;
+          }
+        }
+      }
+    });
+
+    // Handle process exit
+    child.on('exit', (code) => {
+      markProcessExited(pid, code);
+      spawnedProcesses.delete(pid);
+    });
+
+    child.on('error', (err) => {
+      addProcessLog(pid, 'stderr', `Process error: ${err.message}`);
+      markProcessExited(pid, 1);
+      spawnedProcesses.delete(pid);
+    });
+
+    // Unref so parent can exit independently
     child.unref();
 
     // Give it a moment to start
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    return { success: true };
+    return { success: true, pid };
   } catch (err) {
     return { success: false, error: String(err) };
   }
+}
+
+/**
+ * Get a spawned process by PID
+ */
+export function getSpawnedProcess(pid: number): ChildProcess | undefined {
+  return spawnedProcesses.get(pid);
 }
 
 /**

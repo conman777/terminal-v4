@@ -94,11 +94,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState(null);
   const [hasCookies, setHasCookies] = useState(false);
+  const [activePorts, setActivePorts] = useState([]);
+  const [showPortDropdown, setShowPortDropdown] = useState(false);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
   const isLogsNearBottomRef = useRef(true);
   const urlInputRef = useRef(null);
+  const portDropdownRef = useRef(null);
 
   const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
@@ -158,6 +161,48 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       console.error('Failed to clear cookies:', err);
     }
   }, [previewPort, baseIframeSrc]);
+
+  // Fetch active ports for the dropdown
+  useEffect(() => {
+    const fetchActivePorts = async () => {
+      try {
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/preview/active-ports', { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setActivePorts(data.ports || []);
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    };
+    fetchActivePorts();
+    // Refresh every 5 seconds
+    const interval = setInterval(fetchActivePorts, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!showPortDropdown) return;
+    const handleClickOutside = (e) => {
+      if (portDropdownRef.current && !portDropdownRef.current.contains(e.target)) {
+        setShowPortDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showPortDropdown]);
+
+  const handleSelectPort = useCallback((port) => {
+    const newUrl = `http://localhost:${port}`;
+    setInputUrl(newUrl);
+    setShowPortDropdown(false);
+    if (onUrlChange) {
+      onUrlChange(newUrl);
+    }
+  }, [onUrlChange]);
 
   // Poll for proxy logs (server-side network requests)
   const lastProxyLogTimestamp = useRef(0);
@@ -591,6 +636,52 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         <div className="preview-title">
           <span className="preview-icon">{'\u2699'}</span>
           <span>Preview</span>
+        </div>
+        {/* Port selector dropdown */}
+        <div className="preview-port-selector" ref={portDropdownRef}>
+          <button
+            type="button"
+            className={`preview-port-btn ${showPortDropdown ? 'active' : ''}`}
+            onClick={() => setShowPortDropdown(!showPortDropdown)}
+            title="Select active port"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <path d="M8 21h8" />
+              <path d="M12 17v4" />
+            </svg>
+            {activePorts.filter(p => p.listening).length > 0 && (
+              <span className="preview-port-badge">{activePorts.filter(p => p.listening).length}</span>
+            )}
+          </button>
+          {showPortDropdown && (
+            <div className="preview-port-dropdown">
+              <div className="preview-port-dropdown-header">Active Ports</div>
+              {activePorts.length === 0 ? (
+                <div className="preview-port-dropdown-empty">No active ports found</div>
+              ) : (
+                <div className="preview-port-dropdown-list">
+                  {activePorts.map(({ port, listening, previewed, process, cwd }) => (
+                    <button
+                      key={port}
+                      type="button"
+                      className={`preview-port-item ${port === previewPort ? 'current' : ''}`}
+                      onClick={() => handleSelectPort(port)}
+                    >
+                      <span className="preview-port-info">
+                        <span className="preview-port-number">:{port}</span>
+                        {(cwd || process) && <span className="preview-port-process">{cwd || process}</span>}
+                      </span>
+                      <span className="preview-port-status">
+                        {listening && <span className="preview-port-dot listening" title="Listening" />}
+                        {previewed && <span className="preview-port-dot previewed" title="Previously viewed" />}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <form className="preview-url-form" onSubmit={handleUrlSubmit}>
           <input

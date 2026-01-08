@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
 import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
 import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
-import { addProxyLog } from '../preview/request-log-store.js';
+import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
 
 // Pattern to match preview subdomains: preview-{port}.conordart.com
 const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
@@ -47,8 +47,8 @@ const PREVIEW_DEBUG_SCRIPT = `
   const PORT = portMatch[1];
   const MAIN_DOMAIN = portMatch[2];
 
-  // Send logs to main domain, not preview subdomain (which proxies to localhost)
-  const API_URL = location.protocol + '//' + MAIN_DOMAIN + '/api/preview/' + PORT + '/logs';
+  // Send logs to code.{domain}, not preview subdomain (which proxies to localhost)
+  const API_URL = location.protocol + '//code.' + MAIN_DOMAIN + '/api/preview/' + PORT + '/logs';
   const pendingLogs = [];
   let flushTimeout = null;
 
@@ -57,7 +57,7 @@ const PREVIEW_DEBUG_SCRIPT = `
     if (pendingLogs.length === 0) return;
     const batch = pendingLogs.splice(0, pendingLogs.length);
     try {
-      navigator.sendBeacon(API_URL, JSON.stringify({ logs: batch }));
+      navigator.sendBeacon(API_URL, new Blob([JSON.stringify({ logs: batch })], { type: 'application/json' }));
     } catch (e) {
       // Fallback to fetch
       fetch(API_URL, {
@@ -139,6 +139,24 @@ const PREVIEW_DEBUG_SCRIPT = `
     });
   });
 
+  // Max body size for logging (50KB)
+  var MAX_BODY_SIZE = 50 * 1024;
+
+  function truncateBody(body) {
+    if (!body || body.length <= MAX_BODY_SIZE) return body;
+    return body.slice(0, MAX_BODY_SIZE) + '\\n... [truncated at 50KB]';
+  }
+
+  function headersToObject(headers) {
+    var obj = {};
+    if (headers && typeof headers.forEach === 'function') {
+      headers.forEach(function(value, key) { obj[key] = value; });
+    } else if (headers && typeof headers === 'object') {
+      Object.keys(headers).forEach(function(key) { obj[key] = headers[key]; });
+    }
+    return obj;
+  }
+
   // Network capture - fetch
   var origFetch = window.fetch;
   window.fetch = function(input, init) {
@@ -146,8 +164,33 @@ const PREVIEW_DEBUG_SCRIPT = `
     var method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
     var startTime = Date.now();
 
+    // Capture request headers
+    var requestHeaders = {};
+    if (init && init.headers) {
+      requestHeaders = headersToObject(init.headers);
+    } else if (typeof input === 'object' && input.headers) {
+      requestHeaders = headersToObject(input.headers);
+    }
+
+    // Capture request body
+    var requestBody = null;
+    if (init && init.body) {
+      if (typeof init.body === 'string') {
+        requestBody = truncateBody(init.body);
+      } else if (init.body instanceof FormData) {
+        requestBody = '[FormData]';
+      } else if (init.body instanceof Blob) {
+        requestBody = '[Blob: ' + init.body.size + ' bytes]';
+      }
+    }
+
     return origFetch.apply(this, arguments).then(function(response) {
       var duration = Date.now() - startTime;
+
+      // Capture response headers
+      var responseHeaders = headersToObject(response.headers);
+      var contentType = response.headers.get('content-type') || '';
+
       var entry = {
         type: 'network',
         method: method,
@@ -155,13 +198,17 @@ const PREVIEW_DEBUG_SCRIPT = `
         status: response.status,
         statusText: response.statusText,
         duration: duration,
-        timestamp: startTime
+        timestamp: startTime,
+        requestHeaders: requestHeaders,
+        responseHeaders: responseHeaders,
+        requestBody: requestBody
       };
 
-      // Try to get response preview for errors or JSON
-      if (response.status >= 400 || (response.headers.get('content-type') || '').includes('json')) {
+      // Capture response body for text-based responses
+      if (contentType.includes('json') || contentType.includes('text') ||
+          contentType.includes('xml') || contentType.includes('javascript')) {
         response.clone().text().then(function(text) {
-          entry.responsePreview = text.slice(0, 500);
+          entry.responseBody = truncateBody(text);
           queueLog(entry);
         }).catch(function() {
           queueLog(entry);
@@ -178,7 +225,9 @@ const PREVIEW_DEBUG_SCRIPT = `
         url: url,
         error: err.message,
         duration: Date.now() - startTime,
-        timestamp: startTime
+        timestamp: startTime,
+        requestHeaders: requestHeaders,
+        requestBody: requestBody
       });
       throw err;
     });
@@ -187,18 +236,52 @@ const PREVIEW_DEBUG_SCRIPT = `
   // Network capture - XMLHttpRequest
   var XHROpen = XMLHttpRequest.prototype.open;
   var XHRSend = XMLHttpRequest.prototype.send;
+  var XHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
 
   XMLHttpRequest.prototype.open = function(method, url) {
     this._debugMethod = method;
     this._debugUrl = url;
+    this._debugHeaders = {};
     return XHROpen.apply(this, arguments);
   };
 
-  XMLHttpRequest.prototype.send = function() {
+  XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+    if (this._debugHeaders) {
+      this._debugHeaders[name] = value;
+    }
+    return XHRSetHeader.apply(this, arguments);
+  };
+
+  XMLHttpRequest.prototype.send = function(body) {
     var xhr = this;
     var startTime = Date.now();
+    var requestBody = null;
+
+    if (body) {
+      if (typeof body === 'string') {
+        requestBody = truncateBody(body);
+      } else if (body instanceof FormData) {
+        requestBody = '[FormData]';
+      } else if (body instanceof Blob) {
+        requestBody = '[Blob: ' + body.size + ' bytes]';
+      }
+    }
 
     xhr.addEventListener('loadend', function() {
+      var responseHeaders = {};
+      try {
+        var headerStr = xhr.getAllResponseHeaders();
+        if (headerStr) {
+          headerStr.split('\\r\\n').forEach(function(line) {
+            var parts = line.split(': ');
+            if (parts.length === 2) {
+              responseHeaders[parts[0].toLowerCase()] = parts[1];
+            }
+          });
+        }
+      } catch (e) {}
+
+      var contentType = xhr.getResponseHeader('content-type') || '';
       var entry = {
         type: 'network',
         method: xhr._debugMethod || 'GET',
@@ -206,14 +289,17 @@ const PREVIEW_DEBUG_SCRIPT = `
         status: xhr.status,
         statusText: xhr.statusText,
         duration: Date.now() - startTime,
-        timestamp: startTime
+        timestamp: startTime,
+        requestHeaders: xhr._debugHeaders || {},
+        responseHeaders: responseHeaders,
+        requestBody: requestBody
       };
 
-      // Get response preview for errors or JSON
-      var contentType = xhr.getResponseHeader('content-type') || '';
-      if (xhr.status >= 400 || contentType.includes('json')) {
+      // Capture response body for text-based responses
+      if (contentType.includes('json') || contentType.includes('text') ||
+          contentType.includes('xml') || contentType.includes('javascript')) {
         try {
-          entry.responsePreview = (xhr.responseText || '').slice(0, 500);
+          entry.responseBody = truncateBody(xhr.responseText || '');
         } catch (e) {}
       }
 
@@ -222,6 +308,64 @@ const PREVIEW_DEBUG_SCRIPT = `
 
     return XHRSend.apply(this, arguments);
   };
+
+  // DOM Snapshot capture
+  window.__captureDOM = function() {
+    var html = document.documentElement.outerHTML;
+    queueLog({
+      type: 'dom',
+      html: truncateBody(html),
+      url: location.href,
+      timestamp: Date.now()
+    });
+    return html.length;
+  };
+
+  // Storage Inspector
+  function captureStorage() {
+    var localStorage_data = {};
+    var sessionStorage_data = {};
+
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        localStorage_data[key] = truncateBody(localStorage.getItem(key) || '');
+      }
+    } catch (e) {}
+
+    try {
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var key = sessionStorage.key(i);
+        sessionStorage_data[key] = truncateBody(sessionStorage.getItem(key) || '');
+      }
+    } catch (e) {}
+
+    queueLog({
+      type: 'storage',
+      localStorage: localStorage_data,
+      sessionStorage: sessionStorage_data,
+      timestamp: Date.now()
+    });
+  }
+
+  window.__captureStorage = captureStorage;
+
+  // Capture storage on load and changes
+  window.addEventListener('load', function() {
+    setTimeout(captureStorage, 1000);
+  });
+
+  window.addEventListener('storage', captureStorage);
+
+  // Listen for commands from parent
+  window.addEventListener('message', function(event) {
+    if (event.data && event.data.type === 'preview-capture-dom') {
+      window.__captureDOM();
+    }
+    if (event.data && event.data.type === 'preview-capture-storage') {
+      window.__captureStorage();
+    }
+  });
 
   // Flush on page unload
   window.addEventListener('beforeunload', flushLogs);
@@ -598,6 +742,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       }
 
       // Stream response body
+      let responseBodyBuffer: Buffer | null = null;
       if (response.body) {
         const reader = response.body.getReader();
         const chunks: Uint8Array[] = [];
@@ -608,7 +753,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           chunks.push(value);
         }
 
-        const body = Buffer.concat(chunks);
+        responseBodyBuffer = Buffer.concat(chunks);
+        const body = responseBodyBuffer;
 
         // Extract cache-buster from request URL, or generate one
         const url = new URL(request.url, `http://localhost:${port}`);
@@ -650,8 +796,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           );
 
           // Inject debug script and inspector script at start of <head> to run before app code
-          // TEMPORARILY DISABLED for debugging iframe animation issues
-          const injectedScripts = ''; // PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+          const injectedScripts = PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
           if (html.includes('<head>')) {
             html = html.replace('<head>', '<head>' + injectedScripts);
           } else if (html.includes('<html>')) {
@@ -709,7 +854,46 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         responseSize = 0;
       }
 
-      // Log the successful request
+      // Prepare headers for logging (filter sensitive data)
+      const requestHeadersForLog = filterHeaders(forwardHeaders);
+      const responseHeadersForLog: Record<string, string> = {};
+      for (const [key, value] of response.headers.entries()) {
+        responseHeadersForLog[key] = value;
+      }
+      const filteredResponseHeaders = filterHeaders(responseHeadersForLog);
+
+      // Capture request body for logging (text-based only)
+      let requestBodyForLog: string | undefined;
+      let requestBodyTruncated = false;
+      if (body && requestBodySize && requestBodySize < 100 * 1024) {
+        const reqContentType = forwardHeaders['content-type'] || '';
+        if (reqContentType.includes('json') || reqContentType.includes('text') ||
+            reqContentType.includes('xml') || reqContentType.includes('form-urlencoded')) {
+          const { body: truncBody, truncated } = truncateBody(body.toString('utf-8'));
+          requestBodyForLog = truncBody;
+          requestBodyTruncated = truncated;
+        }
+      }
+
+      // Capture response body for logging (text-based only)
+      let responseBodyForLog: string | undefined;
+      let responseBodyTruncated = false;
+      const respContentType = response.headers.get('content-type') || '';
+      if (respContentType.includes('json') || respContentType.includes('text') ||
+          respContentType.includes('xml') || respContentType.includes('javascript')) {
+        if (responseBodyBuffer && responseSize && responseSize < 100 * 1024) {
+          try {
+            const responseBodyText = responseBodyBuffer.toString('utf-8');
+            const { body: truncBody, truncated } = truncateBody(responseBodyText);
+            responseBodyForLog = truncBody;
+            responseBodyTruncated = truncated;
+          } catch {
+            // Binary or encoding issue, skip
+          }
+        }
+      }
+
+      // Log the successful request with full details
       addProxyLog(port, {
         timestamp: startTime,
         method: request.method,
@@ -720,7 +904,13 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         requestSize: requestBodySize,
         responseSize,
         contentType,
-        error: null
+        error: null,
+        requestHeaders: requestHeadersForLog,
+        responseHeaders: filteredResponseHeaders,
+        requestBody: requestBodyForLog,
+        responseBody: responseBodyForLog,
+        requestBodyTruncated,
+        responseBodyTruncated
       });
 
       // Return to prevent further processing

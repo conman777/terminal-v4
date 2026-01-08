@@ -689,6 +689,7 @@ function AppContent() {
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
 
   const mainContentRef = useRef(null);
+  const focusTerminalRef = useRef(null);
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
@@ -706,11 +707,20 @@ function AppContent() {
   const handleToggleKeybar = useCallback(() => {
     const willOpen = !keybarOpen;
     setKeybarOpen(willOpen);
-    // When opening keybar, ensure header is visible
+    // When opening keybar, ensure header is visible and focus terminal
     if (willOpen) {
       resetScrollDirection();
+      // Focus terminal immediately - iOS requires this in same call stack as user tap
+      if (focusTerminalRef.current) {
+        focusTerminalRef.current();
+      }
     }
   }, [keybarOpen, resetScrollDirection]);
+
+  // Register focus terminal callback from MobileTerminalCarousel
+  const handleRegisterFocusTerminal = useCallback((focusFn) => {
+    focusTerminalRef.current = focusFn;
+  }, []);
 
   // Session activity tracking for unread indicators
   const {
@@ -1305,6 +1315,7 @@ function AppContent() {
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
                   onScrollDirection={handleScrollDirectionSafe}
+                  onRegisterFocusTerminal={handleRegisterFocusTerminal}
                 />
               </div>
             )}

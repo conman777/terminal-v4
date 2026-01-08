@@ -1,14 +1,14 @@
 /**
  * Preview Logs Service
  *
- * Stores console logs, errors, and network requests from preview apps
- * so Claude Code can query them for debugging.
+ * Stores console logs, errors, network requests, DOM snapshots, and storage data
+ * from preview apps so Claude Code can query them for debugging.
  */
 
 export interface PreviewLogEntry {
   id: string;
   timestamp: number;
-  type: 'console' | 'error' | 'network';
+  type: 'console' | 'error' | 'network' | 'dom' | 'storage';
   // Console fields
   level?: 'log' | 'warn' | 'error' | 'info' | 'debug';
   message?: string;
@@ -23,8 +23,18 @@ export interface PreviewLogEntry {
   status?: number;
   statusText?: string;
   duration?: number;
-  responsePreview?: string;
+  responsePreview?: string;  // Deprecated, use responseBody
   error?: string;
+  // Enhanced network fields
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+  requestBody?: string;
+  responseBody?: string;
+  // DOM snapshot fields
+  html?: string;
+  // Storage fields
+  localStorage?: Record<string, string>;
+  sessionStorage?: Record<string, string>;
 }
 
 interface PortLogData {
@@ -80,7 +90,7 @@ export function addLogs(port: number, entries: Omit<PreviewLogEntry, 'id'>[]): P
 }
 
 export interface GetLogsOptions {
-  type?: 'console' | 'error' | 'network';
+  type?: 'console' | 'error' | 'network' | 'dom' | 'storage';
   level?: 'log' | 'warn' | 'error' | 'info' | 'debug';
   since?: number;
   limit?: number;

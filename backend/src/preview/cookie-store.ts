@@ -1,14 +1,17 @@
 // Server-side cookie store for preview proxy
 // Acts as a browser-like cookie jar for each previewed app
+// Persists to disk so cookies survive backend restarts
 
 import { parse as parseCookie, serialize as serializeCookie } from 'cookie';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface StoredCookie {
   name: string;
   value: string;
   path?: string;
   domain?: string;
-  expires?: Date;
+  expires?: Date | string; // Can be string when loaded from JSON
   maxAge?: number;
   httpOnly?: boolean;
   secure?: boolean;
@@ -18,6 +21,83 @@ interface StoredCookie {
 
 // Cookie store keyed by port number
 const cookieStores = new Map<number, Map<string, StoredCookie>>();
+
+// Persistence configuration
+const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const COOKIE_FILE = path.join(DATA_DIR, 'preview-cookies.json');
+let saveTimeout: NodeJS.Timeout | null = null;
+
+// Load cookies from disk on startup
+function loadCookiesFromDisk(): void {
+  try {
+    if (!fs.existsSync(COOKIE_FILE)) return;
+
+    const data = fs.readFileSync(COOKIE_FILE, 'utf-8');
+    const parsed = JSON.parse(data) as Record<string, Record<string, StoredCookie>>;
+
+    for (const [portStr, cookies] of Object.entries(parsed)) {
+      const port = parseInt(portStr, 10);
+      const portStore = new Map<string, StoredCookie>();
+
+      for (const [key, cookie] of Object.entries(cookies)) {
+        // Convert expires string back to Date if present
+        if (cookie.expires) {
+          cookie.expires = new Date(cookie.expires);
+        }
+        // Skip expired cookies
+        if (!isCookieExpired(cookie)) {
+          portStore.set(key, cookie);
+        }
+      }
+
+      if (portStore.size > 0) {
+        cookieStores.set(port, portStore);
+      }
+    }
+
+    console.log(`[cookie-store] Loaded cookies for ${cookieStores.size} ports`);
+  } catch (err) {
+    console.error('[cookie-store] Failed to load cookies from disk:', err);
+  }
+}
+
+// Save cookies to disk (debounced)
+function saveCookiesToDisk(): void {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+
+  saveTimeout = setTimeout(() => {
+    try {
+      // Ensure data directory exists
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+
+      const data: Record<string, Record<string, StoredCookie>> = {};
+
+      for (const [port, store] of cookieStores.entries()) {
+        const portCookies: Record<string, StoredCookie> = {};
+        for (const [key, cookie] of store.entries()) {
+          // Skip expired cookies when saving
+          if (!isCookieExpired(cookie)) {
+            portCookies[key] = cookie;
+          }
+        }
+        if (Object.keys(portCookies).length > 0) {
+          data[port.toString()] = portCookies;
+        }
+      }
+
+      fs.writeFileSync(COOKIE_FILE, JSON.stringify(data, null, 2));
+    } catch (err) {
+      console.error('[cookie-store] Failed to save cookies to disk:', err);
+    }
+  }, 1000); // Debounce 1 second
+}
+
+// Load cookies on module initialization
+loadCookiesFromDisk();
 
 // Parse Set-Cookie header into StoredCookie
 function parseSetCookie(header: string): StoredCookie | null {
@@ -78,7 +158,11 @@ function isCookieExpired(cookie: StoredCookie): boolean {
     return Date.now() > expiresAt;
   }
   if (cookie.expires) {
-    return Date.now() > cookie.expires.getTime();
+    // Handle both Date objects and strings (from JSON deserialization)
+    const expiresTime = cookie.expires instanceof Date
+      ? cookie.expires.getTime()
+      : new Date(cookie.expires).getTime();
+    return Date.now() > expiresTime;
   }
   return false; // Session cookie, never expires (until cleared)
 }
@@ -111,8 +195,12 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
       const key = `${cookie.name}:${cookie.path || '/'}`;
 
       // Check if this is a delete operation (empty value or past expiry)
+      const expiresTime = cookie.expires instanceof Date
+        ? cookie.expires.getTime()
+        : cookie.expires ? new Date(cookie.expires).getTime() : null;
+
       if (cookie.value === '' ||
-          (cookie.expires && cookie.expires.getTime() < Date.now()) ||
+          (expiresTime && expiresTime < Date.now()) ||
           (cookie.maxAge !== undefined && cookie.maxAge <= 0)) {
         store.delete(key);
       } else {
@@ -120,6 +208,9 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
       }
     }
   }
+
+  // Persist to disk
+  saveCookiesToDisk();
 }
 
 /**
@@ -160,6 +251,7 @@ export function getCookieHeader(port: number, requestPath: string): string | nul
  */
 export function clearCookies(port: number): void {
   cookieStores.delete(port);
+  saveCookiesToDisk();
 }
 
 /**

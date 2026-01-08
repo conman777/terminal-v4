@@ -1,6 +1,21 @@
 // Server-side request log store for preview proxy
 // Captures all requests going through the proxy for debugging
 
+// Max body size to capture (50KB)
+const MAX_BODY_SIZE = 50 * 1024;
+
+// Headers to filter out for security
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'x-auth-token',
+  'x-api-key',
+  'api-key',
+  'x-csrf-token',
+  'x-xsrf-token'
+]);
+
 export interface ProxyLogEntry {
   id: string;
   timestamp: number;
@@ -13,6 +28,41 @@ export interface ProxyLogEntry {
   responseSize: number | null;
   contentType: string | null;
   error: string | null;
+  // New fields for full network logging
+  requestHeaders?: Record<string, string>;
+  responseHeaders?: Record<string, string>;
+  requestBody?: string;
+  responseBody?: string;
+  requestBodyTruncated?: boolean;
+  responseBodyTruncated?: boolean;
+}
+
+/**
+ * Filter sensitive headers from a headers object
+ */
+export function filterHeaders(headers: Record<string, string>): Record<string, string> {
+  const filtered: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (!SENSITIVE_HEADERS.has(key.toLowerCase())) {
+      filtered[key] = value;
+    } else {
+      filtered[key] = '[REDACTED]';
+    }
+  }
+  return filtered;
+}
+
+/**
+ * Truncate body if too large
+ */
+export function truncateBody(body: string): { body: string; truncated: boolean } {
+  if (body.length <= MAX_BODY_SIZE) {
+    return { body, truncated: false };
+  }
+  return {
+    body: body.slice(0, MAX_BODY_SIZE) + '\n... [truncated at 50KB]',
+    truncated: true
+  };
 }
 
 // Log store keyed by port number
@@ -72,4 +122,11 @@ export function getLatestLogTimestamp(port: number): number {
   const logs = logStores.get(port);
   if (!logs || logs.length === 0) return 0;
   return logs[logs.length - 1].timestamp;
+}
+
+/**
+ * Get all ports that have been previewed (have logs)
+ */
+export function getActivePreviewPorts(): number[] {
+  return Array.from(logStores.keys()).sort((a, b) => a - b);
 }

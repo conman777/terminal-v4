@@ -18,7 +18,8 @@ import {
   PROJECT_ROOT
 } from '../utils/path-security';
 import { clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
-import { getProxyLogs, clearProxyLogs } from '../preview/request-log-store';
+import { getProxyLogs, clearProxyLogs, getActivePreviewPorts } from '../preview/request-log-store';
+import { exec } from 'node:child_process';
 
 export interface CoreRouteDependencies {
   terminalManager: TerminalManager;
@@ -649,5 +650,91 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
     }
     clearProxyLogs(port);
     reply.send({ success: true, port });
+  });
+
+  // Preview: List active/available ports for preview
+  app.get('/api/preview/active-ports', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    // Get ports that have been previewed (from log store)
+    const previewedPorts = getActivePreviewPorts();
+
+    // Scan for listening ports with process names and working directories
+    const portInfo = await new Promise<Map<number, { process: string; cwd: string | null }>>((resolve) => {
+      // ss -tlnp output format: LISTEN  0  128  *:3000  *:*  users:(("node",pid=1234,fd=12))
+      exec('ss -tlnp 2>/dev/null | grep LISTEN', async (error, stdout) => {
+        const portMap = new Map<number, { process: string; cwd: string | null }>();
+        if (error) {
+          resolve(portMap);
+          return;
+        }
+        const lines = stdout.trim().split('\n');
+        const cwdPromises: Promise<void>[] = [];
+
+        for (const line of lines) {
+          // Extract port from 4th column (e.g., *:3000 or 0.0.0.0:3000 or [::]:3000)
+          const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
+          if (!portMatch) continue;
+          const port = parseInt(portMatch[1], 10);
+          if (isNaN(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
+
+          // Extract process name and PID from users:(("name",pid=1234,...)) format
+          const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+          const processName = processMatch ? processMatch[1] : '';
+          const pid = processMatch ? processMatch[2] : null;
+
+          portMap.set(port, { process: processName, cwd: null });
+
+          // Try to get the working directory for more context
+          if (pid) {
+            const cwdPromise = new Promise<void>((cwdResolve) => {
+              exec(`readlink /proc/${pid}/cwd 2>/dev/null`, (err, cwdStdout) => {
+                if (!err && cwdStdout.trim()) {
+                  const cwd = cwdStdout.trim();
+                  // Get just the last directory name
+                  const dirName = cwd.split('/').filter(Boolean).pop() || cwd;
+                  const existing = portMap.get(port);
+                  if (existing) {
+                    existing.cwd = dirName;
+                  }
+                }
+                cwdResolve();
+              });
+            });
+            cwdPromises.push(cwdPromise);
+          }
+        }
+
+        await Promise.all(cwdPromises);
+        resolve(portMap);
+      });
+    });
+
+    const listeningPorts = Array.from(portInfo.keys());
+
+    // Common dev ports to highlight
+    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8888];
+
+    // Combine and dedupe
+    const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
+
+    // Build response with metadata
+    const ports = allPorts.map(port => {
+      const info = portInfo.get(port);
+      return {
+        port,
+        listening: listeningPorts.includes(port),
+        previewed: previewedPorts.includes(port),
+        common: commonDevPorts.includes(port),
+        process: info?.process || null,
+        cwd: info?.cwd || null
+      };
+    });
+
+    reply.send({ ports });
   });
 }

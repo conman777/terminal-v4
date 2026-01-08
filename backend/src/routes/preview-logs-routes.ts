@@ -71,7 +71,7 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
   }, async (request: FastifyRequest<{
     Params: { port: string };
     Querystring: {
-      type?: 'console' | 'error' | 'network';
+      type?: 'console' | 'error' | 'network' | 'dom' | 'storage';
       level?: 'log' | 'warn' | 'error' | 'info' | 'debug';
       since?: string;
       limit?: string;

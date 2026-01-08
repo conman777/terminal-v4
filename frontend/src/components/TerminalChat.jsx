@@ -9,7 +9,7 @@ import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onActivityChange, onConnectionChange, onCwdChange }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -28,6 +28,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const idleTimerRef = useRef(null);
   const audioCtxRef = useRef(null);
   const faviconIntervalRef = useRef(null);
+  const touchStateRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
@@ -48,6 +49,90 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onRegisterImageUpload(() => imageInputRef.current?.click());
     }
   }, [onRegisterImageUpload]);
+
+  const setMobileInputEnabled = useCallback((enabled) => {
+    if (!isMobile) return;
+    const term = xtermRef.current;
+    if (!term) return;
+    const textarea = term.textarea;
+    if (!textarea) return;
+
+    if (enabled) {
+      // Move on-screen for iOS keyboard activation (must be visible)
+      textarea.style.left = '0';
+      textarea.style.top = '0';
+      textarea.style.width = '1px';
+      textarea.style.height = '1px';
+      textarea.style.opacity = '0.01';
+      textarea.style.zIndex = '1';
+      textarea.style.pointerEvents = 'none';
+      textarea.readOnly = false;
+      textarea.inputMode = 'text';
+      term.focus();
+    } else {
+      // Move off-screen and disable
+      textarea.blur();
+      textarea.style.left = '-9999px';
+      textarea.style.opacity = '1';
+      textarea.style.zIndex = '-1';
+      textarea.style.pointerEvents = 'auto';
+      textarea.readOnly = true;
+      textarea.inputMode = 'none';
+    }
+  }, [isMobile]);
+
+  const handleTerminalTap = useCallback((event) => {
+    if (!isMobile || event?.defaultPrevented) return;
+    const target = event?.target;
+    if (target instanceof Element) {
+      if (target.closest('button, input, textarea, select, a')) {
+        return;
+      }
+    }
+    setMobileInputEnabled(true);
+  }, [isMobile, setMobileInputEnabled]);
+
+  const handleTouchStartCapture = useCallback((event) => {
+    if (!isMobile) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    touchStateRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      moved: false
+    };
+  }, [isMobile]);
+
+  const handleTouchMoveCapture = useCallback((event) => {
+    const state = touchStateRef.current;
+    if (!state) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    if (Math.abs(touch.clientX - state.x) > 8 || Math.abs(touch.clientY - state.y) > 8) {
+      state.moved = true;
+    }
+  }, []);
+
+  const handleTouchEndCapture = useCallback((event) => {
+    if (!isMobile) return;
+    const state = touchStateRef.current;
+    touchStateRef.current = null;
+    if (!state || state.moved) return;
+    handleTerminalTap(event);
+  }, [isMobile, handleTerminalTap]);
+
+  const handleTouchCancelCapture = useCallback(() => {
+    touchStateRef.current = null;
+  }, []);
+
+  // Register focus terminal trigger for iOS keyboard activation
+  // iOS requires focus to happen in the same call stack as user interaction
+  // AND the element must be VISIBLE on screen (not at left: -9999px)
+  useEffect(() => {
+    if (onRegisterFocusTerminal) {
+      onRegisterFocusTerminal(() => setMobileInputEnabled(true));
+    }
+  }, [onRegisterFocusTerminal, setMobileInputEnabled]);
 
   // Update document.title with active session name
   useEffect(() => {
@@ -91,6 +176,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Track if we're in tmux copy mode
   const inCopyModeRef = useRef(false);
   const copyModeTimeoutRef = useRef(null);
+  const copyModeBufferRef = useRef([]); // Buffer data while in copy-mode
 
   // Track if user is actively scrolling (to suppress idle sound)
   const isScrollingRef = useRef(false);
@@ -128,6 +214,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Actually exit tmux copy-mode by sending 'q'
       sendToTerminal('q');
       inCopyModeRef.current = false;
+      // Flush any buffered data from while we were in copy-mode
+      if (copyModeBufferRef.current.length > 0) {
+        const bufferedData = copyModeBufferRef.current.join('');
+        copyModeBufferRef.current = [];
+        xtermRef.current?.write(bufferedData);
+      }
     }, 3000);
   }, [sendToTerminal]);
 
@@ -165,6 +257,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const scrollUp = useCallback(() => scrollInTmux('up'), [scrollInTmux]);
   const scrollDown = useCallback(() => scrollInTmux('down'), [scrollInTmux]);
 
+  // Flush buffered data when exiting copy-mode
+  const flushCopyModeBuffer = useCallback(() => {
+    const term = xtermRef.current;
+    if (!term || copyModeBufferRef.current.length === 0) return;
+    const bufferedData = copyModeBufferRef.current.join('');
+    copyModeBufferRef.current = [];
+    term.write(bufferedData);
+  }, []);
+
   // Jump to live output - exits tmux copy-mode and scrolls xterm to bottom
   const jumpToLive = useCallback(() => {
     const term = xtermRef.current;
@@ -177,9 +278,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     inCopyModeRef.current = false;
     clearTimeout(copyModeTimeoutRef.current);
 
+    // Flush any buffered data from while we were in copy-mode
+    flushCopyModeBuffer();
+
     // Also scroll xterm to bottom in case it has its own scrollback
     term.scrollToBottom();
-  }, [sendToTerminal]);
+  }, [sendToTerminal, flushCopyModeBuffer]);
 
   // Track last scroll time for acceleration
   const lastScrollTimeRef = useRef(0);
@@ -474,6 +578,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         textarea.style.left = '-9999px';
         textarea.addEventListener('compositionstart', handleCompositionStart);
         textarea.addEventListener('compositionend', handleCompositionEnd);
+        // On mobile, disable keyboard by default (keybar controls when it appears)
+        if (isMobile) {
+          textarea.readOnly = true;
+          textarea.inputMode = 'none';
+        }
       }
 
       // Scroll direction detection for header collapse (throttled to max 10 calls/sec)
@@ -642,8 +751,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           // Preserve scroll position - only auto-scroll if user is at bottom
           const buffer = term.buffer?.active;
+          const baseY = buffer?.baseY || 0;
           const viewportYBefore = buffer?.viewportY ?? 0;
-          const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+          const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
+
+          // When in tmux copy-mode (baseY === 0, tmux managing scrollback),
+          // buffer data instead of writing it - prevents tmux from exiting copy-mode
+          if (baseY === 0 && inCopyModeRef.current) {
+            copyModeBufferRef.current.push(data);
+            return; // Don't write data while in copy-mode
+          }
 
           term.write(data);
 
@@ -749,6 +866,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           sendTerminalInput('\x1b\x1b'); // Double ESC to fully exit copy-mode
           inCopyModeRef.current = false;
           clearTimeout(copyModeTimeoutRef.current);
+          // Flush any buffered data from while we were in copy-mode
+          if (copyModeBufferRef.current.length > 0) {
+            const bufferedData = copyModeBufferRef.current.join('');
+            copyModeBufferRef.current = [];
+            term.write(bufferedData);
+          }
         }
 
         // Mark that user has typed - enables idle sound
@@ -952,7 +1075,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       fitAddonRef.current = null;
     };
-  }, [sessionId, onUrlDetected, fontSize, isMobile]);
+  // Note: fontSize intentionally excluded - handled by separate effect below
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, onUrlDetected, isMobile]);
+
+  // Handle font size changes without recreating terminal
+  useEffect(() => {
+    if (!xtermRef.current || !fitAddonRef.current) return;
+    const term = xtermRef.current;
+    const newSize = fontSize || (isMobile ? 20 : 14);
+    if (term.options.fontSize !== newSize) {
+      term.options.fontSize = newSize;
+      fitAddonRef.current.fit();
+    }
+  }, [fontSize, isMobile]);
 
   // Handle keybar/viewport changes with debounced fit (avoids triple-fit flashing)
   useEffect(() => {
@@ -981,12 +1117,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }, 150);
   }, [keybarOpen, viewportHeight]);
 
+  // On mobile, control keyboard by moving textarea on/off screen
+  // iOS Safari requires element to be VISIBLE on screen for keyboard to appear
+  useEffect(() => {
+    if (!isMobile) return;
+    setMobileInputEnabled(keybarOpen);
+  }, [isMobile, keybarOpen, setMobileInputEnabled]);
+
   return (
     <div
       className="terminal-chat"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleImageDrop}
+      onClick={handleTerminalTap}
+      onTouchStartCapture={handleTouchStartCapture}
+      onTouchMoveCapture={handleTouchMoveCapture}
+      onTouchEndCapture={handleTouchEndCapture}
+      onTouchCancelCapture={handleTouchCancelCapture}
     >
       <div ref={terminalRef} className="xterm-container"></div>
 

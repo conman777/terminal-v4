@@ -14,6 +14,8 @@ const PUBLIC_ROUTE_PATTERNS = [
   /^\/api\/preview\/\d+\/logs$/, // Preview logs per port (client-side)
   /^\/api\/preview\/logs$/,      // List all preview logs
   /^\/api\/preview\/external\/logs$/, // External preview logs
+  /^\/api\/preview\/\d+\/process-logs$/, // Server-side process logs per port
+  /^\/api\/process-logs(\/\d+)?$/, // Process logs by PID or list all
   /^\/api\/browser\//            // Browser automation API
 ];
 

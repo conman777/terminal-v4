@@ -11,7 +11,8 @@ export function MobileTerminalCarousel({
   viewportHeight,
   onUrlDetected,
   fontSize,
-  onScrollDirection
+  onScrollDirection,
+  onRegisterFocusTerminal
 }) {
   // Clamp index to valid range when sessions change
   useEffect(() => {
@@ -75,6 +76,7 @@ export function MobileTerminalCarousel({
           fontSize={fontSize}
           onScrollDirection={onScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
+          onRegisterFocusTerminal={onRegisterFocusTerminal}
         />
       </div>
 
