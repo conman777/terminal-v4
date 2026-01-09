@@ -2,375 +2,231 @@
 
 ## Overview
 
-Terminal v4 is a web-based terminal emulator providing remote access to system command-line interfaces (cmd/PowerShell/bash) through a browser. The system consists of two main components:
+Terminal v4 is a web-based terminal and development cockpit. It combines:
+- A PTY-backed terminal (xterm.js + node-pty)
+- Claude Code sessions (Claude CLI via PTY)
+- Preview tooling for local dev servers and external sites
+- File management, project scanning, process control, and voice input
 
-1. **Backend** - Fastify server managing PTY terminal processes
-2. **Frontend** - React SPA with xterm.js providing the terminal UI
+The system is split into a React SPA frontend and a Fastify backend. The backend
+also serves the built frontend in production.
 
 ## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                         Browser                              │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │              Frontend (React + Vite)                   │  │
-│  │  - Terminal session sidebar                           │  │
-│  │  - xterm.js terminal emulator                         │  │
-│  │  - Settings modal (working directory config)          │  │
-│  │  - Session management (create/close)                  │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                            │                                 │
-│                            │ HTTP / WebSocket                │
-│                            ▼                                 │
-└─────────────────────────────────────────────────────────────┘
-                             │
-                             │
-┌─────────────────────────────────────────────────────────────┐
-│                    Backend (Fastify)                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              Terminal Manager                         │   │
-│  │  - Creates/manages terminal processes                │   │
-│  │  - Uses node-pty for full PTY emulation             │   │
-│  │  - Buffers output history                           │   │
-│  │  - Supports multiple concurrent sessions            │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                            │                                 │
-│  ┌────────────────────────▼──────────────────────────────┐  │
-│  │              API Routes                                │  │
-│  │  GET  /api/health       - Server health check        │  │
-│  │  GET  /api/terminal     - List terminal sessions     │  │
-│  │  POST /api/terminal     - Create terminal session    │  │
-│  │  GET  /api/terminal/:id/history - Get history        │  │
-│  │  GET  /api/terminal/:id/ws      - WebSocket I/O stream   │  │
-│  │  POST /api/terminal/:id/input   - Send input         │  │
-│  │  DELETE /api/terminal/:id       - Close session      │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                            │                                 │
-└────────────────────────────┼─────────────────────────────────┘
-                             │ spawn PTY
-                             ▼
-                  ┌────────────────────┐
-                  │  cmd.exe / bash    │
-                  │  (PTY Process)     │
-                  └────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                               Browser                                  │
+│  ┌───────────────────────────────────────────────────────────────────┐ │
+│  │ Frontend (React + Vite)                                            │ │
+│  │ - Terminal UI (xterm.js)                                           │ │
+│  │ - Claude Code panel                                                │ │
+│  │ - Preview panel + logs                                             │ │
+│  │ - File manager / process manager / settings                        │ │
+│  │ - Mobile keybar + voice input                                      │ │
+│  └───────────────────────────────────────────────────────────────────┘ │
+│     HTTP + SSE + WebSocket (JWT)                                       │
+└────────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Backend (Fastify)                             │
+│  - Auth (JWT + refresh tokens)                                         │
+│  - Terminal Manager (node-pty + tmux optional)                         │
+│  - Claude Code Manager (Claude CLI via PTY)                            │
+│  - Preview/Proxy (preview subdomain, dev proxy, external proxy)        │
+│  - File + project services                                             │
+│  - Process manager + logs                                              │
+│  - Browser automation (Playwright)                                     │
+│  - Voice transcription (Groq API)                                      │
+└────────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+                  ┌───────────────────────────────┐
+                  │  PTY Processes + Local Ports  │
+                  │  (shell, dev servers, Claude) │
+                  └───────────────────────────────┘
 ```
 
-## Components
+## Backend Components
 
-### Frontend (Port 5173)
+### Auth (JWT)
+- Access tokens are JWTs; refresh tokens are stored hashed in SQLite.
+- Registration is disabled (`/api/auth/register` returns 403).
+- `ALLOWED_USERNAME` can restrict logins to a single username.
+- Auth hook applies to all `/api/*` routes except explicit public routes.
+- SSE and WebSocket clients can pass `?token=` when headers are unavailable.
 
-React application providing the terminal user interface:
+Key files:
+- `backend/src/auth/auth-service.ts`
+- `backend/src/auth/auth-routes.ts`
+- `backend/src/auth/auth-hook.ts`
 
-**Technologies:**
-- React 18
-- Vite (dev server + build tool)
-- xterm.js (terminal emulator)
-- xterm-addon-fit (responsive terminal sizing)
+### Terminal Manager
+- Uses `@homebridge/node-pty-prebuilt-multiarch` to spawn real PTYs.
+- Optional tmux integration for persistence across restarts (Linux/macOS).
+- Sessions are stored per-user as JSON for history and metadata.
+- WebSocket stream (`/api/terminal/:id/ws`) is the primary IO channel.
 
-**Key Features:**
-- **Session Sidebar**: Lists all active terminal sessions
-- **Terminal Display**: xterm.js renders ANSI escape codes properly
-- **Settings Modal**: Configure default working directory for new terminals
-- **Session Controls**:
-  - "New" button to create terminals
-  - × button to close terminals
-  - Click to switch between terminals
+Key files:
+- `backend/src/terminal/terminal-manager.ts`
+- `backend/src/terminal/session-store.ts`
+- `backend/src/terminal/tmux-manager.ts`
 
-**State Management:**
-- Terminal sessions list (fetched from API)
-- Active terminal ID
-- Settings (persisted to localStorage)
+### Claude Code Manager
+- Wraps the Claude CLI using PTY to keep terminal behavior consistent.
+- Events are streamed over SSE (`/api/claude-code/:id/stream`).
+- Sessions are persisted per user as JSON.
 
-### Backend (Port 3020)
+Key files:
+- `backend/src/claude-code/claude-code-manager.ts`
+- `backend/src/claude-code/claude-code-routes.ts`
+- `backend/src/claude-code/claude-code-store.ts`
 
-Fastify server managing terminal processes:
+### Preview + Proxy
+Supports three preview modes:
+1. **File preview**: `/api/preview?path=...&file=...` serves static files
+   inside the project root.
+2. **Local dev servers**: `preview-{port}.conordart.com` proxies to
+   `localhost:{port}`, injects debug scripts, and maintains cookies.
+3. **External sites**: `/api/proxy-external?url=...` proxies external HTTP(S)
+   content and injects a lightweight debug logger.
 
-**Technologies:**
-- Fastify 5.x (high-performance web framework)
-- TypeScript
-- @homebridge/node-pty-prebuilt-multiarch (PTY support)
-- Zod (schema validation)
+Note: the preview subdomain domain (`conordart.com`) is hard-coded in both the
+frontend and backend. Update `frontend/src/components/PreviewPanel.jsx` and
+`backend/src/routes/preview-subdomain-routes.ts` if you deploy on a different
+domain.
 
-**Terminal Manager:**
-- Creates real terminal processes using node-pty
-- Each terminal = separate cmd.exe/bash process
-- Buffers output history for late-joining clients
-- Pub/sub pattern for real-time streaming
-- Auto-cleanup on process exit
+Debug tooling:
+- Injected scripts capture console, errors, and network activity.
+- Logs are stored in-memory for Claude Code and the preview UI.
+- Cookie jar is persisted to disk.
 
-**Session Lifecycle:**
-1. Client creates terminal via POST request
-2. Backend spawns PTY process
-3. Process output buffered + streamed via WebSocket
-4. Client sends input via WebSocket
-5. Client closes terminal via DELETE request
-6. Backend kills process and cleans up
+Key files:
+- `backend/src/routes/preview-routes.ts`
+- `backend/src/routes/preview-subdomain-routes.ts`
+- `backend/src/routes/dev-proxy-routes.ts`
+- `backend/src/routes/external-proxy-routes.ts`
+- `backend/src/preview/*`
 
-## Data Flow
+### File + Project Services
+- File manager supports list, upload, download, rename, delete, unzip.
+- Project scanner finds git repositories and tracks custom scan paths.
+- Path resolution uses helpers in `path-security.ts`.
 
-### Creating a Terminal
+Key files:
+- `backend/src/routes/file-routes.ts`
+- `backend/src/services/project-scanner.ts`
+- `backend/src/utils/path-security.ts`
 
-```
-Browser                 Frontend              Backend            PTY Process
-   │                       │                     │                    │
-   │   Click "New"         │                     │                    │
-   ├──────────────────────>│                     │                    │
-   │                       │  POST /api/terminal │                    │
-   │                       ├────────────────────>│                    │
-   │                       │                     │  spawn()           │
-   │                       │                     ├───────────────────>│
-   │                       │  201 {session}      │                    │
-   │                       │<────────────────────┤                    │
-   │   Display terminal    │                     │                    │
-   │<──────────────────────┤                     │                    │
-   │                       │  WS /api/terminal/:id/ws │              │
-   │                       ├────────────────────>│                    │
-   │                       │  ...output...       │                    │
-   │                       │<────────────────────┤                    │
-```
+### Process Manager
+- Detects running dev servers by scanning listening ports.
+- Can start/stop repos based on project type.
+- Captures process logs with port association.
 
-### Sending Input
+Key files:
+- `backend/src/processes/process-service.ts`
+- `backend/src/preview/process-log-store.ts`
 
-```
-Browser                 Frontend              Backend            PTY Process
-   │                       │                     │                    │
-   │   Type "ls"           │                     │                    │
-   ├──────────────────────>│                     │                    │
-   │                       │  WS send "ls"       │                    │
-   │                       ├────────────────────>│                    │
-   │                       │                     │  write("ls")       │
-   │                       │                     ├───────────────────>│
-   │                       │                     │                    │
-   │                       │                     │  output stream     │
-   │                       │  WS messages        │<───────────────────┤
-   │                       │<────────────────────┤                    │
-   │   Render output       │                     │                    │
-   │<──────────────────────┤                     │                    │
-```
+### Browser Automation
+- Playwright-backed browser control API (public endpoints).
+- Supports navigation, interaction, screenshots, and DOM queries.
 
-### Closing a Terminal
+Key files:
+- `backend/src/routes/browser-routes.ts`
+- `backend/src/browser/*`
 
-```
-Browser                 Frontend              Backend            PTY Process
-   │                       │                     │                    │
-   │   Click ×             │                     │                    │
-   ├──────────────────────>│                     │                    │
-   │                       │  DELETE /terminal   │                    │
-   │                       ├────────────────────>│                    │
-   │                       │                     │  kill()            │
-   │                       │                     ├───────────────────>│
-   │                       │  204 No Content     │                    X
-   │                       │<────────────────────┤
-   │   Remove from UI      │                     │
-   │<──────────────────────┤                     │
-```
+### Settings + Transcribe
+- User settings stored in SQLite (`user_settings`), currently Groq API key.
+- `/api/transcribe` uses Groq Whisper for voice input.
 
-## Key Technical Decisions
+Key files:
+- `backend/src/routes/settings-routes.ts`
+- `backend/src/routes/transcribe-routes.ts`
 
-### PTY vs Simple spawn()
+## Frontend Architecture
 
-**Why PTY (node-pty)?**
-- ✅ True terminal emulation (TERM=xterm-256color)
-- ✅ Interactive programs work (vim, python REPL, claude CLI)
-- ✅ Proper ANSI escape code support
-- ✅ Terminal resizing support
+### State Providers
+- `AuthContext` manages login/session tokens.
+- `TerminalSessionContext` handles terminal sessions, bookmarks, projects.
+- `ClaudeCodeContext` manages Claude Code sessions and mode switching.
+- `PreviewContext` owns preview URL + PiP state.
+- `PaneLayoutContext` stores split-pane layout for terminals.
 
-**Simple spawn() doesn't support:**
-- ❌ Programs that detect non-TTY and change behavior
-- ❌ Terminal control codes
-- ❌ Interactive input/output
+### Key UI Components
+- `TerminalChat` integrates xterm.js and WebSocket IO.
+- `PreviewPanel` renders local/external previews and log panes.
+- `MobileTerminalCarousel` handles swipe navigation on mobile.
+- `MobileKeybar` provides a dedicated control row for mobile key input.
+- `FileManager` and `ProcessManagerModal` for file/process operations.
 
-### WebSocket for Input/Output
+## Key Data Flows
 
-**Why WebSockets?**
-- ✅ Bidirectional streaming for input/output
-- ✅ Lower latency than per-keystroke HTTP requests
-- ✅ Browser support excellent
-- ✅ Fastify support via @fastify/websocket
+### Authentication
+1. User logs in via `/api/auth/login`.
+2. Access/refresh tokens stored in localStorage.
+3. `apiFetch` attaches `Authorization: Bearer` to requests.
+4. Token refresh happens automatically on 401 responses.
 
-Input goes via WebSocket messages (client ↔ server).
+### Terminal Sessions
+1. Create session via `POST /api/terminal`.
+2. Connect to `/api/terminal/:id/ws` for IO (token in query).
+3. Server sends a `clientId` JSON frame on connect.
+4. Client sends raw keystrokes; server streams raw output.
+5. Sessions are persisted as JSON history snapshots.
 
-### Terminal Persistence with tmux
+### Claude Code Sessions
+1. Start via `POST /api/claude-code/start`.
+2. Stream events over SSE at `/api/claude-code/:id/stream`.
+3. Persist sessions for later restore.
 
-**Platform-specific behavior:**
+### Preview Pipeline
+1. Terminal output is scanned for dev server URLs.
+2. Preview panel transforms URLs into a preview-safe URL:
+   - Static files -> `/api/preview`.
+   - Local servers -> `preview-{port}.conordart.com`.
+   - External -> `/api/proxy-external`.
+3. Injected scripts send logs to `/api/preview/*/logs`.
 
-**Windows:** Each terminal = separate process (no tmux)
-- Direct node-pty process management
-- Sessions lost on server restart
-- xterm.js manages scrollback buffer
+## Persistence and Data Storage
 
-**Linux:** Each terminal = tmux session
-- tmux provides session persistence across server restarts
-- Sessions survive disconnection and can be reattached
-- tmux manages scrollback buffer (not xterm.js)
+### SQLite (terminal.db)
+Location: `backend/data/terminal.db` by default, overridden by
+`TERMINAL_DATA_DIR`. Stores:
+- `users`
+- `refresh_tokens`
+- `user_settings`
 
-**tmux Manager (`backend/src/terminal/tmux-manager.ts`):**
-- Detects if tmux is available on the system
-- Creates tmux sessions with prefix `terminal-app-{sessionId}`
-- Attaches to existing sessions on reconnection
-- Handles resize commands for tmux windows
+### File-Based Stores (JSON)
+Under `backend/data/users/<userId>/`:
+- `sessions/*.json` (terminal history)
+- `claude-code/*.json`
+- `bookmarks.json`
 
-### Mobile Scrolling with tmux
+### Preview Cookies
+Stored in `backend/data/preview-cookies.json` by default (overridable via
+`DATA_DIR`).
 
-**Important:** When tmux is active, scrollback is managed by tmux, not xterm.js.
+### In-Memory Stores
+- Preview logs (console/network/DOM)
+- Proxy request logs
+- Process logs
 
-**How scroll buttons work (`frontend/src/components/TerminalChat.jsx`):**
+## Security and Sandboxing
 
-1. **Check xterm scrollback:** If `buffer.baseY > 0`, xterm has scrollback → use `term.scrollLines()`
-
-2. **If baseY === 0:** tmux is managing scrollback → send tmux commands:
-   - Enter copy mode: `Ctrl+B [` (`\x02[`)
-   - Page Up: `\x1b[5~`
-   - Page Down: `\x1b[6~`
-   - Auto-exit copy mode when user types (sends `q`)
-
-**Why this matters:**
-- On Windows (no tmux): `term.scrollLines()` works directly
-- On Linux (with tmux): Must use tmux copy-mode commands
-- The code detects which mode to use by checking `baseY`
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Scroll Button Tap                   │
-└─────────────────────┬───────────────────────────────┘
-                      │
-                      ▼
-              ┌───────────────┐
-              │ baseY > 0 ?   │
-              └───────┬───────┘
-                     / \
-                   /     \
-                 Yes      No
-                /           \
-               ▼             ▼
-    ┌─────────────────┐  ┌──────────────────────┐
-    │ term.scrollLines│  │ Send tmux commands:  │
-    │ (xterm native)  │  │ - Enter copy mode    │
-    └─────────────────┘  │ - Page Up/Down       │
-                         └──────────────────────┘
-```
-
-### LocalStorage for Settings
-
-**Settings stored client-side:**
-- ✅ No database needed
-- ✅ Per-user, per-browser preferences
-- ✅ Works offline
-- ✅ Simple implementation
-
-**Current settings:**
-- Default working directory for new terminals
-
-## Security Considerations
-
-⚠️ **This app is designed for local/trusted network use only.**
-
-### Current Security Status
-
-**No authentication:**
-- Anyone on the network can access
-- Full shell access to the server
-
-**No command filtering:**
-- Users can run ANY command
-- Full system access
-
-**No rate limiting:**
-- Potential for abuse
-
-### Production Requirements
-
-Before deploying to production, you **MUST** add:
-
-1. **Authentication & Authorization**
-   - User login (JWT/session tokens)
-   - Per-user session isolation
-   - Admin vs user roles
-
-2. **Command Filtering**
-   - Whitelist/blacklist commands
-   - Sandboxing (containers, chroot)
-
-3. **Network Security**
-   - HTTPS/TLS required
-   - CORS restrictions
-   - Rate limiting
-
-4. **Monitoring & Logging**
-   - Command audit logs
-   - Failed access attempts
-   - Resource usage monitoring
-
-## Performance Characteristics
-
-### Resource Usage
-
-**Per Terminal Session:**
-- 1 Node.js child process (cmd.exe/bash)
-- ~10-50MB memory per terminal
-- Output buffer in memory (~1MB max)
-
-**Scalability:**
-- 10s of concurrent terminals: ✅ Fine
-- 100s of concurrent terminals: ⚠️ Consider limits
-- 1000s: ❌ Need redesign (process pooling, containers)
-
-### Output Buffering
-
-- History kept in memory
-- Default: All output since terminal creation
-- Late-joining clients get full history
-- No persistence (lost on server restart)
+- JWT auth is required for most `/api/*` routes.
+- Public routes include health checks, preview logs, process logs, and
+  browser automation endpoints.
+- Preview file server is sandboxed to the project root.
+- File manager resolves paths safely but is not restricted to project root.
+- Dev proxy only allows a fixed set of local ports.
+- External proxy blocks localhost and private IP ranges.
 
 ## Development vs Production
 
-### Development (Current Setup)
+Development:
+- Frontend: `vite dev` on port 5173
+- Backend: `tsx watch` on port 3020
 
-```
-Frontend (Vite dev server)  →  Backend (tsx watch)
-Port 5173                       Port 3020
-- Hot reload                    - Auto restart
-- Proxy /api/* → 3020          - Full logging
-```
-
-### Production Deployment
-
-**Option 1: Serve frontend from backend**
-```bash
-cd frontend && npm run build
-# Serve dist/ folder from Fastify
-# Single port deployment
-```
-
-**Option 2: Separate services**
-```
-Frontend (Nginx/CDN)  →  Backend (PM2/Docker)
-Port 80/443               Port 3020
-- Static files            - API only
-- HTTPS termination       - Process management
-```
-
-## Future Enhancements
-
-Potential improvements:
-
-1. **Persistent Terminals**
-   - Survive server restart
-   - Use tmux/screen backend
-   - Redis for session state
-
-2. **Collaborative Terminals**
-   - Multiple users in same terminal
-   - WebRTC for peer-to-peer
-
-3. **File Upload/Download**
-   - Drag-and-drop files
-   - Download terminal output
-
-4. **Terminal Recording**
-   - Record/replay sessions
-   - Share terminal recordings
-
-5. **Custom Themes**
-   - Color scheme editor
-   - Font customization
+Production:
+- Build frontend (`frontend/dist`)
+- Fastify serves static assets and SPA fallback
