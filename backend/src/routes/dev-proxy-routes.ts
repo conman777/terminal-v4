@@ -1,5 +1,4 @@
 import type { FastifyInstance } from 'fastify';
-import { pipeline } from 'node:stream/promises';
 
 // Script to inject into HTML pages for URL rewriting and console capture
 // PORT_PLACEHOLDER will be replaced with the actual port number
@@ -191,15 +190,6 @@ const DEV_PROXY_SCRIPT = `
 </script>
 `;
 
-// Allowed ports for dev server proxy (security: prevent arbitrary port access)
-const ALLOWED_PORTS = new Set([
-  3000, 3001, 3002, 3003,  // Common React/Next.js ports
-  4000, 4200,              // Angular
-  5000, 5001, 5173, 5174,  // Vite, Flask
-  8000, 8080, 8081, 8888,  // General dev servers
-  9000, 9090               // Various
-]);
-
 function isPortAllowed(port: number): boolean {
   // Allow any port between 3000-9999 for flexibility
   return port >= 3000 && port <= 9999;
@@ -295,11 +285,6 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('text/html')) {
           let content = body.toString('utf-8');
-
-          // Get auth token from request to append to rewritten URLs
-          const query = request.query as Record<string, string>;
-          const token = query.token || '';
-          const tokenSuffix = token ? `?token=${encodeURIComponent(token)}` : '';
 
           // Rewrite absolute localhost URLs
           content = content.replace(
@@ -405,36 +390,67 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
     const WebSocket = require('ws');
     const targetWs = new WebSocket(`ws://localhost:${port}`);
 
+    // Buffer messages until connection opens (fixes resource leak)
+    const messageBuffer: Buffer[] = [];
+    let isOpen = false;
+
+    // Connection timeout to prevent hanging connections
+    const connectionTimeout = setTimeout(() => {
+      if (!isOpen) {
+        console.error(`Dev proxy WS timeout for port ${port}`);
+        socket.close(4504, 'Connection timeout');
+        targetWs.close();
+      }
+    }, 10000);
+
+    // Forward messages from client to dev server (attach immediately, not in 'open')
+    socket.on('message', (data: Buffer) => {
+      if (isOpen && targetWs.readyState === WebSocket.OPEN) {
+        targetWs.send(data);
+      } else if (!isOpen) {
+        // Buffer messages until connection opens
+        messageBuffer.push(data);
+      }
+    });
+
     targetWs.on('open', () => {
-      // Forward messages from client to dev server
-      socket.on('message', (data: Buffer) => {
-        if (targetWs.readyState === WebSocket.OPEN) {
+      isOpen = true;
+      clearTimeout(connectionTimeout);
+
+      // Flush buffered messages
+      while (messageBuffer.length > 0) {
+        const data = messageBuffer.shift();
+        if (data && targetWs.readyState === WebSocket.OPEN) {
           targetWs.send(data);
         }
-      });
+      }
 
       // Forward messages from dev server to client
       targetWs.on('message', (data: Buffer) => {
-        if (socket.readyState === 1) { // WebSocket.OPEN
+        if (socket.readyState === WebSocket.OPEN) {
           socket.send(data);
         }
       });
     });
 
     targetWs.on('error', (error: Error) => {
+      clearTimeout(connectionTimeout);
       console.error(`Dev proxy WS error for port ${port}:`, error.message);
       socket.close(4502, 'Dev server connection failed');
     });
 
     targetWs.on('close', () => {
+      clearTimeout(connectionTimeout);
       socket.close(1000, 'Dev server closed connection');
     });
 
     socket.on('close', () => {
+      clearTimeout(connectionTimeout);
       targetWs.close();
     });
 
     socket.on('error', () => {
+      clearTimeout(connectionTimeout);
       targetWs.close();
     });
   });

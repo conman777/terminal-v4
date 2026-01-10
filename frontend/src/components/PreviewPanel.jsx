@@ -1,84 +1,11 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { getAccessToken } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
+import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
   const date = new Date(timestamp);
   return date.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
-}
-
-// Convert file:// URLs or local paths to preview API URLs
-function withAuthToken(url) {
-  const token = getAccessToken();
-  if (!token) return url;
-
-  try {
-    const fullUrl = new URL(url, window.location.origin);
-    if (!fullUrl.searchParams.has('token')) {
-      fullUrl.searchParams.set('token', token);
-    }
-    return `${fullUrl.pathname}${fullUrl.search}${fullUrl.hash}`;
-  } catch {
-    const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}token=${encodeURIComponent(token)}`;
-  }
-}
-
-function toPreviewUrl(inputUrl) {
-  if (!inputUrl) return null;
-
-  // Handle file:// URLs
-  if (inputUrl.startsWith('file:///')) {
-    const filePath = decodeURIComponent(inputUrl.replace('file:///', ''));
-    const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-    const directory = filePath.substring(0, lastSlash);
-    const filename = filePath.substring(lastSlash + 1);
-    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
-  }
-
-  // Handle Windows-style paths (C:\... or C:/...)
-  if (/^[A-Za-z]:[/\\]/.test(inputUrl)) {
-    const lastSlash = Math.max(inputUrl.lastIndexOf('/'), inputUrl.lastIndexOf('\\'));
-    const directory = inputUrl.substring(0, lastSlash);
-    const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
-    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
-  }
-
-  // Handle Unix-style absolute paths
-  if (inputUrl.startsWith('/') && !inputUrl.startsWith('//')) {
-    const lastSlash = inputUrl.lastIndexOf('/');
-    const directory = inputUrl.substring(0, lastSlash) || '/';
-    const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
-    return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
-  }
-
-  // Handle localhost/local network URLs - use preview subdomain
-  try {
-    const parsed = new URL(inputUrl);
-    const hostname = parsed.hostname;
-    const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
-    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
-
-    if ((isLocalhost || isPrivateIP) && parsed.port) {
-      const path = parsed.pathname + parsed.search + parsed.hash;
-      return `https://preview-${parsed.port}.conordart.com${path}`;
-    }
-  } catch {
-    // Not a valid URL, fall through
-  }
-
-  // External HTTP(S) URLs - route through proxy
-  try {
-    const parsed = new URL(inputUrl);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return withAuthToken(`/api/proxy-external?url=${encodeURIComponent(inputUrl)}`);
-    }
-  } catch {
-    // Not a valid URL
-  }
-
-  return inputUrl;
 }
 
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal }) {
@@ -250,6 +177,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   // Listen for messages from iframe (console logs and element selection)
   useEffect(() => {
     const handleMessage = (event) => {
+      // Verify message is from our iframe to prevent stale/cross-origin issues
+      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
+        return;
+      }
+
       if (event.data?.type === 'preview-console') {
         const { level, message, timestamp } = event.data;
         setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp }]);
@@ -515,7 +447,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 onLoad={handleLoad}
                 onError={handleError}
                 title="App Preview"
-                                style={{ opacity: isLoading ? 0 : 1 }}
+                allow="camera; microphone"
+                style={{ opacity: isLoading ? 0 : 1 }}
               />
             </>
           )}
@@ -826,7 +759,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               onLoad={handleLoad}
               onError={handleError}
               title="App Preview"
-                            style={{ opacity: isLoading ? 0 : 1 }}
+              allow="camera; microphone"
+              style={{ opacity: isLoading ? 0 : 1 }}
             />
           </>
         )}

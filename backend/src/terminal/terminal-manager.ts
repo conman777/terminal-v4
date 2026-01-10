@@ -16,8 +16,7 @@ import {
   saveSession,
   loadSession,
   deleteSession,
-  loadAllSessions,
-  type PersistedSession
+  loadAllSessions
 } from './session-store';
 import {
   isTmuxAvailable,
@@ -27,20 +26,21 @@ import {
   getTmuxSessionCwd,
   listTmuxSessions
 } from './tmux-manager';
+import {
+  DEFAULT_COLS,
+  DEFAULT_ROWS,
+  MAX_BUFFER_CHARS,
+  SAVE_DEBOUNCE_MS,
+  CWD_TIMEOUT_MS,
+  type ProjectType,
+  type ProjectInfo,
+  type ClientDimensions,
+  type ManagedTerminal,
+  type PersistedSession
+} from './types';
 
-export type ProjectType = 'node' | 'python-flask' | 'django' | 'rust' | 'go' | 'static' | 'unknown';
-
-export interface ProjectInfo {
-  cwd: string;
-  projectType: ProjectType;
-  projectName?: string;
-  startCommand?: string;
-  indexPath?: string;
-}
-
-const DEFAULT_COLS = 120;
-const DEFAULT_ROWS = 32;
-const MAX_BUFFER_CHARS = 1_000_000;
+// Re-export types for external consumers
+export type { ProjectType, ProjectInfo } from './types';
 
 function detectShell(): string {
   if (process.platform === 'win32') {
@@ -60,35 +60,6 @@ export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
   defaultShell?: string;
   useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
-}
-
-interface ClientDimensions {
-  cols: number;
-  rows: number;
-}
-
-interface ManagedTerminal {
-  id: string;
-  userId: string;
-  title: string;
-  shell: string;
-  cwd: string;
-  createdAt: string;
-  updatedAt: string;
-  process: TerminalProcess;
-  buffer: TerminalStreamEvent[];
-  bufferCharCount: number;
-  subscribers: Set<(event: TerminalStreamEvent | null) => void>;
-  saveTimer?: NodeJS.Timeout;
-  // Store handlers for cleanup
-  dataHandler?: (data: string) => void;
-  exitHandler?: (code: number | null, signal: NodeJS.Signals | null) => void;
-  // Track dimensions per connected client to use maximum across all
-  clientDimensions: Map<string, ClientDimensions>;
-  currentCols: number;
-  currentRows: number;
-  // Tmux support
-  usesTmux: boolean;
 }
 
 function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
@@ -200,12 +171,12 @@ export class TerminalManager {
     if (session.saveTimer) {
       clearTimeout(session.saveTimer);
     }
-    // Save after 2 seconds of inactivity
+    // Save after period of inactivity
     session.saveTimer = setTimeout(() => {
       void this.#saveSessionToDisk(session).catch((error) => {
         console.error(`Failed to persist terminal session ${session.id}:`, error);
       });
-    }, 2000);
+    }, SAVE_DEBOUNCE_MS);
   }
 
   async #saveSessionToDisk(session: ManagedTerminal): Promise<void> {
@@ -275,7 +246,7 @@ export class TerminalManager {
       timeoutId = setTimeout(() => {
         cleanup();
         resolve(session.cwd);
-      }, 1000);
+      }, CWD_TIMEOUT_MS);
 
       // Send command to get cwd with markers
       // Works on both Windows (cd) and Unix (pwd)
@@ -592,11 +563,15 @@ export class TerminalManager {
     // If there are remaining clients, use the first one's dimensions
     // Otherwise keep current dimensions (will be updated when next client resizes)
     if (session.clientDimensions.size > 0) {
-      const [firstDims] = session.clientDimensions.values();
-      if (firstDims && (firstDims.cols !== session.currentCols || firstDims.rows !== session.currentRows)) {
-        session.currentCols = firstDims.cols;
-        session.currentRows = firstDims.rows;
-        session.process.resize(firstDims.cols, firstDims.rows);
+      const iterator = session.clientDimensions.values();
+      const first = iterator.next();
+      if (!first.done && first.value) {
+        const firstDims = first.value;
+        if (firstDims.cols !== session.currentCols || firstDims.rows !== session.currentRows) {
+          session.currentCols = firstDims.cols;
+          session.currentRows = firstDims.rows;
+          session.process.resize(firstDims.cols, firstDims.rows);
+        }
       }
     }
   }

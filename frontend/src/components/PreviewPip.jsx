@@ -1,52 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { getAccessToken } from '../utils/auth';
-
-// Convert URL for iframe display (simplified from PreviewPanel)
-function toPreviewUrl(inputUrl) {
-  if (!inputUrl) return null;
-
-  const token = getAccessToken();
-  const withToken = (url) => {
-    if (!token) return url;
-    try {
-      const fullUrl = new URL(url, window.location.origin);
-      if (!fullUrl.searchParams.has('token')) {
-        fullUrl.searchParams.set('token', token);
-      }
-      return `${fullUrl.pathname}${fullUrl.search}${fullUrl.hash}`;
-    } catch {
-      const separator = url.includes('?') ? '&' : '?';
-      return `${url}${separator}token=${encodeURIComponent(token)}`;
-    }
-  };
-
-  // Handle localhost URLs - use preview subdomain
-  try {
-    const parsed = new URL(inputUrl);
-    const hostname = parsed.hostname;
-    const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
-    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
-
-    if ((isLocalhost || isPrivateIP) && parsed.port) {
-      const path = parsed.pathname + parsed.search + parsed.hash;
-      return `https://preview-${parsed.port}.conordart.com${path}`;
-    }
-  } catch {
-    // Not a valid URL
-  }
-
-  // External URLs - route through proxy
-  try {
-    const parsed = new URL(inputUrl);
-    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return withToken(`/api/proxy-external?url=${encodeURIComponent(inputUrl)}`);
-    }
-  } catch {
-    // Not a valid URL
-  }
-
-  return inputUrl;
-}
+import { toPreviewUrl } from '../utils/previewUrl';
 
 /**
  * Picture-in-Picture preview window.
@@ -69,6 +22,7 @@ export function PreviewPip({
   const containerRef = useRef(null);
   const dragStartRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
+  const refreshingRef = useRef(false);
 
   const iframeSrc = useMemo(() => toPreviewUrl(url), [url]);
 
@@ -155,6 +109,10 @@ export function PreviewPip({
   }, []);
 
   const handleRefresh = useCallback(() => {
+    // Debounce rapid refresh clicks
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+
     if (containerRef.current) {
       const iframe = containerRef.current.querySelector('iframe');
       if (iframe) {
@@ -162,6 +120,11 @@ export function PreviewPip({
         iframe.src = iframe.src;
       }
     }
+
+    // Reset debounce after 1 second
+    setTimeout(() => {
+      refreshingRef.current = false;
+    }, 1000);
   }, []);
 
   const handleToggleMinimize = useCallback(() => {
@@ -244,6 +207,7 @@ export function PreviewPip({
             className="pip-iframe"
             onLoad={handleLoad}
             title="Preview"
+            allow="camera; microphone"
             sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
             style={{ opacity: isLoading ? 0 : 1 }}
           />

@@ -4,9 +4,7 @@ import ClaudeCodeInput from './ClaudeCodeInput';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
-
-// Check if we're on mobile
-const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+import { useMobileDetect } from '../hooks/useMobileDetect';
 
 // Status bar component
 const StatusBar = memo(function StatusBar({ sessionId, model, isConnected, isProcessing, eventCount }) {
@@ -126,6 +124,7 @@ function groupEvents(events) {
 }
 
 export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, onFolderChange, onModelChange, onSessionEnd }) {
+  const isMobile = useMobileDetect();
   const [events, setEvents] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -286,9 +285,11 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
           return newEvents;
         });
 
-        // Trim seenEventIds to prevent memory leak
+        // Trim seenEventIds to prevent memory leak (LRU-style: keep newest half)
         if (seenEventIdsRef.current.size > MAX_EVENTS * 2) {
-          seenEventIdsRef.current.clear();
+          const entries = Array.from(seenEventIdsRef.current);
+          const toKeep = entries.slice(-MAX_EVENTS);
+          seenEventIdsRef.current = new Set(toKeep);
         }
 
         // Track processing state
@@ -469,12 +470,6 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
   // Group tool_use with its corresponding tool_result
   const groupedEvents = useMemo(() => groupEvents(events), [events]);
 
-  const handleFolderSelect = (newPath) => {
-    if (onFolderChange) {
-      onFolderChange(newPath);
-    }
-  };
-
   // Handle file:line click - copy to clipboard
   const handleFileClick = useCallback((path, line) => {
     navigator.clipboard.writeText(`${path}:${line}`).then(() => {
@@ -625,7 +620,7 @@ export default function ClaudeCodePanel({ sessionId, cwd, model, recentFolders, 
         onClose={() => setShowFolderBrowser(false)}
         currentPath={cwd}
         recentFolders={recentFolders}
-        onSelect={handleFolderSelect}
+        onSelect={onFolderChange}
       />
     </div>
   );

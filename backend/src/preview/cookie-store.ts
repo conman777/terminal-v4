@@ -2,7 +2,7 @@
 // Acts as a browser-like cookie jar for each previewed app
 // Persists to disk so cookies survive backend restarts
 
-import { parse as parseCookie, serialize as serializeCookie } from 'cookie';
+import { parse as parseCookie } from 'cookie';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -190,22 +190,25 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
 
   for (const header of setCookieHeaders) {
     const cookie = parseSetCookie(header);
-    if (cookie) {
-      // Use name+path as key for proper cookie replacement
-      const key = `${cookie.name}:${cookie.path || '/'}`;
+    if (!cookie) {
+      console.warn(`[cookie-store] Failed to parse Set-Cookie header: ${header.substring(0, 100)}${header.length > 100 ? '...' : ''}`);
+      continue;
+    }
 
-      // Check if this is a delete operation (empty value or past expiry)
-      const expiresTime = cookie.expires instanceof Date
-        ? cookie.expires.getTime()
-        : cookie.expires ? new Date(cookie.expires).getTime() : null;
+    // Use name+path as key for proper cookie replacement
+    const key = `${cookie.name}:${cookie.path || '/'}`;
 
-      if (cookie.value === '' ||
-          (expiresTime && expiresTime < Date.now()) ||
-          (cookie.maxAge !== undefined && cookie.maxAge <= 0)) {
-        store.delete(key);
-      } else {
-        store.set(key, cookie);
-      }
+    // Check if this is a delete operation (empty value or past expiry)
+    const expiresTime = cookie.expires instanceof Date
+      ? cookie.expires.getTime()
+      : cookie.expires ? new Date(cookie.expires).getTime() : null;
+
+    if (cookie.value === '' ||
+        (expiresTime && expiresTime < Date.now()) ||
+        (cookie.maxAge !== undefined && cookie.maxAge <= 0)) {
+      store.delete(key);
+    } else {
+      store.set(key, cookie);
     }
   }
 
