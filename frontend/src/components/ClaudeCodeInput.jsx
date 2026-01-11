@@ -1,15 +1,16 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
-const SLASH_COMMANDS = [
-  { cmd: '/model', desc: 'Change AI model' },
-  { cmd: '/clear', desc: 'Clear conversation' },
-  { cmd: '/help', desc: 'Show available commands' },
-  { cmd: '/compact', desc: 'Toggle compact mode' },
-  { cmd: '/cost', desc: 'Show token usage' },
-];
+const SLASH_COMMANDS = [];
 
-export default function ClaudeCodeInput({ onSend, disabled, isProcessing, history = [], onCancel }) {
+export default function ClaudeCodeInput({
+  onSend,
+  disabled,
+  isProcessing,
+  history = [],
+  onCancel,
+  onCommandPreview
+}) {
   const [text, setText] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -31,6 +32,12 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
       textarea.style.height = Math.min(textarea.scrollHeight, 150) + 'px';
     }
   }, [text]);
+
+  useEffect(() => {
+    if (onCommandPreview) {
+      onCommandPreview(text);
+    }
+  }, [text, onCommandPreview]);
 
   // Filter commands based on input
   const suggestions = useMemo(() => {
@@ -80,9 +87,10 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
     }
 
     // Handle autocomplete navigation (only when dropdown is visible)
-    const dropdownVisible = suggestions.length > 0 && text !== suggestions[0]?.cmd;
+    const dropdownVisible = suggestions.length > 0;
+    const exactMatch = dropdownVisible && suggestions.some((s) => s.cmd === text);
     if (dropdownVisible) {
-      if (e.key === 'Tab' || (e.key === 'Enter' && suggestions.length === 1)) {
+      if (e.key === 'Tab' || (e.key === 'Enter' && suggestions.length === 1 && !exactMatch)) {
         e.preventDefault();
         handleComplete(suggestions[selectedIndex].cmd);
         return;
@@ -152,23 +160,6 @@ export default function ClaudeCodeInput({ onSend, disabled, isProcessing, histor
 
   return (
     <div className="claude-code-input-wrapper">
-      {/* Autocomplete dropdown */}
-      {suggestions.length > 0 && text !== suggestions[0]?.cmd && (
-        <div className="slash-autocomplete">
-          {suggestions.map((s, i) => (
-            <button
-              key={s.cmd}
-              type="button"
-              className={`slash-option ${i === selectedIndex ? 'selected' : ''}`}
-              onClick={() => handleComplete(s.cmd)}
-            >
-              <span className="slash-cmd">{s.cmd}</span>
-              <span className="slash-desc">{s.desc}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
       {recordingError && (
         <div className="recording-error">{recordingError}</div>
       )}

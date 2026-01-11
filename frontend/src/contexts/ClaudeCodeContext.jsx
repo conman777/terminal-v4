@@ -1,11 +1,33 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
 import { useTerminalSession } from './TerminalSessionContext';
 
 const ClaudeCodeContext = createContext(null);
+const CLAUDE_SESSION_STORAGE_KEY = 'claudeCodeSessionIds';
+
+function loadClaudeSessionIds() {
+  try {
+    const stored = localStorage.getItem(CLAUDE_SESSION_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistClaudeSessionIds(ids) {
+  try {
+    localStorage.setItem(CLAUDE_SESSION_STORAGE_KEY, JSON.stringify(ids));
+  } catch (error) {
+    console.error('Failed to save Claude Code session ids', error);
+  }
+}
 
 export function ClaudeCodeProvider({ children }) {
-  const { activeSessionId: activeTerminalSessionId, projectInfo, addRecentFolder, navigateSession } = useTerminalSession();
+  const {
+    sessions: terminalSessions,
+    loadingSessions,
+    projectInfo
+  } = useTerminalSession();
   // Claude Code state - restore from localStorage
   const [leftPanelMode, setLeftPanelMode] = useState(() => {
     try {
@@ -15,7 +37,7 @@ export function ClaudeCodeProvider({ children }) {
     }
   });
 
-  const [claudeCodeSessions, setClaudeCodeSessions] = useState([]);
+  const [claudeSessionIds, setClaudeSessionIds] = useState(() => loadClaudeSessionIds());
 
   const [activeClaudeCodeId, setActiveClaudeCodeId] = useState(() => {
     try {
@@ -44,23 +66,50 @@ export function ClaudeCodeProvider({ children }) {
     }
   }, [activeClaudeCodeId]);
 
-  // Update sessions from app state (called by parent)
-  const updateSessions = useCallback((sessions) => {
-    setClaudeCodeSessions(Array.isArray(sessions) ? sessions : []);
-  }, []);
+  useEffect(() => {
+    persistClaudeSessionIds(claudeSessionIds);
+  }, [claudeSessionIds]);
+
+  // Keep Claude Code session ids in sync with terminal sessions
+  useEffect(() => {
+    if (loadingSessions) return;
+    const existingIds = new Set(terminalSessions.map(session => session.id));
+    const nextIds = claudeSessionIds.filter(id => existingIds.has(id));
+    if (nextIds.length !== claudeSessionIds.length) {
+      setClaudeSessionIds(nextIds);
+    }
+    if (activeClaudeCodeId && !existingIds.has(activeClaudeCodeId)) {
+      setActiveClaudeCodeId(nextIds[0] || null);
+    }
+  }, [terminalSessions, loadingSessions, claudeSessionIds, activeClaudeCodeId]);
+
+  const claudeCodeSessions = useMemo(() => {
+    if (claudeSessionIds.length === 0) return [];
+    const sessionMap = new Map(terminalSessions.map(session => [session.id, session]));
+    return claudeSessionIds
+      .map(id => sessionMap.get(id))
+      .filter(Boolean);
+  }, [terminalSessions, claudeSessionIds]);
 
   // Start a new Claude Code session
-  const startClaudeCode = useCallback(async (model = 'sonnet') => {
+  const startClaudeCode = useCallback(async () => {
     const cwd = projectInfo?.cwd || '.';
 
     try {
-      const res = await apiFetch('/api/claude-code/start', {
+      const res = await apiFetch('/api/terminal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cwd, model })
+        body: JSON.stringify({
+          cwd,
+          shell: 'claude',
+          title: 'Claude Code'
+        })
       });
-      const session = await res.json();
-      setClaudeCodeSessions(prev => [session, ...prev]);
+      if (!res.ok) {
+        throw new Error(`Failed to start Claude Code (${res.status})`);
+      }
+      const { session } = await res.json();
+      setClaudeSessionIds(prev => (prev.includes(session.id) ? prev : [session.id, ...prev]));
       setActiveClaudeCodeId(session.id);
       setLeftPanelMode('claude-code');
       return session;
@@ -72,23 +121,27 @@ export function ClaudeCodeProvider({ children }) {
 
   // Select a Claude Code session
   const selectClaudeCode = useCallback(async (id) => {
-    const session = claudeCodeSessions.find(s => s.id === id);
+    const session = terminalSessions.find(s => s.id === id);
     if (session && !session.isActive) {
       try {
-        await apiFetch(`/api/claude-code/${id}/restore`, { method: 'POST' });
+        await apiFetch(`/api/terminal/${id}/restore`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
       } catch (error) {
         console.error('Failed to restore session:', error);
       }
     }
     setActiveClaudeCodeId(id);
     setLeftPanelMode('claude-code');
-  }, [claudeCodeSessions]);
+  }, [terminalSessions]);
 
   // Delete a Claude Code session
   const deleteClaudeCode = useCallback(async (id) => {
     try {
-      await apiFetch(`/api/claude-code/${id}`, { method: 'DELETE' });
-      setClaudeCodeSessions(prev => prev.filter(s => s.id !== id));
+      await apiFetch(`/api/terminal/${id}`, { method: 'DELETE' });
+      setClaudeSessionIds(prev => prev.filter(sessionId => sessionId !== id));
       if (activeClaudeCodeId === id) {
         setActiveClaudeCodeId(null);
         setLeftPanelMode('terminal');
@@ -97,45 +150,6 @@ export function ClaudeCodeProvider({ children }) {
       console.error('Failed to delete session:', error);
     }
   }, [activeClaudeCodeId]);
-
-  // Handle model change
-  const handleModelChange = useCallback((updatedSession) => {
-    setClaudeCodeSessions(prev =>
-      prev.map(s => s.id === updatedSession.id ? updatedSession : s)
-    );
-  }, []);
-
-  // Handle folder change from Claude Code panel - syncs both Claude Code and Terminal
-  const handleFolderChange = useCallback(async (newPath) => {
-    // 1. Send cd command to active Terminal session
-    if (activeTerminalSessionId && navigateSession) {
-      navigateSession(activeTerminalSessionId, newPath);
-    }
-
-    // 2. Update Claude Code session's cwd (persist to backend)
-    if (activeClaudeCodeId) {
-      try {
-        const res = await apiFetch(`/api/claude-code/${activeClaudeCodeId}/cwd`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cwd: newPath })
-        });
-        if (res.ok) {
-          const updatedSession = await res.json();
-          setClaudeCodeSessions(prev =>
-            prev.map(s => s.id === activeClaudeCodeId ? { ...s, cwd: updatedSession.cwd } : s)
-          );
-        }
-      } catch (error) {
-        console.error('Failed to update Claude Code cwd:', error);
-      }
-    }
-
-    // 3. Add to recent folders
-    if (addRecentFolder) {
-      addRecentFolder(newPath);
-    }
-  }, [activeTerminalSessionId, activeClaudeCodeId, navigateSession, addRecentFolder]);
 
   // Switch to terminal mode
   const switchToTerminal = useCallback(() => {
@@ -161,12 +175,7 @@ export function ClaudeCodeProvider({ children }) {
     // Session actions
     startClaudeCode,
     selectClaudeCode,
-    deleteClaudeCode,
-    handleModelChange,
-    handleFolderChange,
-
-    // Update from app state
-    updateSessions
+    deleteClaudeCode
   };
 
   return (

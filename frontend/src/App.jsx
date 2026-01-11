@@ -10,6 +10,8 @@ import { PreviewPip } from './components/PreviewPip';
 import { PathBreadcrumb } from './components/PathBreadcrumb';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { SessionTabBar } from './components/SessionTabBar';
+import { SessionSelector } from './components/SessionSelector';
+import { SettingsModal } from './components/SettingsModal';
 const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
@@ -28,578 +30,7 @@ import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
-import { apiFetch, apiGet } from './utils/api';
-import { getAccessToken } from './utils/auth';
-
-// Format bytes to human-readable GB
-function formatBytes(bytes) {
-  const gb = bytes / (1024 ** 3);
-  return `${gb.toFixed(1)} GB`;
-}
-
-function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange }) {
-  const [workingDir, setWorkingDir] = useState(currentCwd || '');
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
-  const [systemStats, setSystemStats] = useState(null);
-  const dropdownRef = useRef(null);
-
-  // Update local state when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      setWorkingDir(currentCwd || '');
-    }
-  }, [isOpen, currentCwd]);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setShowDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // Poll system stats while modal is open
-  useEffect(() => {
-    if (!isOpen) {
-      setSystemStats(null);
-      return;
-    }
-
-    const fetchStats = async () => {
-      try {
-        const stats = await apiGet('/api/system/stats');
-        if (stats.memory) {
-          setSystemStats(stats);
-        }
-      } catch (err) {
-        // Silently fail - stats are optional
-      }
-    };
-
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000); // 5s is sufficient for system stats
-    return () => clearInterval(interval);
-  }, [isOpen]);
-
-  const handleSave = () => {
-    if (workingDir && workingDir.trim()) {
-      onAddRecentFolder(workingDir.trim());
-    }
-    onSave(sessionId, workingDir.trim());
-    onClose();
-  };
-
-  const handleDownload = () => {
-    const pathToDownload = workingDir || currentCwd;
-    if (!pathToDownload) return;
-    const params = new URLSearchParams({ path: pathToDownload });
-    const token = getAccessToken();
-    if (token) {
-      params.set('token', token);
-    }
-    // Trigger download by navigating to the endpoint
-    window.location.href = `/api/fs/download?${params.toString()}`;
-  };
-
-  const handleSelectFolder = (folder) => {
-    setWorkingDir(folder);
-    setShowDropdown(false);
-  };
-
-  const handleClear = () => {
-    setWorkingDir('');
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>Session Settings</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
-        </div>
-        <div className="modal-body">
-          <div className="form-group">
-            <label>Session: <strong>{sessionTitle || 'New Terminal'}</strong></label>
-          </div>
-          <div className="form-group">
-            <label htmlFor="working-dir">Working Directory</label>
-            <div className="input-with-actions">
-              <div className="input-with-dropdown" ref={dropdownRef}>
-                <input
-                  id="working-dir"
-                  type="text"
-                  value={workingDir}
-                  onChange={(e) => setWorkingDir(e.target.value)}
-                  placeholder="e.g., C:\Users\YourName\Projects"
-                  onFocus={() => recentFolders.length > 0 && setShowDropdown(true)}
-                />
-                {recentFolders.length > 0 && (
-                  <button
-                    type="button"
-                    className="dropdown-toggle"
-                    onClick={() => setShowDropdown(!showDropdown)}
-                    aria-label="Show recent folders"
-                  >
-                    ▼
-                  </button>
-                )}
-                {showDropdown && recentFolders.length > 0 && (
-                  <div className="folder-dropdown">
-                    <div className="folder-dropdown-header">Recent Folders</div>
-                    {recentFolders.map((folder, index) => (
-                      <button
-                        key={index}
-                        type="button"
-                        className="folder-dropdown-item"
-                        onClick={() => handleSelectFolder(folder)}
-                      >
-                        <span className="folder-icon">📁</span>
-                        <span className="folder-path" title={folder}>
-                          {folder}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="input-actions">
-                <button
-                  type="button"
-                  className="btn-secondary btn-small"
-                  onClick={() => setShowFolderBrowser(true)}
-                  title="Browse folders"
-                >
-                  Browse
-                </button>
-                {currentCwd && currentCwd !== workingDir && (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-small"
-                    onClick={() => setWorkingDir(currentCwd)}
-                    title="Use current terminal directory"
-                  >
-                    Use Current
-                  </button>
-                )}
-                {workingDir && (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-small"
-                    onClick={handleClear}
-                    title="Clear directory"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            <small>
-              {currentCwd ? (
-                <>Current: <code>{currentCwd}</code></>
-              ) : (
-                'Leave empty to use backend default'
-              )}
-            </small>
-          </div>
-          <div className="form-group">
-            <label htmlFor="font-size">Terminal Font Size</label>
-            <div className="font-size-selector">
-              <input
-                id="font-size"
-                type="range"
-                min="10"
-                max="24"
-                value={terminalFontSize}
-                onChange={(e) => onFontSizeChange(parseInt(e.target.value, 10))}
-              />
-              <span className="font-size-value">{terminalFontSize}px</span>
-            </div>
-            <small>Adjust terminal text size (changes apply immediately)</small>
-          </div>
-
-          {/* System Resources Section */}
-          {systemStats && (
-            <div className="settings-section" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-dim)' }}>
-              <h3 style={{ margin: '0 0 1rem', fontSize: '14px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>System Resources</h3>
-              <div className="stat-row">
-                <label>RAM</label>
-                <div className="stat-bar">
-                  <div
-                    className="stat-fill"
-                    style={{ width: `${systemStats.memory.percentage}%` }}
-                  />
-                </div>
-                <span>
-                  {formatBytes(systemStats.memory.used)} / {formatBytes(systemStats.memory.total)}
-                </span>
-              </div>
-              <div className="stat-row">
-                <label>CPU</label>
-                <div className="stat-bar">
-                  <div
-                    className="stat-fill"
-                    style={{ width: `${systemStats.cpu.percentage}%` }}
-                  />
-                </div>
-                <span>{systemStats.cpu.percentage}% ({systemStats.cpu.cores} cores)</span>
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={handleDownload}
-            disabled={!workingDir && !currentCwd}
-            title="Download folder as .zip"
-          >
-            ⬇ Download
-          </button>
-          <button className="btn-primary" onClick={handleSave}>
-            Save & Navigate
-          </button>
-        </div>
-
-        <FolderBrowserModal
-          isOpen={showFolderBrowser}
-          onClose={() => setShowFolderBrowser(false)}
-          currentPath={workingDir || currentCwd}
-          recentFolders={recentFolders}
-          onSelect={(path) => {
-            setWorkingDir(path);
-            setShowFolderBrowser(false);
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SessionSelector({
-  activeSessions,
-  inactiveSessions,
-  activeSessionId,
-  onSelectSession,
-  onRestoreSession,
-  onCreateSession,
-  onCloseSession,
-  onRenameSession,
-  isLoading
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef(null);
-  const [renamingId, setRenamingId] = useState(null);
-  const [renameValue, setRenameValue] = useState('');
-
-  const activeSession = activeSessions.find(s => s.id === activeSessionId);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setRenamingId(null);
-      setRenameValue('');
-    }
-  }, [isOpen]);
-
-  const handleSelect = (session) => {
-    onSelectSession(session.id);
-    setIsOpen(false);
-  };
-
-  const handleClose = (e, sessionId) => {
-    e.stopPropagation();
-    onCloseSession(sessionId);
-  };
-
-  const startRename = (e, session) => {
-    e.stopPropagation();
-    setRenamingId(session.id);
-    setRenameValue(session.title);
-  };
-
-  const cancelRename = (e) => {
-    if (e) {
-      e.stopPropagation();
-    }
-    setRenamingId(null);
-    setRenameValue('');
-  };
-
-  const commitRename = async (e, sessionId) => {
-    e.stopPropagation();
-    const trimmed = renameValue.trim();
-    if (!trimmed) {
-      cancelRename();
-      return;
-    }
-    const clipped = trimmed.slice(0, 60);
-    if (clipped !== renameValue) {
-      setRenameValue(clipped);
-    }
-    await onRenameSession(sessionId, clipped);
-    setRenamingId(null);
-    setRenameValue('');
-  };
-
-  return (
-    <div className="session-selector" ref={dropdownRef}>
-      <button
-        type="button"
-        className="session-selector-btn"
-        onClick={() => setIsOpen(!isOpen)}
-        aria-haspopup="listbox"
-        aria-expanded={isOpen}
-      >
-        <span className="session-selector-label">
-          {activeSession ? activeSession.title : 'No Terminal'}
-        </span>
-        <span className={`session-selector-arrow${isOpen ? ' open' : ''}`}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </span>
-      </button>
-
-      {isOpen && (
-        <div className="session-selector-dropdown">
-          <div className="session-selector-list">
-            {isLoading && <div className="session-selector-empty">Loading...</div>}
-            {!isLoading && activeSessions.length === 0 && (
-              <div className="session-selector-empty">No active terminals</div>
-            )}
-            {activeSessions.map((session) => {
-              const isRenaming = renamingId === session.id;
-              return (
-                <div
-                  key={session.id}
-                  className={`session-selector-item${session.id === activeSessionId ? ' active' : ''}`}
-                  onClick={() => {
-                    if (!isRenaming) {
-                      handleSelect(session);
-                    }
-                  }}
-                  role="option"
-                  aria-selected={session.id === activeSessionId}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (isRenaming) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleSelect(session);
-                    }
-                  }}
-                >
-                  <div className="session-selector-item-info">
-                    {isRenaming ? (
-                      <input
-                        className="session-selector-rename-input"
-                        value={renameValue}
-                        maxLength={60}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            commitRename(e, session.id);
-                          }
-                          if (e.key === 'Escape') {
-                            cancelRename(e);
-                          }
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <>
-                        <span className="session-selector-item-title">{session.title}</span>
-                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="session-selector-item-actions">
-                    {isRenaming ? (
-                      <>
-                        <button
-                          type="button"
-                          className="session-selector-item-save"
-                          onClick={(e) => commitRename(e, session.id)}
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          className="session-selector-item-cancel"
-                          onClick={cancelRename}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="session-selector-item-rename"
-                          onClick={(e) => startRename(e, session)}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          className="session-selector-item-close"
-                          onClick={(e) => handleClose(e, session.id)}
-                          aria-label="Close terminal"
-                        >
-                          ×
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {!isLoading && inactiveSessions.length > 0 && (
-              <div className="session-selector-section-title">Inactive</div>
-            )}
-            {inactiveSessions.map((session) => {
-              const isRenaming = renamingId === session.id;
-              return (
-                <div
-                  key={session.id}
-                  className="session-selector-item inactive"
-                  onClick={() => {
-                    if (!isRenaming) {
-                      onRestoreSession(session.id);
-                      setIsOpen(false);
-                    }
-                  }}
-                  role="option"
-                  aria-selected={session.id === activeSessionId}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (isRenaming) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onRestoreSession(session.id);
-                      setIsOpen(false);
-                    }
-                  }}
-                >
-                  <div className="session-selector-item-info">
-                    {isRenaming ? (
-                      <input
-                        className="session-selector-rename-input"
-                        value={renameValue}
-                        maxLength={60}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            commitRename(e, session.id);
-                          }
-                          if (e.key === 'Escape') {
-                            cancelRename(e);
-                          }
-                        }}
-                        autoFocus
-                      />
-                    ) : (
-                      <>
-                        <span className="session-selector-item-title">
-                          <span className="session-inactive-icon" title="Inactive terminal">{'\u23F8'}</span>
-                          {session.title}
-                        </span>
-                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="session-selector-item-actions">
-                    {isRenaming ? (
-                      <>
-                        <button
-                          type="button"
-                          className="session-selector-item-save"
-                          onClick={(e) => commitRename(e, session.id)}
-                        >
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          className="session-selector-item-cancel"
-                          onClick={cancelRename}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="session-selector-item-restore"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onRestoreSession(session.id);
-                            setIsOpen(false);
-                          }}
-                        >
-                          Restore
-                        </button>
-                        <button
-                          type="button"
-                          className="session-selector-item-rename"
-                          onClick={(e) => startRename(e, session)}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          className="session-selector-item-close"
-                          onClick={(e) => handleClose(e, session.id)}
-                          aria-label="Delete terminal"
-                        >
-                          ×
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <button
-            type="button"
-            className="session-selector-new"
-            onClick={() => {
-              onCreateSession();
-              setIsOpen(false);
-            }}
-          >
-            + New Terminal
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
+import { apiFetch } from './utils/api';
 
 function AppContent() {
   const { logout, user } = useAuth();
@@ -659,9 +90,7 @@ function AppContent() {
     setLeftPanelMode,
     startClaudeCode,
     selectClaudeCode,
-    deleteClaudeCode,
-    handleModelChange: handleClaudeCodeModelChange,
-    handleFolderChange: handleClaudeCodeFolderChange
+    deleteClaudeCode
   } = useClaudeCode();
 
   const {
@@ -880,6 +309,40 @@ function AppContent() {
       console.error('Failed to send to terminal', error);
     }
   }, [activeSessionId]);
+
+  // Send element context to Claude Code from preview inspector
+  const handleSendToClaudeCode = useCallback(async (context) => {
+    if (!context) return;
+
+    // If no active Claude Code session, start one
+    let sessionId = activeClaudeCodeId;
+    if (!sessionId) {
+      try {
+        const session = await startClaudeCode();
+        sessionId = session.id;
+      } catch (error) {
+        console.error('Failed to start Claude Code session:', error);
+        return;
+      }
+    }
+
+    // Switch to Claude Code panel
+    setLeftPanelMode('claude-code');
+
+    // Send the context as input
+    try {
+      const command = context.endsWith('\n') || context.endsWith('\r')
+        ? context
+        : `${context}\r`;
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command })
+      });
+    } catch (error) {
+      console.error('Failed to send to Claude Code:', error);
+    }
+  }, [activeClaudeCodeId, startClaudeCode, setLeftPanelMode]);
 
   const handleNavigateToPath = useCallback(async (path) => {
     if (!activeSessionId || !path) return;
@@ -1243,9 +706,9 @@ function AppContent() {
                 !activeClaudeCodeId ? (
                   <div className="empty-state">
                     <h2>Claude Code</h2>
-                    <p>Start a new Claude Code session to get AI-powered assistance.</p>
-                    <p className="empty-hint">Use /model to change models</p>
-                    <button className="btn-primary" onClick={() => startClaudeCode('sonnet')}>
+                    <p>Start a Claude Code session to open the interactive CLI.</p>
+                    <p className="empty-hint">Use /model inside the CLI to change models.</p>
+                    <button className="btn-primary" onClick={startClaudeCode}>
                       + New Session
                     </button>
                   </div>
@@ -1253,12 +716,10 @@ function AppContent() {
                   <Suspense fallback={<div className="empty-state"><p>Loading Claude Code...</p></div>}>
                     <ClaudeCodePanel
                       sessionId={activeClaudeCodeId}
-                      cwd={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.cwd}
-                      model={claudeCodeSessions.find(s => s.id === activeClaudeCodeId)?.model}
-                      recentFolders={recentFolders}
-                      onFolderChange={handleClaudeCodeFolderChange}
-                      onModelChange={handleClaudeCodeModelChange}
-                      onSessionEnd={() => setLeftPanelMode('terminal')}
+                      keybarOpen={keybarOpen}
+                      viewportHeight={viewportHeight}
+                      onUrlDetected={handleUrlDetected}
+                      fontSize={terminalFontSize}
                     />
                   </Suspense>
                 )
@@ -1279,6 +740,7 @@ function AppContent() {
                   projectInfo={projectInfo}
                   onStartProject={handleStartProject}
                   onSendToTerminal={handleSendToTerminal}
+                  onSendToClaudeCode={handleSendToClaudeCode}
                 />
               </>
             )}
@@ -1326,7 +788,12 @@ function AppContent() {
                 <Suspense fallback={<div className="empty-state"><p>Loading...</p></div>}>
                   <ClaudeCodePanel
                     sessionId={activeClaudeCodeId}
-                    onSessionChange={handleClaudeCodeSessionChange}
+                    keybarOpen={keybarOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={handleUrlDetected}
+                    fontSize={terminalFontSize}
+                    onScrollDirection={handleScrollDirectionSafe}
+                    onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   />
                 </Suspense>
               </div>
@@ -1341,6 +808,7 @@ function AppContent() {
                 projectInfo={projectInfo}
                 onStartProject={handleStartProject}
                 onSendToTerminal={handleSendToTerminal}
+                onSendToClaudeCode={handleSendToClaudeCode}
               />
             )}
           </main>

@@ -112,6 +112,17 @@ export const INSPECTOR_SCRIPT = `
   \`;
   document.documentElement.appendChild(selection);
 
+  // Element ID counter for stable targeting
+  let elementIdCounter = 0;
+  const elementIdMap = new WeakMap();
+
+  function getOrCreateElementId(el) {
+    if (!elementIdMap.has(el)) {
+      elementIdMap.set(el, '__pi_' + (++elementIdCounter));
+    }
+    return elementIdMap.get(el);
+  }
+
   function getElementSelector(el) {
     if (el.id) return '#' + el.id;
 
@@ -123,6 +134,119 @@ export const INSPECTOR_SCRIPT = `
       }
     }
     return selector;
+  }
+
+  // Get unique CSS selector path for element
+  function getFullSelector(el) {
+    const parts = [];
+    let current = el;
+    while (current && current !== document.body && current !== document.documentElement) {
+      let selector = current.tagName.toLowerCase();
+      if (current.id) {
+        selector = '#' + current.id;
+        parts.unshift(selector);
+        break;
+      }
+      if (current.className && typeof current.className === 'string') {
+        const classes = current.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('__preview'));
+        if (classes.length > 0) {
+          selector += '.' + classes.slice(0, 2).join('.');
+        }
+      }
+      // Add nth-child if needed for uniqueness
+      const parent = current.parentElement;
+      if (parent) {
+        const siblings = Array.from(parent.children).filter(c => c.tagName === current.tagName);
+        if (siblings.length > 1) {
+          const index = siblings.indexOf(current) + 1;
+          selector += ':nth-child(' + index + ')';
+        }
+      }
+      parts.unshift(selector);
+      current = current.parentElement;
+    }
+    return parts.join(' > ');
+  }
+
+  // Get parent chain for context
+  function getParentChain(el, maxDepth = 5) {
+    const chain = [];
+    let current = el.parentElement;
+    let depth = 0;
+    while (current && current !== document.body && depth < maxDepth) {
+      chain.push({
+        tagName: current.tagName.toLowerCase(),
+        id: current.id || null,
+        className: typeof current.className === 'string' ? current.className : '',
+        selector: getElementSelector(current)
+      });
+      current = current.parentElement;
+      depth++;
+    }
+    return chain;
+  }
+
+  // Get sibling info
+  function getSiblingInfo(el) {
+    const parent = el.parentElement;
+    if (!parent) return { before: 0, after: 0, total: 1 };
+    const siblings = Array.from(parent.children);
+    const index = siblings.indexOf(el);
+    return {
+      before: index,
+      after: siblings.length - index - 1,
+      total: siblings.length
+    };
+  }
+
+  // Detect React component info
+  function getReactInfo(el) {
+    try {
+      // Find React Fiber node
+      const key = Object.keys(el).find(k =>
+        k.startsWith('__reactFiber$') ||
+        k.startsWith('__reactInternalInstance$')
+      );
+      if (!key) return null;
+
+      const fiber = el[key];
+      if (!fiber) return null;
+
+      // Traverse fiber tree to find component
+      let current = fiber;
+      while (current) {
+        const type = current.type;
+        if (type && (typeof type === 'function' || typeof type === 'object')) {
+          const name = type.displayName || type.name || null;
+          if (name && name !== 'Anonymous' && !name.startsWith('_')) {
+            const props = current.memoizedProps || {};
+            // Filter out children and internal props
+            const cleanProps = {};
+            for (const [k, v] of Object.entries(props)) {
+              if (k !== 'children' && !k.startsWith('__')) {
+                if (typeof v === 'function') {
+                  cleanProps[k] = '[Function]';
+                } else if (typeof v === 'object' && v !== null) {
+                  cleanProps[k] = Array.isArray(v) ? '[Array]' : '[Object]';
+                } else {
+                  cleanProps[k] = v;
+                }
+              }
+            }
+            return {
+              componentName: name,
+              props: cleanProps,
+              filePath: type.__source?.fileName || null,
+              lineNumber: type.__source?.lineNumber || null
+            };
+          }
+        }
+        current = current.return;
+      }
+    } catch (e) {
+      // Silently fail if React detection fails
+    }
+    return null;
   }
 
   function getElementInfo(el) {
@@ -158,6 +282,109 @@ export const INSPECTOR_SCRIPT = `
       },
       selector: getElementSelector(el)
     };
+  }
+
+  // Get detailed element info for AI context
+  function getDetailedElementInfo(el) {
+    const basicInfo = getElementInfo(el);
+    const computedStyle = window.getComputedStyle(el);
+
+    // Get outerHTML but truncate if too large
+    let outerHTML = el.outerHTML || '';
+    if (outerHTML.length > 5000) {
+      // Get just the opening tag and indicate truncation
+      const match = outerHTML.match(/^<[^>]+>/);
+      outerHTML = (match ? match[0] : '<' + el.tagName.toLowerCase() + '>') + '...truncated...';
+    }
+
+    return {
+      ...basicInfo,
+      elementId: getOrCreateElementId(el),
+      outerHTML: outerHTML,
+      fullSelector: getFullSelector(el),
+      parentChain: getParentChain(el),
+      siblings: getSiblingInfo(el),
+      react: getReactInfo(el),
+      // Extended computed styles for AI editing
+      extendedStyles: {
+        display: computedStyle.display,
+        position: computedStyle.position,
+        top: computedStyle.top,
+        left: computedStyle.left,
+        right: computedStyle.right,
+        bottom: computedStyle.bottom,
+        width: computedStyle.width,
+        height: computedStyle.height,
+        color: computedStyle.color,
+        backgroundColor: computedStyle.backgroundColor,
+        fontSize: computedStyle.fontSize,
+        fontFamily: computedStyle.fontFamily,
+        fontWeight: computedStyle.fontWeight,
+        lineHeight: computedStyle.lineHeight,
+        textAlign: computedStyle.textAlign,
+        padding: computedStyle.padding,
+        margin: computedStyle.margin,
+        border: computedStyle.border,
+        borderRadius: computedStyle.borderRadius,
+        boxShadow: computedStyle.boxShadow,
+        opacity: computedStyle.opacity,
+        zIndex: computedStyle.zIndex,
+        flexDirection: computedStyle.flexDirection,
+        justifyContent: computedStyle.justifyContent,
+        alignItems: computedStyle.alignItems,
+        gap: computedStyle.gap
+      }
+    };
+  }
+
+  // Style preview system
+  let previewStyles = null;
+  let originalStyles = null;
+
+  function applyStylePreview(elementId, styles) {
+    // Find element by ID
+    let targetEl = null;
+    for (const [el, id] of elementIdMap) {
+      if (id === elementId) {
+        targetEl = el;
+        break;
+      }
+    }
+    if (!targetEl) return false;
+
+    // Save original inline styles
+    originalStyles = {};
+    for (const prop of Object.keys(styles)) {
+      originalStyles[prop] = targetEl.style[prop] || '';
+    }
+
+    // Apply preview styles
+    for (const [prop, value] of Object.entries(styles)) {
+      targetEl.style[prop] = value;
+    }
+    previewStyles = { elementId, styles };
+    return true;
+  }
+
+  function revertStylePreview() {
+    if (!previewStyles || !originalStyles) return;
+
+    // Find element
+    let targetEl = null;
+    for (const [el, id] of elementIdMap) {
+      if (id === previewStyles.elementId) {
+        targetEl = el;
+        break;
+      }
+    }
+    if (!targetEl) return;
+
+    // Restore original styles
+    for (const [prop, value] of Object.entries(originalStyles)) {
+      targetEl.style[prop] = value;
+    }
+    previewStyles = null;
+    originalStyles = null;
   }
 
   function updateOverlay(el) {
@@ -282,8 +509,8 @@ export const INSPECTOR_SCRIPT = `
     selectedElement = el;
     updateSelection(el);
 
-    // Send element info to parent
-    const info = getElementInfo(el);
+    // Send detailed element info to parent (includes React info, parent chain, etc.)
+    const info = getDetailedElementInfo(el);
     window.parent.postMessage({
       type: 'preview-element-selected',
       element: info
@@ -313,6 +540,24 @@ export const INSPECTOR_SCRIPT = `
       setInspectMode(e.data.enabled);
     } else if (e.data?.type === 'preview-clear-selection') {
       clearSelection();
+    } else if (e.data?.type === 'preview-apply-style-preview') {
+      // Apply temporary style preview
+      const { elementId, styles } = e.data;
+      if (elementId && styles) {
+        applyStylePreview(elementId, styles);
+      }
+    } else if (e.data?.type === 'preview-revert-style-preview') {
+      // Revert style preview
+      revertStylePreview();
+    } else if (e.data?.type === 'preview-request-detailed-info') {
+      // Request detailed info for currently selected element
+      if (selectedElement) {
+        const info = getDetailedElementInfo(selectedElement);
+        window.parent.postMessage({
+          type: 'preview-detailed-info',
+          element: info
+        }, '*');
+      }
     }
   });
 

@@ -108,8 +108,14 @@ export function rewriteSetCookieHeader(header: string, options: RewriteSetCookie
     }
   }
 
-  if (sameSiteValue === 'none' && !hasSecure && options.isSecureRequest) {
+  // SameSite=None requires Secure attribute per spec
+  if (sameSiteValue === 'none' && !hasSecure) {
     rewrittenAttributes.push('Secure');
+  }
+
+  // Add Partitioned attribute for CHIPS compliance (third-party iframe context)
+  if (sameSiteValue === 'none' && options.isSecureRequest) {
+    rewrittenAttributes.push('Partitioned');
   }
 
   if (rewrittenAttributes.length === 0) {

@@ -708,7 +708,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           ? rewriteSetCookieHeaders(setCookieHeaders, {
             previewHost,
             isSecureRequest: isSecureRequest(request),
-            defaultSameSite: 'lax'
+            defaultSameSite: 'none'
           })
           : setCookieHeaders;
         // Store cookies server-side for browser-like behavior in iframe

@@ -46,35 +46,37 @@ export default function ClaudeCodeSessionSelector({
 
           {sessions.length > 0 && <div className="dropdown-divider" />}
 
-          {sessions.map((session, index) => (
-            <div
-              key={session.id}
-              className={`session-item ${session.id === activeId ? 'active' : ''}`}
-            >
-              <button
-                className="session-select-btn"
-                onClick={() => { onSelect(session.id); setIsOpen(false); }}
-                type="button"
+          {sessions.map((session, index) => {
+            const messageCount = session.messageCount ?? session.events?.length ?? 0;
+            return (
+              <div
+                key={session.id}
+                className={`session-item ${session.id === activeId ? 'active' : ''}`}
               >
-                <span className={`status-dot ${session.isActive ? 'active' : 'inactive'}`} />
-                <span>Claude Code {index + 1}</span>
-                <span className="session-meta">
-                  {session.events?.length || 0} messages
-                </span>
-              </button>
-              <button
-                className="session-delete-btn"
-                onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
-                aria-label="Delete Claude Code session"
-                type="button"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                <button
+                  className="session-select-btn"
+                  onClick={() => { onSelect(session.id); setIsOpen(false); }}
+                  type="button"
+                >
+                  <span className={`status-dot ${session.isActive ? 'active' : 'inactive'}`} />
+                  <span>Claude Code {index + 1}</span>
+                  <span className="session-meta">
+                    {messageCount} events
+                  </span>
+                </button>
+                <button
+                  className="session-delete-btn"
+                  onClick={(e) => { e.stopPropagation(); onDelete(session.id); }}
+                  aria-label="Delete Claude Code session"
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
-

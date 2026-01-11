@@ -67,8 +67,50 @@ export function MobileHeader({
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [renamingSessionId, setRenamingSessionId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const [showOverflow, setShowOverflow] = useState(false);
+  const [hasOverflow, setHasOverflow] = useState(false);
   const tabsRef = useRef(null);
   const renameInputRef = useRef(null);
+  const overflowRef = useRef(null);
+
+  // Check if tabs overflow
+  const updateOverflowState = useCallback(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    setHasOverflow(el.scrollWidth > el.clientWidth + 1);
+  }, []);
+
+  // Update overflow state on mount and when sessions change
+  useEffect(() => {
+    updateOverflowState();
+    const el = tabsRef.current;
+    if (el) {
+      el.addEventListener('scroll', updateOverflowState);
+      window.addEventListener('resize', updateOverflowState);
+      return () => {
+        el.removeEventListener('scroll', updateOverflowState);
+        window.removeEventListener('resize', updateOverflowState);
+      };
+    }
+  }, [activeSessions, updateOverflowState]);
+
+  // Close overflow menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target)) {
+        setShowOverflow(false);
+      }
+    };
+    if (showOverflow) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showOverflow]);
+
+  const handleOverflowSelect = useCallback((sessionId) => {
+    onSelectSession(sessionId);
+    setShowOverflow(false);
+  }, [onSelectSession]);
 
   const handleTabLongPress = useCallback((sessionId, coords) => {
     setTabContextMenu({ sessionId, x: coords.x, y: coords.y });
@@ -161,6 +203,48 @@ export function MobileHeader({
             +
           </button>
         </div>
+
+        {/* Overflow dropdown for many tabs */}
+        {hasOverflow && (
+          <div className="mobile-header-overflow" ref={overflowRef}>
+            <button
+              type="button"
+              className="mobile-header-overflow-btn"
+              onClick={() => setShowOverflow(!showOverflow)}
+              aria-label={`Show all ${activeSessions.length} terminals`}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+              <span className="mobile-header-overflow-count">{activeSessions.length}</span>
+            </button>
+
+            {showOverflow && (
+              <div className="mobile-header-overflow-menu">
+                <div className="mobile-header-overflow-header">
+                  All Terminals ({activeSessions.length})
+                </div>
+                <div className="mobile-header-overflow-list">
+                  {activeSessions.map(session => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className={`mobile-header-overflow-item${session.id === activeSessionId ? ' active' : ''}`}
+                      onClick={() => handleOverflowSelect(session.id)}
+                    >
+                      <span className="mobile-header-overflow-title">{session.title || 'Terminal'}</span>
+                      {session.id === activeSessionId && (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Action buttons */}
         <div className="mobile-header-actions">

@@ -49,10 +49,10 @@ describe('rewriteSetCookieHeader', () => {
     expect(output).toBe('__Host-id=abc; Path=/; Secure');
   });
 
-  it('adds Secure for SameSite=None on secure requests', () => {
+  it('adds Secure and Partitioned for SameSite=None on secure requests', () => {
     const input = 'sid=abc; SameSite=None';
     const output = rewriteSetCookieHeader(input, options);
-    expect(output).toBe('sid=abc; SameSite=None; Secure');
+    expect(output).toBe('sid=abc; SameSite=None; Secure; Partitioned');
   });
 
   it('normalizes invalid SameSite values', () => {

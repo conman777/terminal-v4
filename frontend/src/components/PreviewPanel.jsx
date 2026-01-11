@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
+import { StyleEditor } from './StyleEditor';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -8,7 +9,7 @@ function formatTime(timestamp) {
   return date.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode }) {
   const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -20,6 +21,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState(null);
+  const [editDescription, setEditDescription] = useState('');
+  const [showEditInput, setShowEditInput] = useState(false);
+  const [showStyleEditor, setShowStyleEditor] = useState(false);
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
@@ -289,6 +293,112 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, []);
 
+  // Format element context for Claude and send
+  const handleEditWithClaude = useCallback((description) => {
+    if (!selectedElement || !onSendToClaudeCode) return;
+
+    // Build context string for Claude
+    const el = selectedElement;
+    const parentPath = el.parentChain
+      ? el.parentChain.map(p => p.selector).reverse().join(' > ')
+      : '';
+
+    let context = `I've selected an element in the preview that I'd like you to modify.\n\n`;
+    context += `**Selected Element:**\n`;
+    context += `- Selector: \`${el.fullSelector || el.selector}\`\n`;
+    context += `- Tag: \`<${el.tagName}>\`\n`;
+    if (el.id) context += `- ID: \`${el.id}\`\n`;
+    if (el.className) context += `- Classes: \`${el.className}\`\n`;
+    if (parentPath) context += `- Parent path: \`${parentPath}\`\n`;
+    context += `- Size: ${el.rect.width} x ${el.rect.height}px\n`;
+
+    // Add React component info if available
+    if (el.react?.componentName) {
+      context += `\n**React Component:**\n`;
+      context += `- Component: \`<${el.react.componentName}>\`\n`;
+      if (el.react.filePath) {
+        context += `- Source: \`${el.react.filePath}${el.react.lineNumber ? ':' + el.react.lineNumber : ''}\`\n`;
+      }
+      if (Object.keys(el.react.props || {}).length > 0) {
+        context += `- Props: \`${JSON.stringify(el.react.props)}\`\n`;
+      }
+    }
+
+    // Add HTML snippet
+    if (el.outerHTML) {
+      const htmlSnippet = el.outerHTML.length > 500
+        ? el.outerHTML.substring(0, 500) + '...'
+        : el.outerHTML;
+      context += `\n**HTML:**\n\`\`\`html\n${htmlSnippet}\n\`\`\`\n`;
+    }
+
+    // Add current styles
+    const styles = el.extendedStyles || el.computedStyle;
+    if (styles) {
+      const relevantStyles = Object.entries(styles)
+        .filter(([, v]) => v && v !== 'none' && v !== 'auto' && v !== 'normal')
+        .slice(0, 10)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+      if (relevantStyles) {
+        context += `\n**Current Styles:** \`${relevantStyles}\`\n`;
+      }
+    }
+
+    // Add user's requested change
+    context += `\n**Requested Change:**\n${description}\n`;
+    context += `\nPlease find and edit the relevant source file(s) to make this change.`;
+
+    onSendToClaudeCode(context);
+  }, [selectedElement, onSendToClaudeCode]);
+
+  // Send style preview to iframe
+  const handleStylePreview = useCallback((styles) => {
+    if (!selectedElement?.elementId || !iframeRef.current?.contentWindow) return;
+    iframeRef.current.contentWindow.postMessage({
+      type: 'preview-apply-style-preview',
+      elementId: selectedElement.elementId,
+      styles
+    }, '*');
+  }, [selectedElement]);
+
+  // Revert style preview in iframe
+  const handleStyleRevert = useCallback(() => {
+    if (!iframeRef.current?.contentWindow) return;
+    iframeRef.current.contentWindow.postMessage({
+      type: 'preview-revert-style-preview'
+    }, '*');
+  }, []);
+
+  // Apply styles via Claude
+  const handleStyleApply = useCallback((styles) => {
+    if (!selectedElement || !onSendToClaudeCode) return;
+
+    const el = selectedElement;
+    const styleChanges = Object.entries(styles)
+      .map(([prop, value]) => `${prop}: ${value}`)
+      .join(';\n  ');
+
+    let context = `I've made style changes to an element in the preview that I'd like you to apply to the source code.\n\n`;
+    context += `**Selected Element:**\n`;
+    context += `- Selector: \`${el.fullSelector || el.selector}\`\n`;
+    if (el.react?.componentName) {
+      context += `- React Component: \`<${el.react.componentName}>\`\n`;
+      if (el.react.filePath) {
+        context += `- Source: \`${el.react.filePath}\`\n`;
+      }
+    }
+
+    context += `\n**Style Changes to Apply:**\n\`\`\`css\n${el.selector} {\n  ${styleChanges};\n}\n\`\`\`\n`;
+    context += `\nPlease find and edit the relevant CSS/style file(s) to apply these changes. `;
+    context += `If this is a React component, you may need to update inline styles, styled-components, CSS modules, or Tailwind classes as appropriate.`;
+
+    // Revert preview before sending to Claude
+    handleStyleRevert();
+    setShowStyleEditor(false);
+    onSendToClaudeCode(context);
+  }, [selectedElement, onSendToClaudeCode, handleStyleRevert]);
+
   useEffect(() => {
     setInputUrl(url || '');
   }, [url]);
@@ -456,6 +566,22 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
         {/* Floating URL bar at top */}
         <div className="preview-floating-url">
+          {/* Port selector button */}
+          <button
+            type="button"
+            className={`preview-floating-btn preview-port-btn-mobile ${showPortDropdown ? 'active' : ''}`}
+            onClick={() => setShowPortDropdown(!showPortDropdown)}
+            aria-label="Select port"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <path d="M8 21h8" />
+              <path d="M12 17v4" />
+            </svg>
+            {activePorts.filter(p => p.listening).length > 0 && (
+              <span className="preview-port-badge-mobile">{activePorts.filter(p => p.listening).length}</span>
+            )}
+          </button>
           {showUrlInput ? (
             <form className="preview-url-form-mobile" onSubmit={handleUrlSubmit}>
               <input
@@ -475,6 +601,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               onClick={() => setShowUrlInput(true)}
             >
               {displayUrl}
+            </button>
+          )}
+          {/* Cookie clear button - only shown when cookies exist */}
+          {previewPort && hasCookies && (
+            <button
+              type="button"
+              className="preview-floating-btn preview-cookie-btn-mobile"
+              onClick={handleClearCookies}
+              aria-label="Clear cookies"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 12h8" />
+                <circle cx="12" cy="12" r="3" fill="currentColor" />
+              </svg>
             </button>
           )}
           <button
@@ -502,11 +643,61 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           </button>
         </div>
 
+        {/* Port selector dropdown */}
+        {showPortDropdown && (
+          <div className="preview-port-sheet" ref={portDropdownRef}>
+            <div className="preview-port-sheet-header">
+              <span>Active Ports</span>
+              <button
+                type="button"
+                className="preview-port-sheet-close"
+                onClick={() => setShowPortDropdown(false)}
+                aria-label="Close"
+              >
+                {'\u00D7'}
+              </button>
+            </div>
+            {activePorts.length === 0 ? (
+              <div className="preview-port-sheet-empty">No active ports found</div>
+            ) : (
+              <div className="preview-port-sheet-list">
+                {activePorts.map(({ port, listening, previewed, process, cwd }) => (
+                  <button
+                    key={port}
+                    type="button"
+                    className={`preview-port-sheet-item ${port === previewPort ? 'current' : ''}`}
+                    onClick={() => handleSelectPort(port)}
+                  >
+                    <span className="preview-port-sheet-number">:{port}</span>
+                    {(cwd || process) && <span className="preview-port-sheet-process">{cwd || process}</span>}
+                    <span className="preview-port-sheet-status">
+                      {listening && <span className="preview-port-dot listening" title="Listening" />}
+                      {previewed && <span className="preview-port-dot previewed" title="Previously viewed" />}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Console bottom sheet */}
         <div className={`preview-console-sheet ${showLogs ? 'open' : ''}`}>
           <div className="preview-console-header" onClick={() => setShowLogs(!showLogs)}>
             <div className="preview-console-handle" />
-            <span className="preview-console-title">Console {logs.length > 0 && `(${logs.length})`}</span>
+            <span className="preview-console-title">Logs {(logs.length + proxyLogs.length) > 0 && `(${logs.length + proxyLogs.length})`}</span>
+            {showLogs && (
+              <select
+                className="preview-logs-filter-mobile"
+                value={logFilter}
+                onChange={(e) => { e.stopPropagation(); setLogFilter(e.target.value); }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <option value="all">All</option>
+                <option value="proxy">Network</option>
+                <option value="client">Console</option>
+              </select>
+            )}
             <button
               type="button"
               className="preview-console-clear"
@@ -516,22 +707,184 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             </button>
           </div>
           <div className="preview-console-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
-            {logs.length === 0 ? (
-              <div className="preview-logs-empty">No console output</div>
+            {filteredLogs.length === 0 ? (
+              <div className="preview-logs-empty">No logs yet</div>
             ) : (
-              logs.map((log) => (
-                <div key={log.id} className={`preview-log-entry preview-log-${log.level}`}>
-                  <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                  <span className="preview-log-message">{log.message}</span>
-                </div>
-              ))
+              filteredLogs.map((log) => {
+                if (log.source === 'client') {
+                  return (
+                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className="preview-log-message">{log.message}</span>
+                    </div>
+                  );
+                } else {
+                  const statusClass = log.error ? 'error' : (log.status >= 400 ? 'warn' : 'info');
+                  const statusText = log.error ? 'ERR' : log.status;
+                  return (
+                    <div key={`p-${log.id}`} className={`preview-log-entry preview-log-${statusClass} preview-log-network`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className={`preview-log-status preview-log-status-${statusClass}`}>{statusText}</span>
+                      <span className="preview-log-method">{log.method}</span>
+                      <span className="preview-log-url" title={log.url}>{log.url}</span>
+                    </div>
+                  );
+                }
+              })
             )}
             <div ref={logsEndRef} />
           </div>
         </div>
 
+        {/* Element inspector bottom sheet */}
+        {selectedElement && (
+          <div className="preview-inspector-sheet">
+            <div className="preview-inspector-sheet-header">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+              </svg>
+              <span>Element Inspector</span>
+              <button
+                type="button"
+                className="preview-inspector-sheet-close"
+                onClick={handleClearSelection}
+                aria-label="Close"
+              >
+                {'\u00D7'}
+              </button>
+            </div>
+            <div className="preview-inspector-sheet-content">
+              <div className="preview-inspector-selector">
+                <code>{selectedElement.selector}</code>
+              </div>
+              <div className="preview-inspector-section">
+                <div className="preview-inspector-label">Element</div>
+                <div className="preview-inspector-value">
+                  <span className="preview-inspector-tag">&lt;{selectedElement.tagName}</span>
+                  {selectedElement.id && <span className="preview-inspector-id">#{selectedElement.id}</span>}
+                  {selectedElement.className && (
+                    <span className="preview-inspector-class">
+                      .{selectedElement.className.split(' ').filter(c => c).join('.')}
+                    </span>
+                  )}
+                  <span className="preview-inspector-tag">&gt;</span>
+                </div>
+              </div>
+              <div className="preview-inspector-section">
+                <div className="preview-inspector-label">Size</div>
+                <div className="preview-inspector-value">
+                  {selectedElement.rect.width} x {selectedElement.rect.height}px
+                </div>
+              </div>
+              {selectedElement.textContent && (
+                <div className="preview-inspector-section">
+                  <div className="preview-inspector-label">Text</div>
+                  <div className="preview-inspector-text">
+                    {selectedElement.textContent.length > 80
+                      ? selectedElement.textContent.substring(0, 80) + '...'
+                      : selectedElement.textContent}
+                  </div>
+                </div>
+              )}
+              {/* React Component Info */}
+              {selectedElement.react?.componentName && (
+                <div className="preview-inspector-section preview-inspector-react">
+                  <div className="preview-inspector-label">React</div>
+                  <div className="preview-inspector-value">
+                    <span className="preview-inspector-component">&lt;{selectedElement.react.componentName}&gt;</span>
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Actions - Mobile */}
+            {onSendToClaudeCode && (
+              <div className="preview-inspector-sheet-actions">
+                {showEditInput ? (
+                  <form
+                    className="preview-inspector-edit-form-mobile"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (editDescription.trim()) {
+                        handleEditWithClaude(editDescription.trim());
+                        setEditDescription('');
+                        setShowEditInput(false);
+                      }
+                    }}
+                  >
+                    <input
+                      type="text"
+                      className="preview-inspector-edit-input"
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      placeholder="Describe the change..."
+                      autoFocus
+                    />
+                    <button type="submit" className="preview-inspector-edit-submit" disabled={!editDescription.trim()}>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <line x1="22" y1="2" x2="11" y2="13"/>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                      </svg>
+                    </button>
+                  </form>
+                ) : (
+                  <div className="preview-inspector-btns-mobile">
+                    <button
+                      type="button"
+                      className="preview-inspector-edit-btn-mobile"
+                      onClick={() => setShowEditInput(true)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 20h9"/>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                      </svg>
+                      Edit with Claude
+                    </button>
+                    <button
+                      type="button"
+                      className={`preview-inspector-style-btn-mobile ${showStyleEditor ? 'active' : ''}`}
+                      onClick={() => setShowStyleEditor(!showStyleEditor)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="13.5" cy="6.5" r="2.5"/>
+                        <circle cx="19" cy="17" r="2"/>
+                        <circle cx="6" cy="12" r="2.5"/>
+                        <path d="M9.5 10.5L14 6.5"/>
+                        <path d="M16 8.5l2 6"/>
+                        <path d="M8 14l5 2"/>
+                      </svg>
+                      Styles
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Style Editor - Mobile */}
+            {showStyleEditor && (
+              <StyleEditor
+                element={selectedElement}
+                onStyleChange={handleStylePreview}
+                onApply={handleStyleApply}
+                onRevert={handleStyleRevert}
+                isMobile={true}
+              />
+            )}
+          </div>
+        )}
+
         {/* Floating action buttons bottom-right */}
-        <div className="preview-floating-actions">
+        <div className={`preview-floating-actions ${selectedElement ? 'with-inspector' : ''}`}>
+          <button
+            type="button"
+            className={`preview-floating-btn ${inspectMode ? 'active' : ''}`}
+            onClick={handleToggleInspect}
+            disabled={!iframeSrc}
+            aria-label={inspectMode ? 'Exit inspect mode' : 'Inspect elements'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+              <path d="M13 13l6 6" />
+            </svg>
+          </button>
           <button
             type="button"
             className="preview-floating-btn"
@@ -555,7 +908,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
-            {logs.length > 0 && <span className="preview-log-badge">{logs.length}</span>}
+            {(logs.length + proxyLogs.length) > 0 && <span className="preview-log-badge">{logs.length + proxyLogs.length}</span>}
           </button>
         </div>
       </div>
@@ -918,7 +1271,114 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 </div>
               </div>
             )}
+            {/* React Component Info */}
+            {selectedElement.react?.componentName && (
+              <div className="preview-inspector-section preview-inspector-react">
+                <div className="preview-inspector-label">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="12" r="2.5"/>
+                    <ellipse cx="12" cy="12" rx="10" ry="4" fill="none" stroke="currentColor" strokeWidth="1.5"/>
+                    <ellipse cx="12" cy="12" rx="10" ry="4" fill="none" stroke="currentColor" strokeWidth="1.5" transform="rotate(60 12 12)"/>
+                    <ellipse cx="12" cy="12" rx="10" ry="4" fill="none" stroke="currentColor" strokeWidth="1.5" transform="rotate(120 12 12)"/>
+                  </svg>
+                  React
+                </div>
+                <div className="preview-inspector-value">
+                  <span className="preview-inspector-component">&lt;{selectedElement.react.componentName}&gt;</span>
+                  {selectedElement.react.filePath && (
+                    <span className="preview-inspector-muted"> {selectedElement.react.filePath.split('/').pop()}</span>
+                  )}
+                </div>
+                {Object.keys(selectedElement.react.props || {}).length > 0 && (
+                  <div className="preview-inspector-props">
+                    {Object.entries(selectedElement.react.props).slice(0, 5).map(([name, value]) => (
+                      <div key={name} className="preview-inspector-prop">
+                        <span className="preview-inspector-prop-name">{name}</span>
+                        <span className="preview-inspector-prop-value">
+                          {typeof value === 'string' ? `"${value}"` : String(value)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+          {/* Actions: Edit with Claude or Style Editor */}
+          {onSendToClaudeCode && (
+            <div className="preview-inspector-actions">
+              {showEditInput ? (
+                <form
+                  className="preview-inspector-edit-form"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (editDescription.trim()) {
+                      handleEditWithClaude(editDescription.trim());
+                      setEditDescription('');
+                      setShowEditInput(false);
+                    }
+                  }}
+                >
+                  <input
+                    type="text"
+                    className="preview-inspector-edit-input"
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    placeholder="Describe the change..."
+                    autoFocus
+                  />
+                  <button type="submit" className="preview-inspector-edit-submit" disabled={!editDescription.trim()}>
+                    Send
+                  </button>
+                  <button
+                    type="button"
+                    className="preview-inspector-edit-cancel"
+                    onClick={() => { setShowEditInput(false); setEditDescription(''); }}
+                  >
+                    {'\u00D7'}
+                  </button>
+                </form>
+              ) : (
+                <div className="preview-inspector-btns">
+                  <button
+                    type="button"
+                    className="preview-inspector-edit-btn"
+                    onClick={() => setShowEditInput(true)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 20h9"/>
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                    Edit with Claude
+                  </button>
+                  <button
+                    type="button"
+                    className={`preview-inspector-style-btn ${showStyleEditor ? 'active' : ''}`}
+                    onClick={() => setShowStyleEditor(!showStyleEditor)}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="13.5" cy="6.5" r="2.5"/>
+                      <circle cx="19" cy="17" r="2"/>
+                      <circle cx="6" cy="12" r="2.5"/>
+                      <path d="M9.5 10.5L14 6.5"/>
+                      <path d="M16 8.5l2 6"/>
+                      <path d="M8 14l5 2"/>
+                    </svg>
+                    Styles
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Style Editor Panel */}
+          {showStyleEditor && selectedElement && (
+            <StyleEditor
+              element={selectedElement}
+              onStyleChange={handleStylePreview}
+              onApply={handleStyleApply}
+              onRevert={handleStyleRevert}
+            />
+          )}
         </div>
       )}
     </div>

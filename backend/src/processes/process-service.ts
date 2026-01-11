@@ -58,12 +58,15 @@ export function getListeningPorts(): PortInfo[] {
       if (!pidMatch) continue;
       const pid = parseInt(pidMatch[1], 10);
 
+      // Validate PID is a positive integer
+      if (isNaN(pid) || pid <= 0) continue;
+
       // Get command name from /proc/{pid}/comm
       let command = 'unknown';
       try {
         command = readFileSync(`/proc/${pid}/comm`, 'utf-8').trim();
       } catch {
-        // Process may have exited
+        // Process may have exited - safe to ignore
       }
 
       ports.push({ port, pid, command });
@@ -280,6 +283,14 @@ export async function startRepo(repoPath: string): Promise<{ success: boolean; p
           }
         }
       }
+    });
+
+    // Handle stream errors to prevent unhandled error events
+    child.stdout?.on('error', (err) => {
+      console.error(`stdout error for process ${pid}:`, err.message);
+    });
+    child.stderr?.on('error', (err) => {
+      console.error(`stderr error for process ${pid}:`, err.message);
     });
 
     // Handle process exit

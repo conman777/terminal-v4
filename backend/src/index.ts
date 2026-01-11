@@ -25,6 +25,7 @@ import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
 import { assertAuthConfig } from './auth/auth-service';
+import { stopCleanupInterval } from './preview/preview-logs-service';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -136,6 +137,7 @@ async function start() {
   const shutdown = async (signal: string) => {
     server.log.info(`${signal} received, shutting down...`);
     try {
+      stopCleanupInterval();
       await server.close();
       await terminalManager.closeAll();
       closeDatabase();
