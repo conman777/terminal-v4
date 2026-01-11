@@ -148,7 +148,37 @@ export class TerminalManager {
 
     // Auto-restore sessions that have surviving tmux processes
     if (this.#useTmux) {
-      for (const session of persisted) {
+      // First, recover any orphaned tmux sessions (tmux exists but no valid persisted data)
+      const tmuxSessions = listTmuxSessions();
+      for (const tmuxId of tmuxSessions) {
+        if (!userSessions.has(tmuxId)) {
+          // Tmux exists but no valid persisted data - create minimal entry
+          const cwd = getTmuxSessionCwd(tmuxId) || process.cwd();
+          // Use the directory name as the title to help identify the session
+          const dirName = path.basename(cwd);
+          const title = dirName && dirName !== '/' ? `${dirName} (recovered)` : 'Recovered Terminal';
+          console.log(`[TerminalManager] Recovering orphaned tmux session: ${tmuxId} -> ${title}`);
+          const recovered: PersistedSession = {
+            id: tmuxId,
+            title,
+            shell: this.#defaultShell,
+            cwd,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            history: []
+          };
+          userSessions.set(tmuxId, recovered);
+          // Save the recovered session to disk
+          try {
+            await saveSession(userId, recovered);
+          } catch (error) {
+            console.error(`Failed to save recovered session ${tmuxId}:`, error);
+          }
+        }
+      }
+
+      // Now restore all sessions that have surviving tmux processes
+      for (const session of userSessions.values()) {
         // Skip if already active
         if (this.#sessions.has(session.id)) {
           continue;

@@ -1,5 +1,5 @@
-import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, writeFile, mkdir, readdir, unlink, rename } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalStreamEvent } from './terminal-types';
 
@@ -45,10 +45,17 @@ function getSessionFilePath(userId: string, sessionId: string): string {
 export async function saveSession(userId: string, session: PersistedSession): Promise<void> {
   await ensureUserSessionsDir(userId);
   const filePath = getSessionFilePath(userId, session.id);
+  const tempPath = `${filePath}.tmp`;
   try {
-    await writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
+    // Write to temp file first, then atomic rename to prevent corruption
+    await writeFile(tempPath, JSON.stringify(session, null, 2), 'utf-8');
+    await rename(tempPath, filePath);
   } catch (error) {
     console.error(`Failed to save session ${session.id}:`, error);
+    // Clean up temp file if it exists
+    try {
+      if (existsSync(tempPath)) await unlink(tempPath);
+    } catch {}
     throw error;
   }
 }
@@ -60,10 +67,27 @@ export async function loadSession(userId: string, sessionId: string): Promise<Pe
   }
 
   try {
+    // Check for corrupt 0-byte files
+    const stats = statSync(filePath);
+    if (stats.size === 0) {
+      console.warn(`Deleting corrupt empty session file: ${sessionId}`);
+      await unlink(filePath);
+      return null;
+    }
+
     const data = await readFile(filePath, 'utf-8');
+    if (!data || data.trim() === '') {
+      console.warn(`Deleting corrupt empty session file: ${sessionId}`);
+      await unlink(filePath);
+      return null;
+    }
     return JSON.parse(data) as PersistedSession;
   } catch (error) {
-    console.error(`Failed to load session ${sessionId}:`, error);
+    console.error(`Failed to load session ${sessionId}, deleting corrupt file:`, error);
+    // Delete corrupt file so it doesn't block recovery
+    try {
+      await unlink(filePath);
+    } catch {}
     return null;
   }
 }

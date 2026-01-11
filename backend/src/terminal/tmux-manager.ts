@@ -36,7 +36,11 @@ export function tmuxSessionExists(sessionId: string): boolean {
   try {
     execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
     return true;
-  } catch {
+  } catch (error) {
+    // Exit code 1 means session doesn't exist (normal), other errors are unexpected
+    if (error instanceof Error && 'status' in error && (error as any).status !== 1) {
+      console.warn(`[tmux] Unexpected error checking session ${sessionId}:`, error);
+    }
     return false;
   }
 }
@@ -54,7 +58,12 @@ export function listTmuxSessions(): string[] {
       .split('\n')
       .filter(name => name.startsWith(TMUX_SESSION_PREFIX))
       .map(name => name.replace(TMUX_SESSION_PREFIX, ''));
-  } catch {
+  } catch (error) {
+    // Exit code 1 with "no server running" is normal when no tmux sessions exist
+    const stderr = error instanceof Error && 'stderr' in error ? (error as any).stderr : '';
+    if (!stderr?.toString().includes('no server running')) {
+      console.warn('[tmux] Error listing sessions:', error);
+    }
     return [];
   }
 }
@@ -67,7 +76,8 @@ export function killTmuxSession(sessionId: string): boolean {
   try {
     execSync(`tmux kill-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
     return true;
-  } catch {
+  } catch (error) {
+    console.warn(`[tmux] Failed to kill session ${sessionId}:`, error);
     return false;
   }
 }
