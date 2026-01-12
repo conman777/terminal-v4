@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
+import { getAccessToken } from '../utils/auth';
 import { StyleEditor } from './StyleEditor';
 
 // Format timestamp for log display
