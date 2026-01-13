@@ -20,6 +20,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [showLogs, setShowLogs] = useState(false);
   const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy'
   const [showUrlInput, setShowUrlInput] = useState(false);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(() => {
+    if (typeof document === 'undefined') return true;
+    return document.visibilityState === 'visible';
+  });
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState(null);
   const [editDescription, setEditDescription] = useState('');
@@ -41,6 +45,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     return result;
   }, [url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handleVisibilityChange = () => {
+      setIsDocumentVisible(document.visibilityState === 'visible');
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // Extract port from preview URL for cookie management
   const previewPort = useMemo(() => {
@@ -64,6 +77,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setHasCookies(false);
       return;
     }
+    if (!isDocumentVisible) {
+      return;
+    }
     const checkCookies = async () => {
       try {
         const token = getAccessToken();
@@ -77,9 +93,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
     checkCookies();
     // Re-check periodically while preview is active
-    const interval = setInterval(checkCookies, 5000);
+    const interval = setInterval(checkCookies, 10000);
     return () => clearInterval(interval);
-  }, [previewPort]);
+  }, [previewPort, isDocumentVisible]);
 
   const handleClearCookies = useCallback(async () => {
     if (!previewPort) return;
@@ -105,6 +121,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Fetch active ports for the dropdown
   useEffect(() => {
+    if (!isDocumentVisible) return;
     const fetchActivePorts = async () => {
       try {
         const token = getAccessToken();
@@ -122,7 +139,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     // Refresh every 5 seconds
     const interval = setInterval(fetchActivePorts, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isDocumentVisible]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -153,6 +170,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       lastProxyLogTimestamp.current = 0;
       return;
     }
+    if (!showLogs || !isDocumentVisible || logFilter === 'client') {
+      return;
+    }
     const fetchProxyLogs = async () => {
       try {
         const token = getAccessToken();
@@ -179,10 +199,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
     // Initial fetch (get all logs)
     fetchProxyLogs();
-    // Poll every second
-    const interval = setInterval(fetchProxyLogs, 1000);
+    // Poll every 2 seconds while logs are visible
+    const interval = setInterval(fetchProxyLogs, 2000);
     return () => clearInterval(interval);
-  }, [previewPort]);
+  }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 
   useEffect(() => {
     setIframeSrc(baseIframeSrc);

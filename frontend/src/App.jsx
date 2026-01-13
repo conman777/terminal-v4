@@ -2,25 +2,16 @@ import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } fro
 import { TerminalChat } from './components/TerminalChat';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
-import { BookmarkModal } from './components/BookmarkModal';
-import { NotesModal } from './components/NotesModal';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
-import { PreviewPanel } from './components/PreviewPanel';
-import { PreviewPip } from './components/PreviewPip';
 import { PathBreadcrumb } from './components/PathBreadcrumb';
-import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { SessionTabBar } from './components/SessionTabBar';
 import { SessionSelector } from './components/SessionSelector';
-import { SettingsModal } from './components/SettingsModal';
 const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
 import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
 import Sidebar from './components/Sidebar';
-import { FileManager } from './components/FileManager';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
-import ApiSettingsModal from './components/ApiSettingsModal';
-import { ProcessManagerModal } from './components/ProcessManagerModal';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
 import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
@@ -32,6 +23,14 @@ import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { apiFetch } from './utils/api';
+
+const PreviewPanel = lazy(() => import('./components/PreviewPanel').then((module) => ({ default: module.PreviewPanel })));
+const FileManager = lazy(() => import('./components/FileManager').then((module) => ({ default: module.FileManager })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
+const BookmarkModal = lazy(() => import('./components/BookmarkModal').then((module) => ({ default: module.BookmarkModal })));
+const NotesModal = lazy(() => import('./components/NotesModal').then((module) => ({ default: module.NotesModal })));
+const ApiSettingsModal = lazy(() => import('./components/ApiSettingsModal'));
+const ProcessManagerModal = lazy(() => import('./components/ProcessManagerModal').then((module) => ({ default: module.ProcessManagerModal })));
 
 function AppContent() {
   const { logout, user } = useAuth();
@@ -423,44 +422,46 @@ function AppContent() {
 
   return (
     <div className={`layout${isMobile ? ' mobile' : ''}${isNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
-      <SettingsModal
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        sessionId={activeSessionId}
-        sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
-        currentCwd={projectInfo?.cwd}
-        recentFolders={recentFolders}
-        onSave={navigateSession}
-        onAddRecentFolder={addRecentFolder}
-        terminalFontSize={terminalFontSize}
-        onFontSizeChange={updateTerminalFontSize}
-      />
-      <BookmarkModal
-        isOpen={showBookmarks}
-        onClose={() => setShowBookmarks(false)}
-        bookmarks={bookmarks}
-        onAdd={addBookmark}
-        onUpdate={updateBookmark}
-        onDelete={deleteBookmark}
-        onExecute={executeBookmark}
-      />
-      <NotesModal
-        isOpen={showNotes}
-        onClose={() => setShowNotes(false)}
-        notes={notes}
-        onAdd={addNote}
-        onUpdate={updateNote}
-        onDelete={deleteNote}
-      />
-      <ApiSettingsModal
-        isOpen={showApiSettings}
-        onClose={() => setShowApiSettings(false)}
-      />
-      <ProcessManagerModal
-        isOpen={showProcessManager}
-        onClose={() => setShowProcessManager(false)}
-        projects={projects}
-      />
+      <Suspense fallback={null}>
+        <SettingsModal
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
+          sessionId={activeSessionId}
+          sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
+          currentCwd={projectInfo?.cwd}
+          recentFolders={recentFolders}
+          onSave={navigateSession}
+          onAddRecentFolder={addRecentFolder}
+          terminalFontSize={terminalFontSize}
+          onFontSizeChange={updateTerminalFontSize}
+        />
+        <BookmarkModal
+          isOpen={showBookmarks}
+          onClose={() => setShowBookmarks(false)}
+          bookmarks={bookmarks}
+          onAdd={addBookmark}
+          onUpdate={updateBookmark}
+          onDelete={deleteBookmark}
+          onExecute={executeBookmark}
+        />
+        <NotesModal
+          isOpen={showNotes}
+          onClose={() => setShowNotes(false)}
+          notes={notes}
+          onAdd={addNote}
+          onUpdate={updateNote}
+          onDelete={deleteNote}
+        />
+        <ApiSettingsModal
+          isOpen={showApiSettings}
+          onClose={() => setShowApiSettings(false)}
+        />
+        <ProcessManagerModal
+          isOpen={showProcessManager}
+          onClose={() => setShowProcessManager(false)}
+          projects={projects}
+        />
+      </Suspense>
 
       {isMobile && (
         <>
@@ -762,26 +763,30 @@ function AppContent() {
                   className={`split-handle${isDragging ? ' active' : ''}`}
                   onMouseDown={handleSplitMouseDown}
                 />
-                <PreviewPanel
-                  url={previewUrl}
-                  onClose={handlePreviewClose}
-                  onUrlChange={handlePreviewUrlChange}
-                  projectInfo={projectInfo}
-                  onStartProject={handleStartProject}
-                  onSendToTerminal={handleSendToTerminal}
-                  onSendToClaudeCode={handleSendToClaudeCode}
-                />
+                <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
+                  <PreviewPanel
+                    url={previewUrl}
+                    onClose={handlePreviewClose}
+                    onUrlChange={handlePreviewUrlChange}
+                    projectInfo={projectInfo}
+                    onStartProject={handleStartProject}
+                    onSendToTerminal={handleSendToTerminal}
+                    onSendToClaudeCode={handleSendToClaudeCode}
+                  />
+                </Suspense>
               </>
             )}
           </main>
 
           {/* File Manager Sidebar */}
           {showFileManager && (
-            <FileManager
-              isOpen={showFileManager}
-              onClose={() => setShowFileManager(false)}
-              onNavigateTerminal={handleNavigateToPath}
-            />
+            <Suspense fallback={null}>
+              <FileManager
+                isOpen={showFileManager}
+                onClose={() => setShowFileManager(false)}
+                onNavigateTerminal={handleNavigateToPath}
+              />
+            </Suspense>
           )}
         </div>
         </>
@@ -830,15 +835,17 @@ function AppContent() {
 
             {/* Mobile preview - full screen when active */}
             {mobileView === 'preview' && (
-              <PreviewPanel
-                url={previewUrl}
-                onClose={() => setMobileView('terminal')}
-                onUrlChange={handlePreviewUrlChange}
-                projectInfo={projectInfo}
-                onStartProject={handleStartProject}
-                onSendToTerminal={handleSendToTerminal}
-                onSendToClaudeCode={handleSendToClaudeCode}
-              />
+              <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
+                <PreviewPanel
+                  url={previewUrl}
+                  onClose={() => setMobileView('terminal')}
+                  onUrlChange={handlePreviewUrlChange}
+                  projectInfo={projectInfo}
+                  onStartProject={handleStartProject}
+                  onSendToTerminal={handleSendToTerminal}
+                  onSendToClaudeCode={handleSendToClaudeCode}
+                />
+              </Suspense>
             )}
           </main>
         </div>
@@ -860,11 +867,13 @@ function AppContent() {
               zIndex: 99998
             }}
           />
-          <FileManager
-            isOpen={showFileManager}
-            onClose={() => setShowFileManager(false)}
-            onNavigateTerminal={handleNavigateToPath}
-          />
+          <Suspense fallback={null}>
+            <FileManager
+              isOpen={showFileManager}
+              onClose={() => setShowFileManager(false)}
+              onNavigateTerminal={handleNavigateToPath}
+            />
+          </Suspense>
         </>
       )}
     </div>
