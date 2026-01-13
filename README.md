@@ -93,6 +93,7 @@ terminal-v4/
 - `JWT_SECRET` - JWT signing secret (required in production)
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
+- `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits and rewrites JS module imports for cache-busting (use with care on exposed deployments)
 
 ### Default Shell
 

@@ -60,6 +60,8 @@ export function ClaudeCodeProvider({ children }) {
     try {
       if (activeClaudeCodeId) {
         localStorage.setItem('lastActiveClaudeCodeId', activeClaudeCodeId);
+      } else {
+        localStorage.removeItem('lastActiveClaudeCodeId');
       }
     } catch (e) {
       console.error('Failed to save lastActiveClaudeCodeId', e);
@@ -74,8 +76,14 @@ export function ClaudeCodeProvider({ children }) {
   useEffect(() => {
     if (loadingSessions) return;
     const existingIds = new Set(terminalSessions.map(session => session.id));
-    const nextIds = claudeSessionIds.filter(id => existingIds.has(id));
-    if (nextIds.length !== claudeSessionIds.length) {
+    let nextIds = claudeSessionIds.filter(id => existingIds.has(id));
+    if (activeClaudeCodeId && existingIds.has(activeClaudeCodeId) && !nextIds.includes(activeClaudeCodeId)) {
+      nextIds = [activeClaudeCodeId, ...nextIds];
+    }
+    const isSame =
+      nextIds.length === claudeSessionIds.length &&
+      nextIds.every((id, index) => id === claudeSessionIds[index]);
+    if (!isSame) {
       setClaudeSessionIds(nextIds);
     }
     if (activeClaudeCodeId && !existingIds.has(activeClaudeCodeId)) {
@@ -133,6 +141,7 @@ export function ClaudeCodeProvider({ children }) {
         console.error('Failed to restore session:', error);
       }
     }
+    setClaudeSessionIds(prev => (prev.includes(id) ? prev : [id, ...prev]));
     setActiveClaudeCodeId(id);
     setLeftPanelMode('claude-code');
   }, [terminalSessions]);

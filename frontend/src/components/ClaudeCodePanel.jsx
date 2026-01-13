@@ -1,5 +1,4 @@
 import { TerminalChat } from './TerminalChat';
-import { useMobileDetect } from '../hooks/useMobileDetect';
 
 export default function ClaudeCodePanel({
   sessionId,
@@ -10,8 +9,6 @@ export default function ClaudeCodePanel({
   onScrollDirection,
   onRegisterFocusTerminal
 }) {
-  const isMobile = useMobileDetect();
-
   if (!sessionId) {
     return (
       <div className="claude-code-panel">
@@ -26,7 +23,7 @@ export default function ClaudeCodePanel({
   }
 
   return (
-    <div className={`claude-code-panel${isMobile ? ' claude-code-mobile' : ''}`}>
+    <div className="claude-code-panel">
       <TerminalChat
         sessionId={sessionId}
         keybarOpen={keybarOpen}

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import WebSocket from 'ws';
+import { Readable } from 'node:stream';
 import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
 import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
 import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
@@ -7,6 +8,8 @@ import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log
 
 // Pattern to match preview subdomains: preview-{port}.conordart.com
 const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
+const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW === 'true';
+const PREVIEW_PORT_RANGE = UNRESTRICTED_PREVIEW ? { min: 1, max: 65535 } : { min: 3000, max: 9999 };
 
 // Headers to skip when forwarding
 const SKIP_HEADERS = new Set([
@@ -46,6 +49,37 @@ const PREVIEW_DEBUG_SCRIPT = `
   if (!portMatch) return;
   const PORT = portMatch[1];
   const MAIN_DOMAIN = portMatch[2];
+  const PREVIEW_ORIGIN = location.origin;
+
+  function isLocalHost(hostname) {
+    if (!hostname) return false;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') return true;
+    return /^(192\\.168\\.|10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.)/.test(hostname);
+  }
+
+  function rewritePreviewUrl(rawUrl) {
+    try {
+      var parsed = new URL(rawUrl, PREVIEW_ORIGIN);
+      var hostname = parsed.hostname.toLowerCase();
+      if (!isLocalHost(hostname)) return rawUrl;
+      if (parsed.port && parsed.port !== String(PORT)) return rawUrl;
+      return PREVIEW_ORIGIN + parsed.pathname + parsed.search + parsed.hash;
+    } catch (e) {
+      return rawUrl;
+    }
+  }
+
+  function rewriteWebSocketUrl(rawUrl) {
+    try {
+      var rewritten = rewritePreviewUrl(rawUrl);
+      var parsed = new URL(rewritten, PREVIEW_ORIGIN);
+      if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+      if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+      return parsed.toString();
+    } catch (e) {
+      return rawUrl;
+    }
+  }
 
   // Send logs to code.{domain}, not preview subdomain (which proxies to localhost)
   const API_URL = location.protocol + '//code.' + MAIN_DOMAIN + '/api/preview/' + PORT + '/logs';
@@ -163,6 +197,15 @@ const PREVIEW_DEBUG_SCRIPT = `
     var url = typeof input === 'string' ? input : (input.url || String(input));
     var method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
     var startTime = Date.now();
+    var rewrittenUrl = rewritePreviewUrl(url);
+    if (rewrittenUrl !== url) {
+      url = rewrittenUrl;
+      if (typeof input === 'string') {
+        input = rewrittenUrl;
+      } else if (input && input instanceof Request) {
+        input = new Request(rewrittenUrl, input);
+      }
+    }
 
     // Capture request headers
     var requestHeaders = {};
@@ -184,7 +227,7 @@ const PREVIEW_DEBUG_SCRIPT = `
       }
     }
 
-    return origFetch.apply(this, arguments).then(function(response) {
+    return origFetch.call(this, input, init).then(function(response) {
       var duration = Date.now() - startTime;
 
       // Capture response headers
@@ -233,6 +276,22 @@ const PREVIEW_DEBUG_SCRIPT = `
     });
   };
 
+  // WebSocket rewrite for local dev URLs (HMR, live reload, etc.)
+  var OrigWebSocket = window.WebSocket;
+  if (OrigWebSocket) {
+    window.WebSocket = function(url, protocols) {
+      var rewrittenUrl = rewriteWebSocketUrl(url);
+      if (protocols !== undefined) {
+        return new OrigWebSocket(rewrittenUrl, protocols);
+      }
+      return new OrigWebSocket(rewrittenUrl);
+    };
+    for (var key in OrigWebSocket) {
+      window.WebSocket[key] = OrigWebSocket[key];
+    }
+    window.WebSocket.prototype = OrigWebSocket.prototype;
+  }
+
   // Network capture - XMLHttpRequest
   var XHROpen = XMLHttpRequest.prototype.open;
   var XHRSend = XMLHttpRequest.prototype.send;
@@ -240,9 +299,12 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   XMLHttpRequest.prototype.open = function(method, url) {
     this._debugMethod = method;
-    this._debugUrl = url;
+    var rewrittenUrl = rewritePreviewUrl(url);
+    this._debugUrl = rewrittenUrl;
     this._debugHeaders = {};
-    return XHROpen.apply(this, arguments);
+    var args = Array.prototype.slice.call(arguments);
+    args[1] = rewrittenUrl;
+    return XHROpen.apply(this, args);
   };
 
   XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
@@ -382,7 +444,7 @@ function getPreviewPort(host: string | undefined): number | null {
 
   const port = parseInt(match[1], 10);
   // Validate port range
-  if (port < 3000 || port > 9999) return null;
+  if (Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) return null;
   return port;
 }
 
@@ -445,6 +507,129 @@ function mergeCookieHeaders(requestCookies: string, storedCookies: string): stri
   return Array.from(merged.entries())
     .map(([name, value]) => `${name}=${value}`)
     .join('; ');
+}
+
+function shouldSkipRewrite(urlValue: string): boolean {
+  return (
+    urlValue.startsWith('http://') ||
+    urlValue.startsWith('https://') ||
+    urlValue.startsWith('//') ||
+    urlValue.startsWith('data:') ||
+    urlValue.startsWith('/_next/') ||
+    urlValue.includes('_cb=')
+  );
+}
+
+function addCacheBuster(urlValue: string, cacheBuster: string): string {
+  const separator = urlValue.includes('?') ? '&' : '?';
+  return `${urlValue}${separator}_cb=${cacheBuster}`;
+}
+
+function rewriteCssText(
+  css: string,
+  cacheBuster: string,
+  rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean }
+): string {
+  let rewritten = css;
+  rewritten = rewritten.replace(
+    /url\s*\(\s*(["']?)([^)"']+)\1\s*\)/gi,
+    (match, quote, urlValue) => {
+      const normalized = rewriteUrlValue ? rewriteUrlValue(urlValue) : { url: urlValue, skip: shouldSkipRewrite(urlValue) };
+      if (normalized.skip) {
+        return match;
+      }
+      return `url(${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote})`;
+    }
+  );
+
+  rewritten = rewritten.replace(
+    /@import\s+(["'])([^"']+)\1/gi,
+    (match, quote, importUrl) => {
+      const normalized = rewriteUrlValue ? rewriteUrlValue(importUrl) : { url: importUrl, skip: shouldSkipRewrite(importUrl) };
+      if (normalized.skip) {
+        return match;
+      }
+      return `@import ${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+    }
+  );
+  return rewritten;
+}
+
+function rewriteSrcset(
+  srcset: string,
+  cacheBuster: string,
+  rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean }
+): string {
+  return srcset
+    .split(',')
+    .map((segment) => {
+      const trimmed = segment.trim();
+      if (!trimmed) return '';
+      const parts = trimmed.split(/\s+/);
+      const urlPart = parts.shift();
+      if (!urlPart) {
+        return trimmed;
+      }
+      const normalized = rewriteUrlValue ? rewriteUrlValue(urlPart) : { url: urlPart, skip: shouldSkipRewrite(urlPart) };
+      if (normalized.skip) {
+        return trimmed;
+      }
+      return [addCacheBuster(normalized.url, cacheBuster), ...parts].join(' ');
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+function rewriteJsImports(
+  js: string,
+  cacheBuster: string,
+  rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean }
+): string {
+  const rewriteSpecifier = (specifier: string) => {
+    const normalized = rewriteUrlValue ? rewriteUrlValue(specifier) : { url: specifier, skip: shouldSkipRewrite(specifier) };
+    if (normalized.skip) return specifier;
+    return addCacheBuster(normalized.url, cacheBuster);
+  };
+
+  let rewritten = js.replace(
+    /\b(import|export)\s+[^'"]*?from\s+(["'])([^"']+)\2/gi,
+    (match, keyword, quote, specifier) => {
+      return match.replace(specifier, rewriteSpecifier(specifier));
+    }
+  );
+
+  rewritten = rewritten.replace(
+    /\bimport\s*\(\s*(["'])([^"']+)\1\s*\)/gi,
+    (match, quote, specifier) => {
+      return `import(${quote}${rewriteSpecifier(specifier)}${quote})`;
+    }
+  );
+
+  return rewritten;
+}
+
+function isPrivateHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '0.0.0.0') {
+    return true;
+  }
+  return /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(lower);
+}
+
+function rewriteLocalAbsoluteUrl(urlValue: string, port: number, previewHost: string): string {
+  try {
+    const parsed = new URL(urlValue);
+    if (!isPrivateHostname(parsed.hostname)) {
+      return urlValue;
+    }
+    const targetPort = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === 'https:' ? 443 : 80);
+    if (Number.isNaN(targetPort) || targetPort !== port) {
+      return urlValue;
+    }
+    return `https://${previewHost}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return urlValue;
+  }
 }
 
 function getWebSocketProtocols(request: FastifyRequest): string[] | undefined {
@@ -682,6 +867,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
         // Remove X-Frame-Options to allow iframe embedding
         if (lowerKey === 'x-frame-options') continue;
+        if (lowerKey === 'content-security-policy' || lowerKey === 'content-security-policy-report-only') continue;
 
         // Skip Set-Cookie here - handle separately below
         if (lowerKey === 'set-cookie') continue;
@@ -728,13 +914,10 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Handle redirects - rewrite Location header
       const location = response.headers.get('location');
       if (location) {
-        // Rewrite localhost URLs to preview subdomain
-        if (location.startsWith(`http://localhost:${port}`)) {
-          const newLocation = location.replace(
-            `http://localhost:${port}`,
-            `https://preview-${port}.conordart.com`
-          );
-          reply.header('location', newLocation);
+        const previewHostForRedirect = previewHost || `preview-${port}.conordart.com`;
+        const rewrittenLocation = rewriteLocalAbsoluteUrl(location, port, previewHostForRedirect);
+        if (rewrittenLocation !== location) {
+          reply.header('location', rewrittenLocation);
         } else if (location.startsWith('/')) {
           // Relative redirect - keep as is
           reply.header('location', location);
@@ -744,39 +927,91 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Stream response body
       let responseBodyBuffer: Buffer | null = null;
       if (response.body) {
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-        }
-
-        responseBodyBuffer = Buffer.concat(chunks);
-        const body = responseBodyBuffer;
-
         // Extract cache-buster from request URL, or generate one
         const url = new URL(request.url, `http://localhost:${port}`);
         const cacheBuster = url.searchParams.get('_cb') || Date.now().toString();
-
-        // For HTML responses, add cache-busters to all resource URLs
         const contentType = response.headers.get('content-type') || '';
-        if (contentType.includes('text/html')) {
-          let html = body.toString('utf-8');
+        const isHtml = contentType.includes('text/html');
+        const isCss = contentType.includes('text/css') || request.url.endsWith('.css') || request.url.includes('.css?');
+        const isJs = contentType.includes('javascript') || request.url.endsWith('.js') || request.url.endsWith('.mjs');
+        const shouldRewrite = isHtml || isCss || (UNRESTRICTED_PREVIEW && isJs);
+        const rewriteUrlValue = (value: string) => {
+          const normalized = rewriteLocalAbsoluteUrl(value, port, previewHost);
+          const isPreviewHost =
+            normalized.startsWith(`https://${previewHost}`) ||
+            normalized.startsWith(`http://${previewHost}`);
+          if (!isPreviewHost && shouldSkipRewrite(normalized)) {
+            return { url: normalized, skip: true };
+          }
+          return { url: normalized, skip: false };
+        };
+
+        if (!shouldRewrite) {
+          const nodeStream = Readable.fromWeb(response.body);
+          nodeStream.pipe(reply.raw);
+          await new Promise<void>((resolve, reject) => {
+            nodeStream.on('end', resolve);
+            nodeStream.on('error', reject);
+            reply.raw.on('close', resolve);
+          });
+          responseSize = responseSize || 0;
+          responseBodyBuffer = null;
+          // Continue to logging after streaming completes.
+        } else {
+          const reader = response.body.getReader();
+          const chunks: Uint8Array[] = [];
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+          }
+
+          responseBodyBuffer = Buffer.concat(chunks);
+          const body = responseBodyBuffer;
+
+          if (isHtml) {
+            let html = body.toString('utf-8');
 
           // Add cache-buster to src attributes (scripts, images, etc.)
           html = html.replace(
-            /(<(?:script|img|source|video|audio|embed|track)[^>]*\s)src=(["'])([^"']+)\2/gi,
+            /(<(?:script|img|source|video|audio|embed|track|iframe)[^>]*\s)src=(["'])([^"']+)\2/gi,
             (match, prefix, quote, srcUrl) => {
-              // Skip external URLs and data URIs
-              if (srcUrl.startsWith('http://') || srcUrl.startsWith('https://') ||
-                  srcUrl.startsWith('//') || srcUrl.startsWith('data:') ||
-                  srcUrl.startsWith('/_next/')) {
+              const normalized = rewriteUrlValue(srcUrl);
+              if (normalized.skip) {
                 return match;
               }
-              const separator = srcUrl.includes('?') ? '&' : '?';
-              return `${prefix}src=${quote}${srcUrl}${separator}_cb=${cacheBuster}${quote}`;
+              return `${prefix}src=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+            }
+          );
+
+          // Add cache-buster to srcset attributes
+          html = html.replace(
+            /(<(?:img|source)[^>]*\s)srcset=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, srcset) => {
+              const rewritten = rewriteSrcset(srcset, cacheBuster, rewriteUrlValue);
+              return `${prefix}srcset=${quote}${rewritten}${quote}`;
+            }
+          );
+
+          // Add cache-buster to imagesrcset attributes (e.g., link rel=preload)
+          html = html.replace(
+            /(<link[^>]*\s)imagesrcset=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, srcset) => {
+              const rewritten = rewriteSrcset(srcset, cacheBuster, rewriteUrlValue);
+              return `${prefix}imagesrcset=${quote}${rewritten}${quote}`;
+            }
+          );
+
+          // Add cache-buster to poster attributes
+          html = html.replace(
+            /(<video[^>]*\s)poster=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, posterUrl) => {
+              const normalized = rewriteUrlValue(posterUrl);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}poster=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
             }
           );
 
@@ -784,19 +1019,141 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           html = html.replace(
             /(<link[^>]*\s)href=(["'])([^"']+)\2/gi,
             (match, prefix, quote, hrefUrl) => {
-              // Skip external URLs and data URIs
-              if (hrefUrl.startsWith('http://') || hrefUrl.startsWith('https://') ||
-                  hrefUrl.startsWith('//') || hrefUrl.startsWith('data:') ||
-                  hrefUrl.startsWith('/_next/')) {
+              const normalized = rewriteUrlValue(hrefUrl);
+              if (normalized.skip) {
                 return match;
               }
-              const separator = hrefUrl.includes('?') ? '&' : '?';
-              return `${prefix}href=${quote}${hrefUrl}${separator}_cb=${cacheBuster}${quote}`;
+              return `${prefix}href=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+            }
+          );
+
+          // Rewrite navigation links to stay within preview origin
+          html = html.replace(
+            /(<a[^>]*\s)href=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, hrefUrl) => {
+              const normalized = rewriteUrlValue(hrefUrl);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}href=${quote}${normalized.url}${quote}`;
+            }
+          );
+
+          // Rewrite form actions to stay within preview origin
+          html = html.replace(
+            /(<form[^>]*\s)action=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, actionUrl) => {
+              const normalized = rewriteUrlValue(actionUrl);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}action=${quote}${normalized.url}${quote}`;
+            }
+          );
+
+          // Rewrite meta refresh URLs
+          html = html.replace(
+            /<meta[^>]*http-equiv=(["'])refresh\1[^>]*>/gi,
+            (match) => {
+              const contentMatch = match.match(/content=(["'])([^"']+)\1/i);
+              if (!contentMatch) return match;
+              const quote = contentMatch[1];
+              const contentValue = contentMatch[2];
+              const urlMatch = contentValue.match(/url=([^;]+)$/i);
+              if (!urlMatch) return match;
+              const rawUrl = urlMatch[1].trim();
+              const normalized = rewriteUrlValue(rawUrl);
+              if (normalized.skip) return match;
+              const updatedContent = contentValue.replace(urlMatch[1], normalized.url);
+              return match.replace(contentMatch[0], `content=${quote}${updatedContent}${quote}`);
+            }
+          );
+
+          // Rewrite common data-* URL attributes used by lazy loaders
+          html = html.replace(
+            /(\s)data-src=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, dataSrc) => {
+              const normalized = rewriteUrlValue(dataSrc);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}data-src=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+            }
+          );
+          html = html.replace(
+            /(\s)data-poster=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, dataPoster) => {
+              const normalized = rewriteUrlValue(dataPoster);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}data-poster=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+            }
+          );
+          html = html.replace(
+            /(\s)data-srcset=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, srcset) => {
+              const rewritten = rewriteSrcset(srcset, cacheBuster, rewriteUrlValue);
+              return `${prefix}data-srcset=${quote}${rewritten}${quote}`;
+            }
+          );
+          html = html.replace(
+            /(\s)data-href=(["'])([^"']+)\2/gi,
+            (match, prefix, quote, dataHref) => {
+              const normalized = rewriteUrlValue(dataHref);
+              if (normalized.skip) {
+                return match;
+              }
+              return `${prefix}data-href=${quote}${normalized.url}${quote}`;
+            }
+          );
+
+          // Rewrite inline style attributes with url() references
+          html = html.replace(
+            /style=(["'])([^"']+)\1/gi,
+            (match, quote, styleValue) => {
+              if (!styleValue.includes('url(') && !styleValue.includes('@import')) {
+                return match;
+              }
+              return `style=${quote}${rewriteCssText(styleValue, cacheBuster, rewriteUrlValue)}${quote}`;
+            }
+          );
+
+          // Rewrite <style> blocks
+          html = html.replace(
+            /<style([^>]*)>([\s\S]*?)<\/style>/gi,
+            (match, attrs, cssText) => {
+              const rewritten = rewriteCssText(cssText, cacheBuster, rewriteUrlValue);
+              return `<style${attrs}>${rewritten}</style>`;
             }
           );
 
           // Inject debug script and inspector script at start of <head> to run before app code
-          const injectedScripts = PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+          // CSS fix for backdrop-filter in iframes - forces proper stacking context
+          const backdropFixCSS = `<style>
+/* Force stacking context on root elements */
+html, body { isolation: isolate; }
+/* Ensure elements with backdrop-filter have proper rendering context */
+[style*="backdrop-filter"],
+[style*="-webkit-backdrop-filter"],
+[class*="backdrop"],
+[class*="glass"],
+[class*="blur"] {
+  isolation: isolate !important;
+  transform: translateZ(0) !important;
+  -webkit-transform: translateZ(0) !important;
+  backface-visibility: hidden !important;
+  -webkit-backface-visibility: hidden !important;
+  will-change: backdrop-filter, transform !important;
+}
+/* Force GPU layer for elements with blur in Tailwind */
+.backdrop-blur, .backdrop-blur-sm, .backdrop-blur-md, .backdrop-blur-lg, .backdrop-blur-xl, .backdrop-blur-2xl, .backdrop-blur-3xl {
+  isolation: isolate !important;
+  transform: translateZ(0) !important;
+  will-change: backdrop-filter !important;
+}
+</style>`;
+          const injectedScripts = backdropFixCSS + PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
           if (html.includes('<head>')) {
             html = html.replace('<head>', '<head>' + injectedScripts);
           } else if (html.includes('<html>')) {
@@ -805,50 +1162,25 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             html = injectedScripts + html;
           }
 
-          reply.header('content-length', String(Buffer.byteLength(html)));
-          reply.raw.removeHeader('content-encoding');
-          reply.send(html);
-        } else if (contentType.includes('text/css') || request.url.endsWith('.css') || request.url.includes('.css?')) {
-          // For CSS files, rewrite url() references
-          let css = body.toString('utf-8');
-
-          // Rewrite url() references
-          css = css.replace(
-            /url\s*\(\s*(["']?)([^)"']+)\1\s*\)/gi,
-            (match, quote, urlValue) => {
-              // Skip external URLs, data URIs, and already cache-busted URLs
-              if (urlValue.startsWith('http://') || urlValue.startsWith('https://') ||
-                  urlValue.startsWith('//') || urlValue.startsWith('data:') ||
-                  urlValue.startsWith('/_next/') || urlValue.includes('_cb=')) {
-                return match;
-              }
-              const separator = urlValue.includes('?') ? '&' : '?';
-              return `url(${quote}${urlValue}${separator}_cb=${cacheBuster}${quote})`;
-            }
-          );
-
-          // Rewrite @import statements
-          css = css.replace(
-            /@import\s+(["'])([^"']+)\1/gi,
-            (match, quote, importUrl) => {
-              if (importUrl.startsWith('http://') || importUrl.startsWith('https://') ||
-                  importUrl.startsWith('//') || importUrl.startsWith('/_next/') ||
-                  importUrl.includes('_cb=')) {
-                return match;
-              }
-              const separator = importUrl.includes('?') ? '&' : '?';
-              return `@import ${quote}${importUrl}${separator}_cb=${cacheBuster}${quote}`;
-            }
-          );
-
+            reply.header('content-length', String(Buffer.byteLength(html)));
+            reply.raw.removeHeader('content-encoding');
+            reply.send(html);
+        } else if (isCss) {
+          const css = rewriteCssText(body.toString('utf-8'), cacheBuster, rewriteUrlValue);
           reply.header('content-length', String(Buffer.byteLength(css)));
           reply.raw.removeHeader('content-encoding');
           reply.send(css);
+        } else if (UNRESTRICTED_PREVIEW && isJs) {
+          const js = rewriteJsImports(body.toString('utf-8'), cacheBuster, rewriteUrlValue);
+          reply.header('content-length', String(Buffer.byteLength(js)));
+          reply.raw.removeHeader('content-encoding');
+          reply.send(js);
         } else {
-          reply.header('content-length', String(body.byteLength));
-          reply.send(body);
+            reply.header('content-length', String(body.byteLength));
+            reply.send(body);
+          }
+          responseSize = body.byteLength;
         }
-        responseSize = body.byteLength;
       } else {
         reply.send();
         responseSize = 0;

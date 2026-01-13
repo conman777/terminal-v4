@@ -3202,6 +3202,27 @@ button {
   color: var(--text-primary);
 }
 
+.preview-inspector-terminal-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.preview-inspector-terminal-btn:hover {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border-color: var(--accent-primary-dim);
+}
+
 /* ===========================================
    Style Editor Component
    =========================================== */
@@ -4175,6 +4196,25 @@ button {
   background: linear-gradient(135deg, rgba(168, 85, 247, 0.15), rgba(236, 72, 153, 0.15));
   border-color: rgba(168, 85, 247, 0.4);
   color: var(--text-primary);
+}
+
+.preview-inspector-terminal-btn-mobile {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.preview-inspector-terminal-btn-mobile:active {
+  background: var(--bg-base);
 }
 
 /* Mobile Style Editor */

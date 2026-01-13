@@ -35,7 +35,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const urlInputRef = useRef(null);
   const portDropdownRef = useRef(null);
 
-  const baseIframeSrc = useMemo(() => toPreviewUrl(url), [url]);
+  const baseIframeSrc = useMemo(() => {
+    const result = toPreviewUrl(url);
+    console.log('[Preview] URL conversion:', url, '->', result);
+    return result;
+  }, [url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
 
   // Extract port from preview URL for cookie management
@@ -370,6 +374,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       type: 'preview-revert-style-preview'
     }, '*');
   }, []);
+
+  // Copy element info to terminal
+  const handleCopyToTerminal = useCallback(() => {
+    if (!selectedElement || !onSendToTerminal) return;
+
+    const el = selectedElement;
+    const parts = [`Element: ${el.selector}`];
+    if (el.rect) {
+      parts.push(`Size: ${el.rect.width}x${el.rect.height}px`);
+    }
+    if (el.className) {
+      parts.push(`Classes: ${el.className}`);
+    }
+    // HTML hint
+    let htmlHint = `<${el.tagName}`;
+    if (el.id) htmlHint += ` id="${el.id}"`;
+    if (el.className) htmlHint += ` class="${el.className}"`;
+    htmlHint += '>';
+    parts.push(`HTML: ${htmlHint}`);
+
+    onSendToTerminal(parts.join(' | '));
+  }, [selectedElement, onSendToTerminal]);
 
   // Apply styles via Claude
   const handleStyleApply = useCallback((styles) => {
@@ -855,6 +881,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       </svg>
                       Styles
                     </button>
+                    {onSendToTerminal && (
+                      <button
+                        type="button"
+                        className="preview-inspector-terminal-btn-mobile"
+                        onClick={handleCopyToTerminal}
+                        title="Copy element info to terminal"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="4 17 10 11 4 5" />
+                          <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                        Terminal
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1367,6 +1407,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     </svg>
                     Styles
                   </button>
+                  {onSendToTerminal && (
+                    <button
+                      type="button"
+                      className="preview-inspector-terminal-btn"
+                      onClick={handleCopyToTerminal}
+                      title="Copy element info to terminal"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="4 17 10 11 4 5" />
+                        <line x1="12" y1="19" x2="20" y2="19" />
+                      </svg>
+                      Terminal
+                    </button>
+                  )}
                 </div>
               )}
             </div>
