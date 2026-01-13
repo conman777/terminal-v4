@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { registerCoreRoutes } from './routes/register-core-routes';
 import { registerBookmarkRoutes } from './routes/bookmark-routes';
+import { registerNoteRoutes } from './routes/note-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
 import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
@@ -43,7 +44,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   });
 
   await app.register(cors, {
-    origin: true
+    origin: true,
+    credentials: true
   });
   // Compression is handled by Cloudflare - don't double-compress
   // await app.register(fastifyCompress, { ... });
@@ -80,6 +82,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Register routes with both managers
   await registerCoreRoutes(app, { terminalManager, claudeCodeManager });
   await registerBookmarkRoutes(app);
+  await registerNoteRoutes(app);
   await registerPreviewRoutes(app);
   await registerPreviewLogsRoutes(app);
   await registerTranscribeRoutes(app);

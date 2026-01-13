@@ -46,8 +46,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const previewPort = useMemo(() => {
     if (!iframeSrc) return null;
     try {
-      const match = iframeSrc.match(/preview-(\d+)\.conordart\.com/);
-      return match ? parseInt(match[1], 10) : null;
+      const parsed = new URL(iframeSrc, window.location.origin);
+      const hostMatch = parsed.hostname.match(/preview-(\d+)\./);
+      if (hostMatch) {
+        return parseInt(hostMatch[1], 10);
+      }
+      const pathMatch = parsed.pathname.match(/^\/preview\/(\d+)(\/|$)/);
+      return pathMatch ? parseInt(pathMatch[1], 10) : null;
     } catch {
       return null;
     }

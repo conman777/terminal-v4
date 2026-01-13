@@ -42,6 +42,9 @@ export function TerminalSessionProvider({ children }) {
   // Bookmarks state
   const [bookmarks, setBookmarks] = useState([]);
 
+  // Notes state
+  const [notes, setNotes] = useState([]);
+
   // Refs
   const isMountedRef = useRef(true);
   const restoreInFlightRef = useRef(new Set());
@@ -139,6 +142,23 @@ export function TerminalSessionProvider({ children }) {
       }
     } catch (error) {
       console.error('Failed to load bookmarks', error);
+    }
+  }, []);
+
+  // Load notes
+  const loadNotes = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      const response = await apiFetch('/api/notes');
+      if (!response.ok) {
+        throw new Error(`Failed to load notes (${response.status})`);
+      }
+      const data = await response.json();
+      if (isMountedRef.current) {
+        setNotes(Array.isArray(data.notes) ? data.notes : []);
+      }
+    } catch (error) {
+      console.error('Failed to load notes', error);
     }
   }, []);
 
@@ -422,6 +442,59 @@ export function TerminalSessionProvider({ children }) {
     }
   }, [activeSessionId]);
 
+  // Note handlers
+  const addNote = useCallback(async (title, content, category) => {
+    try {
+      const response = await apiFetch('/api/notes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, content, category })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create note (${response.status})`);
+      }
+
+      await loadNotes();
+    } catch (error) {
+      console.error('Failed to create note', error);
+    }
+  }, [loadNotes]);
+
+  const updateNote = useCallback(async (id, updates) => {
+    try {
+      const response = await apiFetch(`/api/notes/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update note (${response.status})`);
+      }
+
+      await loadNotes();
+    } catch (error) {
+      console.error('Failed to update note', error);
+    }
+  }, [loadNotes]);
+
+  const deleteNote = useCallback(async (id) => {
+    try {
+      const response = await apiFetch(`/api/notes/${id}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete note (${response.status})`);
+      }
+
+      await loadNotes();
+    } catch (error) {
+      console.error('Failed to delete note', error);
+    }
+  }, [loadNotes]);
+
   // Track activity for polling
   const trackActivity = useCallback(() => {
     lastActivityRef.current = Date.now();
@@ -434,6 +507,7 @@ export function TerminalSessionProvider({ children }) {
     const initializeSessions = async () => {
       await loadSessions();
       await loadBookmarks();
+      await loadNotes();
 
       const lastSessionId = localStorage.getItem('lastActiveSession');
       if (lastSessionId) {
@@ -539,7 +613,7 @@ export function TerminalSessionProvider({ children }) {
       window.removeEventListener('keydown', handleActivity);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [loadSessions, loadBookmarks, loadProjects, fetchAppState]);
+  }, [loadSessions, loadBookmarks, loadNotes, loadProjects, fetchAppState]);
 
   // Auto-restore inactive sessions
   useEffect(() => {
@@ -614,6 +688,12 @@ export function TerminalSessionProvider({ children }) {
     updateBookmark,
     deleteBookmark,
     executeBookmark,
+
+    // Notes
+    notes,
+    addNote,
+    updateNote,
+    deleteNote,
 
     // Activity tracking
     trackActivity

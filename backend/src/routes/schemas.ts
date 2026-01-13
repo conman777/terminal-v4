@@ -93,3 +93,28 @@ export const fileUnzipRequestSchema = z.object({
 });
 
 export type FileUnzipRequestBody = z.infer<typeof fileUnzipRequestSchema>;
+
+// Note schemas
+export const noteCreateRequestSchema = z.object({
+  title: z
+    .string({ error: 'title must be a string' })
+    .min(1, 'title cannot be empty')
+    .max(200, 'title too long'),
+  content: z
+    .string({ error: 'content must be a string' })
+    .max(50000, 'content too long'),
+  category: z
+    .string({ error: 'category must be a string' })
+    .min(1, 'category cannot be empty')
+    .max(50, 'category too long')
+});
+
+export type NoteCreateRequestBody = z.infer<typeof noteCreateRequestSchema>;
+
+export const noteUpdateRequestSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  content: z.string().max(50000).optional(),
+  category: z.string().min(1).max(50).optional()
+});
+
+export type NoteUpdateRequestBody = z.infer<typeof noteUpdateRequestSchema>;

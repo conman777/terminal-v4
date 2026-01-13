@@ -22,6 +22,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
   const clientIdRef = useRef(null);
+  const inputBufferRef = useRef('');
+  const inputFlushRef = useRef(null);
   const isMobile = useMobileDetect();
   const { activeSessionId, sessions } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -207,6 +209,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
     };
     sendTerminalInputRef.current = sendTerminalInput;
+
+    const flushInputBuffer = () => {
+      if (disposed) return;
+      if (!inputBufferRef.current) return;
+      const payload = inputBufferRef.current;
+      inputBufferRef.current = '';
+      inputFlushRef.current = null;
+      sendTerminalInput(payload);
+    };
+
+    const queueTerminalInput = (data) => {
+      if (!data || disposed) return;
+      inputBufferRef.current += data;
+      if (!inputFlushRef.current) {
+        inputFlushRef.current = requestAnimationFrame(flushInputBuffer);
+      }
+      if (data.includes('\r')) {
+        flushInputBuffer();
+      }
+    };
 
     const handleClipboardPaste = async () => {
       try {
@@ -487,7 +509,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         exitCopyModeIfActive();
         markUserInput();
-        sendTerminalInput(data);
+        queueTerminalInput(data);
       });
 
       const handleResize = () => debouncedFit();
@@ -610,6 +632,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       disposed = true;
       detectedUrlsRef.current.clear();
       clientIdRef.current = null;
+      if (inputFlushRef.current) {
+        cancelAnimationFrame(inputFlushRef.current);
+        inputFlushRef.current = null;
+      }
+      inputBufferRef.current = '';
       if (rafId) cancelAnimationFrame(rafId);
       if (fitTimeoutRef.current) {
         clearTimeout(fitTimeoutRef.current);

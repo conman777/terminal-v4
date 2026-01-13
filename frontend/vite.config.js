@@ -17,6 +17,11 @@ export default defineConfig({
         target: 'http://localhost:3020',
         changeOrigin: true,
         ws: true
+      },
+      '/preview': {
+        target: 'http://localhost:3020',
+        changeOrigin: true,
+        ws: true
       }
     }
   }

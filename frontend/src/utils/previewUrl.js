@@ -51,15 +51,22 @@ export function toPreviewUrl(inputUrl) {
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
-  // Handle localhost/local network URLs - use preview subdomain
+  // Handle localhost/local network URLs - use preview subdomain or local proxy path
   try {
     const parsed = new URL(inputUrl);
     const hostname = parsed.hostname;
     const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
     const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
+    const uiHost = typeof window !== 'undefined' ? window.location.hostname : '';
+    const isLocalUiHost =
+      ['localhost', '127.0.0.1', '0.0.0.0'].includes(uiHost) ||
+      /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(uiHost);
 
     if ((isLocalhost || isPrivateIP) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
+      if (isLocalUiHost) {
+        return `/preview/${parsed.port}${path}`;
+      }
       return `https://preview-${parsed.port}.conordart.com${path}`;
     }
   } catch {
