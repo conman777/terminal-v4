@@ -13,6 +13,7 @@ export function TerminalSessionProvider({ children }) {
     }
   });
   const [loadingSessions, setLoadingSessions] = useState(false);
+  const [sessionLoadError, setSessionLoadError] = useState(null);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
 
@@ -110,6 +111,7 @@ export function TerminalSessionProvider({ children }) {
   const loadSessions = useCallback(async () => {
     if (!isMountedRef.current) return;
     setLoadingSessions(true);
+    setSessionLoadError(null);
     try {
       const response = await apiFetch('/api/terminal');
       if (!response.ok) {
@@ -121,6 +123,9 @@ export function TerminalSessionProvider({ children }) {
       }
     } catch (error) {
       console.error('Failed to load sessions', error);
+      if (isMountedRef.current) {
+        setSessionLoadError(error.message || 'Failed to load terminals');
+      }
     } finally {
       if (isMountedRef.current) {
         setLoadingSessions(false);
@@ -658,6 +663,7 @@ export function TerminalSessionProvider({ children }) {
     activeSessions,
     inactiveSessions,
     loadingSessions,
+    sessionLoadError,
     restoringSessionId,
     projectInfo,
 
@@ -668,6 +674,7 @@ export function TerminalSessionProvider({ children }) {
     renameSession,
     closeSession,
     navigateSession,
+    retryLoadSessions: loadSessions,
 
     // Folder state
     recentFolders,

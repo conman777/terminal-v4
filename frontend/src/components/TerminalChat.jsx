@@ -1,7 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
@@ -178,6 +177,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       fontFamily: isMobile
         ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
         : 'Consolas, "Courier New", monospace',
+      rendererType: 'canvas',
       scrollback: 5000,
       theme: {
         background: '#1e1e1e',
@@ -295,15 +295,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       hasOpened = true;
       term.open(container);
-
-      let webglAddon = null;
-      try {
-        webglAddon = new WebglAddon();
-        webglAddon.onContextLoss(() => { webglAddon?.dispose(); });
-        term.loadAddon(webglAddon);
-      } catch (e) {
-        console.warn('WebGL addon failed to load:', e);
-      }
 
       const textarea = term.textarea;
       let isComposing = false;

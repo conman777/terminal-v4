@@ -1303,10 +1303,11 @@ html, body { isolation: isolate; }
 }
 </style>`;
           const injectedScripts = backdropFixCSS + PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+          // Use function replacement to avoid $' special pattern issues in injected scripts
           if (html.includes('<head>')) {
-            html = html.replace('<head>', '<head>' + injectedScripts);
+            html = html.replace('<head>', () => '<head>' + injectedScripts);
           } else if (html.includes('<html>')) {
-            html = html.replace('<html>', '<html><head>' + injectedScripts + '</head>');
+            html = html.replace('<html>', () => '<html><head>' + injectedScripts + '</head>');
           } else {
             html = injectedScripts + html;
           }

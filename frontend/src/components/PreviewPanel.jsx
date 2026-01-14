@@ -17,8 +17,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [inputUrl, setInputUrl] = useState(url || '');
   const [logs, setLogs] = useState([]);  // Client-side logs from injected script
   const [proxyLogs, setProxyLogs] = useState([]);  // Server-side proxy logs
+  const [processLogs, setProcessLogs] = useState([]);  // Process stdout/stderr logs
   const [showLogs, setShowLogs] = useState(false);
-  const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy'
+  const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy', 'server'
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [isDocumentVisible, setIsDocumentVisible] = useState(() => {
     if (typeof document === 'undefined') return true;
@@ -204,6 +205,48 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     return () => clearInterval(interval);
   }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 
+  // Poll for process logs (stdout/stderr from dev server)
+  const lastProcessLogTimestamp = useRef(0);
+  useEffect(() => {
+    if (!previewPort) {
+      setProcessLogs([]);
+      lastProcessLogTimestamp.current = 0;
+      return;
+    }
+    if (!showLogs || !isDocumentVisible || logFilter === 'client' || logFilter === 'proxy') {
+      return;
+    }
+    const fetchProcessLogs = async () => {
+      try {
+        const token = getAccessToken();
+        const since = lastProcessLogTimestamp.current;
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/preview/${previewPort}/process-logs?since=${since}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.logs && data.logs.length > 0) {
+          setProcessLogs(prev => {
+            const newLogs = [...prev, ...data.logs];
+            // Keep max 200 logs
+            return newLogs.slice(-200);
+          });
+          // Update last timestamp
+          const lastLog = data.logs[data.logs.length - 1];
+          if (lastLog) {
+            lastProcessLogTimestamp.current = lastLog.timestamp;
+          }
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    };
+    // Initial fetch (get all logs)
+    fetchProcessLogs();
+    // Poll every 2 seconds while logs are visible
+    const interval = setInterval(fetchProcessLogs, 2000);
+    return () => clearInterval(interval);
+  }, [previewPort, showLogs, isDocumentVisible, logFilter]);
+
   useEffect(() => {
     setIframeSrc(baseIframeSrc);
   }, [baseIframeSrc]);
@@ -287,13 +330,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const handleClearLogs = useCallback(async () => {
     setLogs([]);
     setProxyLogs([]);
+    setProcessLogs([]);
     lastProxyLogTimestamp.current = 0;
+    lastProcessLogTimestamp.current = 0;
     // Also clear on server
     if (previewPort) {
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        // Clear both client-side logs and proxy logs
+        // Clear client-side logs and proxy logs (process logs are not clearable)
         await Promise.all([
           fetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE' }),
           fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers })
@@ -475,7 +520,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handleError = useCallback(() => {
     setIsLoading(false);
-    setError('Failed to load preview. The server may not be running or CORS may be blocking the request.');
+    setError('Failed to load page. The server may not be running or CORS may be blocking the request.');
   }, []);
 
   const handleRefresh = useCallback(() => {
@@ -517,10 +562,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   // Merge and filter logs (memoized for performance)
   const filteredLogs = useMemo(() => {
     const allLogs = [];
-    if (logFilter !== 'proxy') {
+    if (logFilter === 'all' || logFilter === 'client') {
       logs.forEach(log => allLogs.push({ ...log, source: 'client' }));
     }
-    if (logFilter !== 'client') {
+    if (logFilter === 'all' || logFilter === 'proxy') {
       proxyLogs.forEach(log => allLogs.push({
         id: log.id,
         timestamp: log.timestamp,
@@ -534,10 +579,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         responseSize: log.responseSize
       }));
     }
+    if (logFilter === 'all' || logFilter === 'server') {
+      processLogs.forEach(log => allLogs.push({
+        id: log.id || `proc-${log.timestamp}-${Math.random()}`,
+        timestamp: log.timestamp,
+        source: 'server',
+        stream: log.stream,  // 'stdout' or 'stderr'
+        data: log.data
+      }));
+    }
     // Sort by timestamp
     allLogs.sort((a, b) => a.timestamp - b.timestamp);
     return allLogs;
-  }, [logs, proxyLogs, logFilter]);
+  }, [logs, proxyLogs, processLogs, logFilter]);
 
   // Mobile layout
   if (isMobile) {
@@ -559,7 +613,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                         className="btn-primary project-action-btn"
                         onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
                       >
-                        Preview Static Site
+                        Open Static Site
                       </button>
                     </>
                   ) : projectInfo.startCommand ? (
@@ -580,7 +634,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               ) : (
                 <>
                   <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
-                  <h3>No Preview URL</h3>
+                  <h3>No URL</h3>
                   <p>Start a dev server or enter a URL</p>
                 </>
               )}
@@ -588,7 +642,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           ) : error ? (
             <div className="preview-error">
               <div className="preview-error-icon">{'\u26A0'}</div>
-              <h3>Preview Error</h3>
+              <h3>Load Error</h3>
               <p>{error}</p>
               <button type="button" className="btn-primary" onClick={handleRefresh}>
                 Try Again
@@ -608,7 +662,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 className="preview-iframe"
                 onLoad={handleLoad}
                 onError={handleError}
-                title="App Preview"
+                title="Browser"
                 allow="camera; microphone"
                 style={{ opacity: isLoading ? 0 : 1 }}
               />
@@ -737,7 +791,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         <div className={`preview-console-sheet ${showLogs ? 'open' : ''}`}>
           <div className="preview-console-header" onClick={() => setShowLogs(!showLogs)}>
             <div className="preview-console-handle" />
-            <span className="preview-console-title">Logs {(logs.length + proxyLogs.length) > 0 && `(${logs.length + proxyLogs.length})`}</span>
+            <span className="preview-console-title">Logs {(logs.length + proxyLogs.length + processLogs.length) > 0 && `(${logs.length + proxyLogs.length + processLogs.length})`}</span>
             {showLogs && (
               <select
                 className="preview-logs-filter-mobile"
@@ -746,6 +800,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 onClick={(e) => e.stopPropagation()}
               >
                 <option value="all">All</option>
+                <option value="server">Server</option>
                 <option value="proxy">Network</option>
                 <option value="client">Console</option>
               </select>
@@ -768,6 +823,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}`}>
                       <span className="preview-log-time">{formatTime(log.timestamp)}</span>
                       <span className="preview-log-message">{log.message}</span>
+                    </div>
+                  );
+                } else if (log.source === 'server') {
+                  const isError = log.stream === 'stderr';
+                  return (
+                    <div key={`s-${log.id}`} className={`preview-log-entry preview-log-server ${isError ? 'preview-log-stderr' : 'preview-log-stdout'}`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className={`preview-log-stream ${isError ? 'stderr' : 'stdout'}`}>{log.stream}</span>
+                      <span className="preview-log-data">{log.data}</span>
                     </div>
                   );
                 } else {
@@ -974,20 +1038,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
-            {(logs.length + proxyLogs.length) > 0 && <span className="preview-log-badge">{logs.length + proxyLogs.length}</span>}
+            {(logs.length + proxyLogs.length + processLogs.length) > 0 && <span className="preview-log-badge">{logs.length + proxyLogs.length + processLogs.length}</span>}
           </button>
         </div>
       </div>
     );
   }
 
-  // Desktop layout (unchanged)
+  // Desktop layout
   return (
     <div className="preview-panel">
       <div className="preview-header">
         <div className="preview-title">
           <span className="preview-icon">{'\u2699'}</span>
-          <span>Preview</span>
+          <span>Browser</span>
         </div>
         {/* Port selector dropdown */}
         <div className="preview-port-selector" ref={portDropdownRef}>
@@ -1081,7 +1145,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             onClick={handleRefresh}
             title="Refresh"
             disabled={!iframeSrc}
-            aria-label="Refresh preview"
+            aria-label="Refresh"
           >
             {'\u21BB'}
           </button>
@@ -1091,7 +1155,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             onClick={handleOpenExternal}
             title="Open in new tab"
             disabled={!iframeSrc}
-            aria-label="Open preview in new tab"
+            aria-label="Open in new tab"
           >
             {'\u2197'}
           </button>
@@ -1099,8 +1163,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             type="button"
             className="preview-action-btn preview-close-btn"
             onClick={onClose}
-            title="Close preview"
-            aria-label="Close preview"
+            title="Close browser"
+            aria-label="Close browser"
           >
             {'\u00D7'}
           </button>
@@ -1122,12 +1186,12 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       className="btn-primary project-action-btn"
                       onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
                     >
-                      Preview Static Site
+                      Open Static Site
                     </button>
                   </>
                 ) : projectInfo.startCommand ? (
                   <>
-                    <p>Run the dev server to see your preview:</p>
+                    <p>Run the dev server:</p>
                     <button
                       type="button"
                       className="btn-primary project-action-btn"
@@ -1146,7 +1210,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             ) : (
               <>
                 <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
-                <h3>No Preview URL</h3>
+                <h3>No URL</h3>
                 <p>Start a dev server in the terminal, or enter a local file path like:</p>
                 <p className="preview-hint">
                   <code>C:\path\to\project\index.html</code>
@@ -1157,7 +1221,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         ) : error ? (
           <div className="preview-error">
             <div className="preview-error-icon">{'\u26A0'}</div>
-            <h3>Preview Error</h3>
+            <h3>Load Error</h3>
             <p>{error}</p>
             <button type="button" className="btn-primary" onClick={handleRefresh}>
               Try Again
@@ -1168,7 +1232,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             {isLoading && (
               <div className="preview-loading">
                 <div className="preview-spinner"></div>
-                <p>Loading preview...</p>
+                <p>Loading...</p>
               </div>
             )}
             <iframe
@@ -1177,7 +1241,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               className="preview-iframe"
               onLoad={handleLoad}
               onError={handleError}
-              title="App Preview"
+              title="Browser"
               allow="camera; microphone"
               style={{ opacity: isLoading ? 0 : 1 }}
             />
@@ -1191,8 +1255,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           <span className="preview-logs-title">
             <span className="preview-logs-icon">{'\u{1F4CB}'}</span>
             Logs
-            {(logs.length + proxyLogs.length) > 0 && (
-              <span className="preview-logs-count">{logs.length + proxyLogs.length}</span>
+            {(logs.length + proxyLogs.length + processLogs.length) > 0 && (
+              <span className="preview-logs-count">{logs.length + proxyLogs.length + processLogs.length}</span>
             )}
           </span>
           <div className="preview-logs-actions">
@@ -1205,6 +1269,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   onClick={(e) => e.stopPropagation()}
                 >
                   <option value="all">All</option>
+                  <option value="server">Server ({processLogs.length})</option>
                   <option value="proxy">Network ({proxyLogs.length})</option>
                   <option value="client">Console ({logs.length})</option>
                 </select>
@@ -1233,6 +1298,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       <span className="preview-log-time">{formatTime(log.timestamp)}</span>
                       <span className="preview-log-level">{log.level}</span>
                       <span className="preview-log-message">{log.message}</span>
+                    </div>
+                  );
+                } else if (log.source === 'server') {
+                  // Process log (stdout/stderr)
+                  const isError = log.stream === 'stderr';
+                  return (
+                    <div key={`s-${log.id}`} className={`preview-log-entry preview-log-server ${isError ? 'preview-log-stderr' : 'preview-log-stdout'}`}>
+                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
+                      <span className={`preview-log-stream ${isError ? 'stderr' : 'stdout'}`}>{log.stream}</span>
+                      <span className="preview-log-data">{log.data}</span>
                     </div>
                   );
                 } else {

@@ -27,6 +27,7 @@ import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
 import { assertAuthConfig } from './auth/auth-service';
 import { stopCleanupInterval } from './preview/preview-logs-service';
+import { migrateOrphanedSessions } from './migrations/migrate-sessions';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -58,6 +59,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Initialize database
   getDatabase();
+
+  // Migrate orphaned sessions from old storage location (one-time)
+  await migrateOrphanedSessions();
 
   // Fail fast on insecure auth configuration
   assertAuthConfig();

@@ -1,5 +1,10 @@
 # Terminal V4 - Project Guide
 
+## Important Rules
+
+- **Do not write or modify code without explicit permission.** Always explain what you plan to do and wait for approval before making changes.
+- When investigating issues, read and analyze code first - do not make fixes until asked.
+
 ## Project Architecture
 
 This is a browser-based terminal emulator that wraps Claude Code CLI. It consists of:

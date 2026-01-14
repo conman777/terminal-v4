@@ -1,10 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { ensureDataDir } from '../utils/data-dir';
 
-const DATA_DIR = process.env.TERMINAL_DATA_DIR
-  ? path.resolve(process.env.TERMINAL_DATA_DIR)
-  : path.join(process.cwd(), 'data');
+const DATA_DIR = ensureDataDir();
 const DB_PATH = path.join(DATA_DIR, 'terminal.db');
 
 export function initDatabase(): Database.Database {

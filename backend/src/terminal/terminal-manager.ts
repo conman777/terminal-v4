@@ -16,7 +16,10 @@ import {
   saveSession,
   loadSession,
   deleteSession,
-  loadAllSessions
+  loadAllSessions,
+  updateSessionMetadata,
+  getSessionMetadata,
+  deleteSessionMetadata
 } from './session-store';
 import {
   isTmuxAvailable,
@@ -154,16 +157,26 @@ export class TerminalManager {
         if (!userSessions.has(tmuxId)) {
           // Tmux exists but no valid persisted data - create minimal entry
           const cwd = getTmuxSessionCwd(tmuxId) || process.cwd();
-          // Use the directory name as the title to help identify the session
-          const dirName = path.basename(cwd);
-          const title = dirName && dirName !== '/' ? `${dirName} (recovered)` : 'Recovered Terminal';
-          console.log(`[TerminalManager] Recovering orphaned tmux session: ${tmuxId} -> ${title}`);
+
+          // Try to get title from metadata index (survives session file corruption)
+          const metadata = await getSessionMetadata(userId, tmuxId);
+          let title: string;
+          if (metadata?.title) {
+            title = metadata.title;
+            console.log(`[TerminalManager] Recovering orphaned tmux session with saved title: ${tmuxId} -> ${title}`);
+          } else {
+            // Fall back to directory name
+            const dirName = path.basename(cwd);
+            title = dirName && dirName !== '/' ? `${dirName} (recovered)` : 'Recovered Terminal';
+            console.log(`[TerminalManager] Recovering orphaned tmux session: ${tmuxId} -> ${title}`);
+          }
+
           const recovered: PersistedSession = {
             id: tmuxId,
             title,
-            shell: this.#defaultShell,
-            cwd,
-            createdAt: new Date().toISOString(),
+            shell: metadata?.shell || this.#defaultShell,
+            cwd: metadata?.cwd || cwd,
+            createdAt: metadata?.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             history: []
           };
@@ -210,23 +223,47 @@ export class TerminalManager {
   }
 
   async #saveSessionToDisk(session: ManagedTerminal): Promise<void> {
-    const persisted: PersistedSession = {
-      id: session.id,
-      title: session.title,
-      shell: session.shell,
-      cwd: session.cwd,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      history: session.buffer
-    };
-    await saveSession(session.userId, persisted);
-
-    let userSessions = this.#persistedSessions.get(session.userId);
-    if (!userSessions) {
-      userSessions = new Map();
-      this.#persistedSessions.set(session.userId, userSessions);
+    // If a save is already in progress, mark that another save is needed
+    if (session.saveInProgress) {
+      session.pendingSave = true;
+      return;
     }
-    userSessions.set(session.id, persisted);
+
+    session.saveInProgress = true;
+    session.pendingSave = false;
+
+    try {
+      const persisted: PersistedSession = {
+        id: session.id,
+        title: session.title,
+        shell: session.shell,
+        cwd: session.cwd,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        history: session.buffer
+      };
+      await saveSession(session.userId, persisted);
+
+      let userSessions = this.#persistedSessions.get(session.userId);
+      if (!userSessions) {
+        userSessions = new Map();
+        this.#persistedSessions.set(session.userId, userSessions);
+      }
+      userSessions.set(session.id, persisted);
+    } finally {
+      session.saveInProgress = false;
+
+      // If another save was requested while we were saving, do it now
+      if (session.pendingSave) {
+        session.pendingSave = false;
+        // Use setImmediate to avoid stack overflow on rapid saves
+        setImmediate(() => {
+          void this.#saveSessionToDisk(session).catch((error) => {
+            console.error(`Failed to persist terminal session ${session.id}:`, error);
+          });
+        });
+      }
+    }
   }
 
   // Get the current working directory by executing pwd/cd command
@@ -334,6 +371,17 @@ export class TerminalManager {
       session.title = trimmed;
       session.updatedAt = new Date().toISOString();
       this.#scheduleSave(session);
+
+      // Update metadata index with new title
+      updateSessionMetadata(userId, id, {
+        title: trimmed,
+        shell: session.shell,
+        cwd: session.cwd,
+        createdAt: session.createdAt
+      }).catch((error) => {
+        console.error(`Failed to update session metadata for ${id}:`, error);
+      });
+
       return {
         id: session.id,
         title: session.title,
@@ -359,6 +407,14 @@ export class TerminalManager {
 
     await saveSession(userId, updated);
     userPersistedSessions.set(id, updated);
+
+    // Update metadata index with new title
+    await updateSessionMetadata(userId, id, {
+      title: trimmed,
+      shell: updated.shell,
+      cwd: updated.cwd,
+      createdAt: updated.createdAt
+    });
 
     return {
       id: updated.id,
@@ -524,6 +580,11 @@ export class TerminalManager {
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
+
+    // Save metadata index entry (survives session file corruption)
+    updateSessionMetadata(userId, id, { title, shell, cwd, createdAt }).catch((error) => {
+      console.error(`Failed to save session metadata for ${id}:`, error);
+    });
 
     // Execute initial command if provided
     if (options.initialCommand) {
@@ -764,6 +825,10 @@ export class TerminalManager {
     // Fire-and-forget with error handling to prevent unhandled rejection
     deleteSession(userId, id).catch((error) => {
       console.error(`Failed to delete session file for ${id}:`, error);
+    });
+    // Also delete metadata index entry
+    deleteSessionMetadata(userId, id).catch((error) => {
+      console.error(`Failed to delete session metadata for ${id}:`, error);
     });
   }
 

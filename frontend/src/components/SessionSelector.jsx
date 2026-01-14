@@ -9,7 +9,9 @@ export function SessionSelector({
   onCreateSession,
   onCloseSession,
   onRenameSession,
-  isLoading
+  isLoading,
+  sessionLoadError,
+  onRetryLoad
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -99,7 +101,15 @@ export function SessionSelector({
         <div className="session-selector-dropdown">
           <div className="session-selector-list">
             {isLoading && <div className="session-selector-empty">Loading...</div>}
-            {!isLoading && activeSessions.length === 0 && (
+            {sessionLoadError && (
+              <div className="session-selector-error">
+                <span>{sessionLoadError}</span>
+                <button type="button" onClick={(e) => { e.stopPropagation(); onRetryLoad?.(); }}>
+                  Retry
+                </button>
+              </div>
+            )}
+            {!isLoading && !sessionLoadError && activeSessions.length === 0 && (
               <div className="session-selector-empty">No active terminals</div>
             )}
             {activeSessions.map((session) => {

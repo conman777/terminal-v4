@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { ensureDataDir } from '../utils/data-dir';
 
 export interface Bookmark {
   id: string;
@@ -12,8 +13,8 @@ export interface Bookmark {
   updatedAt?: string;
 }
 
-// Use process.cwd() which is the backend/ directory when running npm start
-const DATA_DIR = join(process.cwd(), 'data');
+// Stable base data directory (repo-relative or env override)
+const DATA_DIR = ensureDataDir();
 
 // Per-user bookmark cache
 const userBookmarks = new Map<string, Bookmark[]>();

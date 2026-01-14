@@ -5,6 +5,7 @@
 import { parse as parseCookie } from 'cookie';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ensureDataDir } from '../utils/data-dir';
 
 interface StoredCookie {
   name: string;
@@ -23,7 +24,7 @@ interface StoredCookie {
 const cookieStores = new Map<number, Map<string, StoredCookie>>();
 
 // Persistence configuration
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
+const DATA_DIR = ensureDataDir();
 const COOKIE_FILE = path.join(DATA_DIR, 'preview-cookies.json');
 let saveTimeout: NodeJS.Timeout | null = null;
 

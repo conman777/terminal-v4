@@ -41,9 +41,9 @@ Backend configuration (set in `backend/.env` or your shell):
 | `ALLOWED_USERNAME` | Restrict logins to a single username | *(unset)* |
 
 Notes:
-- `TERMINAL_DATA_DIR` only affects SQLite. Terminal and Claude Code session JSON
-  files still live under `backend/data/users/...`.
-- `DATA_DIR` controls preview cookie persistence (`preview-cookies.json`).
+- `TERMINAL_DATA_DIR` (or `DATA_DIR`) sets the base data directory for SQLite,
+  terminal/Claude Code sessions, bookmarks, notes, and preview cookies.
+  Default is `backend/data` (repo-relative) regardless of working directory.
 
 Frontend configuration (set in `frontend/.env` or your shell):
 

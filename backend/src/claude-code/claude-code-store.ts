@@ -2,9 +2,10 @@ import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ClaudeCodeSession } from './claude-code-types';
+import { ensureDataDir } from '../utils/data-dir';
 
-// Use process.cwd() which is the backend/ directory when running npm start
-const DATA_DIR = join(process.cwd(), 'data');
+// Stable base data directory (repo-relative or env override)
+const DATA_DIR = ensureDataDir();
 
 function sanitizeId(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');

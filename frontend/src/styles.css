@@ -802,6 +802,42 @@ button {
   font-size: 13px;
 }
 
+.session-selector-error {
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  color: var(--error);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  margin: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.session-selector-error span {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.session-selector-error button {
+  background: var(--error);
+  color: white;
+  border: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-selector-error button:hover {
+  background: #e11d48;
+}
+
 .session-selector-item {
   display: flex;
   align-items: center;
@@ -3278,6 +3314,40 @@ button {
   color: var(--error);
   font-size: 10px;
   margin-left: 8px;
+}
+
+/* Server log entries (stdout/stderr from dev server) */
+.preview-log-server {
+  border-left-color: #a855f7;
+}
+.preview-log-server.preview-log-stderr {
+  border-left-color: var(--error);
+}
+
+.preview-log-stream {
+  width: 40px;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  text-align: center;
+}
+.preview-log-stream.stderr {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--error);
+}
+
+.preview-log-data {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
 }
 
 /* Preview action button active state (for inspect mode) */
