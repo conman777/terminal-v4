@@ -221,11 +221,13 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
       }
 
       // Make the proxied request
+      // Note: Fastify parses JSON bodies into objects, so we need to re-stringify them.
+      // However, if the body is already a string (e.g., form data), don't double-stringify.
       const response = await fetch(targetUrl, {
         method: request.method,
         headers: forwardHeaders,
-        body: request.method !== 'GET' && request.method !== 'HEAD'
-          ? JSON.stringify(request.body)
+        body: request.method !== 'GET' && request.method !== 'HEAD' && request.body
+          ? (typeof request.body === 'string' ? request.body : JSON.stringify(request.body))
           : undefined,
         redirect: 'manual'
       });

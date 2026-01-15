@@ -842,8 +842,10 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
   // Handle all HTTP requests on preview subdomains
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip API routes - they should be handled by their own route handlers
-    if (request.url.startsWith('/api/')) return;
+    // Note: We no longer skip /api/ routes here because preview subdomains need to proxy
+    // ALL requests (including /api/*) to the target dev server. The check for whether
+    // this is a preview request happens below - if it's not a preview subdomain, the
+    // hook returns early and lets Terminal V4's own routes handle it.
 
     const forwardedHost = request.headers['x-forwarded-host'];
     const forwardedHostValue = Array.isArray(forwardedHost)
