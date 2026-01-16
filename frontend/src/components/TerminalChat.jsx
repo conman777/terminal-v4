@@ -13,7 +13,7 @@ import { useImageUpload } from '../hooks/useImageUpload';
 import { useTerminalScrolling } from '../hooks/useTerminalScrolling';
 import { useIdleDetection } from '../hooks/useIdleDetection';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -29,6 +29,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
+  const usesTmuxRef = useRef(Boolean(usesTmux));
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
 
@@ -62,7 +63,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     startScrolling,
     stopScrolling,
     exitCopyModeIfActive,
-    enterCopyMode,
     cleanup: cleanupScrolling
   } = useTerminalScrolling(xtermRef, sendToTerminal);
 
@@ -135,6 +135,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     onScrollDirectionRef.current = onScrollDirection;
   }, [onScrollDirection]);
+
+  useEffect(() => {
+    usesTmuxRef.current = Boolean(usesTmux);
+  }, [usesTmux]);
 
   // Reset loading state when session changes
   useEffect(() => {
@@ -313,6 +317,61 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           textarea.inputMode = 'none';
         }
       }
+
+      // Custom wheel handling to avoid arrow-key fallback when tmux has no scrollback
+      let wheelAccumulator = 0;
+      let lastWheelDirection = 0;
+      const SCROLL_THRESHOLD = 80;
+      const LINE_HEIGHT = 16;
+
+      term.attachCustomWheelEventHandler((event) => {
+        if (!usesTmuxRef.current) {
+          return true;
+        }
+
+        const mouseTrackingMode = term.modes?.mouseTrackingMode;
+        if (mouseTrackingMode && mouseTrackingMode !== 'none') {
+          return true;
+        }
+
+        const buffer = term.buffer?.active;
+        const baseY = buffer?.baseY || 0;
+        if (baseY > 0) {
+          return true;
+        }
+
+        if (event.deltaY === 0) {
+          return true;
+        }
+
+        event.preventDefault();
+
+        let delta = event.deltaY;
+        if (event.deltaMode === 1) {
+          delta *= LINE_HEIGHT;
+        } else if (event.deltaMode === 2) {
+          delta *= LINE_HEIGHT * term.rows;
+        }
+
+        const currentDirection = Math.sign(delta);
+        if (currentDirection !== 0 && currentDirection !== lastWheelDirection) {
+          wheelAccumulator = 0;
+          lastWheelDirection = currentDirection;
+        }
+
+        wheelAccumulator += delta;
+
+        if (Math.abs(wheelAccumulator) >= SCROLL_THRESHOLD) {
+          wheelAccumulator = 0;
+          if (currentDirection < 0) {
+            scrollUp();
+          } else if (currentDirection > 0) {
+            scrollDown();
+          }
+        }
+
+        return false;
+      });
 
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
@@ -537,51 +596,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       container.addEventListener('contextmenu', handleContextMenu);
 
-      // Mouse wheel scrolling for tmux
-      let scrollAccumulator = 0;
-      let lastScrollDirection = 0;
-      let pendingScroll = null;
-      const SCROLL_THRESHOLD = 150;
-
-      const wheelHandler = (e) => {
-        const buffer = term.buffer?.active;
-        const baseY = buffer?.baseY || 0;
-        if (baseY === 0) {
-          e.preventDefault();
-          const socket = socketRef.current;
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-          const currentDirection = Math.sign(e.deltaY);
-          if (currentDirection !== 0 && currentDirection !== lastScrollDirection) {
-            scrollAccumulator = 0;
-            lastScrollDirection = currentDirection;
-          }
-
-          scrollAccumulator += e.deltaY;
-
-          if (Math.abs(scrollAccumulator) >= SCROLL_THRESHOLD) {
-            const scrollDirection = scrollAccumulator < 0 ? 'up' : 'down';
-            scrollAccumulator = 0;
-
-            if (pendingScroll) clearTimeout(pendingScroll);
-
-            socket.send('\x1b');
-            socket.send('\x02[');
-            enterCopyMode();
-
-            pendingScroll = setTimeout(() => {
-              if (scrollDirection === 'up') {
-                socket.send('\x15');
-              } else {
-                socket.send('\x04');
-              }
-              pendingScroll = null;
-            }, 50);
-          }
-        }
-      };
-      container.addEventListener('wheel', wheelHandler, { passive: false });
-
       const handlePasteEvent = (e) => {
         if (suppressPasteEventRef.current) {
           e.preventDefault();
@@ -602,7 +616,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
         container.removeEventListener('contextmenu', handleContextMenu);
-        container.removeEventListener('wheel', wheelHandler);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
           textarea.removeEventListener('compositionstart', handleCompositionStart);

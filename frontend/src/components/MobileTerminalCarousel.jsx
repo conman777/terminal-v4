@@ -74,6 +74,7 @@ export function MobileTerminalCarousel({
           viewportHeight={viewportHeight}
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
+          usesTmux={currentSession?.usesTmux}
           onScrollDirection={onScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterFocusTerminal={onRegisterFocusTerminal}

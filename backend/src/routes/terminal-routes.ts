@@ -76,7 +76,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         title: session.title,
         shell: session.shell,
         createdAt: session.createdAt,
-        updatedAt: session.updatedAt
+        updatedAt: session.updatedAt,
+        usesTmux: session.usesTmux
       }
     });
   });

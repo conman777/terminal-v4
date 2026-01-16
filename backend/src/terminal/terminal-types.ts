@@ -13,6 +13,7 @@ export interface TerminalSessionSummary {
   updatedAt: string;
   messageCount: number;
   isActive: boolean;
+  usesTmux: boolean;
 }
 
 export interface TerminalSessionSnapshot {
@@ -22,6 +23,7 @@ export interface TerminalSessionSnapshot {
   createdAt: string;
   updatedAt: string;
   history: TerminalStreamEvent[];
+  usesTmux: boolean;
 }
 
 export interface TerminalCreateOptions {

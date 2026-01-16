@@ -10,6 +10,55 @@ function formatTime(timestamp) {
   return date.toLocaleTimeString('en-US', { hour12: false }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
 }
 
+const PREVIEW_STORAGE_KEY = 'terminal_preview_storage_v1';
+const PREVIEW_STORAGE_MAX_BYTES = 200 * 1024;
+
+function normalizePreviewUrl(value) {
+  if (!value || typeof value !== 'string') return '';
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return value.trim();
+  }
+}
+
+function readPreviewStorage() {
+  try {
+    const raw = localStorage.getItem(PREVIEW_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function writePreviewStorage(data) {
+  try {
+    const payload = JSON.stringify(data);
+    if (payload.length > PREVIEW_STORAGE_MAX_BYTES) {
+      return false;
+    }
+    localStorage.setItem(PREVIEW_STORAGE_KEY, payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeStorageSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return {};
+  const result = {};
+  Object.entries(snapshot).forEach(([key, value]) => {
+    if (typeof key === 'string') {
+      result[key] = value === null || value === undefined ? '' : String(value);
+    }
+  });
+  return result;
+}
+
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode }) {
   const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
@@ -39,6 +88,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const isLogsNearBottomRef = useRef(true);
   const urlInputRef = useRef(null);
   const portDropdownRef = useRef(null);
+  const skipUrlSyncRef = useRef(false);
+  const lastSyncedUrlRef = useRef(normalizePreviewUrl(url || ''));
 
   const baseIframeSrc = useMemo(() => {
     const result = toPreviewUrl(url);
@@ -248,10 +299,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 
   useEffect(() => {
+    if (skipUrlSyncRef.current) {
+      return;
+    }
     setIframeSrc(baseIframeSrc);
   }, [baseIframeSrc]);
 
-  // Listen for messages from iframe (console logs and element selection)
+  // Listen for messages from iframe (console logs, navigation, and element selection)
   useEffect(() => {
     const handleMessage = (event) => {
       // Verify message is from our iframe to prevent stale/cross-origin issues
@@ -269,6 +323,43 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         if (inspectMode && iframeRef.current?.contentWindow) {
           iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: true }, '*');
         }
+      } else if (event.data?.type === 'preview-location') {
+        const nextUrl = event.data.url;
+        if (!nextUrl || typeof nextUrl !== 'string') return;
+        const normalizedNext = normalizePreviewUrl(nextUrl);
+        if (!normalizedNext) return;
+        const normalizedCurrent = normalizePreviewUrl(url);
+        if (normalizedNext === normalizedCurrent || normalizedNext === lastSyncedUrlRef.current) {
+          return;
+        }
+        lastSyncedUrlRef.current = normalizedNext;
+        if (onUrlChange) {
+          skipUrlSyncRef.current = true;
+          onUrlChange(normalizedNext);
+        }
+      } else if (event.data?.type === 'preview-storage-request') {
+        const requestedPort = parseInt(event.data.port, 10);
+        if (!requestedPort || requestedPort !== previewPort) return;
+        const allStorage = readPreviewStorage();
+        const stored = allStorage[requestedPort] || {};
+        const localSnapshot = normalizeStorageSnapshot(stored.local);
+        const sessionSnapshot = normalizeStorageSnapshot(stored.session);
+        if (iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage({
+            type: 'preview-storage-restore',
+            port: requestedPort,
+            local: localSnapshot,
+            session: sessionSnapshot
+          }, '*');
+        }
+      } else if (event.data?.type === 'preview-storage-sync') {
+        const syncPort = parseInt(event.data.port, 10);
+        if (!syncPort || syncPort !== previewPort) return;
+        const localSnapshot = normalizeStorageSnapshot(event.data.local);
+        const sessionSnapshot = normalizeStorageSnapshot(event.data.session);
+        const allStorage = readPreviewStorage();
+        allStorage[syncPort] = { local: localSnapshot, session: sessionSnapshot };
+        writePreviewStorage(allStorage);
       } else if (event.data?.type === 'preview-send-to-terminal') {
         // Send element info to terminal
         if (onSendToTerminal && event.data.element) {
@@ -295,7 +386,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [inspectMode, onSendToTerminal]);
+  }, [inspectMode, onSendToTerminal, onUrlChange, url, previewPort]);
 
   // Track if user scrolled away from bottom in logs
   const handleLogsScroll = useCallback(() => {
@@ -314,6 +405,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Clear logs and selection when URL changes
   useEffect(() => {
+    if (skipUrlSyncRef.current) {
+      skipUrlSyncRef.current = false;
+      return;
+    }
     setLogs([]);
     setSelectedElement(null);
     setInspectMode(false);
@@ -427,6 +522,43 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     onSendToClaudeCode(context);
   }, [selectedElement, onSendToClaudeCode]);
 
+  // Send element info to terminal for Claude to see
+  const handleSendElementToTerminal = useCallback(() => {
+    if (!selectedElement || !onSendToTerminal) return;
+
+    const el = selectedElement;
+    const parentPath = el.parentChain
+      ? el.parentChain.map(p => p.selector).reverse().join(' > ')
+      : '';
+
+    let text = `\n--- Selected Element ---\n`;
+    text += `Selector: ${el.fullSelector || el.selector}\n`;
+    text += `Tag: <${el.tagName}>\n`;
+    if (el.id) text += `ID: ${el.id}\n`;
+    if (el.className) text += `Classes: ${el.className}\n`;
+    if (parentPath) text += `Parent path: ${parentPath}\n`;
+    if (el.rect) text += `Size: ${Math.round(el.rect.width)} x ${Math.round(el.rect.height)}px\n`;
+
+    // Add React component info if available
+    if (el.react?.componentName) {
+      text += `\nReact Component: <${el.react.componentName}>\n`;
+      if (el.react.filePath) {
+        text += `Source: ${el.react.filePath}${el.react.lineNumber ? ':' + el.react.lineNumber : ''}\n`;
+      }
+    }
+
+    // Add HTML snippet (truncated)
+    if (el.outerHTML) {
+      const htmlSnippet = el.outerHTML.length > 300
+        ? el.outerHTML.substring(0, 300) + '...'
+        : el.outerHTML;
+      text += `\nHTML:\n${htmlSnippet}\n`;
+    }
+
+    text += `--- End Element ---\n`;
+    onSendToTerminal(text);
+  }, [selectedElement, onSendToTerminal]);
+
   // Send style preview to iframe
   const handleStylePreview = useCallback((styles) => {
     if (!selectedElement?.elementId || !iframeRef.current?.contentWindow) return;
@@ -498,6 +630,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   useEffect(() => {
     setInputUrl(url || '');
+    lastSyncedUrlRef.current = normalizePreviewUrl(url || '');
   }, [url]);
 
   const handleLoad = useCallback(() => {
@@ -543,10 +676,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [inputUrl, onUrlChange]);
 
   const handleOpenExternal = useCallback(() => {
-    if (iframeSrc) {
-      window.open(iframeSrc, '_blank', 'noopener,noreferrer');
+    const targetUrl = baseIframeSrc || iframeSrc;
+    if (targetUrl) {
+      window.open(targetUrl, '_blank', 'noopener,noreferrer');
     }
-  }, [iframeSrc]);
+  }, [baseIframeSrc, iframeSrc]);
 
   // Truncate URL for display
   const displayUrl = useMemo(() => {
@@ -592,6 +726,46 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     allLogs.sort((a, b) => a.timestamp - b.timestamp);
     return allLogs;
   }, [logs, proxyLogs, processLogs, logFilter]);
+
+  // Filter to only error logs
+  const errorLogs = useMemo(() => {
+    return filteredLogs.filter(log => {
+      if (log.source === 'client') {
+        return log.level === 'error';
+      } else if (log.source === 'server') {
+        return log.stream === 'stderr';
+      } else {
+        // Network logs - include failed requests
+        return log.error || log.status >= 400;
+      }
+    });
+  }, [filteredLogs]);
+
+  // Send error logs to terminal for Claude to see
+  const handleSendLogsToTerminal = useCallback(() => {
+    if (!onSendToTerminal || errorLogs.length === 0) return;
+
+    const MAX_LOGS = 50;
+    const logsToSend = errorLogs.slice(-MAX_LOGS);
+    const totalCount = errorLogs.length;
+
+    const header = `\n--- Browser Errors (${logsToSend.length}${totalCount > MAX_LOGS ? ` of ${totalCount}` : ''}) ---\n`;
+
+    const formattedLogs = logsToSend.map(log => {
+      const time = formatTime(log.timestamp);
+      if (log.source === 'client') {
+        return `[${time}] [ERROR] ${log.message}`;
+      } else if (log.source === 'server') {
+        return `[${time}] [STDERR] ${log.data}`;
+      } else {
+        const status = log.error ? 'ERR' : log.status;
+        return `[${time}] [${status}] ${log.method} ${log.url}`;
+      }
+    }).join('\n');
+
+    const footer = '\n--- End Errors ---\n';
+    onSendToTerminal(header + formattedLogs + footer);
+  }, [onSendToTerminal, errorLogs]);
 
   // Mobile layout
   if (isMobile) {
@@ -812,6 +986,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             >
               Clear
             </button>
+            {onSendToTerminal && (
+              <button
+                type="button"
+                className="preview-console-clear"
+                onClick={(e) => { e.stopPropagation(); handleSendLogsToTerminal(); }}
+                disabled={errorLogs.length === 0}
+                title="Send errors to terminal"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+              </button>
+            )}
           </div>
           <div className="preview-console-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
             {filteredLogs.length === 0 ? (
@@ -944,17 +1132,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   </form>
                 ) : (
                   <div className="preview-inspector-btns-mobile">
-                    <button
-                      type="button"
-                      className="preview-inspector-edit-btn-mobile"
-                      onClick={() => setShowEditInput(true)}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 20h9"/>
-                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                      </svg>
-                      Edit with Claude
-                    </button>
                     <button
                       type="button"
                       className={`preview-inspector-style-btn-mobile ${showStyleEditor ? 'active' : ''}`}
@@ -1281,6 +1458,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 >
                   Clear
                 </button>
+                {onSendToTerminal && (
+                  <button
+                    type="button"
+                    className="preview-logs-btn"
+                    onClick={(e) => { e.stopPropagation(); handleSendLogsToTerminal(); }}
+                    title="Send errors to terminal"
+                    disabled={errorLogs.length === 0}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: '4px', verticalAlign: 'middle' }}>
+                      <polyline points="4 17 10 11 4 5" />
+                      <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    Send Errors
+                  </button>
+                )}
               </>
             )}
             <span className="preview-logs-toggle">{showLogs ? '\u25BC' : '\u25B2'}</span>
@@ -1481,17 +1673,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 </form>
               ) : (
                 <div className="preview-inspector-btns">
-                  <button
-                    type="button"
-                    className="preview-inspector-edit-btn"
-                    onClick={() => setShowEditInput(true)}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 20h9"/>
-                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-                    </svg>
-                    Edit with Claude
-                  </button>
                   <button
                     type="button"
                     className={`preview-inspector-style-btn ${showStyleEditor ? 'active' : ''}`}

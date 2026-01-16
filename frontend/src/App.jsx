@@ -754,6 +754,7 @@ function AppContent() {
                       viewportHeight={viewportHeight}
                       onUrlDetected={handleUrlDetected}
                       fontSize={terminalFontSize}
+                      usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
                     />
                   </Suspense>
                 )
@@ -832,6 +833,7 @@ function AppContent() {
                     fontSize={terminalFontSize}
                     onScrollDirection={handleScrollDirectionSafe}
                     onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                    usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
                   />
                 </Suspense>
               </div>

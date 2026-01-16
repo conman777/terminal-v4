@@ -22,12 +22,12 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
     }, 10);
     inCopyModeRef.current = true;
 
-    // Auto-exit copy-mode after 3s of no scroll activity
+    // Auto-exit copy-mode after 5 minutes of no scroll activity
     clearTimeout(copyModeTimeoutRef.current);
     copyModeTimeoutRef.current = setTimeout(() => {
       sendToTerminal('q');
       inCopyModeRef.current = false;
-    }, 3000);
+    }, 300000);
   }, [sendToTerminal]);
 
   // Scroll in tmux copy-mode (shared logic for buttons and wheel)

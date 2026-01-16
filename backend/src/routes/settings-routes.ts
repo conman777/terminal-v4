@@ -3,10 +3,12 @@ import { getDatabase } from '../database/db';
 
 interface UserSettings {
   groqApiKey: string | null;
+  previewUrl: string | null;
 }
 
 interface UpdateSettingsBody {
   groqApiKey?: string | null;
+  previewUrl?: string | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -19,7 +21,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, preview_url FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -27,7 +29,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     return {
       groqApiKey: maskedKey,
-      hasGroqApiKey: !!groqApiKey
+      hasGroqApiKey: !!groqApiKey,
+      previewUrl: row?.preview_url || null
     };
   });
 
@@ -39,7 +42,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey } = request.body || {};
+    const { groqApiKey, previewUrl } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -65,16 +68,26 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     const existing = db.prepare('SELECT user_id FROM user_settings WHERE user_id = ?').get(userId);
 
     if (existing) {
-      if (groqApiKey === null || groqApiKey === '') {
-        // Clear the key
-        db.prepare('UPDATE user_settings SET groq_api_key = NULL, updated_at = ? WHERE user_id = ?').run(now, userId);
-      } else if (groqApiKey !== undefined) {
-        db.prepare('UPDATE user_settings SET groq_api_key = ?, updated_at = ? WHERE user_id = ?').run(groqApiKey, now, userId);
+      // Build dynamic update
+      const updates: string[] = ['updated_at = ?'];
+      const values: (string | null)[] = [now];
+
+      if (groqApiKey !== undefined) {
+        updates.push('groq_api_key = ?');
+        values.push(groqApiKey === '' ? null : groqApiKey);
       }
+      if (previewUrl !== undefined) {
+        updates.push('preview_url = ?');
+        values.push(previewUrl === '' ? null : previewUrl);
+      }
+
+      values.push(userId);
+      db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, updated_at) VALUES (?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, updated_at) VALUES (?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
+        previewUrl || null,
         now
       );
     }

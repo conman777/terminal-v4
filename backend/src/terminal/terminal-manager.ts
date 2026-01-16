@@ -338,7 +338,8 @@ export class TerminalManager {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.buffer.length,
-        isActive: true
+        isActive: true,
+        usesTmux: session.usesTmux
       }));
 
     // Get persisted sessions for this user that aren't currently active
@@ -353,7 +354,8 @@ export class TerminalManager {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.history.length,
-        isActive: false
+        isActive: false,
+        usesTmux: false
       }));
 
     // Return active sessions first, then persisted
@@ -389,7 +391,8 @@ export class TerminalManager {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.buffer.length,
-        isActive: true
+        isActive: true,
+        usesTmux: session.usesTmux
       };
     }
 
@@ -423,7 +426,8 @@ export class TerminalManager {
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
       messageCount: updated.history.length,
-      isActive: false
+      isActive: false,
+      usesTmux: false
     };
   }
 
@@ -437,13 +441,14 @@ export class TerminalManager {
     if (session && session.userId === userId) {
       return {
         id: session.id,
-        title: session.title,
-        shell: session.shell,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        history: [...session.buffer]
-      };
-    }
+      title: session.title,
+      shell: session.shell,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      history: [...session.buffer],
+      usesTmux: session.usesTmux
+    };
+  }
 
     // Fall back to persisted sessions
     const userPersistedSessions = this.#persistedSessions.get(userId);
@@ -451,13 +456,14 @@ export class TerminalManager {
     if (persisted) {
       return {
         id: persisted.id,
-        title: persisted.title,
-        shell: persisted.shell,
-        createdAt: persisted.createdAt,
-        updatedAt: persisted.updatedAt,
-        history: [...persisted.history]
-      };
-    }
+      title: persisted.title,
+      shell: persisted.shell,
+      createdAt: persisted.createdAt,
+      updatedAt: persisted.updatedAt,
+      history: [...persisted.history],
+      usesTmux: false
+    };
+  }
 
     return null;
   }

@@ -26,11 +26,35 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
   startCleanupInterval();
 
   /**
+   * OPTIONS /api/preview/:port/logs - CORS preflight
+   */
+  app.options('/api/preview/:port/logs', {
+    config: { skipAuth: true }
+  }, async (request, reply) => {
+    const origin = request.headers.origin;
+    if (origin && origin.includes('preview-')) {
+      reply.header('Access-Control-Allow-Origin', origin);
+      reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      reply.header('Access-Control-Allow-Headers', 'Content-Type');
+      reply.header('Access-Control-Allow-Credentials', 'true');
+    }
+    return reply.code(204).send();
+  });
+
+  /**
    * POST /api/preview/:port/logs
    * Receive logs from injected debug script (no auth - called from iframe)
    */
   app.post('/api/preview/:port/logs', {
-    config: { skipAuth: true } // No auth required - called from iframe
+    config: { skipAuth: true }, // No auth required - called from iframe
+    preHandler: async (request, reply) => {
+      // Add CORS headers for cross-origin requests from preview subdomains
+      const origin = request.headers.origin;
+      if (origin && origin.includes('preview-')) {
+        reply.header('Access-Control-Allow-Origin', origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+      }
+    }
   }, async (request: FastifyRequest<{
     Params: { port: string };
     Body: { logs: Omit<PreviewLogEntry, 'id'>[] } | Omit<PreviewLogEntry, 'id'>;

@@ -63,6 +63,205 @@ const PREVIEW_DEBUG_SCRIPT = `
   const MAIN_DOMAIN = ctx.mainDomain;
   const PREVIEW_BASE_PATH = ctx.basePath;
   const PREVIEW_ORIGIN = location.origin;
+  var lastReportedLocation = null;
+
+  function getCanonicalLocation() {
+    var path = location.pathname;
+    if (PREVIEW_BASE_PATH && path.indexOf(PREVIEW_BASE_PATH) === 0) {
+      path = path.slice(PREVIEW_BASE_PATH.length);
+      if (!path.startsWith('/')) {
+        path = '/' + path;
+      }
+    }
+    if (!path) {
+      path = '/';
+    }
+    return 'http://localhost:' + PORT + path + location.search + location.hash;
+  }
+
+  function reportLocationChange() {
+    try {
+      var canonicalUrl = getCanonicalLocation();
+      if (canonicalUrl === lastReportedLocation) return;
+      lastReportedLocation = canonicalUrl;
+      window.parent.postMessage({
+        type: 'preview-location',
+        url: canonicalUrl
+      }, '*');
+    } catch (e) {}
+  }
+
+  function hookHistoryMethod(methodName) {
+    var original = history[methodName];
+    if (typeof original !== 'function') return;
+    history[methodName] = function() {
+      var result = original.apply(this, arguments);
+      reportLocationChange();
+      return result;
+    };
+  }
+
+  hookHistoryMethod('pushState');
+  hookHistoryMethod('replaceState');
+  window.addEventListener('popstate', reportLocationChange);
+  window.addEventListener('hashchange', reportLocationChange);
+  window.addEventListener('load', reportLocationChange);
+  reportLocationChange();
+
+  var SESSION_STORAGE_KEY = '__preview_session_storage__' + PORT;
+  var sessionSaveTimeout = null;
+
+  function loadSessionStorage() {
+    try {
+      var raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return;
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return;
+      Object.keys(parsed).forEach(function(key) {
+        if (sessionStorage.getItem(key) === null) {
+          sessionStorage.setItem(key, parsed[key]);
+        }
+      });
+    } catch (e) {}
+  }
+
+  function saveSessionStorage() {
+    try {
+      var data = {};
+      for (var i = 0; i < sessionStorage.length; i++) {
+        var key = sessionStorage.key(i);
+        if (key) {
+          data[key] = sessionStorage.getItem(key);
+        }
+      }
+      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {}
+  }
+
+  function scheduleSessionStorageSave() {
+    if (sessionSaveTimeout) clearTimeout(sessionSaveTimeout);
+    sessionSaveTimeout = setTimeout(saveSessionStorage, 200);
+  }
+
+  function hookSessionStorageMethod(methodName) {
+    var original = sessionStorage[methodName];
+    if (typeof original !== 'function') return;
+    sessionStorage[methodName] = function() {
+      var result = original.apply(this, arguments);
+      scheduleSessionStorageSave();
+      return result;
+    };
+  }
+
+  try {
+    if (typeof sessionStorage !== 'undefined' && typeof localStorage !== 'undefined') {
+      loadSessionStorage();
+      hookSessionStorageMethod('setItem');
+      hookSessionStorageMethod('removeItem');
+      hookSessionStorageMethod('clear');
+      window.addEventListener('pagehide', saveSessionStorage);
+      window.addEventListener('beforeunload', saveSessionStorage);
+    }
+  } catch (e) {}
+
+  var storageSyncTimeout = null;
+
+  function readStorageSnapshot(storage) {
+    try {
+      var data = {};
+      for (var i = 0; i < storage.length; i++) {
+        var key = storage.key(i);
+        if (key) {
+          data[key] = storage.getItem(key);
+        }
+      }
+      return data;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function sendStorageSync() {
+    try {
+      var localSnapshot = typeof localStorage !== 'undefined' ? readStorageSnapshot(localStorage) : null;
+      var sessionSnapshot = typeof sessionStorage !== 'undefined' ? readStorageSnapshot(sessionStorage) : null;
+      window.parent.postMessage({
+        type: 'preview-storage-sync',
+        port: PORT,
+        local: localSnapshot,
+        session: sessionSnapshot
+      }, '*');
+    } catch (e) {}
+  }
+
+  function scheduleStorageSync() {
+    if (storageSyncTimeout) clearTimeout(storageSyncTimeout);
+    storageSyncTimeout = setTimeout(sendStorageSync, 200);
+  }
+
+  function hookStorage(storage) {
+    try {
+      var originalSetItem = storage.setItem;
+      var originalRemoveItem = storage.removeItem;
+      var originalClear = storage.clear;
+
+      storage.setItem = function() {
+        var result = originalSetItem.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      };
+      storage.removeItem = function() {
+        var result = originalRemoveItem.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      };
+      storage.clear = function() {
+        var result = originalClear.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      };
+    } catch (e) {}
+  }
+
+  function applyStorageSnapshot(storage, data) {
+    if (!data || typeof data !== 'object') return;
+    try {
+      Object.keys(data).forEach(function(key) {
+        if (storage.getItem(key) === null) {
+          storage.setItem(key, data[key]);
+        }
+      });
+    } catch (e) {}
+  }
+
+  try {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('message', function(event) {
+        var payload = event.data || {};
+        if (payload.type !== 'preview-storage-restore' || String(payload.port) !== String(PORT)) {
+          return;
+        }
+        if (typeof localStorage !== 'undefined') {
+          applyStorageSnapshot(localStorage, payload.local);
+        }
+        if (typeof sessionStorage !== 'undefined') {
+          applyStorageSnapshot(sessionStorage, payload.session);
+        }
+      });
+
+      window.parent.postMessage({ type: 'preview-storage-request', port: PORT }, '*');
+
+      if (typeof localStorage !== 'undefined') {
+        hookStorage(localStorage);
+      }
+      if (typeof sessionStorage !== 'undefined') {
+        hookStorage(sessionStorage);
+      }
+
+      window.addEventListener('pagehide', sendStorageSync);
+      window.addEventListener('beforeunload', sendStorageSync);
+    }
+  } catch (e) {}
 
   function isLocalHost(hostname) {
     if (!hostname) return false;
@@ -580,6 +779,11 @@ function shouldSkipRewrite(urlValue: string): boolean {
     urlValue.startsWith('//') ||
     urlValue.startsWith('data:') ||
     urlValue.startsWith('/_next/') ||
+    urlValue.startsWith('/@vite/') ||
+    urlValue.startsWith('/@react-refresh') ||
+    urlValue.startsWith('/@fs/') ||
+    urlValue.startsWith('/@id/') ||
+    urlValue.startsWith('/node_modules/') ||
     urlValue.includes('_cb=')
   );
 }
@@ -1035,7 +1239,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           ? rewriteSetCookieHeaders(setCookieHeaders, {
             previewHost,
             isSecureRequest: isSecureRequest(request),
-            defaultSameSite: 'none'
+            defaultSameSite: 'none',
+            forceSameSite: 'none'
           })
           : setCookieHeaders;
         // Store cookies server-side for browser-like behavior in iframe

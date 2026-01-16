@@ -72,15 +72,17 @@ function formatRelativeTime(dateString) {
 
 export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }) {
   const [selectedNoteId, setSelectedNoteId] = useState(null);
-  const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
   const [editCategory, setEditCategory] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('idle'); // 'idle' | 'saving' | 'saved'
 
   const titleInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
+  const saveTimeoutRef = useRef(null);
+  const lastSavedRef = useRef({ title: '', content: '', category: '' });
 
   // Get selected note
   const selectedNote = useMemo(() => {
@@ -106,61 +108,109 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
     });
   }, [notes, searchTerm]);
 
-  // Start editing
-  const startEditing = useCallback(() => {
-    if (selectedNote) {
+  // Sync edit fields when selected note changes
+  useEffect(() => {
+    if (selectedNote && !isCreating) {
       setEditTitle(selectedNote.title);
       setEditContent(selectedNote.content);
       setEditCategory(selectedNote.category);
-      setIsEditing(true);
+      lastSavedRef.current = {
+        title: selectedNote.title,
+        content: selectedNote.content,
+        category: selectedNote.category,
+      };
+      setSaveStatus('idle');
     }
-  }, [selectedNote]);
+  }, [selectedNoteId]); // Only trigger on ID change
 
-  // Save changes
-  const saveChanges = useCallback(async () => {
-    if (isCreating) {
-      if (editTitle.trim()) {
-        await onAdd(editTitle.trim(), editContent, editCategory.trim() || 'General');
-        setIsCreating(false);
-        setEditTitle('');
-        setEditContent('');
-        setEditCategory('');
+  // Autosave effect
+  useEffect(() => {
+    if (!selectedNote || isCreating) return;
+
+    // Check if anything changed from last saved state
+    const hasChanges =
+      editTitle !== lastSavedRef.current.title ||
+      editContent !== lastSavedRef.current.content ||
+      editCategory !== lastSavedRef.current.category;
+
+    if (!hasChanges) return;
+
+    // Clear previous timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    // Debounce save
+    saveTimeoutRef.current = setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        await onUpdate(selectedNote.id, {
+          title: editTitle.trim() || selectedNote.title,
+          content: editContent,
+          category: editCategory.trim() || selectedNote.category,
+        });
+        lastSavedRef.current = {
+          title: editTitle,
+          content: editContent,
+          category: editCategory,
+        };
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } catch (error) {
+        console.error('Failed to save note:', error);
+        setSaveStatus('idle');
       }
-    } else if (selectedNote && isEditing) {
-      await onUpdate(selectedNote.id, {
-        title: editTitle.trim() || selectedNote.title,
-        content: editContent,
-        category: editCategory.trim() || selectedNote.category,
-      });
-      setIsEditing(false);
-    }
-  }, [isCreating, isEditing, selectedNote, editTitle, editContent, editCategory, onAdd, onUpdate]);
+    }, 1000);
 
-  // Cancel editing
-  const cancelEditing = useCallback(() => {
-    setIsEditing(false);
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [editTitle, editContent, editCategory, selectedNote, isCreating, onUpdate]);
+
+  // Save new note
+  const saveNewNote = useCallback(async () => {
+    if (isCreating && editTitle.trim()) {
+      await onAdd(editTitle.trim(), editContent, editCategory.trim() || 'General');
+      setIsCreating(false);
+      setEditTitle('');
+      setEditContent('');
+      setEditCategory('');
+    }
+  }, [isCreating, editTitle, editContent, editCategory, onAdd]);
+
+  // Create new note
+  const createNewNote = useCallback(() => {
+    // Clear any pending save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    setSelectedNoteId(null);
+    setIsCreating(true);
+    setEditTitle('');
+    setEditContent('');
+    setEditCategory('General');
+    setSaveStatus('idle');
+  }, []);
+
+  // Cancel creating
+  const cancelCreating = useCallback(() => {
     setIsCreating(false);
     setEditTitle('');
     setEditContent('');
     setEditCategory('');
   }, []);
 
-  // Create new note
-  const createNewNote = useCallback(() => {
-    setSelectedNoteId(null);
-    setIsCreating(true);
-    setEditTitle('');
-    setEditContent('');
-    setEditCategory('General');
-    setIsEditing(true);
-  }, []);
-
   // Delete note
   const handleDelete = useCallback(async () => {
     if (selectedNote && confirm('Delete this note?')) {
+      // Clear any pending save
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
       await onDelete(selectedNote.id);
       setSelectedNoteId(null);
-      setIsEditing(false);
     }
   }, [selectedNote, onDelete]);
 
@@ -177,15 +227,15 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
 
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
-        if (isEditing) {
-          cancelEditing();
+        if (isCreating) {
+          cancelCreating();
         } else {
           onClose();
         }
       }
-      if ((e.metaKey || e.ctrlKey) && e.key === 's' && isEditing) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's' && isCreating) {
         e.preventDefault();
-        saveChanges();
+        saveNewNote();
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
         e.preventDefault();
@@ -195,16 +245,27 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isEditing, cancelEditing, saveChanges, createNewNote, onClose]);
+  }, [isOpen, isCreating, cancelCreating, saveNewNote, createNewNote, onClose]);
 
   // Go back to list (for mobile)
   const goBack = useCallback(() => {
-    if (isEditing) {
-      cancelEditing();
+    if (isCreating) {
+      cancelCreating();
     }
     setSelectedNoteId(null);
-    setIsCreating(false);
-  }, [isEditing, cancelEditing]);
+  }, [isCreating, cancelCreating]);
+
+  // Select a note
+  const selectNote = useCallback((noteId) => {
+    // Clear any pending save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    if (isCreating) {
+      cancelCreating();
+    }
+    setSelectedNoteId(noteId);
+  }, [isCreating, cancelCreating]);
 
   // Determine if we have an active selection (for mobile layout)
   const hasSelection = selectedNoteId !== null || isCreating;
@@ -239,10 +300,7 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
                 <button
                   key={note.id}
                   className={`notes-v2-item${selectedNoteId === note.id ? ' active' : ''}`}
-                  onClick={() => {
-                    if (isEditing) cancelEditing();
-                    setSelectedNoteId(note.id);
-                  }}
+                  onClick={() => selectNote(note.id)}
                 >
                   <div className="notes-v2-item-title">{note.title}</div>
                   <div className="notes-v2-item-meta">
@@ -267,8 +325,8 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
             </button>
           )}
 
-          {isCreating || isEditing ? (
-            // Edit mode
+          {isCreating ? (
+            // Creating new note - explicit save required
             <div className="notes-v2-editor">
               <div className="notes-v2-editor-header">
                 <input
@@ -287,10 +345,10 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
                     value={editCategory}
                     onChange={(e) => setEditCategory(e.target.value)}
                   />
-                  <button className="notes-v2-save-btn" onClick={saveChanges}>
+                  <button className="notes-v2-save-btn" onClick={saveNewNote}>
                     Save
                   </button>
-                  <button className="notes-v2-cancel-btn" onClick={cancelEditing}>
+                  <button className="notes-v2-cancel-btn" onClick={cancelCreating}>
                     Cancel
                   </button>
                 </div>
@@ -308,32 +366,43 @@ export function NotesModal({ isOpen, onClose, notes, onAdd, onUpdate, onDelete }
               </div>
             </div>
           ) : selectedNote ? (
-            // View mode
-            <div className="notes-v2-viewer">
-              <div className="notes-v2-viewer-header">
-                <h1 className="notes-v2-viewer-title">{selectedNote.title}</h1>
-                <div className="notes-v2-viewer-actions">
-                  <button className="notes-v2-edit-btn" onClick={startEditing}>
-                    Edit
-                  </button>
+            // Editing existing note - autosave enabled
+            <div className="notes-v2-editor">
+              <div className="notes-v2-editor-header">
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  className="notes-v2-title-input"
+                  placeholder="Untitled"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                />
+                <div className="notes-v2-editor-actions">
+                  <input
+                    type="text"
+                    className="notes-v2-category-input"
+                    placeholder="Category"
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                  />
+                  <span className={`notes-v2-save-status ${saveStatus}`}>
+                    {saveStatus === 'saving' && 'Saving...'}
+                    {saveStatus === 'saved' && 'Saved'}
+                  </span>
                   <button className="notes-v2-delete-btn" onClick={handleDelete}>
                     Delete
                   </button>
                 </div>
               </div>
-              <div className="notes-v2-viewer-meta">
-                <span className="notes-v2-viewer-category">{selectedNote.category}</span>
-                <span className="notes-v2-viewer-time">
-                  {selectedNote.updatedAt ? 'Updated ' : 'Created '}
-                  {formatRelativeTime(selectedNote.updatedAt || selectedNote.createdAt)}
-                </span>
-              </div>
-              <div className="notes-v2-viewer-content">
-                {selectedNote.content ? (
-                  <MarkdownContent content={selectedNote.content} />
-                ) : (
-                  <p className="notes-v2-no-content">Empty note. Click Edit to add content.</p>
-                )}
+              <textarea
+                ref={contentTextareaRef}
+                className="notes-v2-content-input"
+                placeholder="Write something... (Markdown supported)"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+              />
+              <div className="notes-v2-editor-hint">
+                <span>Auto-saves as you type</span>
               </div>
             </div>
           ) : (

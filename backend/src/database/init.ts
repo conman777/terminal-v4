@@ -75,6 +75,12 @@ function runMigrations(db: Database.Database): void {
           FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
       `
+    },
+    {
+      name: '004_add_preview_url_to_settings',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN preview_url TEXT;
+      `
     }
   ];
 

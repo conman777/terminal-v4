@@ -196,6 +196,7 @@ export const TerminalPane = memo(function TerminalPane({
               viewportHeight={viewportHeight}
               onUrlDetected={onUrlDetected}
               fontSize={fontSize}
+              usesTmux={currentSession?.usesTmux}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
               onConnectionChange={handleConnectionChange}
               onCwdChange={handleCwdChange}

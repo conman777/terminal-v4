@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, isAuthenticated } from '../utils/auth';
+import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens } from '../utils/auth';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -13,61 +13,70 @@ export function AuthProvider({ children }) {
   // Validate session with backend on mount
   useEffect(() => {
     const validateSession = async () => {
-      const storedUser = getUser();
-      const accessToken = getAccessToken();
-      const refreshToken = getRefreshToken();
+      // Mark auth as initializing to prevent race conditions with apiFetch
+      setAuthInitializing(true);
 
-      // No tokens stored - not authenticated
-      if (!accessToken && !refreshToken) {
+      try {
+        const accessToken = getAccessToken();
+        const storedRefreshToken = getRefreshToken();
+
+        // No tokens stored - not authenticated
+        if (!accessToken && !storedRefreshToken) {
+          setLoading(false);
+          return;
+        }
+
+        // Try to validate the access token with the backend
+        if (accessToken) {
+          try {
+            const response = await fetch(`${API_BASE}/api/auth/me`, {
+              headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+
+            if (response.ok) {
+              const userData = await response.json();
+              setUser(userData);
+              setUserState(userData);
+              setLoading(false);
+              return;
+            }
+          } catch {
+            // Access token invalid, will try refresh below
+          }
+        }
+
+        // Access token invalid/expired - try to refresh using centralized function
+        if (storedRefreshToken) {
+          try {
+            const result = await refreshTokens();
+            if (result.user) {
+              setUserState(result.user);
+            } else {
+              // Fetch user data if not returned from refresh
+              const meResponse = await fetch(`${API_BASE}/api/auth/me`, {
+                headers: { 'Authorization': `Bearer ${result.accessToken}` }
+              });
+              if (meResponse.ok) {
+                const userData = await meResponse.json();
+                setUser(userData);
+                setUserState(userData);
+              }
+            }
+            setLoading(false);
+            return;
+          } catch {
+            // Refresh failed
+          }
+        }
+
+        // Both access and refresh failed - clear tokens and show login
+        clearTokens(true); // Force clear since we're done initializing
+        setUserState(null);
         setLoading(false);
-        return;
+      } finally {
+        // Always mark auth as done initializing
+        setAuthInitializing(false);
       }
-
-      // Try to validate the access token with the backend
-      if (accessToken) {
-        try {
-          const response = await fetch(`${API_BASE}/api/auth/me`, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
-          });
-
-          if (response.ok) {
-            const userData = await response.json();
-            setUser(userData);
-            setUserState(userData);
-            setLoading(false);
-            return;
-          }
-        } catch {
-          // Access token invalid, will try refresh below
-        }
-      }
-
-      // Access token invalid/expired - try to refresh
-      if (refreshToken) {
-        try {
-          const refreshResponse = await fetch(`${API_BASE}/api/auth/refresh`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refreshToken })
-          });
-
-          if (refreshResponse.ok) {
-            const data = await refreshResponse.json();
-            setTokens(data.tokens.accessToken, data.tokens.refreshToken);
-            setUser(data.user);
-            setUserState(data.user);
-            setLoading(false);
-            return;
-          }
-        } catch {
-          // Refresh failed
-        }
-      }
-
-      // Both access and refresh failed - clear tokens and show login
-      clearTokens();
-      setUserState(null);
-      setLoading(false);
     };
 
     validateSession();

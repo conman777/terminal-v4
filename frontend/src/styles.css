@@ -2467,6 +2467,21 @@ button {
   color: var(--text-muted);
 }
 
+.notes-v2-save-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 60px;
+  text-align: center;
+}
+
+.notes-v2-save-status.saving {
+  color: var(--accent);
+}
+
+.notes-v2-save-status.saved {
+  color: var(--success, #10b981);
+}
+
 .notes-v2-save-btn {
   background: var(--accent-primary);
   border: none;

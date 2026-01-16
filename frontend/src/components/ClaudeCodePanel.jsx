@@ -7,7 +7,8 @@ export default function ClaudeCodePanel({
   onUrlDetected,
   fontSize,
   onScrollDirection,
-  onRegisterFocusTerminal
+  onRegisterFocusTerminal,
+  usesTmux
 }) {
   if (!sessionId) {
     return (
@@ -30,6 +31,7 @@ export default function ClaudeCodePanel({
         viewportHeight={viewportHeight}
         onUrlDetected={onUrlDetected}
         fontSize={fontSize}
+        usesTmux={usesTmux}
         onScrollDirection={onScrollDirection}
         onRegisterFocusTerminal={onRegisterFocusTerminal}
       />

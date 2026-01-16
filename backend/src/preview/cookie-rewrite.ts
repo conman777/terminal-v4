@@ -2,6 +2,7 @@ export interface RewriteSetCookieOptions {
   previewHost: string;
   isSecureRequest: boolean;
   defaultSameSite?: 'lax' | 'strict' | 'none';
+  forceSameSite?: 'lax' | 'strict' | 'none';
 }
 
 interface ParsedAttribute {
@@ -73,6 +74,7 @@ export function rewriteSetCookieHeader(header: string, options: RewriteSetCookie
   const rewrittenAttributes: string[] = [];
   let hasSecure = false;
   let sameSiteValue: 'lax' | 'strict' | 'none' | undefined;
+  const forcedSameSite = options.forceSameSite;
 
   for (const attr of attributes) {
     switch (attr.keyLower) {
@@ -89,6 +91,9 @@ export function rewriteSetCookieHeader(header: string, options: RewriteSetCookie
         break;
       }
       case 'samesite': {
+        if (forcedSameSite) {
+          break;
+        }
         const normalized = normalizeSameSite(attr.value);
         const fallback = options.defaultSameSite;
         const finalValue = normalized ?? fallback;
@@ -106,6 +111,11 @@ export function rewriteSetCookieHeader(header: string, options: RewriteSetCookie
         rewrittenAttributes.push(attr.raw);
         break;
     }
+  }
+
+  if (forcedSameSite) {
+    sameSiteValue = forcedSameSite;
+    rewrittenAttributes.push(`SameSite=${formatSameSite(forcedSameSite)}`);
   }
 
   // SameSite=None requires Secure attribute per spec

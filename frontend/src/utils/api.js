@@ -1,36 +1,6 @@
-import { getAccessToken, getRefreshToken, setTokens, clearTokens } from './auth';
+import { getAccessToken, clearTokens, refreshTokens, getAuthInitializing } from './auth';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
-
-let isRefreshing = false;
-let refreshPromise = null;
-
-async function refreshAccessToken() {
-  const refreshToken = getRefreshToken();
-  if (!refreshToken) {
-    throw new Error('No refresh token');
-  }
-
-  const response = await fetch(`${API_BASE}/api/auth/refresh`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refreshToken })
-  });
-
-  if (!response.ok) {
-    clearTokens();
-    throw new Error('Token refresh failed');
-  }
-
-  const data = await response.json();
-  const tokens = data?.tokens || data;
-  if (!tokens?.accessToken || !tokens?.refreshToken) {
-    clearTokens();
-    throw new Error('Token refresh failed');
-  }
-  setTokens(tokens.accessToken, tokens.refreshToken);
-  return tokens.accessToken;
-}
 
 export async function apiFetch(url, options = {}) {
   const accessToken = getAccessToken();
@@ -53,18 +23,15 @@ export async function apiFetch(url, options = {}) {
 
   // Handle 401 - try to refresh token
   if (response.status === 401 && accessToken) {
-    if (!isRefreshing) {
-      isRefreshing = true;
-      refreshPromise = refreshAccessToken()
-        .finally(() => {
-          isRefreshing = false;
-          refreshPromise = null;
-        });
+    // If auth is still initializing, don't try to refresh - let AuthContext handle it
+    if (getAuthInitializing()) {
+      throw new Error('Auth initializing');
     }
 
     try {
-      const newToken = await refreshPromise;
-      headers['Authorization'] = `Bearer ${newToken}`;
+      // Use centralized refresh to avoid race conditions
+      const result = await refreshTokens();
+      headers['Authorization'] = `Bearer ${result.accessToken}`;
       response = await fetch(fullUrl, { ...options, headers });
     } catch {
       // Refresh failed, clear tokens and let caller handle

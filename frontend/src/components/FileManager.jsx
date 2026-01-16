@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiGet, apiFetch } from '../utils/api';
+import { getAccessToken } from '../utils/auth';
 
 export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const [currentPath, setCurrentPath] = useState('~');
@@ -156,7 +157,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
         await fetch('/api/files/upload', {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`
+            'Authorization': `Bearer ${getAccessToken()}`
           },
           body: formData
         });
