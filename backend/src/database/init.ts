@@ -81,6 +81,13 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN preview_url TEXT;
       `
+    },
+    {
+      name: '005_add_ui_preferences_to_settings',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN terminal_font_size INTEGER DEFAULT 14;
+        ALTER TABLE user_settings ADD COLUMN sidebar_collapsed INTEGER DEFAULT 0;
+      `
     }
   ];
 

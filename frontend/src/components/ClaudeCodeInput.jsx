@@ -1,7 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 
-const SLASH_COMMANDS = [];
+const SLASH_COMMANDS = [
+  { cmd: '/model', desc: 'Change AI model' },
+  { cmd: '/clear', desc: 'Clear conversation' },
+  { cmd: '/help', desc: 'Show available commands' },
+  { cmd: '/compact', desc: 'Toggle compact mode' },
+  { cmd: '/cost', desc: 'Show token usage' },
+];
 
 export default function ClaudeCodeInput({
   onSend,
@@ -58,14 +64,22 @@ export default function ClaudeCodeInput({
 
   const handleSubmit = (e) => {
     e.preventDefault();
+
+    // On mobile, Enter might bypass keyDown and come straight here
+    // If dropdown is visible, complete instead of submit
+    if (suggestions.length > 0) {
+      setText(suggestions[selectedIndex].cmd + ' ');
+      return;
+    }
+
     if (text.trim() && !disabled && !isProcessing) {
       onSend(text);
       setText('');
     }
   };
 
-  const handleComplete = (cmd) => {
-    setText(cmd);
+  const handleComplete = (cmd, addSpace = false) => {
+    setText(addSpace ? cmd + ' ' : cmd);
     setSelectedIndex(0);
     textareaRef.current?.focus();
   };
@@ -88,9 +102,15 @@ export default function ClaudeCodeInput({
 
     // Handle autocomplete navigation (only when dropdown is visible)
     const dropdownVisible = suggestions.length > 0;
-    const exactMatch = dropdownVisible && suggestions.some((s) => s.cmd === text);
     if (dropdownVisible) {
-      if (e.key === 'Tab' || (e.key === 'Enter' && suggestions.length === 1 && !exactMatch)) {
+      // Enter completes the command with a space so user can continue typing
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleComplete(suggestions[selectedIndex].cmd, true);
+        return;
+      }
+      // Tab completes without space
+      if (e.key === 'Tab') {
         e.preventDefault();
         handleComplete(suggestions[selectedIndex].cmd);
         return;
@@ -162,6 +182,22 @@ export default function ClaudeCodeInput({
     <div className="claude-code-input-wrapper">
       {recordingError && (
         <div className="recording-error">{recordingError}</div>
+      )}
+
+      {/* Slash command autocomplete dropdown */}
+      {suggestions.length > 0 && (
+        <div className="slash-autocomplete">
+          {suggestions.map((s, i) => (
+            <div
+              key={s.cmd}
+              className={`slash-option${i === selectedIndex ? ' selected' : ''}`}
+              onClick={() => handleComplete(s.cmd, true)}
+            >
+              <span className="slash-cmd">{s.cmd}</span>
+              <span className="slash-desc">{s.desc}</span>
+            </div>
+          ))}
+        </div>
       )}
 
       <form className="claude-code-input" onSubmit={handleSubmit}>

@@ -110,8 +110,9 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
 
     if (keyData.special && keyData.key === 'paste') {
       handlePaste();
-    } else if (keyData.key === '\x1b') {
-      // ESC button - send as-is, don't prepend another ESC
+    } else if (keyData.key === '\x1b' || keyData.key === '\t') {
+      // ESC and TAB - send as-is, don't prepend ESC
+      // TAB needs to be raw for autocomplete to work
       sendKeyRaw(keyData.key);
     } else {
       sendKey(keyData.key);

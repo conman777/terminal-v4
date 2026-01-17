@@ -523,14 +523,16 @@ export class TerminalManager {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
     const shell = options.shell ?? this.#defaultShell;
-    let cwd = options.cwd ?? process.cwd();
+    // Default to user's home directory instead of server's process.cwd()
+    const defaultCwd = process.env.HOME || process.cwd();
+    let cwd = options.cwd ?? defaultCwd;
     try {
       cwd = path.resolve(cwd);
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
-        cwd = process.cwd();
+        cwd = defaultCwd;
       }
     } catch {
-      cwd = process.cwd();
+      cwd = defaultCwd;
     }
 
     // Use tmux if available for persistent sessions
@@ -908,8 +910,9 @@ export class TerminalManager {
     // Check if tmux session exists (process survived server restart)
     const hasTmuxSession = this.#useTmux && tmuxSessionExists(id);
 
-    // Validate cwd - fall back to process.cwd() if invalid
+    // Validate cwd - fall back to user's home directory if invalid
     // If tmux session exists, try to get current working dir from it
+    const defaultCwd = process.env.HOME || process.cwd();
     let cwd = persisted.cwd;
     if (hasTmuxSession) {
       const tmuxCwd = getTmuxSessionCwd(id);
@@ -919,10 +922,10 @@ export class TerminalManager {
     }
     try {
       if (!cwd || !path.isAbsolute(cwd) || !fs.existsSync(cwd)) {
-        cwd = process.cwd();
+        cwd = defaultCwd;
       }
     } catch {
-      cwd = process.cwd();
+      cwd = defaultCwd;
     }
 
     // Spawn the process - if tmux session exists, reattach to it

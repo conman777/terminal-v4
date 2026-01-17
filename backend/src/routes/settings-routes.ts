@@ -4,11 +4,15 @@ import { getDatabase } from '../database/db';
 interface UserSettings {
   groqApiKey: string | null;
   previewUrl: string | null;
+  terminalFontSize: number | null;
+  sidebarCollapsed: boolean | null;
 }
 
 interface UpdateSettingsBody {
   groqApiKey?: string | null;
   previewUrl?: string | null;
+  terminalFontSize?: number | null;
+  sidebarCollapsed?: boolean | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -21,7 +25,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -30,7 +34,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return {
       groqApiKey: maskedKey,
       hasGroqApiKey: !!groqApiKey,
-      previewUrl: row?.preview_url || null
+      previewUrl: row?.preview_url || null,
+      terminalFontSize: row?.terminal_font_size ?? null,
+      sidebarCollapsed: row?.sidebar_collapsed === 1
     };
   });
 
@@ -42,7 +48,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl } = request.body || {};
+    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -61,6 +67,14 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       }
     }
 
+    // Validate terminal font size
+    if (terminalFontSize !== undefined && terminalFontSize !== null) {
+      if (typeof terminalFontSize !== 'number' || terminalFontSize < 8 || terminalFontSize > 32) {
+        reply.code(400).send({ error: 'Terminal font size must be between 8 and 32' });
+        return;
+      }
+    }
+
     const db = getDatabase();
     const now = new Date().toISOString();
 
@@ -70,7 +84,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     if (existing) {
       // Build dynamic update
       const updates: string[] = ['updated_at = ?'];
-      const values: (string | null)[] = [now];
+      const values: (string | number | null)[] = [now];
 
       if (groqApiKey !== undefined) {
         updates.push('groq_api_key = ?');
@@ -80,14 +94,24 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('preview_url = ?');
         values.push(previewUrl === '' ? null : previewUrl);
       }
+      if (terminalFontSize !== undefined) {
+        updates.push('terminal_font_size = ?');
+        values.push(terminalFontSize);
+      }
+      if (sidebarCollapsed !== undefined) {
+        updates.push('sidebar_collapsed = ?');
+        values.push(sidebarCollapsed ? 1 : 0);
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, updated_at) VALUES (?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
+        terminalFontSize ?? null,
+        sidebarCollapsed ? 1 : 0,
         now
       );
     }

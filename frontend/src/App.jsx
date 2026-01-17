@@ -171,7 +171,10 @@ function AppContent() {
     resetScrollDirection();
   }, [mobileView, resetScrollDirection]);
 
-  // Sidebar collapsed state (local UI setting)
+  // Settings loaded from server (with localStorage fallback)
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  // Sidebar collapsed state (synced with server)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem('sidebarCollapsed') === 'true';
@@ -180,7 +183,7 @@ function AppContent() {
     }
   });
 
-  // Terminal font size (local UI setting)
+  // Terminal font size (synced with server)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
     try {
       const stored = localStorage.getItem('terminalFontSize');
@@ -191,23 +194,67 @@ function AppContent() {
     }
   });
 
+  // Fetch settings from server on mount
+  useEffect(() => {
+    const fetchSettings = async () => {
+      try {
+        const response = await apiFetch('/api/settings');
+        if (response.ok) {
+          const data = await response.json();
+          // Apply server settings if they exist
+          if (data.terminalFontSize !== null) {
+            setTerminalFontSize(data.terminalFontSize);
+            try {
+              localStorage.setItem('terminalFontSize', String(data.terminalFontSize));
+            } catch { /* ignore */ }
+          }
+          if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
+            setSidebarCollapsed(data.sidebarCollapsed);
+            try {
+              localStorage.setItem('sidebarCollapsed', String(data.sidebarCollapsed));
+            } catch { /* ignore */ }
+          }
+        }
+      } catch (e) {
+        console.error('Failed to fetch settings from server:', e);
+      } finally {
+        setSettingsLoaded(true);
+      }
+    };
+    fetchSettings();
+  }, []);
+
   const updateTerminalFontSize = useCallback((size) => {
     setTerminalFontSize(size);
+    // Save to localStorage for immediate use
     try {
       localStorage.setItem('terminalFontSize', String(size));
     } catch (e) {
-      console.error('Failed to save terminal font size', e);
+      console.error('Failed to save terminal font size to localStorage', e);
     }
+    // Save to server for persistence across devices/sessions
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terminalFontSize: size })
+    }).catch(e => console.error('Failed to save terminal font size to server', e));
   }, []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarCollapsed(prev => {
       const newValue = !prev;
+      // Save to localStorage for immediate use
       try {
         localStorage.setItem('sidebarCollapsed', String(newValue));
       } catch (e) {
-        console.error('Failed to save sidebar state', e);
+        console.error('Failed to save sidebar state to localStorage', e);
       }
+      // Save to server for persistence across devices/sessions
+      apiFetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sidebarCollapsed: newValue })
+      }).catch(e => console.error('Failed to save sidebar state to server', e));
       return newValue;
     });
   }, []);

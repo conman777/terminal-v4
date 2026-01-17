@@ -1303,6 +1303,13 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         };
 
         if (!shouldRewrite) {
+          // For raw piping, we need to set headers on reply.raw since reply.header() won't apply
+          const headers = reply.getHeaders();
+          for (const [key, value] of Object.entries(headers)) {
+            if (value !== undefined) {
+              reply.raw.setHeader(key, value as string | string[]);
+            }
+          }
           const nodeStream = Readable.fromWeb(response.body);
           nodeStream.pipe(reply.raw);
           await new Promise<void>((resolve, reject) => {
