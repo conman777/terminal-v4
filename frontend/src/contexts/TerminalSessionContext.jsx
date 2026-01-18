@@ -51,6 +51,7 @@ export function TerminalSessionProvider({ children }) {
   const restoreInFlightRef = useRef(new Set());
   const lastActivityRef = useRef(Date.now());
   const lastCwdRef = useRef(null);
+  const terminalSendersRef = useRef(new Map());
 
   // Derived state
   const activeSessions = useMemo(
@@ -505,6 +506,38 @@ export function TerminalSessionProvider({ children }) {
     lastActivityRef.current = Date.now();
   }, []);
 
+  const registerTerminalSender = useCallback((sessionId, sender) => {
+    if (!sessionId || typeof sender !== 'function') return;
+    terminalSendersRef.current.set(sessionId, sender);
+  }, []);
+
+  const unregisterTerminalSender = useCallback((sessionId, sender) => {
+    if (!sessionId) return;
+    const current = terminalSendersRef.current.get(sessionId);
+    if (!current || current === sender) {
+      terminalSendersRef.current.delete(sessionId);
+    }
+  }, []);
+
+  const sendToSession = useCallback(async (sessionId, data) => {
+    if (!sessionId || data === undefined || data === null) return;
+    const payload = typeof data === 'string' ? data : String(data);
+    const sender = terminalSendersRef.current.get(sessionId);
+    if (sender) {
+      sender(payload);
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        body: { command: payload }
+      });
+    } catch (error) {
+      console.error('Failed to send terminal input', error);
+    }
+  }, []);
+
   // Initial load and polling setup
   useEffect(() => {
     isMountedRef.current = true;
@@ -675,6 +708,9 @@ export function TerminalSessionProvider({ children }) {
     closeSession,
     navigateSession,
     retryLoadSessions: loadSessions,
+    registerTerminalSender,
+    unregisterTerminalSender,
+    sendToSession,
 
     // Folder state
     recentFolders,

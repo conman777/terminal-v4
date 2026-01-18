@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
@@ -17,6 +18,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
+  const webglAddonRef = useRef(null);
   const socketRef = useRef(null);
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
@@ -24,7 +26,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputBufferRef = useRef('');
   const inputFlushRef = useRef(null);
   const isMobile = useMobileDetect();
-  const { activeSessionId, sessions } = useTerminalSession();
+  const { activeSessionId, sessions, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
@@ -59,6 +61,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     isScrollingRef,
     scrollUp,
     scrollDown,
+    scrollByWheel,
     jumpToLive,
     startScrolling,
     stopScrolling,
@@ -182,7 +185,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
         : 'Consolas, "Courier New", monospace',
       rendererType: 'canvas',
-      scrollback: 5000,
+      scrollback: 100000,
       theme: {
         background: '#1e1e1e',
         foreground: '#d4d4d4'
@@ -212,7 +215,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         console.error('Failed to send terminal input:', error);
       });
     };
-    sendTerminalInputRef.current = sendTerminalInput;
 
     const flushInputBuffer = () => {
       if (disposed) return;
@@ -234,6 +236,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     };
 
+    const sendUserInput = (text) => {
+      if (!text || disposed) return;
+      exitCopyModeIfActive();
+      markUserInput();
+      queueTerminalInput(text);
+    };
+    sendTerminalInputRef.current = sendUserInput;
+    if (registerTerminalSender) {
+      registerTerminalSender(sessionId, sendUserInput);
+    }
+
     const handleClipboardPaste = async () => {
       try {
         if (navigator.clipboard.read) {
@@ -245,7 +258,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 const blob = await item.getType(imageType);
                 const path = await uploadScreenshot(blob);
                 if (path) {
-                  sendTerminalInput(path + ' ');
+                  sendUserInput(path + ' ');
                   return;
                 }
               }
@@ -255,7 +268,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }
         }
         const text = await navigator.clipboard.readText();
-        sendTerminalInput(text);
+        sendUserInput(text);
       } catch (err) {
         console.error('Failed to read clipboard:', err);
       }
@@ -300,6 +313,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       hasOpened = true;
       term.open(container);
 
+      if (!isMobile) {
+        try {
+          const webglAddon = new WebglAddon();
+          term.loadAddon(webglAddon);
+          webglAddon.onContextLoss(() => {
+            try {
+              webglAddon.dispose();
+            } catch {}
+            if (webglAddonRef.current === webglAddon) {
+              webglAddonRef.current = null;
+            }
+          });
+          webglAddonRef.current = webglAddon;
+        } catch {
+          // Fall back to canvas renderer if WebGL fails
+        }
+      }
+
       const textarea = term.textarea;
       let isComposing = false;
       const handleCompositionStart = () => { isComposing = true; };
@@ -318,25 +349,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
       }
 
-      // Custom wheel handling to avoid arrow-key fallback when tmux has no scrollback
-      let wheelAccumulator = 0;
-      let lastWheelDirection = 0;
-      const SCROLL_THRESHOLD = 80;
-      const LINE_HEIGHT = 16;
-
+      // Custom wheel handling to improve tmux scroll reliability
       term.attachCustomWheelEventHandler((event) => {
         if (!usesTmuxRef.current) {
           return true;
         }
 
-        const mouseTrackingMode = term.modes?.mouseTrackingMode;
-        if (mouseTrackingMode && mouseTrackingMode !== 'none') {
-          return true;
-        }
-
         const buffer = term.buffer?.active;
-        const baseY = buffer?.baseY || 0;
-        if (baseY > 0) {
+        const isAlternate = buffer?.type === 'alternate';
+        const mouseTrackingMode = term.modes?.mouseTrackingMode;
+        if (mouseTrackingMode && mouseTrackingMode !== 'none' && isAlternate) {
           return true;
         }
 
@@ -345,31 +367,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
 
         event.preventDefault();
-
-        let delta = event.deltaY;
-        if (event.deltaMode === 1) {
-          delta *= LINE_HEIGHT;
-        } else if (event.deltaMode === 2) {
-          delta *= LINE_HEIGHT * term.rows;
-        }
-
-        const currentDirection = Math.sign(delta);
-        if (currentDirection !== 0 && currentDirection !== lastWheelDirection) {
-          wheelAccumulator = 0;
-          lastWheelDirection = currentDirection;
-        }
-
-        wheelAccumulator += delta;
-
-        if (Math.abs(wheelAccumulator) >= SCROLL_THRESHOLD) {
-          wheelAccumulator = 0;
-          if (currentDirection < 0) {
-            scrollUp();
-          } else if (currentDirection > 0) {
-            scrollDown();
-          }
-        }
-
+        scrollByWheel(event.deltaY, event.deltaMode, term.rows);
         return false;
       });
 
@@ -425,6 +423,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       resizeObserver = new ResizeObserver(() => debouncedFit());
       resizeObserver.observe(container);
+
+      const handleFocus = () => debouncedFit();
+      const handleVisibility = () => {
+        if (document.visibilityState === 'visible') {
+          debouncedFit();
+        }
+      };
+      window.addEventListener('focus', handleFocus);
+      document.addEventListener('visibilitychange', handleVisibility);
 
       const buildSocketUrl = () => {
         const token = getAccessToken();
@@ -589,7 +596,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         e.preventDefault();
         try {
           const text = await navigator.clipboard.readText();
-          sendTerminalInput(text);
+          sendUserInput(text);
         } catch (err) {
           console.error('Failed to read clipboard:', err);
         }
@@ -606,7 +613,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         e.stopPropagation();
         const text = e.clipboardData?.getData('text');
         if (text) {
-          sendTerminalInput(text);
+          sendUserInput(text);
           return;
         }
         handleClipboardPaste();
@@ -615,6 +622,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       openWhenReady.cleanup = () => {
         window.removeEventListener('resize', handleResize);
+        window.removeEventListener('focus', handleFocus);
+        document.removeEventListener('visibilitychange', handleVisibility);
         container.removeEventListener('contextmenu', handleContextMenu);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
@@ -627,6 +636,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
         if (viewport) viewport.removeEventListener('resize', handleResize);
+        if (webglAddonRef.current) {
+          try {
+            webglAddonRef.current.dispose();
+          } catch {}
+          webglAddonRef.current = null;
+        }
       };
     };
 
@@ -636,6 +651,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       disposed = true;
       detectedUrlsRef.current.clear();
       clientIdRef.current = null;
+      if (unregisterTerminalSender) {
+        unregisterTerminalSender(sessionId, sendUserInput);
+      }
       if (inputFlushRef.current) {
         cancelAnimationFrame(inputFlushRef.current);
         inputFlushRef.current = null;
@@ -659,6 +677,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         xtermRef.current = null;
       }
       fitAddonRef.current = null;
+      if (webglAddonRef.current) {
+        try {
+          webglAddonRef.current.dispose();
+        } catch {}
+        webglAddonRef.current = null;
+      }
     };
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs

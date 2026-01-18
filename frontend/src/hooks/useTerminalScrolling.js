@@ -14,28 +14,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
   const scrollDirectionRef = useRef(null);
   const lastScrollTimeRef = useRef(0);
 
-  // Enter tmux copy-mode with automatic timeout reset
-  const enterCopyMode = useCallback(() => {
-    sendToTerminal('\x02'); // Ctrl+B (tmux prefix)
-    setTimeout(() => {
-      sendToTerminal('['); // copy-mode command
-    }, 10);
-    inCopyModeRef.current = true;
-
-    // Auto-exit copy-mode after 5 minutes of no scroll activity
-    clearTimeout(copyModeTimeoutRef.current);
-    copyModeTimeoutRef.current = setTimeout(() => {
-      sendToTerminal('q');
-      inCopyModeRef.current = false;
-    }, 300000);
-  }, [sendToTerminal]);
-
-  // Scroll in tmux copy-mode (shared logic for buttons and wheel)
-  const scrollInTmux = useCallback((direction) => {
-    const term = xtermRef.current;
-    if (!term) return;
-
-    // Mark scrolling active to suppress idle sound
+  const setScrollingActive = useCallback(() => {
     isScrollingRef.current = true;
     if (scrollCooldownRef.current) {
       clearTimeout(scrollCooldownRef.current);
@@ -43,33 +22,111 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
     scrollCooldownRef.current = setTimeout(() => {
       isScrollingRef.current = false;
     }, 500);
+  }, []);
+
+  const resetCopyModeTimeout = useCallback(() => {
+    if (copyModeTimeoutRef.current) {
+      clearTimeout(copyModeTimeoutRef.current);
+    }
+    copyModeTimeoutRef.current = setTimeout(() => {
+      if (!inCopyModeRef.current) return;
+      sendToTerminal('q');
+      inCopyModeRef.current = false;
+    }, 300000);
+  }, [sendToTerminal]);
+
+  const enterCopyMode = useCallback(() => {
+    if (inCopyModeRef.current) {
+      resetCopyModeTimeout();
+      return;
+    }
+    inCopyModeRef.current = true;
+    sendToTerminal('\x02[');
+    resetCopyModeTimeout();
+  }, [resetCopyModeTimeout, sendToTerminal]);
+
+  const sendCopyModeKeys = useCallback((keys) => {
+    if (!keys) return;
+    if (!inCopyModeRef.current) {
+      inCopyModeRef.current = true;
+      sendToTerminal('\x02[' + keys);
+      resetCopyModeTimeout();
+      return;
+    }
+    sendToTerminal(keys);
+    resetCopyModeTimeout();
+  }, [resetCopyModeTimeout, sendToTerminal]);
+
+  // Scroll in tmux copy-mode (shared logic for buttons and wheel)
+  const scrollInTmux = useCallback((direction, lines = 5) => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    setScrollingActive();
 
     const baseY = term.buffer?.active?.baseY || 0;
 
     if (baseY > 0) {
       // xterm has scrollback, use native scroll
-      term.scrollLines(direction === 'up' ? -5 : 5);
+      term.scrollLines(direction === 'up' ? -lines : lines);
     } else {
       // No xterm scrollback - tmux managing it
-      enterCopyMode();
-      setTimeout(() => {
-        sendToTerminal(direction === 'up' ? '\x15' : '\x04'); // Ctrl+U / Ctrl+D
-      }, 60);
+      const key = direction === 'up' ? '\x15' : '\x04'; // Ctrl+U / Ctrl+D
+      sendCopyModeKeys(key);
     }
-  }, [xtermRef, sendToTerminal, enterCopyMode]);
+  }, [xtermRef, sendCopyModeKeys, setScrollingActive]);
 
   const scrollUp = useCallback(() => scrollInTmux('up'), [scrollInTmux]);
   const scrollDown = useCallback(() => scrollInTmux('down'), [scrollInTmux]);
+
+  const scrollByLines = useCallback((direction, lines) => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    setScrollingActive();
+
+    const baseY = term.buffer?.active?.baseY || 0;
+    const safeLines = Math.max(1, Math.min(10, Math.round(lines || 1)));
+
+    if (baseY > 0) {
+      term.scrollLines(direction === 'up' ? -safeLines : safeLines);
+      return;
+    }
+
+    const key = direction === 'up' ? '\x1b[A' : '\x1b[B';
+    sendCopyModeKeys(key.repeat(safeLines));
+  }, [xtermRef, sendCopyModeKeys, setScrollingActive]);
+
+  const scrollByWheel = useCallback((deltaY, deltaMode, rows) => {
+    if (!deltaY) return;
+    const term = xtermRef.current;
+    if (!term) return;
+
+    const lineHeight = 16;
+    let pixels = deltaY;
+
+    if (deltaMode === 1) {
+      pixels *= lineHeight;
+    } else if (deltaMode === 2) {
+      pixels *= lineHeight * (rows || term.rows || 1);
+    }
+
+    const lines = Math.max(1, Math.min(10, Math.round(Math.abs(pixels) / lineHeight)));
+    const direction = pixels < 0 ? 'up' : 'down';
+
+    scrollByLines(direction, lines);
+  }, [scrollByLines, xtermRef]);
 
   // Jump to live output - exits tmux copy-mode and scrolls xterm to bottom
   const jumpToLive = useCallback(() => {
     const term = xtermRef.current;
     if (!term) return;
 
-    sendToTerminal('\x1b'); // ESC
-    sendToTerminal('q');    // quit copy-mode
-    inCopyModeRef.current = false;
-    clearTimeout(copyModeTimeoutRef.current);
+    if (inCopyModeRef.current) {
+      sendToTerminal('q');
+      inCopyModeRef.current = false;
+      clearTimeout(copyModeTimeoutRef.current);
+    }
 
     term.scrollToBottom();
   }, [xtermRef, sendToTerminal]);
@@ -133,7 +190,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
   // Exit copy-mode before sending user input
   const exitCopyModeIfActive = useCallback(() => {
     if (inCopyModeRef.current) {
-      sendToTerminal('\x1b\x1b'); // Double ESC to fully exit copy-mode
+      sendToTerminal('q');
       inCopyModeRef.current = false;
       clearTimeout(copyModeTimeoutRef.current);
     }
@@ -150,6 +207,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
     if (copyModeTimeoutRef.current) {
       clearTimeout(copyModeTimeoutRef.current);
     }
+    inCopyModeRef.current = false;
   }, []);
 
   return {
@@ -157,6 +215,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal) {
     isScrollingRef,
     scrollUp,
     scrollDown,
+    scrollByWheel,
     jumpToLive,
     startScrolling,
     stopScrolling,

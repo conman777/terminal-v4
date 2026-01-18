@@ -1,8 +1,9 @@
 import { useLayoutEffect, useRef } from 'react';
-import { apiFetch } from '../utils/api';
+import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
 export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   const keybarRef = useRef(null);
+  const { sendToSession } = useTerminalSession();
 
   useLayoutEffect(() => {
     if (!onHeightChange) {
@@ -48,30 +49,11 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     }
   };
 
-  // Send key directly without ESC prefix (for ESC button itself)
   const sendKeyRaw = async (data) => {
     if (!sessionId) return;
 
     try {
-      await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        body: { command: data }
-      });
-    } catch (error) {
-      console.error('Failed to send key:', error);
-    }
-  };
-
-  // Send key with ESC prefix to exit any tmux copy-mode state
-  // ESC is safe: exits copy-mode, or does minimal harm at shell prompt
-  const sendKey = async (data) => {
-    if (!sessionId) return;
-
-    try {
-      await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        body: { command: '\x1b' + data }
-      });
+      await sendToSession?.(sessionId, data);
     } catch (error) {
       console.error('Failed to send key:', error);
     }
@@ -110,12 +92,8 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
 
     if (keyData.special && keyData.key === 'paste') {
       handlePaste();
-    } else if (keyData.key === '\x1b' || keyData.key === '\t') {
-      // ESC and TAB - send as-is, don't prepend ESC
-      // TAB needs to be raw for autocomplete to work
-      sendKeyRaw(keyData.key);
     } else {
-      sendKey(keyData.key);
+      sendKeyRaw(keyData.key);
     }
   };
 

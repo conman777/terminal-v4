@@ -3,6 +3,20 @@ import { EventEmitter } from 'node:events';
 import type { TerminalProcess, TerminalSpawnOptions } from './terminal-types';
 
 const TMUX_SESSION_PREFIX = 'terminal-app-';
+const TMUX_HISTORY_LIMIT = Number(process.env.TMUX_HISTORY_LIMIT || '100000');
+
+function applyHistoryLimit(sessionName: string): void {
+  if (!Number.isFinite(TMUX_HISTORY_LIMIT) || TMUX_HISTORY_LIMIT <= 0) {
+    return;
+  }
+  try {
+    execSync(`tmux set-option -t "${sessionName}" history-limit ${TMUX_HISTORY_LIMIT} 2>/dev/null`, {
+      stdio: 'pipe'
+    });
+  } catch {
+    // Ignore failures (tmux might not be running or session might be gone)
+  }
+}
 
 /**
  * Check if tmux is available on the system
@@ -96,6 +110,7 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
   if (sessionExists) {
     // Attach to existing tmux session
     console.log(`[tmux] Reattaching to existing session: ${sessionName}`);
+    applyHistoryLimit(sessionName);
     ptyProcess = spawn('tmux', [
       'attach-session',
       '-t', sessionName
@@ -119,6 +134,8 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
       console.error(`[tmux] Failed to create session:`, error);
       throw error;
     }
+
+    applyHistoryLimit(sessionName);
 
     // Then attach to it
     ptyProcess = spawn('tmux', [
@@ -213,6 +230,8 @@ export function spawnTmuxWithPty(
   } else {
     console.log(`[tmux] Reattaching to existing session: ${sessionName}`);
   }
+
+  applyHistoryLimit(sessionName);
 
   // Use node-pty to attach to the tmux session
   const ptyProcess = ptySpawn('tmux', ['attach-session', '-t', sessionName], {
