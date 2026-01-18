@@ -30,6 +30,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [showSessionMenu, setShowSessionMenu] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [currentCwd, setCurrentCwd] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const currentSession = sessions.find(s => s.id === pane.sessionId);
 
@@ -83,6 +84,10 @@ export const TerminalPane = memo(function TerminalPane({
     onCwdChange?.(cwd);
   }, [onCwdChange]);
 
+  const handleRefreshTerminal = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
   return (
     <div
       ref={paneRef}
@@ -132,6 +137,16 @@ export const TerminalPane = memo(function TerminalPane({
         </div>
 
         <div className="pane-controls">
+          <button
+            className="pane-btn pane-refresh-btn"
+            onClick={(e) => { e.stopPropagation(); handleRefreshTerminal(); }}
+            title="Reconnect terminal"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1 2.13-9" />
+            </svg>
+          </button>
           {canSplit && !isFullscreen && (
             <>
               <button
@@ -205,6 +220,7 @@ export const TerminalPane = memo(function TerminalPane({
         {pane.sessionId ? (
           <div className="terminal-with-status">
             <TerminalChat
+              key={`${pane.sessionId}-${refreshToken}`}
               sessionId={pane.sessionId}
               keybarOpen={keybarOpen}
               viewportHeight={viewportHeight}
