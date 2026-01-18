@@ -435,17 +435,22 @@ export class TerminalManager {
     return this.#sessions.has(id);
   }
 
-  getSession(userId: string, id: string): TerminalSessionSnapshot | null {
+  getSession(
+    userId: string,
+    id: string,
+    options: { maxHistoryChars?: number; maxHistoryEvents?: number } = {}
+  ): TerminalSessionSnapshot | null {
     // Check active sessions first
     const session = this.#sessions.get(id);
     if (session && session.userId === userId) {
+      const history = this.#limitHistory(session.buffer, options);
       return {
         id: session.id,
       title: session.title,
       shell: session.shell,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
-      history: [...session.buffer],
+      history,
       usesTmux: session.usesTmux
     };
   }
@@ -454,18 +459,47 @@ export class TerminalManager {
     const userPersistedSessions = this.#persistedSessions.get(userId);
     const persisted = userPersistedSessions?.get(id);
     if (persisted) {
+      const history = this.#limitHistory(persisted.history, options);
       return {
         id: persisted.id,
       title: persisted.title,
       shell: persisted.shell,
       createdAt: persisted.createdAt,
       updatedAt: persisted.updatedAt,
-      history: [...persisted.history],
+      history,
       usesTmux: false
     };
   }
 
     return null;
+  }
+
+  #limitHistory(
+    history: TerminalStreamEvent[],
+    options: { maxHistoryChars?: number; maxHistoryEvents?: number }
+  ): TerminalStreamEvent[] {
+    const { maxHistoryChars, maxHistoryEvents } = options;
+    if (!maxHistoryChars && !maxHistoryEvents) {
+      return [...history];
+    }
+
+    let startIndex = 0;
+    if (maxHistoryEvents && history.length > maxHistoryEvents) {
+      startIndex = history.length - maxHistoryEvents;
+    }
+
+    if (maxHistoryChars) {
+      let charCount = 0;
+      for (let i = history.length - 1; i >= startIndex; i -= 1) {
+        charCount += history[i]?.text?.length ?? 0;
+        if (charCount > maxHistoryChars) {
+          startIndex = i;
+          break;
+        }
+      }
+    }
+
+    return history.slice(startIndex);
   }
 
   #handleData(session: ManagedTerminal, chunk: string) {

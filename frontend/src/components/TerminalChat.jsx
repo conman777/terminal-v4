@@ -28,10 +28,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const isMobile = useMobileDetect();
   const { activeSessionId, sessions, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isScrollMode, setIsScrollMode] = useState(false);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
+  const scrollModeRef = useRef(false);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
 
@@ -69,21 +71,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     cleanup: cleanupScrolling
   } = useTerminalScrolling(xtermRef, sendToTerminal);
 
-  // Image upload handling
-  const {
-    imageDragOver,
-    imageInputRef,
-    handleImageDrop,
-    handleDragOver,
-    handleDragLeave,
-    handleImageSelect,
-    triggerFileInput
-  } = useImageUpload((path) => {
-    if (sendTerminalInputRef.current) {
-      sendTerminalInputRef.current(path);
-    }
-  });
-
   // Mobile keyboard control
   const setMobileInputEnabled = useCallback((enabled) => {
     if (!isMobile) return;
@@ -114,6 +101,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [isMobile]);
 
+  const setScrollMode = useCallback((enabled, options = {}) => {
+    scrollModeRef.current = enabled;
+    setIsScrollMode(enabled);
+    if (!isMobile) return;
+    if (enabled) {
+      setMobileInputEnabled(false);
+      return;
+    }
+    if (options.jumpToLive) {
+      jumpToLive();
+    }
+    setMobileInputEnabled(true);
+  }, [isMobile, jumpToLive, setMobileInputEnabled]);
+
+  const toggleScrollMode = useCallback(() => {
+    setScrollMode(!scrollModeRef.current);
+  }, [setScrollMode]);
+
+  // Image upload handling
+  const {
+    imageDragOver,
+    imageInputRef,
+    handleImageDrop,
+    handleDragOver,
+    handleDragLeave,
+    handleImageSelect,
+    triggerFileInput
+  } = useImageUpload((path) => {
+    if (sendTerminalInputRef.current) {
+      sendTerminalInputRef.current(path);
+    }
+  });
+
   const handleTerminalTap = useCallback((event) => {
     if (!isMobile || event?.defaultPrevented) return;
     const target = event?.target;
@@ -122,17 +142,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         return;
       }
     }
+    if (scrollModeRef.current) {
+      setScrollMode(false, { jumpToLive: true });
+      return;
+    }
     setMobileInputEnabled(true);
-  }, [isMobile, setMobileInputEnabled]);
+  }, [isMobile, setMobileInputEnabled, setScrollMode]);
 
   // Touch gesture handling
+  const handleLongPress = useCallback(() => {
+    if (!isMobile) return;
+    toggleScrollMode();
+  }, [isMobile, toggleScrollMode]);
+
+  const handleTouchMove = useCallback((info) => {
+    if (!scrollModeRef.current) return;
+    const deltaY = info?.deltaY || 0;
+    if (!deltaY) return;
+    if (info?.event?.cancelable) {
+      info.event.preventDefault();
+    }
+    scrollByWheel(-deltaY, 0, xtermRef.current?.rows);
+  }, [scrollByWheel]);
+
   const {
     touchStateRef,
     handleTouchStartCapture,
     handleTouchMoveCapture,
     handleTouchEndCapture,
     handleTouchCancelCapture
-  } = useTouchGestures(isMobile, handleTerminalTap);
+  } = useTouchGestures(isMobile, handleTerminalTap, {
+    onLongPress: handleLongPress,
+    onMove: handleTouchMove
+  });
 
   // Keep ref updated to avoid stale closures
   useEffect(() => {
@@ -142,6 +184,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     usesTmuxRef.current = Boolean(usesTmux);
   }, [usesTmux]);
+
+  useEffect(() => {
+    scrollModeRef.current = isScrollMode;
+  }, [isScrollMode]);
 
   // Reset loading state when session changes
   useEffect(() => {
@@ -178,6 +224,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let rafId = null;
     let resizeObserver = null;
 
+    const scrollback = isMobile ? 5000 : 100000;
     const term = new Terminal({
       cursorBlink: false,
       fontSize: fontSize || (isMobile ? 20 : 14),
@@ -185,7 +232,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
         : 'Consolas, "Courier New", monospace',
       rendererType: 'canvas',
-      scrollback: 100000,
+      scrollback,
       theme: {
         background: '#1e1e1e',
         foreground: '#d4d4d4'
@@ -438,6 +485,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const base = import.meta.env.VITE_API_URL || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
         if (token) url.searchParams.set('token', token);
+        if (isMobile) {
+          url.searchParams.set('historyChars', '300000');
+        }
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
         return url.toString();
       };
@@ -728,7 +778,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   return (
     <div
-      className="terminal-chat"
+      className={`terminal-chat${isScrollMode ? ' scroll-mode' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleImageDrop}
@@ -739,6 +789,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onTouchCancelCapture={handleTouchCancelCapture}
     >
       <div ref={terminalRef} className="xterm-container"></div>
+
+      {isMobile && isScrollMode && (
+        <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>
+      )}
 
       <button
         className="terminal-image-btn"

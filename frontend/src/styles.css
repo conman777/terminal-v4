@@ -1131,8 +1131,29 @@ button {
   transition: box-shadow var(--transition-base);
 }
 
+.terminal-chat.scroll-mode {
+  touch-action: none;
+}
+
 .terminal-chat:focus-within {
   box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15);
+}
+
+.terminal-scroll-mode-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  color: #e2e8f0;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  z-index: 20;
+  pointer-events: none;
+  text-transform: uppercase;
 }
 
 /* Terminal Image Upload */

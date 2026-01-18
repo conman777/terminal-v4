@@ -10,6 +10,17 @@ import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
 
 export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
+  const parseHistoryLimit = (request: { query?: unknown }) => {
+    const query = (request.query || {}) as Record<string, string | undefined>;
+    const historyChars = Number.parseInt(String(query.historyChars || ''), 10);
+    const historyEvents = Number.parseInt(String(query.historyEvents || ''), 10);
+
+    return {
+      maxHistoryChars: Number.isFinite(historyChars) && historyChars > 0 ? historyChars : undefined,
+      maxHistoryEvents: Number.isFinite(historyEvents) && historyEvents > 0 ? historyEvents : undefined
+    };
+  };
+
   app.get('/api/terminal', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {
@@ -88,7 +99,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
+    const historyLimits = parseHistoryLimit(request);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -207,7 +219,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
+    const historyLimits = parseHistoryLimit(request);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -319,7 +332,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id);
+    const historyLimits = parseHistoryLimit(request);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
     if (!snapshot) {
       socket.close(4404, 'Terminal session not found');
       return;
