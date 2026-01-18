@@ -13,14 +13,14 @@ export default function LoginPage() {
     e.preventDefault();
     setLocalError('');
 
-    if (!username.trim() || !password) {
+    if (!username.trim() || !password.trim()) {
       setLocalError('Username and password are required');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await login(username.trim(), password);
+      await login(username.trim(), password.trim());
     } catch (err) {
       // Error is set in auth context
     } finally {

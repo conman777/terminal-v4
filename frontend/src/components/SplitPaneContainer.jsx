@@ -11,6 +11,8 @@ export function SplitPaneContainer({
   onPaneFocus,
   onPaneFullscreen,
   fullscreenPaneId,
+  showPreview,
+  onMinimizeMainTerminal,
   keybarOpen,
   viewportHeight,
   onUrlDetected,
@@ -42,6 +44,8 @@ export function SplitPaneContainer({
           onClose={onPaneClose}
           onFocus={onPaneFocus}
           onFullscreen={onPaneFullscreen}
+          showPreview={showPreview}
+          onMinimizeMainTerminal={onMinimizeMainTerminal}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}
           onUrlDetected={onUrlDetected}

@@ -14,6 +14,8 @@ export const TerminalPane = memo(function TerminalPane({
   onClose,
   onFocus,
   onFullscreen,
+  showPreview,
+  onMinimizeMainTerminal,
   keybarOpen,
   viewportHeight,
   onUrlDetected,
@@ -153,6 +155,18 @@ export const TerminalPane = memo(function TerminalPane({
                 </svg>
               </button>
             </>
+          )}
+          {showPreview && !isFullscreen && onMinimizeMainTerminal && (
+            <button
+              className="pane-btn pane-minimize-btn"
+              onClick={(e) => { e.stopPropagation(); onMinimizeMainTerminal(); }}
+              title="Minimize terminal (show browser)"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="1" y="2" width="6" height="10" rx="1" />
+                <polyline points="8 5 11 7 8 9" />
+              </svg>
+            </button>
           )}
           <button
             className="pane-btn pane-fullscreen-btn"

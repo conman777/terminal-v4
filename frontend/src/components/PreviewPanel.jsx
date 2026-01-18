@@ -3,6 +3,7 @@ import { useMobileDetect } from '../hooks/useMobileDetect';
 import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
 import { getAccessToken } from '../utils/auth';
 import { StyleEditor } from './StyleEditor';
+import { TerminalChat } from './TerminalChat';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -59,7 +60,28 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode }) {
+// Tooltip component
+function Tooltip({ children, text, shortcut }) {
+  const [show, setShow] = useState(false);
+
+  return (
+    <div
+      className="tooltip-wrapper"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      {show && (
+        <div className="tooltip">
+          <span className="tooltip-text">{text}</span>
+          {shortcut && <span className="tooltip-shortcut">{shortcut}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -79,6 +101,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [editDescription, setEditDescription] = useState('');
   const [showEditInput, setShowEditInput] = useState(false);
   const [showStyleEditor, setShowStyleEditor] = useState(false);
+  const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
@@ -90,6 +113,24 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const portDropdownRef = useRef(null);
   const skipUrlSyncRef = useRef(false);
   const lastSyncedUrlRef = useRef(normalizePreviewUrl(url || ''));
+
+  // Browser split view state
+  const [browserSplitEnabled, setBrowserSplitEnabled] = useState(false);
+  const [browserSplitPosition, setBrowserSplitPosition] = useState(() => {
+    try {
+      const stored = localStorage.getItem('browser_split_position_v1');
+      if (!stored) return 50;
+      const parsed = parseInt(stored, 10);
+      // Validate range (30-70%)
+      if (isNaN(parsed) || parsed < 30 || parsed > 70) return 50;
+      return parsed;
+    } catch {
+      return 50;
+    }
+  });
+  const [selectedTerminalSession, setSelectedTerminalSession] = useState(null);
+  const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
+  const browserSplitRef = useRef(null);
 
   const baseIframeSrc = useMemo(() => {
     const result = toPreviewUrl(url);
@@ -318,6 +359,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp }]);
       } else if (event.data?.type === 'preview-element-selected') {
         setSelectedElement(event.data.element);
+        setShowEditInput(true);
+        setShowStyleEditor(false);
+        setEditDescription('');
       } else if (event.data?.type === 'preview-inspector-ready') {
         // Inspector is ready, sync inspect mode state
         if (inspectMode && iframeRef.current?.contentWindow) {
@@ -412,6 +456,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setLogs([]);
     setSelectedElement(null);
     setInspectMode(false);
+    setShowEditInput(false);
+    setShowStyleEditor(false);
+    setEditDescription('');
   }, [url]);
 
   // Focus URL input when shown
@@ -449,6 +496,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setInspectMode(newMode);
     if (!newMode) {
       setSelectedElement(null);
+      setShowEditInput(false);
+      setShowStyleEditor(false);
+      setEditDescription('');
     }
     // Send message to iframe
     if (iframeRef.current?.contentWindow) {
@@ -458,6 +508,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handleClearSelection = useCallback(() => {
     setSelectedElement(null);
+    setShowEditInput(false);
+    setShowStyleEditor(false);
+    setEditDescription('');
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({ type: 'preview-clear-selection' }, '*');
     }
@@ -741,6 +794,35 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     });
   }, [filteredLogs]);
 
+  // Compute breadcrumb path for inspector
+  const elementPath = useMemo(() => {
+    if (!selectedElement) return [];
+
+    const path = [];
+    let current = selectedElement;
+
+    while (current && current.parentElement) {
+      const tag = current.tagName?.toLowerCase() || 'unknown';
+      const id = current.id ? `#${current.id}` : '';
+      const classes = current.className && typeof current.className === 'string'
+        ? `.${current.className.split(' ').filter(c => c).join('.')}`
+        : '';
+
+      path.unshift({
+        tag,
+        selector: `${tag}${id}${classes}`,
+        element: current
+      });
+
+      current = current.parentElement;
+
+      // Limit to 10 levels
+      if (path.length >= 10) break;
+    }
+
+    return path;
+  }, [selectedElement]);
+
   // Send error logs to terminal for Claude to see
   const handleSendLogsToTerminal = useCallback(() => {
     if (!onSendToTerminal || errorLogs.length === 0) return;
@@ -766,6 +848,130 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     const footer = '\n--- End Errors ---\n';
     onSendToTerminal(header + formattedLogs + footer);
   }, [onSendToTerminal, errorLogs]);
+
+  // Browser split handlers
+  const handleBrowserSplitMouseDown = useCallback((e) => {
+    e.preventDefault();
+    setIsDraggingBrowserSplit(true);
+  }, []);
+
+  const handleToggleTerminalSplit = useCallback(() => {
+    setBrowserSplitEnabled(prev => !prev);
+  }, []);
+
+  // Handle browser split drag
+  useEffect(() => {
+    if (!isDraggingBrowserSplit) return;
+
+    const handleMouseMove = (e) => {
+      if (!browserSplitRef.current) return;
+      const rect = browserSplitRef.current.getBoundingClientRect();
+      const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.min(Math.max(newPosition, 30), 70);
+      setBrowserSplitPosition(clamped);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingBrowserSplit(false);
+      // Save final position to localStorage
+      setBrowserSplitPosition(pos => {
+        try {
+          localStorage.setItem('browser_split_position_v1', String(Math.round(pos)));
+        } catch {}
+        return pos;
+      });
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingBrowserSplit]);
+
+  // Auto-select default terminal session
+  useEffect(() => {
+    if (!activeSessions || activeSessions.length === 0) {
+      if (selectedTerminalSession) {
+        setSelectedTerminalSession(null);
+      }
+      return;
+    }
+
+    // Reset if selected session no longer exists
+    if (selectedTerminalSession) {
+      const sessionExists = activeSessions.some(s => s.id === selectedTerminalSession);
+      if (!sessionExists) {
+        setSelectedTerminalSession(activeSessionId || activeSessions[0].id);
+        return;
+      }
+    }
+
+    // Auto-select default if none selected
+    if (!selectedTerminalSession) {
+      setSelectedTerminalSession(activeSessionId || activeSessions[0].id);
+    }
+  }, [activeSessionId, activeSessions, selectedTerminalSession]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Cmd/Ctrl + I: Toggle inspector
+      if ((e.metaKey || e.ctrlKey) && e.key === 'i') {
+        e.preventDefault();
+        handleToggleInspect();
+      }
+
+      // Cmd/Ctrl + R: Refresh preview
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault();
+        handleRefresh();
+      }
+
+      // Cmd/Ctrl + K: Toggle split terminal
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        handleToggleTerminalSplit();
+      }
+
+      // Cmd/Ctrl + 1-9: Switch terminal session
+      if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const index = parseInt(e.key) - 1;
+        if (activeSessions && activeSessions[index]) {
+          setSelectedTerminalSession(activeSessions[index].id);
+        }
+      }
+
+      // Escape: Close inspector or logs
+      if (e.key === 'Escape') {
+        if (selectedElement) {
+          setSelectedElement(null);
+        } else if (showLogs) {
+          setShowLogs(false);
+        } else if (showKeyboardHelp) {
+          setShowKeyboardHelp(false);
+        }
+      }
+
+      // ? : Show keyboard help
+      if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setShowKeyboardHelp(true);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [inspectMode, selectedElement, showLogs, showKeyboardHelp, activeSessions, handleRefresh, handleToggleInspect, handleToggleTerminalSplit]);
+
+  // Auto-expand logs when errors appear
+  useEffect(() => {
+    if (errorLogs.length > 0 && !showLogs) {
+      setShowLogs(true);
+    }
+  }, [errorLogs.length, showLogs]);
 
   // Mobile layout
   if (isMobile) {
@@ -1131,37 +1337,50 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     </button>
                   </form>
                 ) : (
-                  <div className="preview-inspector-btns-mobile">
+                  <>
                     <button
                       type="button"
-                      className={`preview-inspector-style-btn-mobile ${showStyleEditor ? 'active' : ''}`}
-                      onClick={() => setShowStyleEditor(!showStyleEditor)}
+                      className="preview-inspector-edit-btn-mobile"
+                      onClick={() => setShowEditInput(true)}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="13.5" cy="6.5" r="2.5"/>
-                        <circle cx="19" cy="17" r="2"/>
-                        <circle cx="6" cy="12" r="2.5"/>
-                        <path d="M9.5 10.5L14 6.5"/>
-                        <path d="M16 8.5l2 6"/>
-                        <path d="M8 14l5 2"/>
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
                       </svg>
-                      Styles
+                      Edit
                     </button>
-                    {onSendToTerminal && (
+                    <div className="preview-inspector-btns-mobile">
                       <button
                         type="button"
-                        className="preview-inspector-terminal-btn-mobile"
-                        onClick={handleCopyToTerminal}
-                        title="Copy element info to terminal"
+                        className={`preview-inspector-style-btn-mobile ${showStyleEditor ? 'active' : ''}`}
+                        onClick={() => setShowStyleEditor(!showStyleEditor)}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="4 17 10 11 4 5" />
-                          <line x1="12" y1="19" x2="20" y2="19" />
+                          <circle cx="13.5" cy="6.5" r="2.5"/>
+                          <circle cx="19" cy="17" r="2"/>
+                          <circle cx="6" cy="12" r="2.5"/>
+                          <path d="M9.5 10.5L14 6.5"/>
+                          <path d="M16 8.5l2 6"/>
+                          <path d="M8 14l5 2"/>
                         </svg>
-                        Terminal
+                        Styles
                       </button>
-                    )}
-                  </div>
+                      {onSendToTerminal && (
+                        <button
+                          type="button"
+                          className="preview-inspector-terminal-btn-mobile"
+                          onClick={handleCopyToTerminal}
+                          title="Send element info to terminal"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="4 17 10 11 4 5" />
+                            <line x1="12" y1="19" x2="20" y2="19" />
+                          </svg>
+                          Send
+                        </button>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -1261,14 +1480,29 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       className={`preview-port-item ${port === previewPort ? 'current' : ''}`}
                       onClick={() => handleSelectPort(port)}
                     >
-                      <span className="preview-port-info">
-                        <span className="preview-port-number">:{port}</span>
-                        {(cwd || process) && <span className="preview-port-process">{cwd || process}</span>}
-                      </span>
-                      <span className="preview-port-status">
-                        {listening && <span className="preview-port-dot listening" title="Listening" />}
-                        {previewed && <span className="preview-port-dot previewed" title="Previously viewed" />}
-                      </span>
+                      <div className="preview-port-info">
+                        <div className="preview-port-header">
+                          <span className="preview-port-badge">
+                            <span className="preview-port-status-dot" />
+                            {port}
+                          </span>
+                          {listening && <span className="preview-port-listening-badge">Active</span>}
+                        </div>
+                        {(process || cwd) && (
+                          <div className="preview-port-details">
+                            {process && (
+                              <span className="preview-port-command" title={process}>
+                                {process}
+                              </span>
+                            )}
+                            {cwd && (
+                              <span className="preview-port-cwd" title={cwd}>
+                                {cwd.split('/').slice(-2).join('/')}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -1287,19 +1521,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           />
         </form>
         <div className="preview-actions">
-          <button
-            type="button"
-            className={`preview-action-btn ${inspectMode ? 'active' : ''}`}
-            onClick={handleToggleInspect}
-            title={inspectMode ? 'Exit inspect mode' : 'Inspect elements'}
-            disabled={!iframeSrc}
-            aria-label="Inspect elements"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
-              <path d="M13 13l6 6" />
-            </svg>
-          </button>
+          <Tooltip text={inspectMode ? 'Exit inspect mode' : 'Inspect elements'} shortcut="⌘I">
+            <button
+              type="button"
+              className={`preview-action-btn ${inspectMode ? 'active' : ''}`}
+              onClick={handleToggleInspect}
+              disabled={!iframeSrc}
+              aria-label="Inspect elements"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+                <path d="M13 13l6 6" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip text={browserSplitEnabled ? 'Hide Terminal' : 'Show Terminal'} shortcut="⌘K">
+            <button
+              type="button"
+              className={`preview-action-btn ${browserSplitEnabled ? 'active' : ''}`}
+              onClick={handleToggleTerminalSplit}
+              disabled={!iframeSrc}
+              aria-label="Toggle terminal split"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="7" height="18" rx="1" />
+                <rect x="14" y="3" width="7" height="18" rx="1" />
+              </svg>
+            </button>
+          </Tooltip>
           {previewPort && (
             <button
               type="button"
@@ -1316,16 +1565,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </svg>
             </button>
           )}
-          <button
-            type="button"
-            className="preview-action-btn"
-            onClick={handleRefresh}
-            title="Refresh"
-            disabled={!iframeSrc}
-            aria-label="Refresh"
-          >
-            {'\u21BB'}
-          </button>
+          <Tooltip text="Refresh preview" shortcut="⌘R">
+            <button
+              type="button"
+              className="preview-action-btn"
+              onClick={handleRefresh}
+              disabled={!iframeSrc}
+              aria-label="Refresh"
+            >
+              {'\u21BB'}
+            </button>
+          </Tooltip>
           <button
             type="button"
             className="preview-action-btn"
@@ -1336,6 +1586,31 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           >
             {'\u2197'}
           </button>
+          {onToggleMainTerminal && (
+            <Tooltip text={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}>
+              <button
+                type="button"
+                className={`preview-action-btn ${mainTerminalMinimized ? 'active' : ''}`}
+                onClick={onToggleMainTerminal}
+                aria-label={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  {mainTerminalMinimized ? (
+                    <>
+                      {/* Restore icon - two panes */}
+                      <rect x="3" y="3" width="8" height="18" rx="1" />
+                      <rect x="13" y="3" width="8" height="18" rx="1" />
+                    </>
+                  ) : (
+                    <>
+                      {/* Maximize icon - single full pane */}
+                      <rect x="3" y="3" width="18" height="18" rx="1" />
+                    </>
+                  )}
+                </svg>
+              </button>
+            </Tooltip>
+          )}
           <button
             type="button"
             className="preview-action-btn preview-close-btn"
@@ -1348,80 +1623,152 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         </div>
       </div>
 
-      <div className="preview-content">
-        {!iframeSrc ? (
-          <div className="preview-empty">
-            {projectInfo && projectInfo.projectType !== 'unknown' ? (
-              <>
-                <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
-                <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
-                {projectInfo.projectType === 'static' ? (
+      <div
+        ref={browserSplitRef}
+        className={`preview-content-wrapper${isDraggingBrowserSplit ? ' dragging' : ''}`}
+      >
+        <div
+          className="preview-iframe-section"
+          style={browserSplitEnabled ? { flex: `0 0 ${browserSplitPosition}%` } : { flex: 1 }}
+        >
+          <div className="preview-content">
+            {!iframeSrc ? (
+              <div className="preview-empty">
+                {projectInfo && projectInfo.projectType !== 'unknown' ? (
                   <>
-                    <p>Static site detected in this directory.</p>
-                    <button
-                      type="button"
-                      className="btn-primary project-action-btn"
-                      onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
-                    >
-                      Open Static Site
-                    </button>
-                  </>
-                ) : projectInfo.startCommand ? (
-                  <>
-                    <p>Run the dev server:</p>
-                    <button
-                      type="button"
-                      className="btn-primary project-action-btn"
-                      onClick={() => onStartProject && onStartProject(projectInfo.startCommand)}
-                    >
-                      {projectInfo.startCommand}
-                    </button>
+                    <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
+                    <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
+                    {projectInfo.projectType === 'static' ? (
+                      <>
+                        <p>Static site detected in this directory.</p>
+                        <button
+                          type="button"
+                          className="btn-primary project-action-btn"
+                          onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
+                        >
+                          Open Static Site
+                        </button>
+                      </>
+                    ) : projectInfo.startCommand ? (
+                      <>
+                        <p>Run the dev server:</p>
+                        <button
+                          type="button"
+                          className="btn-primary project-action-btn"
+                          onClick={() => onStartProject && onStartProject(projectInfo.startCommand)}
+                        >
+                          {projectInfo.startCommand}
+                        </button>
+                      </>
+                    ) : (
+                      <p>No start script detected. Add a <code>dev</code> or <code>start</code> script to your package.json.</p>
+                    )}
+                    <p className="project-cwd">
+                      <code>{projectInfo.cwd}</code>
+                    </p>
                   </>
                 ) : (
-                  <p>No start script detected. Add a <code>dev</code> or <code>start</code> script to your package.json.</p>
+                  <>
+                    <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
+                    <h3>No URL</h3>
+                    <p>Start a dev server in the terminal, or enter a local file path like:</p>
+                    <p className="preview-hint">
+                      <code>C:\path\to\project\index.html</code>
+                    </p>
+                  </>
                 )}
-                <p className="project-cwd">
-                  <code>{projectInfo.cwd}</code>
-                </p>
-              </>
+              </div>
+            ) : error ? (
+              <div className="preview-error">
+                <div className="preview-error-icon">{'\u26A0'}</div>
+                <h3>Load Error</h3>
+                <p>{error}</p>
+                <button type="button" className="btn-primary" onClick={handleRefresh}>
+                  Try Again
+                </button>
+              </div>
             ) : (
               <>
-                <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
-                <h3>No URL</h3>
-                <p>Start a dev server in the terminal, or enter a local file path like:</p>
-                <p className="preview-hint">
-                  <code>C:\path\to\project\index.html</code>
-                </p>
+                {isLoading && (
+                  <div className="preview-loading">
+                    <div className="preview-spinner"></div>
+                    <p>Loading...</p>
+                  </div>
+                )}
+                <iframe
+                  ref={iframeRef}
+                  src={iframeSrc}
+                  className="preview-iframe"
+                  onLoad={handleLoad}
+                  onError={handleError}
+                  title="Browser"
+                  allow="camera; microphone"
+                  style={{ opacity: isLoading ? 0 : 1 }}
+                />
               </>
             )}
           </div>
-        ) : error ? (
-          <div className="preview-error">
-            <div className="preview-error-icon">{'\u26A0'}</div>
-            <h3>Load Error</h3>
-            <p>{error}</p>
-            <button type="button" className="btn-primary" onClick={handleRefresh}>
-              Try Again
-            </button>
-          </div>
-        ) : (
+        </div>
+
+        {browserSplitEnabled && (
           <>
-            {isLoading && (
-              <div className="preview-loading">
-                <div className="preview-spinner"></div>
-                <p>Loading...</p>
-              </div>
-            )}
-            <iframe
-              ref={iframeRef}
-              src={iframeSrc}
-              className="preview-iframe"
-              onLoad={handleLoad}
-              onError={handleError}
-              title="Browser"
-              allow="camera; microphone"
-              style={{ opacity: isLoading ? 0 : 1 }}
+            <div
+              className="split-handle"
+              onMouseDown={handleBrowserSplitMouseDown}
             />
+            <div className="preview-terminal-section">
+              <div className="preview-terminal-header">
+                {activeSessions && activeSessions.length > 0 ? (
+                  <div className="preview-session-switcher">
+                    {activeSessions.map(session => (
+                      <button
+                        key={session.id}
+                        className={`preview-session-btn ${selectedTerminalSession === session.id ? 'active' : ''}`}
+                        onClick={() => setSelectedTerminalSession(session.id)}
+                        title={session.title || `Session ${session.id.slice(0, 8)}`}
+                      >
+                        <span className="session-indicator" />
+                        <span className="session-name">
+                          {session.title || `Session ${session.id.slice(0, 8)}`}
+                        </span>
+                        {session.hasUnread && <span className="session-unread-dot" />}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="preview-terminal-no-sessions">No terminal sessions</span>
+                )}
+                <button
+                  className="preview-terminal-toggle"
+                  onClick={handleToggleTerminalSplit}
+                  title="Close terminal"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="preview-terminal-content">
+                {selectedTerminalSession ? (
+                  <TerminalChat
+                    sessionId={selectedTerminalSession}
+                    keybarOpen={false}
+                    viewportHeight={null}
+                    fontSize={fontSize}
+                    onUrlDetected={onUrlDetected || (() => {})}
+                    usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
+                    onRegisterImageUpload={() => {}}
+                    onRegisterFocusTerminal={() => {}}
+                    onActivityChange={() => {}}
+                    onConnectionChange={() => {}}
+                    onCwdChange={() => {}}
+                    onScrollDirection={() => {}}
+                  />
+                ) : (
+                  <div className="preview-empty">
+                    <p>No terminal session selected</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </>
         )}
       </div>
@@ -1432,6 +1779,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           <span className="preview-logs-title">
             <span className="preview-logs-icon">{'\u{1F4CB}'}</span>
             Logs
+            {errorLogs.length > 0 && (
+              <span className="preview-logs-error-badge">{errorLogs.length}</span>
+            )}
             {(logs.length + proxyLogs.length + processLogs.length) > 0 && (
               <span className="preview-logs-count">{logs.length + proxyLogs.length + processLogs.length}</span>
             )}
@@ -1546,6 +1896,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {'\u00D7'}
             </button>
           </div>
+
+          {/* Breadcrumb Path */}
+          {elementPath.length > 0 && (
+            <div className="inspector-breadcrumb">
+              {elementPath.map((item, index) => (
+                <span key={index} className="breadcrumb-item">
+                  {index > 0 && <span className="breadcrumb-separator">›</span>}
+                  <button
+                    className="breadcrumb-btn"
+                    onClick={() => {
+                      const newEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
+                      item.element.dispatchEvent(newEvent);
+                    }}
+                    title={item.selector}
+                  >
+                    {item.tag}
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
           <div className="preview-inspector-content">
             <div className="preview-inspector-selector">
               <code>{selectedElement.selector}</code>
@@ -1672,37 +2044,50 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   </button>
                 </form>
               ) : (
-                <div className="preview-inspector-btns">
+                <>
                   <button
                     type="button"
-                    className={`preview-inspector-style-btn ${showStyleEditor ? 'active' : ''}`}
-                    onClick={() => setShowStyleEditor(!showStyleEditor)}
+                    className="preview-inspector-edit-btn"
+                    onClick={() => setShowEditInput(true)}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="13.5" cy="6.5" r="2.5"/>
-                      <circle cx="19" cy="17" r="2"/>
-                      <circle cx="6" cy="12" r="2.5"/>
-                      <path d="M9.5 10.5L14 6.5"/>
-                      <path d="M16 8.5l2 6"/>
-                      <path d="M8 14l5 2"/>
+                      <path d="M12 20h9" />
+                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
                     </svg>
-                    Styles
+                    Edit with Claude
                   </button>
-                  {onSendToTerminal && (
+                  <div className="preview-inspector-btns">
                     <button
                       type="button"
-                      className="preview-inspector-terminal-btn"
-                      onClick={handleCopyToTerminal}
-                      title="Copy element info to terminal"
+                      className={`preview-inspector-style-btn ${showStyleEditor ? 'active' : ''}`}
+                      onClick={() => setShowStyleEditor(!showStyleEditor)}
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <polyline points="4 17 10 11 4 5" />
-                        <line x1="12" y1="19" x2="20" y2="19" />
+                        <circle cx="13.5" cy="6.5" r="2.5"/>
+                        <circle cx="19" cy="17" r="2"/>
+                        <circle cx="6" cy="12" r="2.5"/>
+                        <path d="M9.5 10.5L14 6.5"/>
+                        <path d="M16 8.5l2 6"/>
+                        <path d="M8 14l5 2"/>
                       </svg>
-                      Terminal
+                      Styles
                     </button>
-                  )}
-                </div>
+                    {onSendToTerminal && (
+                      <button
+                        type="button"
+                        className="preview-inspector-terminal-btn"
+                        onClick={handleCopyToTerminal}
+                        title="Send element info to terminal"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="4 17 10 11 4 5" />
+                          <line x1="12" y1="19" x2="20" y2="19" />
+                        </svg>
+                        Send to Terminal
+                      </button>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1715,6 +2100,33 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               onRevert={handleStyleRevert}
             />
           )}
+        </div>
+      )}
+
+      {/* Keyboard Help Modal */}
+      {showKeyboardHelp && (
+        <div className="keyboard-help-modal" onClick={() => setShowKeyboardHelp(false)}>
+          <div className="keyboard-help-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Keyboard Shortcuts</h3>
+            <div className="keyboard-shortcuts">
+              <div className="shortcut-group">
+                <h4>Navigation</h4>
+                <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>I</kbd> <span>Toggle Inspector</span></div>
+                <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>K</kbd> <span>Toggle Terminal</span></div>
+                <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>R</kbd> <span>Refresh Preview</span></div>
+                <div className="shortcut"><kbd>Esc</kbd> <span>Close Inspector/Logs</span></div>
+              </div>
+              <div className="shortcut-group">
+                <h4>Sessions</h4>
+                <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>1-9</kbd> <span>Switch Terminal Session</span></div>
+              </div>
+              <div className="shortcut-group">
+                <h4>Help</h4>
+                <div className="shortcut"><kbd>?</kbd> <span>Show This Help</span></div>
+              </div>
+            </div>
+            <button className="btn-primary" onClick={() => setShowKeyboardHelp(false)}>Close</button>
+          </div>
         </div>
       )}
     </div>

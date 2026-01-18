@@ -123,6 +123,13 @@ function AppContent() {
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
+  const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
+    try {
+      return localStorage.getItem('mainTerminalMinimized') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const mainContentRef = useRef(null);
   const focusTerminalRef = useRef(null);
@@ -461,6 +468,19 @@ function AppContent() {
     };
   }, [isDragging, updateSplitPosition, stopDragging]);
 
+  // Handler to toggle main terminal minimized state
+  const handleToggleMainTerminal = useCallback(() => {
+    setMainTerminalMinimized(prev => {
+      const newValue = !prev;
+      try {
+        localStorage.setItem('mainTerminalMinimized', String(newValue));
+      } catch {
+        // Ignore localStorage errors
+      }
+      return newValue;
+    });
+  }, []);
+
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
     isMobile && viewportHeight
@@ -753,8 +773,8 @@ function AppContent() {
           >
             {/* Left pane - switches between Terminal and Claude Code */}
             <div
-              className="terminal-pane"
-              style={showPreview && !fullscreenPaneId ? { flex: `0 0 ${splitPosition}%` } : undefined}
+              className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
+              style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
             >
               {leftPanelMode === 'terminal' ? (
                 activeSessions.length === 0 ? (
@@ -775,6 +795,8 @@ function AppContent() {
                     onPaneFocus={handlePaneFocus}
                     onPaneFullscreen={toggleFullscreen}
                     fullscreenPaneId={fullscreenPaneId}
+                    showPreview={showPreview && !fullscreenPaneId}
+                    onMinimizeMainTerminal={handleToggleMainTerminal}
                     keybarOpen={keybarOpen}
                     viewportHeight={viewportHeight}
                     onUrlDetected={handleUrlDetected}
@@ -811,10 +833,12 @@ function AppContent() {
             {/* Preview pane - hidden during fullscreen */}
             {showPreview && !fullscreenPaneId && (
               <>
-                <div
-                  className={`split-handle${isDragging ? ' active' : ''}`}
-                  onMouseDown={handleSplitMouseDown}
-                />
+                {!mainTerminalMinimized && (
+                  <div
+                    className={`split-handle${isDragging ? ' active' : ''}`}
+                    onMouseDown={handleSplitMouseDown}
+                  />
+                )}
                 <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
                   <PreviewPanel
                     url={previewUrl}
@@ -824,6 +848,12 @@ function AppContent() {
                     onStartProject={handleStartProject}
                     onSendToTerminal={handleSendToTerminal}
                     onSendToClaudeCode={handleSendToClaudeCode}
+                    activeSessions={activeSessions}
+                    activeSessionId={activeSessionId}
+                    fontSize={terminalFontSize}
+                    onUrlDetected={handlePreviewUrlChange}
+                    mainTerminalMinimized={mainTerminalMinimized}
+                    onToggleMainTerminal={handleToggleMainTerminal}
                   />
                 </Suspense>
               </>
@@ -897,6 +927,10 @@ function AppContent() {
                   onStartProject={handleStartProject}
                   onSendToTerminal={handleSendToTerminal}
                   onSendToClaudeCode={handleSendToClaudeCode}
+                  activeSessions={activeSessions}
+                  activeSessionId={activeSessionId}
+                  fontSize={terminalFontSize}
+                  onUrlDetected={handlePreviewUrlChange}
                 />
               </Suspense>
             )}
