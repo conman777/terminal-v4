@@ -47,6 +47,7 @@ export interface ManagedTerminal {
   currentCols: number;
   currentRows: number;
   usesTmux: boolean;
+  outputBatcher?: any;       // OutputBatcher instance for batching PTY output
 }
 
 // Re-export session store type

@@ -6,6 +6,7 @@
  */
 
 import { chromium, Browser, Page, ConsoleMessage, Request, Response } from 'playwright';
+import { getBrowserSettings } from '../settings/browser-settings-service.js';
 
 export interface LogEntry {
   id: string;
@@ -16,6 +17,9 @@ export interface LogEntry {
   message?: string;
   // Error fields
   stack?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
   // Network fields
   method?: string;
   url?: string;
@@ -27,6 +31,7 @@ export interface LogEntry {
 
 export interface BrowserSession {
   id: string;
+  name: string;
   browser: Browser;
   page: Page;
   logs: LogEntry[];
@@ -35,13 +40,12 @@ export interface BrowserSession {
   currentUrl: string;
 }
 
-// Single active session (simple approach)
-let activeSession: BrowserSession | null = null;
+// Multiple sessions support
+const sessions = new Map<string, BrowserSession>();
+let activeSessionId: string | null = null;
 
 // Cleanup interval
 let cleanupInterval: NodeJS.Timeout | null = null;
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
 
 // Generate unique ID
 function generateId(): string {
@@ -54,12 +58,7 @@ const pendingRequests = new Map<string, { startTime: number; method: string; url
 /**
  * Start a new browser session
  */
-export async function startSession(): Promise<BrowserSession> {
-  // Close existing session if any
-  if (activeSession) {
-    await stopSession();
-  }
-
+export async function startSession(name?: string): Promise<BrowserSession> {
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -67,8 +66,10 @@ export async function startSession(): Promise<BrowserSession> {
 
   const page = await browser.newPage();
 
+  const sessionId = generateId();
   const session: BrowserSession = {
-    id: generateId(),
+    id: sessionId,
+    name: name || `Session ${sessionId.slice(0, 8)}`,
     browser,
     page,
     logs: [],
@@ -80,70 +81,148 @@ export async function startSession(): Promise<BrowserSession> {
   // Attach log listeners
   attachLogListeners(session);
 
-  activeSession = session;
+  sessions.set(sessionId, session);
+  activeSessionId = sessionId;
 
   // Start cleanup interval if not running
   if (!cleanupInterval) {
     startCleanupInterval();
   }
 
-  console.log(`[browser] Session started: ${session.id}`);
+  console.log(`[browser] Session started: ${session.id} (${session.name})`);
   return session;
 }
 
 /**
- * Get the active session
+ * Get the active session (for backward compatibility)
  */
 export function getSession(): BrowserSession | null {
-  if (activeSession) {
-    activeSession.lastActivity = Date.now();
+  if (!activeSessionId) {
+    return null;
   }
-  return activeSession;
+  const session = sessions.get(activeSessionId);
+  if (session) {
+    session.lastActivity = Date.now();
+  }
+  return session || null;
+}
+
+/**
+ * Get a specific session by ID
+ */
+export function getSessionById(sessionId: string): BrowserSession | null {
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.lastActivity = Date.now();
+  }
+  return session || null;
+}
+
+/**
+ * Get all sessions
+ */
+export function getAllSessions(): BrowserSession[] {
+  return Array.from(sessions.values());
+}
+
+/**
+ * Switch to a different active session
+ */
+export function switchSession(sessionId: string): boolean {
+  if (sessions.has(sessionId)) {
+    activeSessionId = sessionId;
+    return true;
+  }
+  return false;
 }
 
 /**
  * Stop the active session
  */
 export async function stopSession(): Promise<boolean> {
-  if (!activeSession) {
+  if (!activeSessionId) {
+    return false;
+  }
+  return await stopSessionById(activeSessionId);
+}
+
+/**
+ * Stop a specific session by ID
+ */
+export async function stopSessionById(sessionId: string): Promise<boolean> {
+  const session = sessions.get(sessionId);
+  if (!session) {
     return false;
   }
 
   try {
-    await activeSession.browser.close();
-    console.log(`[browser] Session stopped: ${activeSession.id}`);
+    await session.browser.close();
+    console.log(`[browser] Session stopped: ${session.id} (${session.name})`);
   } catch (err) {
     console.error('[browser] Error closing browser:', err);
   }
 
-  activeSession = null;
+  sessions.delete(sessionId);
+
+  if (activeSessionId === sessionId) {
+    // Switch to another session if available
+    const remainingSessions = Array.from(sessions.keys());
+    activeSessionId = remainingSessions.length > 0 ? remainingSessions[0] : null;
+  }
+
   pendingRequests.clear();
   return true;
 }
 
 /**
- * Get session status
+ * Get session status (for backward compatibility)
  */
 export function getSessionStatus(): {
   active: boolean;
   id?: string;
+  name?: string;
   currentUrl?: string;
   logCount?: number;
   createdAt?: number;
   lastActivity?: number;
 } {
-  if (!activeSession) {
+  const session = getSession();
+  if (!session) {
     return { active: false };
   }
 
   return {
     active: true,
-    id: activeSession.id,
-    currentUrl: activeSession.currentUrl,
-    logCount: activeSession.logs.length,
-    createdAt: activeSession.createdAt,
-    lastActivity: activeSession.lastActivity
+    id: session.id,
+    name: session.name,
+    currentUrl: session.currentUrl,
+    logCount: session.logs.length,
+    createdAt: session.createdAt,
+    lastActivity: session.lastActivity
   };
+}
+
+/**
+ * Get status of all sessions
+ */
+export function getAllSessionsStatus(): Array<{
+  id: string;
+  name: string;
+  currentUrl: string;
+  logCount: number;
+  createdAt: number;
+  lastActivity: number;
+  isActive: boolean;
+}> {
+  return Array.from(sessions.values()).map(session => ({
+    id: session.id,
+    name: session.name,
+    currentUrl: session.currentUrl,
+    logCount: session.logs.length,
+    createdAt: session.createdAt,
+    lastActivity: session.lastActivity,
+    isActive: session.id === activeSessionId
+  }));
 }
 
 /**
@@ -250,12 +329,33 @@ function trimLogs(logs: LogEntry[], maxLogs = 500): void {
  * Clean up idle sessions
  */
 function cleanupIdleSessions(): void {
-  if (!activeSession) return;
+  if (sessions.size === 0) return;
 
-  const idleTime = Date.now() - activeSession.lastActivity;
-  if (idleTime > IDLE_TIMEOUT_MS) {
-    console.log(`[browser] Cleaning up idle session: ${activeSession.id} (idle for ${Math.round(idleTime / 1000)}s)`);
-    stopSession();
+  const settings = getBrowserSettings();
+  const now = Date.now();
+  const sessionsToClose: string[] = [];
+
+  for (const [sessionId, session] of sessions.entries()) {
+    const idleTime = now - session.lastActivity;
+    const age = now - session.createdAt;
+
+    // Check idle timeout
+    if (idleTime > settings.idleTimeoutMs) {
+      console.log(`[browser] Cleaning up idle session: ${session.id} (${session.name}) - idle for ${Math.round(idleTime / 1000)}s`);
+      sessionsToClose.push(sessionId);
+      continue;
+    }
+
+    // Check max lifetime
+    if (age > settings.maxLifetimeMs) {
+      console.log(`[browser] Cleaning up old session: ${session.id} (${session.name}) - age ${Math.round(age / 1000)}s`);
+      sessionsToClose.push(sessionId);
+    }
+  }
+
+  // Close sessions that need cleanup
+  for (const sessionId of sessionsToClose) {
+    stopSessionById(sessionId);
   }
 }
 
@@ -265,9 +365,10 @@ function cleanupIdleSessions(): void {
 function startCleanupInterval(): void {
   if (cleanupInterval) return;
 
+  const settings = getBrowserSettings();
   cleanupInterval = setInterval(() => {
     cleanupIdleSessions();
-  }, CLEANUP_INTERVAL_MS);
+  }, settings.cleanupIntervalMs);
 }
 
 /**

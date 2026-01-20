@@ -76,6 +76,62 @@ export interface TerminalManagerOptions {
   useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
 }
 
+/**
+ * OutputBatcher - Batches multiple PTY output events into fewer WebSocket messages
+ *
+ * Reduces WebSocket message count by combining rapid PTY outputs into single messages.
+ * Uses smart flushing:
+ * - Flushes immediately when buffer reaches size threshold (4KB)
+ * - Flushes after short delay (16ms) if data is waiting
+ * - Can be manually flushed before user input for responsiveness
+ */
+class OutputBatcher {
+  private buffer: string[] = [];
+  private timer: NodeJS.Timeout | null = null;
+  private readonly maxDelay: number;
+  private readonly maxSize: number;
+  private readonly sendCallback: (data: string) => void;
+
+  constructor(sendCallback: (data: string) => void, maxDelay = 16, maxSize = 4096) {
+    this.sendCallback = sendCallback;
+    this.maxDelay = maxDelay;
+    this.maxSize = maxSize;
+  }
+
+  append(data: string): void {
+    this.buffer.push(data);
+    const size = this.buffer.reduce((acc, s) => acc + s.length, 0);
+
+    if (size >= this.maxSize) {
+      // Buffer full - flush immediately
+      this.flush();
+    } else if (!this.timer) {
+      // Start timer for delayed flush
+      this.timer = setTimeout(() => this.flush(), this.maxDelay);
+    }
+  }
+
+  flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.buffer.length > 0) {
+      const combined = this.buffer.join('');
+      this.buffer = [];
+      this.sendCallback(combined);
+    }
+  }
+
+  destroy(): void {
+    this.flush();
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+  }
+}
+
 function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
   const emitter = new EventEmitter() as TerminalProcess;
 
@@ -557,6 +613,9 @@ export class TerminalManager {
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
       }
+      // Destroy output batcher
+      session.outputBatcher?.destroy();
+
       void this.#saveSessionToDisk(session).catch((error) => {
         console.error(`Failed to persist terminal session ${session.id}:`, error);
       });
@@ -632,10 +691,22 @@ export class TerminalManager {
       clientDimensions: new Map(),
       currentCols: cols,
       currentRows: rows,
-      usesTmux
+      usesTmux,
+      outputBatcher: undefined // Will be initialized below
     };
 
-    ptyProcess.on('data', dataHandler);
+    // Create output batcher for this session
+    session.outputBatcher = new OutputBatcher((batchedData: string) => {
+      this.#handleData(session, batchedData);
+    });
+
+    // PTY data handler appends to batcher instead of calling #handleData directly
+    const batchedDataHandler = (data: string) => {
+      session.outputBatcher?.append(data);
+    };
+    session.dataHandler = batchedDataHandler;
+
+    ptyProcess.on('data', batchedDataHandler);
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
@@ -675,6 +746,9 @@ export class TerminalManager {
     if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
+
+    // Flush output buffer before processing input for better responsiveness
+    session.outputBatcher?.flush();
 
     this.#maybeUpdateCwdFromInput(session, input);
     session.process.write(normaliseNewlines(input));
@@ -847,6 +921,8 @@ export class TerminalManager {
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
       }
+      // Destroy output batcher
+      session.outputBatcher?.destroy();
       // Notify subscribers that session is ending before cleanup
       session.subscribers.forEach((subscriber) => subscriber(null));
       session.subscribers.clear();
@@ -917,6 +993,8 @@ export class TerminalManager {
 
     for (const session of sessions) {
       try {
+        // Destroy output batcher
+        session.outputBatcher?.destroy();
         session.subscribers.forEach((subscriber) => subscriber(null));
         session.subscribers.clear();
         // Remove event listeners to prevent memory leaks
@@ -1037,10 +1115,22 @@ export class TerminalManager {
       clientDimensions: new Map(),
       currentCols: cols,
       currentRows: rows,
-      usesTmux
+      usesTmux,
+      outputBatcher: undefined // Will be initialized below
     };
 
-    ptyProcess.on('data', dataHandler);
+    // Create output batcher for this session
+    session.outputBatcher = new OutputBatcher((batchedData: string) => {
+      this.#handleData(session, batchedData);
+    });
+
+    // PTY data handler appends to batcher instead of calling #handleData directly
+    const batchedDataHandler = (data: string) => {
+      session.outputBatcher?.append(data);
+    };
+    session.dataHandler = batchedDataHandler;
+
+    ptyProcess.on('data', batchedDataHandler);
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);

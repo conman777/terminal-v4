@@ -124,6 +124,188 @@ export const INSPECTOR_SCRIPT = `
     return parts.join(' > ');
   }
 
+  // Smart CSS selector generation with priority: ID > data-testid > class > path
+  function getSmartCSSSelector(el) {
+    // Priority 1: ID selector (most specific and stable)
+    if (el.id && !el.id.startsWith('__preview')) {
+      return '#' + el.id;
+    }
+
+    // Priority 2: data-testid (common in testing frameworks)
+    if (el.hasAttribute('data-testid')) {
+      return '[data-testid="' + el.getAttribute('data-testid') + '"]';
+    }
+
+    // Priority 3: Unique class combination
+    if (el.className && typeof el.className === 'string') {
+      const classes = el.className.trim().split(/\\s+/).filter(c => c && !c.startsWith('__preview'));
+      if (classes.length > 0) {
+        const classSelector = '.' + classes.join('.');
+        // Check if this selector is unique
+        try {
+          if (document.querySelectorAll(classSelector).length === 1) {
+            return classSelector;
+          }
+        } catch (e) {
+          // Invalid selector, continue
+        }
+      }
+    }
+
+    // Priority 4: Full path selector
+    return getFullSelector(el);
+  }
+
+  // Generate XPath for element
+  function getXPath(el) {
+    if (el.id && !el.id.startsWith('__preview')) {
+      return '//*[@id="' + el.id + '"]';
+    }
+
+    const parts = [];
+    let current = el;
+
+    while (current && current.nodeType === Node.ELEMENT_NODE) {
+      let index = 0;
+      let sibling = current.previousSibling;
+
+      while (sibling) {
+        if (sibling.nodeType === Node.ELEMENT_NODE && sibling.nodeName === current.nodeName) {
+          index++;
+        }
+        sibling = sibling.previousSibling;
+      }
+
+      const tagName = current.nodeName.toLowerCase();
+      const pathIndex = index > 0 ? '[' + (index + 1) + ']' : '';
+      parts.unshift(tagName + pathIndex);
+
+      current = current.parentNode;
+    }
+
+    return parts.length ? '/' + parts.join('/') : '';
+  }
+
+  // Generate JavaScript path for element (e.g., document.querySelector...)
+  function getJSPath(el) {
+    const selector = getSmartCSSSelector(el);
+    // Escape quotes in selector
+    const escapedSelector = selector.replace(/"/g, '\\\\"');
+    return 'document.querySelector("' + escapedSelector + '")';
+  }
+
+  // Context menu for copying selectors
+  const contextMenu = document.createElement('div');
+  contextMenu.id = '__preview-inspector-context-menu';
+  contextMenu.style.cssText = 'position: fixed; z-index: 2147483647; background: #0f172a; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 8px; padding: 4px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.35); display: none; min-width: 180px;';
+  document.documentElement.appendChild(contextMenu);
+
+  let contextMenuElement = null;
+
+  function showContextMenu(e, el) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    contextMenuElement = el;
+    const cssSelector = getSmartCSSSelector(el);
+    const xpath = getXPath(el);
+    const jsPath = getJSPath(el);
+
+    contextMenu.innerHTML = \`
+      <div style="padding: 4px 0;">
+        <button class="context-menu-item" data-action="copy-css" style="width: 100%; text-align: left; background: none; border: none; color: #e2e8f0; padding: 8px 12px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          Copy CSS Selector
+        </button>
+        <button class="context-menu-item" data-action="copy-xpath" style="width: 100%; text-align: left; background: none; border: none; color: #e2e8f0; padding: 8px 12px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          Copy XPath
+        </button>
+        <button class="context-menu-item" data-action="copy-js" style="width: 100%; text-align: left; background: none; border: none; color: #e2e8f0; padding: 8px 12px; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          Copy JS Path
+        </button>
+      </div>
+    \`;
+
+    // Position context menu
+    const menuWidth = 200;
+    const menuHeight = 130;
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+      x = window.innerWidth - menuWidth - 4;
+    }
+    if (y + menuHeight > window.innerHeight) {
+      y = window.innerHeight - menuHeight - 4;
+    }
+
+    contextMenu.style.left = x + 'px';
+    contextMenu.style.top = y + 'px';
+    contextMenu.style.display = 'block';
+
+    // Add hover effects and click handlers
+    const items = contextMenu.querySelectorAll('.context-menu-item');
+    items.forEach(item => {
+      item.addEventListener('mouseenter', () => {
+        item.style.background = 'rgba(59, 130, 246, 0.1)';
+      });
+      item.addEventListener('mouseleave', () => {
+        item.style.background = 'none';
+      });
+      item.addEventListener('click', () => {
+        const action = item.getAttribute('data-action');
+        let textToCopy = '';
+
+        if (action === 'copy-css') {
+          textToCopy = cssSelector;
+        } else if (action === 'copy-xpath') {
+          textToCopy = xpath;
+        } else if (action === 'copy-js') {
+          textToCopy = jsPath;
+        }
+
+        // Copy to clipboard
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(textToCopy).then(() => {
+            // Flash success feedback
+            item.style.background = 'rgba(34, 197, 94, 0.2)';
+            item.style.color = '#22c55e';
+            setTimeout(() => {
+              item.style.background = 'none';
+              item.style.color = '#e2e8f0';
+              hideContextMenu();
+            }, 200);
+          }).catch(() => {
+            // Fallback for clipboard API failure
+            hideContextMenu();
+          });
+        } else {
+          // Fallback for older browsers
+          const textarea = document.createElement('textarea');
+          textarea.value = textToCopy;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          try {
+            document.execCommand('copy');
+            hideContextMenu();
+          } catch (e) {
+            console.error('Failed to copy:', e);
+          }
+          document.body.removeChild(textarea);
+        }
+      });
+    });
+  }
+
+  function hideContextMenu() {
+    contextMenu.style.display = 'none';
+    contextMenuElement = null;
+  }
+
   // Get parent chain for context
   function getParentChain(el, maxDepth = 5) {
     const chain = [];
@@ -661,10 +843,28 @@ export const INSPECTOR_SCRIPT = `
     }
   });
 
+  // Right-click handler for context menu
+  function handleContextMenu(e) {
+    if (!inspectMode) return;
+
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el || el.id?.startsWith('__preview-inspector')) return;
+
+    showContextMenu(e, el);
+  }
+
+  // Click handler to hide context menu
+  document.addEventListener('click', (e) => {
+    if (contextMenu.style.display === 'block' && !contextMenu.contains(e.target)) {
+      hideContextMenu();
+    }
+  }, true);
+
   // Add event listeners for both mouse and touch
   document.addEventListener('mousemove', handleMouseMove, true);
   document.addEventListener('mouseout', handleMouseOut, true);
   document.addEventListener('click', handleClick, true);
+  document.addEventListener('contextmenu', handleContextMenu, true);
 
   // Touch event listeners for mobile support
   document.addEventListener('touchstart', handleTouchStart, true);

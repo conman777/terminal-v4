@@ -47,6 +47,7 @@ export function MobileHeader({
   onCloseSession,
   onOpenSettings,
   onOpenApiSettings,
+  onOpenBrowserSettings,
   onOpenBookmarks,
   keybarOpen,
   onToggleKeybar,
@@ -306,6 +307,7 @@ export function MobileHeader({
         onCreateSession={onCreateSession}
         onOpenSettings={onOpenSettings}
         onOpenApiSettings={onOpenApiSettings}
+        onOpenBrowserSettings={onOpenBrowserSettings}
         onOpenBookmarks={onOpenBookmarks}
         projects={projects}
         projectsLoading={projectsLoading}

@@ -1582,6 +1582,10 @@ button {
   animation: modalSlideIn var(--transition-slow) ease-out;
 }
 
+.modal-content-wide {
+  max-width: 900px;
+}
+
 @keyframes modalSlideIn {
   from {
     opacity: 0;
@@ -3328,6 +3332,72 @@ button {
   border-color: #ef4444;
   color: #ef4444;
   box-shadow: none;
+}
+
+/* Navigation Controls & Screenshot Tools */
+.preview-nav-btn,
+.preview-tool-btn {
+  background: var(--preview-chrome);
+  border: 1px solid var(--preview-border);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #94a3b8;
+  padding: 0;
+  font-size: 14px;
+  transition: all 0.15s ease;
+}
+
+.preview-nav-btn:hover:not(:disabled),
+.preview-tool-btn:hover:not(:disabled) {
+  background: #27272a;
+  color: #f8fafc;
+  border-color: #3f3f46;
+}
+
+.preview-nav-btn:disabled,
+.preview-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preview-nav-btn.active,
+.preview-tool-btn.active {
+  background: rgba(59, 130, 246, 0.18);
+  color: #bfdbfe;
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+/* Rotating animation for reload button */
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.rotating {
+  animation: rotate 1s linear infinite;
+}
+
+/* Recording active state */
+.preview-tool-btn.recording-active {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .preview-content {

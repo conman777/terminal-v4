@@ -5,6 +5,7 @@ import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
 import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
 import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
 import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
+import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocket-interceptor.js';
 
 // Pattern to match preview subdomains: preview-{port}.conordart.com
 const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
@@ -681,6 +682,190 @@ const PREVIEW_DEBUG_SCRIPT = `
 </script>
 `;
 
+// Performance monitoring script - captures Core Web Vitals and runtime metrics
+const PERFORMANCE_MONITOR_SCRIPT = `
+<script>
+(function() {
+  if (window.__performanceMonitorInjected) return;
+  window.__performanceMonitorInjected = true;
+
+  function getPreviewContext() {
+    const hostMatch = location.hostname.match(/^preview-(\\d+)\\.(.+)$/i);
+    if (hostMatch) return { port: hostMatch[1] };
+    const pathMatch = location.pathname.match(/^\\/preview\\/(\\d+)(\\/|$)/);
+    if (pathMatch) return { port: pathMatch[1] };
+    return null;
+  }
+
+  const ctx = getPreviewContext();
+  if (!ctx) return;
+  const PORT = ctx.port;
+
+  const metricsBuffer = [];
+  let flushTimer = null;
+
+  function sendMetrics(metrics) {
+    if (!metrics || metrics.length === 0) return;
+
+    // Send to backend for storage
+    fetch('/api/preview/' + PORT + '/performance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ metrics: metrics })
+    }).catch(function(err) {
+      console.debug('[perf-monitor] Failed to send metrics:', err);
+    });
+  }
+
+  function flushMetrics() {
+    if (metricsBuffer.length === 0) return;
+    const toSend = metricsBuffer.splice(0, metricsBuffer.length);
+    sendMetrics(toSend);
+  }
+
+  function scheduleFlush() {
+    if (flushTimer) return;
+    flushTimer = setTimeout(function() {
+      flushTimer = null;
+      flushMetrics();
+    }, 2000);
+  }
+
+  function trackMetric(type, data) {
+    metricsBuffer.push({
+      type: type,
+      timestamp: Date.now(),
+      data: data
+    });
+    scheduleFlush();
+  }
+
+  // Core Web Vitals - LCP (Largest Contentful Paint)
+  try {
+    const lcpObserver = new PerformanceObserver(function(list) {
+      const entries = list.getEntries();
+      const lastEntry = entries[entries.length - 1];
+      trackMetric('coreWebVitals', {
+        lcp: lastEntry.renderTime || lastEntry.loadTime,
+        fid: null,
+        cls: null
+      });
+    });
+    lcpObserver.observe({ type: 'largest-contentful-paint', buffered: true });
+  } catch (e) {}
+
+  // Core Web Vitals - FID (First Input Delay)
+  try {
+    const fidObserver = new PerformanceObserver(function(list) {
+      const entries = list.getEntries();
+      entries.forEach(function(entry) {
+        trackMetric('coreWebVitals', {
+          lcp: null,
+          fid: entry.processingStart - entry.startTime,
+          cls: null
+        });
+      });
+    });
+    fidObserver.observe({ type: 'first-input', buffered: true });
+  } catch (e) {}
+
+  // Core Web Vitals - CLS (Cumulative Layout Shift)
+  try {
+    let clsValue = 0;
+    const clsObserver = new PerformanceObserver(function(list) {
+      const entries = list.getEntries();
+      entries.forEach(function(entry) {
+        if (!entry.hadRecentInput) {
+          clsValue += entry.value;
+        }
+      });
+      trackMetric('coreWebVitals', {
+        lcp: null,
+        fid: null,
+        cls: clsValue
+      });
+    });
+    clsObserver.observe({ type: 'layout-shift', buffered: true });
+  } catch (e) {}
+
+  // Load Metrics
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      try {
+        const navTiming = performance.getEntriesByType('navigation')[0];
+        if (navTiming) {
+          trackMetric('loadMetrics', {
+            domContentLoaded: navTiming.domContentLoadedEventEnd - navTiming.domContentLoadedEventStart,
+            fullPageLoad: navTiming.loadEventEnd - navTiming.loadEventStart,
+            timeToInteractive: navTiming.domInteractive - navTiming.fetchStart
+          });
+        }
+      } catch (e) {}
+    }, 0);
+  });
+
+  // Runtime Performance - FPS and Memory
+  let lastFrameTime = performance.now();
+  let frameCount = 0;
+  let lastFPSReport = performance.now();
+
+  function measureFPS() {
+    const now = performance.now();
+    frameCount++;
+
+    // Report FPS every second
+    if (now - lastFPSReport >= 1000) {
+      const fps = frameCount * 1000 / (now - lastFPSReport);
+      const data = { fps: fps, memory: null, longTasks: [] };
+
+      // Add memory info if available
+      if (performance.memory) {
+        data.memory = {
+          usedJSHeapSize: performance.memory.usedJSHeapSize,
+          totalJSHeapSize: performance.memory.totalJSHeapSize,
+          jsHeapSizeLimit: performance.memory.jsHeapSizeLimit
+        };
+      }
+
+      trackMetric('runtimeMetrics', data);
+      frameCount = 0;
+      lastFPSReport = now;
+    }
+
+    lastFrameTime = now;
+    requestAnimationFrame(measureFPS);
+  }
+
+  // Start FPS monitoring
+  requestAnimationFrame(measureFPS);
+
+  // Long Tasks
+  try {
+    const longTaskObserver = new PerformanceObserver(function(list) {
+      const longTasks = list.getEntries().map(function(entry) {
+        return {
+          startTime: entry.startTime,
+          duration: entry.duration
+        };
+      });
+      if (longTasks.length > 0) {
+        trackMetric('runtimeMetrics', {
+          fps: null,
+          memory: null,
+          longTasks: longTasks
+        });
+      }
+    });
+    longTaskObserver.observe({ type: 'longtask', buffered: true });
+  } catch (e) {}
+
+  // Flush metrics on page unload
+  window.addEventListener('beforeunload', flushMetrics);
+  window.addEventListener('pagehide', flushMetrics);
+})();
+</script>
+`;
+
 function getPreviewPort(host: string | undefined): number | null {
   if (!host) return null;
   const hostname = host.split(':')[0];
@@ -971,6 +1156,22 @@ function proxyWebSocketConnection(
   const forwardHeaders = buildWebSocketForwardHeaders(request, port, previewHost);
   const targetWs = openWebSocket(targetUrl, request, forwardHeaders);
 
+  // Whitelist HMR/dev tool patterns to avoid logging noise
+  const isDevToolWs =
+    targetPath.includes('/_next/webpack-hmr') ||
+    targetPath.includes('/@vite/') ||
+    targetPath.includes('/__webpack_hmr') ||
+    targetPath.includes('/_hmr') ||
+    targetPath.startsWith('/api/preview/');
+
+  // Log connection only for application WebSockets (not dev tools)
+  const connectionId = !isDevToolWs ? logWebSocketConnection(port, {
+    url: targetUrl,
+    protocols: getWebSocketProtocols(request) || [],
+    timestamp: Date.now(),
+    status: 'connecting'
+  }) : null;
+
   const closeBoth = (code: number, reason: string) => {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
       socket.close(code, reason);
@@ -983,25 +1184,86 @@ function proxyWebSocketConnection(
   socket.on('message', (data: Buffer | string, isBinary: boolean) => {
     if (targetWs.readyState === WebSocket.OPEN) {
       targetWs.send(data, { binary: isBinary });
+
+      // Log sent messages (only non-dev tools)
+      if (!isDevToolWs && connectionId) {
+        const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+        logWebSocketMessage(port, {
+          connectionId,
+          direction: 'sent',
+          timestamp: Date.now(),
+          data: dataStr.length > 1000 ? dataStr.substring(0, 1000) + '...' : dataStr,
+          size: Buffer.byteLength(data),
+          format: isBinary ? 'binary' : 'text'
+        });
+      }
     }
   });
 
   targetWs.on('message', (data: Buffer | string, isBinary: boolean) => {
     if (socket.readyState === WebSocket.OPEN) {
       socket.send(data, { binary: isBinary });
+
+      // Log received messages (only non-dev tools)
+      if (!isDevToolWs && connectionId) {
+        const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+        logWebSocketMessage(port, {
+          connectionId,
+          direction: 'received',
+          timestamp: Date.now(),
+          data: dataStr.length > 1000 ? dataStr.substring(0, 1000) + '...' : dataStr,
+          size: Buffer.byteLength(data),
+          format: isBinary ? 'binary' : 'text'
+        });
+      }
     }
   });
 
   targetWs.on('open', () => {
-    // no-op, allows queued messages to flush
+    // Update connection status
+    if (!isDevToolWs && connectionId) {
+      logWebSocketConnection(port, {
+        id: connectionId,
+        url: targetUrl,
+        protocols: getWebSocketProtocols(request) || [],
+        timestamp: Date.now(),
+        status: 'connected'
+      });
+    }
   });
 
   targetWs.on('error', (error: Error) => {
     console.error(`Preview WS proxy error for port ${port}:`, error.message);
+
+    // Log error
+    if (!isDevToolWs && connectionId) {
+      logWebSocketConnection(port, {
+        id: connectionId,
+        url: targetUrl,
+        protocols: getWebSocketProtocols(request) || [],
+        timestamp: Date.now(),
+        status: 'error',
+        error: error.message
+      });
+    }
+
     closeBoth(1011, 'Preview WebSocket upstream error');
   });
 
-  targetWs.on('close', () => {
+  targetWs.on('close', (code: number, reason: string) => {
+    // Log closure
+    if (!isDevToolWs && connectionId) {
+      logWebSocketConnection(port, {
+        id: connectionId,
+        url: targetUrl,
+        protocols: getWebSocketProtocols(request) || [],
+        timestamp: Date.now(),
+        status: 'closed',
+        closeCode: code,
+        closeReason: reason
+      });
+    }
+
     if (socket.readyState === WebSocket.OPEN) {
       socket.close(1000, 'Preview WebSocket upstream closed');
     }
@@ -1516,7 +1778,7 @@ html, body { isolation: isolate; }
   will-change: backdrop-filter !important;
 }
 </style>`;
-          const injectedScripts = backdropFixCSS + PREVIEW_DEBUG_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+          const injectedScripts = backdropFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
           // Use function replacement to avoid $' special pattern issues in injected scripts
           if (html.includes('<head>')) {
             html = html.replace('<head>', () => '<head>' + injectedScripts);

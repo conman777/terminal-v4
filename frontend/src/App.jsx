@@ -29,6 +29,7 @@ const SettingsModal = lazy(() => import('./components/SettingsModal').then((modu
 const BookmarkModal = lazy(() => import('./components/BookmarkModal').then((module) => ({ default: module.BookmarkModal })));
 const NotesModal = lazy(() => import('./components/NotesModal').then((module) => ({ default: module.NotesModal })));
 const ApiSettingsModal = lazy(() => import('./components/ApiSettingsModal'));
+const BrowserSettingsModal = lazy(() => import('./components/BrowserSettingsModal').then((module) => ({ default: module.BrowserSettingsModal })));
 const ProcessManagerModal = lazy(() => import('./components/ProcessManagerModal').then((module) => ({ default: module.ProcessManagerModal })));
 
 function AppContent() {
@@ -114,6 +115,7 @@ function AppContent() {
   // Local UI state (not shared across components)
   const [showSettings, setShowSettings] = useState(false);
   const [showApiSettings, setShowApiSettings] = useState(false);
+  const [showBrowserSettings, setShowBrowserSettings] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showProcessManager, setShowProcessManager] = useState(false);
@@ -524,6 +526,10 @@ function AppContent() {
           isOpen={showApiSettings}
           onClose={() => setShowApiSettings(false)}
         />
+        <BrowserSettingsModal
+          isOpen={showBrowserSettings}
+          onClose={() => setShowBrowserSettings(false)}
+        />
         <ProcessManagerModal
           isOpen={showProcessManager}
           onClose={() => setShowProcessManager(false)}
@@ -544,6 +550,7 @@ function AppContent() {
             onCloseSession={closeSession}
             onOpenSettings={handleOpenSettings}
             onOpenApiSettings={() => setShowApiSettings(true)}
+            onOpenBrowserSettings={() => setShowBrowserSettings(true)}
             onOpenBookmarks={() => setShowBookmarks(true)}
             keybarOpen={keybarOpen}
             onToggleKeybar={handleToggleKeybar}

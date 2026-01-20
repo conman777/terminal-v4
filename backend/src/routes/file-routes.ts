@@ -416,7 +416,66 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
 
   // Upload screenshot for terminal paste
   const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024; // 10MB
-  const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp'];
+  const ALLOWED_IMAGE_TYPES = [
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/gif',
+    'image/webp',
+    'image/heic',
+    'image/heif',
+    'image/avif',
+    'image/tiff',
+    'image/bmp'
+  ];
+  const IMAGE_EXTENSIONS: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/heic': 'heic',
+    'image/heif': 'heif',
+    'image/avif': 'avif',
+    'image/tiff': 'tiff',
+    'image/bmp': 'bmp'
+  };
+  const HEIC_BRANDS = new Set(['heic', 'heix', 'hevc', 'hevx']);
+  const HEIF_BRANDS = new Set(['mif1', 'msf1', 'heif']);
+  const AVIF_BRANDS = new Set(['avif', 'avis']);
+
+  const detectImageMime = (buffer: Buffer): string | null => {
+    if (buffer.length < 12) return null;
+    if (buffer.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      return 'image/png';
+    }
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    const gifHeader = buffer.slice(0, 6).toString('ascii');
+    if (gifHeader === 'GIF87a' || gifHeader === 'GIF89a') {
+      return 'image/gif';
+    }
+    if (buffer[0] === 0x42 && buffer[1] === 0x4d) {
+      return 'image/bmp';
+    }
+    if (buffer.slice(0, 4).toString('ascii') === 'RIFF' && buffer.slice(8, 12).toString('ascii') === 'WEBP') {
+      return 'image/webp';
+    }
+    if (
+      (buffer[0] === 0x49 && buffer[1] === 0x49 && buffer[2] === 0x2a && buffer[3] === 0x00) ||
+      (buffer[0] === 0x4d && buffer[1] === 0x4d && buffer[2] === 0x00 && buffer[3] === 0x2a)
+    ) {
+      return 'image/tiff';
+    }
+    if (buffer.slice(4, 8).toString('ascii') === 'ftyp') {
+      const brand = buffer.slice(8, 12).toString('ascii');
+      if (AVIF_BRANDS.has(brand)) return 'image/avif';
+      if (HEIC_BRANDS.has(brand)) return 'image/heic';
+      if (HEIF_BRANDS.has(brand)) return 'image/heif';
+    }
+    return null;
+  };
 
   app.post('/api/files/screenshot', async (request, reply) => {
     const userId = request.userId;
@@ -431,8 +490,9 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     try {
       for await (const part of parts) {
         if (part.type === 'file' && part.fieldname === 'image') {
-          // Validate MIME type
-          if (!ALLOWED_IMAGE_TYPES.includes(part.mimetype)) {
+          const isKnownImageType = ALLOWED_IMAGE_TYPES.includes(part.mimetype);
+          const isSniffableType = !part.mimetype || part.mimetype === 'application/octet-stream';
+          if (!isKnownImageType && !isSniffableType) {
             reply.code(400).send({
               error: 'Invalid file type',
               message: `Allowed types: ${ALLOWED_IMAGE_TYPES.join(', ')}`
@@ -457,9 +517,23 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
             chunks.push(chunk);
           }
 
+          let mimetype = part.mimetype;
+          const data = Buffer.concat(chunks);
+          if (!ALLOWED_IMAGE_TYPES.includes(mimetype)) {
+            const detected = detectImageMime(data);
+            if (!detected) {
+              reply.code(400).send({
+                error: 'Invalid file type',
+                message: `Allowed types: ${ALLOWED_IMAGE_TYPES.join(', ')}`
+              });
+              return;
+            }
+            mimetype = detected;
+          }
+
           imageFile = {
-            data: Buffer.concat(chunks),
-            mimetype: part.mimetype
+            data,
+            mimetype
           };
         }
       }
@@ -474,7 +548,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       await mkdir(screenshotsDir, { recursive: true });
 
       // Generate filename with timestamp
-      const ext = imageFile.mimetype.split('/')[1] === 'jpeg' ? 'jpg' : imageFile.mimetype.split('/')[1];
+      const ext = IMAGE_EXTENSIONS[imageFile.mimetype] || 'png';
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `screenshot-${timestamp}.${ext}`;
       const filePath = join(screenshotsDir, filename);

@@ -354,7 +354,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const handleClipboardPaste = async () => {
       try {
-        if (navigator.clipboard.read) {
+        if (navigator.clipboard?.readText) {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text) {
+              sendUserInput(text);
+              return;
+            }
+          } catch {
+            // Continue to image handling
+          }
+        }
+
+        if (navigator.clipboard?.read) {
           try {
             const clipboardItems = await navigator.clipboard.read();
             for (const item of clipboardItems) {
@@ -369,32 +381,32 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               }
             }
           } catch {
-            // Fallback to text
+            // Ignore and fall back to text below
           }
         }
-        const text = await navigator.clipboard.readText();
-        sendUserInput(text);
+
+        if (navigator.clipboard?.readText) {
+          const text = await navigator.clipboard.readText();
+          if (text) {
+            sendUserInput(text);
+          }
+        }
       } catch (err) {
         console.error('Failed to read clipboard:', err);
       }
     };
 
     term.attachCustomKeyEventHandler((event) => {
+      // Allow native copy when text is selected
       if (event.ctrlKey && event.key === 'c' && term.hasSelection()) {
         return false;
       }
-      if (event.ctrlKey && event.key === 'v' && event.type === 'keydown') {
-        suppressPasteEventRef.current = true;
-        setTimeout(() => { suppressPasteEventRef.current = false; }, 0);
-        handleClipboardPaste();
+
+      // Allow native paste event to fire (handled by paste event listener below)
+      if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
         return false;
       }
-      if (event.ctrlKey && event.shiftKey && event.key === 'V' && event.type === 'keydown') {
-        suppressPasteEventRef.current = true;
-        setTimeout(() => { suppressPasteEventRef.current = false; }, 0);
-        handleClipboardPaste();
-        return false;
-      }
+
       return true;
     });
 
@@ -418,11 +430,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       hasOpened = true;
       term.open(container);
 
-      if (!isMobile && !performanceMode) {
+      // Enable WebGL GPU rendering for better performance (except on mobile)
+      if (!isMobile) {
         try {
           const webglAddon = new WebglAddon();
-          term.loadAddon(webglAddon);
           webglAddon.onContextLoss(() => {
+            console.warn('[WebGL] Context lost, falling back to canvas renderer');
             try {
               webglAddon.dispose();
             } catch {}
@@ -430,9 +443,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               webglAddonRef.current = null;
             }
           });
+          term.loadAddon(webglAddon);
           webglAddonRef.current = webglAddon;
-        } catch {
-          // Fall back to canvas renderer if WebGL fails
+
+          // Verify WebGL renderer is active
+          setTimeout(() => {
+            const renderer = term._core?._renderService?._renderer;
+            const rendererName = renderer?.constructor?.name;
+            if (rendererName === 'WebglRenderer') {
+              console.log('[WebGL] GPU acceleration active');
+            } else {
+              console.warn('[WebGL] Fallback to canvas renderer:', rendererName);
+            }
+          }, 100);
+        } catch (error) {
+          console.warn('[WebGL] Failed to initialize, using canvas fallback:', error);
         }
       }
 
@@ -667,9 +692,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }, 500);
         };
 
-        socket.onmessage = (event) => {
+        socket.onmessage = async (event) => {
           if (disposed) return;
-          let data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+
+          // Handle binary frames (ArrayBuffer or Blob) for bandwidth optimization
+          let data;
+          if (event.data instanceof ArrayBuffer) {
+            const decoder = new TextDecoder();
+            data = decoder.decode(event.data);
+          } else if (event.data instanceof Blob) {
+            data = await event.data.text();
+          } else {
+            // Text frame (fallback for backward compatibility)
+            data = event.data;
+          }
 
           lastServerPingAt = Date.now();
           if (data === '__terminal_pong__') return;
@@ -830,14 +866,44 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           e.stopPropagation();
           return;
         }
-        e.preventDefault();
-        e.stopPropagation();
-        const text = e.clipboardData?.getData('text');
+        const clipboardData = e.clipboardData;
+        if (!clipboardData) {
+          handleClipboardPaste();
+          return;
+        }
+
+        const text = clipboardData.getData('text/plain') || clipboardData.getData('text');
         if (text) {
+          e.preventDefault();
+          e.stopPropagation();
           sendUserInput(text);
           return;
         }
-        handleClipboardPaste();
+
+        const files = Array.from(clipboardData.files || []);
+        let imageFile = files.find((file) => file.type && file.type.startsWith('image/')) || null;
+        if (!imageFile) {
+          const items = Array.from(clipboardData.items || []);
+          const imageItem = items.find((item) => item.type && item.type.startsWith('image/'));
+          imageFile = imageItem ? imageItem.getAsFile() : null;
+        }
+
+        if (!imageFile) {
+          handleClipboardPaste();
+          return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+        uploadScreenshot(imageFile)
+          .then((path) => {
+            if (path) {
+              sendUserInput(path + ' ');
+            }
+          })
+          .catch((error) => {
+            console.error('Failed to paste image:', error);
+          });
       };
       container.addEventListener('paste', handlePasteEvent, true);
 

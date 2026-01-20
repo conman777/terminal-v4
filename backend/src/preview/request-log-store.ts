@@ -1,8 +1,14 @@
 // Server-side request log store for preview proxy
 // Captures all requests going through the proxy for debugging
+// Now supports optional persistence via storage adapter
+
+import type { IStorage } from '../storage/storage-interface.js';
 
 // Max body size to capture (50KB)
 const MAX_BODY_SIZE = 50 * 1024;
+
+// Optional persistence storage
+let storage: IStorage | null = null;
 
 // Headers to filter out for security
 const SENSITIVE_HEADERS = new Set([
@@ -78,22 +84,53 @@ function generateId(): string {
 }
 
 /**
+ * Initialize persistence storage
+ */
+export function initProxyLogStorage(storageAdapter: IStorage): void {
+  storage = storageAdapter;
+  console.log('[request-log-store] Persistence enabled');
+}
+
+/**
  * Add a log entry for a request
  */
 export function addProxyLog(port: number, entry: Omit<ProxyLogEntry, 'id'>): void {
+  const id = generateId();
+
   if (!logStores.has(port)) {
     logStores.set(port, []);
   }
   const logs = logStores.get(port)!;
 
-  logs.push({
-    id: generateId(),
+  const logEntry = {
+    id,
     ...entry
-  });
+  };
 
-  // Trim to max size
+  logs.push(logEntry);
+
+  // Trim to max size (in-memory only)
   if (logs.length > MAX_LOGS_PER_PORT) {
     logs.splice(0, logs.length - MAX_LOGS_PER_PORT);
+  }
+
+  // Persist to storage if enabled
+  if (storage) {
+    storage.addLog({
+      session_id: null,
+      port,
+      timestamp: entry.timestamp,
+      type: 'network',
+      method: entry.method,
+      url: entry.url,
+      status: entry.status,
+      statusText: entry.statusText,
+      duration: entry.duration,
+      requestHeaders: entry.requestHeaders ? JSON.stringify(entry.requestHeaders) : undefined,
+      responseHeaders: entry.responseHeaders ? JSON.stringify(entry.responseHeaders) : undefined,
+      requestBody: entry.requestBody,
+      responseBody: entry.responseBody
+    });
   }
 }
 

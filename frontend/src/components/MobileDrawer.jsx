@@ -7,6 +7,7 @@ export function MobileDrawer({
   onCreateSession,
   onOpenSettings,
   onOpenApiSettings,
+  onOpenBrowserSettings,
   onOpenBookmarks,
   projects = [],
   projectsLoading = false,
@@ -163,6 +164,17 @@ export function MobileDrawer({
           >
             <span className="mobile-drawer-icon">🔑</span>
             API Settings
+          </button>
+          <button
+            className="mobile-drawer-item"
+            onClick={() => {
+              onOpenBrowserSettings();
+              onClose();
+            }}
+            type="button"
+          >
+            <span className="mobile-drawer-icon">🌐</span>
+            Browser Settings
           </button>
 
           {/* Projects Section */}

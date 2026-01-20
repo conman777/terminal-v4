@@ -3,7 +3,10 @@
  *
  * Stores console logs, errors, network requests, DOM snapshots, and storage data
  * from preview apps so Claude Code can query them for debugging.
+ * Now supports optional persistence via storage adapter.
  */
+
+import type { IStorage } from '../storage/storage-interface.js';
 
 export interface PreviewLogEntry {
   id: string;
@@ -45,6 +48,9 @@ interface PortLogData {
 // In-memory storage: port -> logs
 const portLogs = new Map<number, PortLogData>();
 
+// Optional persistence storage
+let storage: IStorage | null = null;
+
 // Configuration
 const MAX_LOGS_PER_PORT = 500;
 const STALE_PORT_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
@@ -53,6 +59,14 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // Generate unique ID
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+}
+
+/**
+ * Initialize persistence storage
+ */
+export function initStorage(storageAdapter: IStorage): void {
+  storage = storageAdapter;
+  console.log('[preview-logs] Persistence enabled');
 }
 
 /**
@@ -74,9 +88,38 @@ export function addLog(port: number, entry: Omit<PreviewLogEntry, 'id'>): Previe
   portData.logs.push(logEntry);
   portData.lastActivity = Date.now();
 
-  // Enforce max logs limit
+  // Enforce max logs limit (in-memory only)
   if (portData.logs.length > MAX_LOGS_PER_PORT) {
     portData.logs = portData.logs.slice(-MAX_LOGS_PER_PORT);
+  }
+
+  // Persist to storage if enabled
+  if (storage) {
+    storage.addLog({
+      session_id: null,
+      port,
+      timestamp: entry.timestamp,
+      type: entry.type,
+      level: entry.level,
+      message: entry.message,
+      filename: entry.filename,
+      lineno: entry.lineno,
+      colno: entry.colno,
+      stack: entry.stack,
+      method: entry.method,
+      url: entry.url,
+      status: entry.status,
+      statusText: entry.statusText,
+      duration: entry.duration,
+      responsePreview: entry.responsePreview,
+      requestHeaders: entry.requestHeaders ? JSON.stringify(entry.requestHeaders) : undefined,
+      responseHeaders: entry.responseHeaders ? JSON.stringify(entry.responseHeaders) : undefined,
+      requestBody: entry.requestBody,
+      responseBody: entry.responseBody,
+      html: entry.html,
+      localStorage: entry.localStorage ? JSON.stringify(entry.localStorage) : undefined,
+      sessionStorage: entry.sessionStorage ? JSON.stringify(entry.sessionStorage) : undefined
+    });
   }
 
   return logEntry;
@@ -100,6 +143,43 @@ export interface GetLogsOptions {
  * Get logs for a port with optional filtering
  */
 export function getLogs(port: number, options: GetLogsOptions = {}): PreviewLogEntry[] {
+  // If storage is enabled, query from storage for full history
+  if (storage) {
+    const logs = storage.getLogs({
+      port,
+      type: options.type,
+      level: options.level,
+      since: options.since,
+      limit: options.limit ?? 100
+    });
+
+    return logs.map(log => ({
+      id: log.id,
+      timestamp: log.timestamp,
+      type: log.type,
+      level: log.level,
+      message: log.message,
+      filename: log.filename,
+      lineno: log.lineno,
+      colno: log.colno,
+      stack: log.stack,
+      method: log.method,
+      url: log.url,
+      status: log.status,
+      statusText: log.statusText,
+      duration: log.duration,
+      responsePreview: log.responsePreview,
+      requestHeaders: log.requestHeaders ? JSON.parse(log.requestHeaders) : undefined,
+      responseHeaders: log.responseHeaders ? JSON.parse(log.responseHeaders) : undefined,
+      requestBody: log.requestBody,
+      responseBody: log.responseBody,
+      html: log.html,
+      localStorage: log.localStorage ? JSON.parse(log.localStorage) : undefined,
+      sessionStorage: log.sessionStorage ? JSON.parse(log.sessionStorage) : undefined
+    }));
+  }
+
+  // Otherwise use in-memory storage
   const portData = portLogs.get(port);
   if (!portData) {
     return [];
@@ -168,6 +248,12 @@ export function clearLogs(port: number): boolean {
 
   portData.logs = [];
   portData.lastActivity = Date.now();
+
+  // Clear from storage if enabled
+  if (storage) {
+    storage.clearLogs({ port });
+  }
+
   return true;
 }
 
