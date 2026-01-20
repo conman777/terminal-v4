@@ -45,9 +45,14 @@ export function MobileTerminalCarousel({
 
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
+  const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
 
   const handleRegisterImageUpload = useCallback((trigger) => {
     setTriggerImageUpload(() => trigger);
+  }, []);
+
+  const handleRegisterHistoryPanel = useCallback((trigger) => {
+    setTriggerHistoryPanel(() => trigger);
   }, []);
 
   // No sessions - show empty state
@@ -77,6 +82,7 @@ export function MobileTerminalCarousel({
           usesTmux={currentSession?.usesTmux}
           onScrollDirection={onScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
+          onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
         />
       </div>
@@ -85,6 +91,7 @@ export function MobileTerminalCarousel({
       <MobileStatusBar
         sessionId={currentSession.id}
         onImageUpload={triggerImageUpload}
+        onOpenHistory={triggerHistoryPanel}
       />
     </div>
   );

@@ -11,6 +11,32 @@ export type { CoreRouteDependencies } from './types';
 export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
   // Health check endpoint
   app.get('/api/health', () => ({ status: 'ok' }));
+  app.get('/api/latency/ws', { websocket: true }, (socket, request) => {
+    const userId = request.userId;
+    if (!userId) {
+      socket.close(4401, 'Unauthorized');
+      return;
+    }
+
+    socket.on('message', (message) => {
+      const data = message.toString();
+      if (!data) return;
+      if (!data.startsWith('{')) return;
+      try {
+        const msg = JSON.parse(data);
+        if (msg?.type === 'ping' && typeof msg.id === 'number') {
+          socket.send(JSON.stringify({
+            type: 'pong',
+            id: msg.id,
+            sentAt: msg.sentAt ?? null,
+            serverAt: Date.now()
+          }));
+        }
+      } catch {
+        // Ignore invalid JSON.
+      }
+    });
+  });
 
   // Register route modules
   await registerTerminalRoutes(app, deps);

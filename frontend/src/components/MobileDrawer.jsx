@@ -1,6 +1,5 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
-import { PathBreadcrumb } from './PathBreadcrumb';
 
 export function MobileDrawer({
   isOpen,
@@ -73,16 +72,6 @@ export function MobileDrawer({
           </button>
         </div>
         <div className="mobile-drawer-content">
-          {/* Breadcrumb Section */}
-          {currentPath && (
-            <div className="mobile-drawer-breadcrumb">
-              <PathBreadcrumb
-                cwd={currentPath}
-                onNavigate={handleNavigate}
-              />
-            </div>
-          )}
-
           {/* Views Section */}
           <div className="mobile-drawer-views">
             <div className="mobile-drawer-views-title">Views</div>

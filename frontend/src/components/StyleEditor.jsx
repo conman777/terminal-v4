@@ -264,6 +264,38 @@ export function StyleEditor({
     { id: 'colors', label: 'Colors' },
   ];
 
+  // Quick preset handlers
+  const handlePreset = useCallback((preset) => {
+    const presets = {
+      center: {
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center'
+      },
+      hide: {
+        display: 'none'
+      },
+      fullWidth: {
+        width: '100%'
+      },
+      textCenter: {
+        textAlign: 'center'
+      }
+    };
+
+    const styles = presets[preset];
+    if (styles) {
+      setPendingStyles(prev => {
+        const next = { ...prev, ...styles };
+        setHasChanges(true);
+        if (onStyleChange) {
+          onStyleChange(next);
+        }
+        return next;
+      });
+    }
+  }, [onStyleChange]);
+
   return (
     <div className={`style-editor ${isMobile ? 'style-editor-mobile' : ''}`}>
       <div className="style-editor-header">
@@ -289,6 +321,31 @@ export function StyleEditor({
       <div className="style-editor-content">
         {activeTab === 'layout' && (
           <div className="style-editor-section">
+            {isMobile && (
+              <div className="style-preset-buttons">
+                <button
+                  type="button"
+                  className="style-preset-btn"
+                  onClick={() => handlePreset('center')}
+                >
+                  Center
+                </button>
+                <button
+                  type="button"
+                  className="style-preset-btn"
+                  onClick={() => handlePreset('hide')}
+                >
+                  Hide
+                </button>
+                <button
+                  type="button"
+                  className="style-preset-btn"
+                  onClick={() => handlePreset('fullWidth')}
+                >
+                  Full Width
+                </button>
+              </div>
+            )}
             <SelectControl
               label="Display"
               value={getValue('display')}
@@ -396,6 +453,17 @@ export function StyleEditor({
 
         {activeTab === 'typography' && (
           <div className="style-editor-section">
+            {isMobile && (
+              <div className="style-preset-buttons">
+                <button
+                  type="button"
+                  className="style-preset-btn"
+                  onClick={() => handlePreset('textCenter')}
+                >
+                  Center Text
+                </button>
+              </div>
+            )}
             <FontSizeControl
               value={getValue('fontSize')}
               onChange={(v) => handleStyleChange('fontSize', v)}

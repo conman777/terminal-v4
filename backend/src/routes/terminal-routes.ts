@@ -15,9 +15,25 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     const historyChars = Number.parseInt(String(query.historyChars || ''), 10);
     const historyEvents = Number.parseInt(String(query.historyEvents || ''), 10);
 
+    const hasQueryChars = Number.isFinite(historyChars) && historyChars > 0;
+    const hasQueryEvents = Number.isFinite(historyEvents) && historyEvents > 0;
+    let maxHistoryChars = hasQueryChars ? historyChars : undefined;
+    let maxHistoryEvents = hasQueryEvents ? historyEvents : undefined;
+
+    if (!maxHistoryChars && !maxHistoryEvents) {
+      const defaultChars = Number.parseInt(process.env.TERMINAL_HISTORY_CHARS || '500000', 10);
+      const defaultEvents = Number.parseInt(process.env.TERMINAL_HISTORY_EVENTS || '2000', 10);
+      if (Number.isFinite(defaultChars) && defaultChars > 0) {
+        maxHistoryChars = defaultChars;
+      }
+      if (Number.isFinite(defaultEvents) && defaultEvents > 0) {
+        maxHistoryEvents = defaultEvents;
+      }
+    }
+
     return {
-      maxHistoryChars: Number.isFinite(historyChars) && historyChars > 0 ? historyChars : undefined,
-      maxHistoryEvents: Number.isFinite(historyEvents) && historyEvents > 0 ? historyEvents : undefined
+      maxHistoryChars,
+      maxHistoryEvents
     };
   };
 
@@ -362,6 +378,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
+    const heartbeatTimer = setInterval(() => {
+      send(JSON.stringify({ type: 'serverPing', ts: Date.now() }));
+    }, 15000);
+
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
     let isBuffering = true;
 
@@ -393,6 +413,14 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     socket.on('message', (message) => {
       const data = message.toString();
       if (!data) return;
+      if (data.includes('__terminal_ping__')) {
+        send('__terminal_pong__');
+        return;
+      }
+      if (data.includes('"type":"ping"') && data.includes('"source":"terminal-client"')) {
+        send(JSON.stringify({ type: 'pong', source: 'terminal-client', ts: Date.now() }));
+        return;
+      }
       try {
         deps.terminalManager.write(userId, request.params.id, data);
       } catch {
@@ -401,6 +429,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     });
 
     const cleanup = () => {
+      clearInterval(heartbeatTimer);
       unsubscribe();
       // Remove this client's dimensions when WebSocket disconnects
       deps.terminalManager.removeClient(userId, request.params.id, clientId);

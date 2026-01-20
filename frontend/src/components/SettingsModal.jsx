@@ -18,6 +18,19 @@ function formatMB(bytes) {
   return `${mb.toFixed(0)} MB`;
 }
 
+// Format disk I/O rates to human-readable format
+function formatIORate(mbps) {
+  if (mbps >= 1000) {
+    return `${(mbps / 1024).toFixed(1)} GB/s`;
+  } else if (mbps >= 1) {
+    return `${mbps.toFixed(1)} MB/s`;
+  } else if (mbps >= 0.01) {
+    return `${(mbps * 1024).toFixed(0)} KB/s`;
+  } else {
+    return `${(mbps * 1024 * 1024).toFixed(0)} B/s`;
+  }
+}
+
 // Simple sparkline chart component
 function Sparkline({ data, color, height = 32, width = 120 }) {
   if (!data || data.length < 2) {
@@ -65,6 +78,13 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
   const [systemStats, setSystemStats] = useState(null);
   const [statsHistory, setStatsHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState('24h');
+  const [latencyMs, setLatencyMs] = useState(null);
+  const [latencyHistory, setLatencyHistory] = useState([]);
+  const [wsLatencyMs, setWsLatencyMs] = useState(null);
+  const [wsLatencyHistory, setWsLatencyHistory] = useState([]);
+  const [wsTarget, setWsTarget] = useState(null);
+  const [clientFrameMs, setClientFrameMs] = useState(null);
+  const [clientFrameHistory, setClientFrameHistory] = useState([]);
   const dropdownRef = useRef(null);
 
   // Update local state when modal opens
@@ -106,6 +126,150 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
     fetchStats();
     const interval = setInterval(fetchStats, 5000); // 5s is sufficient for system stats
     return () => clearInterval(interval);
+  }, [isOpen]);
+
+  // Poll API latency while modal is open
+  useEffect(() => {
+    if (!isOpen) {
+      setLatencyMs(null);
+      setLatencyHistory([]);
+      setWsLatencyMs(null);
+      setWsLatencyHistory([]);
+      setWsTarget(null);
+      setClientFrameMs(null);
+      setClientFrameHistory([]);
+      return;
+    }
+
+    let active = true;
+    const measureLatency = async () => {
+      const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      try {
+        await apiGet('/api/health');
+        const end = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        if (active) {
+          const latency = Math.round(end - start);
+          setLatencyMs(latency);
+          setLatencyHistory((prev) => {
+            const next = [...prev, latency];
+            return next.slice(-60);
+          });
+        }
+      } catch {
+        if (active) {
+          setLatencyMs(null);
+        }
+      }
+    };
+
+    measureLatency();
+    const interval = setInterval(measureLatency, 10000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setWsLatencyMs(null);
+      setWsLatencyHistory([]);
+      return;
+    }
+
+    let socket = null;
+    let pingTimer = null;
+    let active = true;
+    let nextId = 1;
+
+    const buildWsUrl = () => {
+      const token = getAccessToken();
+      const base = import.meta.env.VITE_API_URL || window.location.origin;
+      const url = new URL('/api/latency/ws', base);
+      if (token) url.searchParams.set('token', token);
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      setWsTarget(url.toString());
+      return url.toString();
+    };
+
+    const connect = () => {
+      socket = new WebSocket(buildWsUrl());
+
+      socket.onopen = () => {
+        const sendPing = () => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          const sentAt = (typeof performance !== 'undefined' && performance.now)
+            ? performance.now()
+            : Date.now();
+          socket.send(JSON.stringify({ type: 'ping', id: nextId++, sentAt }));
+        };
+        sendPing();
+        pingTimer = setInterval(sendPing, 5000);
+      };
+
+      socket.onmessage = (event) => {
+        if (!active) return;
+        let data = event.data;
+        if (typeof data !== 'string') {
+          data = new TextDecoder().decode(data);
+        }
+        if (!data.startsWith('{')) return;
+        try {
+          const msg = JSON.parse(data);
+          if (msg?.type !== 'pong') return;
+          const now = (typeof performance !== 'undefined' && performance.now)
+            ? performance.now()
+            : Date.now();
+          if (typeof msg.sentAt !== 'number') return;
+          const rtt = Math.round(now - msg.sentAt);
+          setWsLatencyMs(rtt);
+          setWsLatencyHistory((prev) => {
+            const next = [...prev, rtt];
+            return next.slice(-60);
+          });
+        } catch {
+          // Ignore malformed messages.
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      active = false;
+      if (pingTimer) clearInterval(pingTimer);
+      if (socket) socket.close();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setClientFrameMs(null);
+      setClientFrameHistory([]);
+      return;
+    }
+
+    let rafId = null;
+    let last = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    let active = true;
+
+    const tick = (now) => {
+      if (!active) return;
+      const delta = now - last;
+      last = now;
+      setClientFrameMs(Math.round(delta));
+      setClientFrameHistory((prev) => {
+        const next = [...prev, delta];
+        return next.slice(-60);
+      });
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => {
+      active = false;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   }, [isOpen]);
 
   // Fetch stats history when modal opens or range changes
@@ -283,6 +447,18 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             const overallStatus = memStatus === 'critical' || cpuStatus === 'critical' ? 'critical' :
                                   memStatus === 'warning' || cpuStatus === 'warning' ? 'warning' : 'healthy';
             const statusLabel = overallStatus === 'critical' ? 'Resources Low' : overallStatus === 'warning' ? 'Moderate Load' : 'Healthy';
+            const eventLoopMean = systemStats.eventLoop?.meanMs ?? null;
+            const eventLoopMax = systemStats.eventLoop?.maxMs ?? null;
+
+            // Calculate disk I/O percentages based on history peak
+            let diskReadPct = 0;
+            let diskWritePct = 0;
+            if (statsHistory?.history?.length > 0) {
+              const maxRead = Math.max(...statsHistory.history.map(p => p.diskRead || 0), 1);
+              const maxWrite = Math.max(...statsHistory.history.map(p => p.diskWrite || 0), 1);
+              diskReadPct = Math.min(100, Math.round((systemStats.disk?.readMBps || 0) / maxRead * 100));
+              diskWritePct = Math.min(100, Math.round((systemStats.disk?.writeMBps || 0) / maxWrite * 100));
+            }
 
             return (
             <div className="settings-section" style={{ marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-dim)' }}>
@@ -329,6 +505,117 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: '-4px' }}>
                 {cpuPct}% used across {systemStats.cpu.cores} cores
               </div>
+
+              <div className="stat-row">
+                <label>Latency</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, latencyMs ?? 0))}%`, backgroundColor: 'var(--accent-primary)' }}
+                  />
+                </div>
+                <span>{latencyMs !== null ? `${latencyMs} ms` : '—'}</span>
+              </div>
+              {latencyHistory.length > 1 && (
+                <div style={{ marginBottom: '0.75rem', marginTop: '-2px' }}>
+                  <Sparkline data={latencyHistory} color="var(--accent-primary)" height={24} width={140} />
+                  <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    Avg: {Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length)} ms
+                  </div>
+                </div>
+              )}
+              <div className="stat-row">
+                <label>WS RTT</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, wsLatencyMs ?? 0))}%`, backgroundColor: 'var(--accent-info, #38bdf8)' }}
+                  />
+                </div>
+                <span>{wsLatencyMs !== null ? `${wsLatencyMs} ms` : '—'}</span>
+              </div>
+              {wsLatencyHistory.length > 1 && (
+                <div style={{ marginBottom: '0.75rem', marginTop: '-2px' }}>
+                  <Sparkline data={wsLatencyHistory} color="var(--accent-info, #38bdf8)" height={24} width={140} />
+                  <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    Avg: {Math.round(wsLatencyHistory.reduce((a, b) => a + b, 0) / wsLatencyHistory.length)} ms
+                  </div>
+                </div>
+              )}
+              {wsTarget && (
+                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '0.5rem' }}>
+                  WS: <code>{wsTarget}</code>
+                </div>
+              )}
+              <div className="stat-row">
+                <label>Client Frame</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, clientFrameMs ?? 0))}%`, backgroundColor: 'var(--accent-warning, #f59e0b)' }}
+                  />
+                </div>
+                <span>{clientFrameMs !== null ? `${clientFrameMs} ms` : '—'}</span>
+              </div>
+              {clientFrameHistory.length > 1 && (
+                <div style={{ marginBottom: '0.75rem', marginTop: '-2px' }}>
+                  <Sparkline data={clientFrameHistory} color="var(--accent-warning, #f59e0b)" height={24} width={140} />
+                  <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    Avg: {Math.round(clientFrameHistory.reduce((a, b) => a + b, 0) / clientFrameHistory.length)} ms
+                  </div>
+                </div>
+              )}
+              <div className="stat-row">
+                <label>Server Loop</label>
+                <div className="stat-bar">
+                  <div
+                    className="stat-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, eventLoopMean ?? 0))}%`, backgroundColor: 'var(--accent-warning, #f59e0b)' }}
+                  />
+                </div>
+                <span>
+                  {eventLoopMean !== null ? `${eventLoopMean} ms` : '—'}
+                  {eventLoopMax !== null ? ` (max ${eventLoopMax} ms)` : ''}
+                </span>
+              </div>
+
+              {/* Disk I/O - Read */}
+              {systemStats.disk && (
+                <>
+                  <div className="stat-row">
+                    <label>Disk Read</label>
+                    <div className="stat-bar">
+                      <div
+                        className="stat-fill"
+                        style={{ width: `${diskReadPct}%`, backgroundColor: '#06b6d4' }}
+                      />
+                    </div>
+                    <span style={{ color: '#06b6d4' }}>
+                      ↓ {formatIORate(systemStats.disk.readMBps)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '0.75rem', marginTop: '-4px' }}>
+                    Current read throughput across all disks
+                  </div>
+
+                  {/* Disk I/O - Write */}
+                  <div className="stat-row">
+                    <label>Disk Write</label>
+                    <div className="stat-bar">
+                      <div
+                        className="stat-fill"
+                        style={{ width: `${diskWritePct}%`, backgroundColor: '#f59e0b' }}
+                      />
+                    </div>
+                    <span style={{ color: '#f59e0b' }}>
+                      ↑ {formatIORate(systemStats.disk.writeMBps)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '0.5rem', marginTop: '-4px' }}>
+                    Current write throughput across all disks
+                  </div>
+                </>
+              )}
 
               {overallStatus !== 'healthy' && (
                 <div style={{
@@ -400,6 +687,46 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
                         Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.cpu, 0) / statsHistory.history.length)}%
                         {' · '}
                         Max: {Math.max(...statsHistory.history.map(p => p.cpu))}%
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Disk Read Chart */}
+                  <div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Disk Read
+                    </div>
+                    <Sparkline
+                      data={statsHistory?.history?.map(p => p.diskRead || 0) || []}
+                      color="#06b6d4"
+                      height={36}
+                      width={140}
+                    />
+                    {statsHistory?.history?.length > 0 && (
+                      <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        Avg: {(statsHistory.history.reduce((a, p) => a + (p.diskRead || 0), 0) / statsHistory.history.length).toFixed(1)} MB/s
+                        {' · '}
+                        Max: {Math.max(...statsHistory.history.map(p => p.diskRead || 0)).toFixed(1)} MB/s
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Disk Write Chart */}
+                  <div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                      Disk Write
+                    </div>
+                    <Sparkline
+                      data={statsHistory?.history?.map(p => p.diskWrite || 0) || []}
+                      color="#f59e0b"
+                      height={36}
+                      width={140}
+                    />
+                    {statsHistory?.history?.length > 0 && (
+                      <div style={{ fontSize: '9px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        Avg: {(statsHistory.history.reduce((a, p) => a + (p.diskWrite || 0), 0) / statsHistory.history.length).toFixed(1)} MB/s
+                        {' · '}
+                        Max: {Math.max(...statsHistory.history.map(p => p.diskWrite || 0)).toFixed(1)} MB/s
                       </div>
                     )}
                   </div>

@@ -13,8 +13,9 @@ import { useTouchGestures } from '../hooks/useTouchGestures';
 import { useImageUpload } from '../hooks/useImageUpload';
 import { useTerminalScrolling } from '../hooks/useTerminalScrolling';
 import { useIdleDetection } from '../hooks/useIdleDetection';
+import { TerminalHistoryModal } from './TerminalHistoryModal';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -26,16 +27,44 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputBufferRef = useRef('');
   const inputFlushRef = useRef(null);
   const isMobile = useMobileDetect();
+  const performanceMode = true;
   const { activeSessionId, sessions, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [isScrollMode, setIsScrollMode] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const scrollModeRef = useRef(false);
+  const historyStateRef = useRef({
+    maxHistoryEvents: 2000,
+    maxHistoryChars: 500000,
+    exhausted: false,
+    loading: false,
+    lastCount: 0,
+    lastChars: 0,
+    lastLoadAt: 0
+  });
+  const historyReloadingRef = useRef(false);
+  const pendingSocketDataRef = useRef([]);
+  const loadMoreHistoryRef = useRef(null);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
+  const HISTORY_MAX_EVENTS = 20000;
+  const HISTORY_MAX_CHARS = 2000000;
+
+  const triggerLoadMoreIfAtTop = useCallback(() => {
+    const term = xtermRef.current;
+    const loadMore = loadMoreHistoryRef.current;
+    if (!term || !loadMore) return;
+    const buffer = term.buffer?.active;
+    if (!buffer || buffer.type === 'alternate') return;
+    if (buffer.viewportY === 0) {
+      loadMore();
+    }
+  }, []);
 
   // Send data to terminal via WebSocket
   const sendToTerminal = useCallback((data) => {
@@ -157,13 +186,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   const handleTouchMove = useCallback((info) => {
     if (!scrollModeRef.current) return;
+    const term = xtermRef.current;
+    if (!term) return;
     const deltaY = info?.deltaY || 0;
     if (!deltaY) return;
     if (info?.event?.cancelable) {
       info.event.preventDefault();
     }
-    scrollByWheel(-deltaY, 0, xtermRef.current?.rows);
-  }, [scrollByWheel]);
+    const lineHeight = Math.max(10, Math.round((term.options?.fontSize || 14) * 1.25));
+    const lines = Math.max(1, Math.round(Math.abs(deltaY) / lineHeight));
+    const scrollingUp = deltaY > 0;
+    term.scrollLines(scrollingUp ? -lines : lines);
+    if (scrollingUp) {
+      triggerLoadMoreIfAtTop();
+    }
+  }, [triggerLoadMoreIfAtTop]);
 
   const {
     touchStateRef,
@@ -192,6 +229,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Reset loading state when session changes
   useEffect(() => {
     setIsLoadingHistory(true);
+    setIsLoadingMoreHistory(false);
+    historyStateRef.current = {
+      maxHistoryEvents: 2000,
+      maxHistoryChars: 500000,
+      exhausted: false,
+      loading: false,
+      lastCount: 0,
+      lastChars: 0,
+      lastLoadAt: 0
+    };
+    historyReloadingRef.current = false;
+    pendingSocketDataRef.current = [];
   }, [sessionId]);
 
   // Register image upload trigger for external components
@@ -200,6 +249,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onRegisterImageUpload(triggerFileInput);
     }
   }, [onRegisterImageUpload, triggerFileInput]);
+
+  // Register history panel trigger for external components
+  useEffect(() => {
+    if (onRegisterHistoryPanel) {
+      onRegisterHistoryPanel(() => setHistoryModalOpen(true));
+    }
+  }, [onRegisterHistoryPanel]);
 
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {
@@ -224,7 +280,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let rafId = null;
     let resizeObserver = null;
 
-    const scrollback = isMobile ? 5000 : 100000;
+    const scrollback = performanceMode
+      ? (isMobile ? 2000 : 20000)
+      : (isMobile ? 5000 : 100000);
     const term = new Terminal({
       cursorBlink: false,
       fontSize: fontSize || (isMobile ? 20 : 14),
@@ -360,7 +418,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       hasOpened = true;
       term.open(container);
 
-      if (!isMobile) {
+      if (!isMobile && !performanceMode) {
         try {
           const webglAddon = new WebglAddon();
           term.loadAddon(webglAddon);
@@ -415,12 +473,83 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         event.preventDefault();
         scrollByWheel(event.deltaY, event.deltaMode, term.rows);
+        if (event.deltaY < 0) {
+          triggerLoadMoreIfAtTop();
+        }
         return false;
       });
 
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
       let scrollThrottleTimer = null;
+      const loadMoreHistory = async () => {
+        if (disposed) return;
+        const state = historyStateRef.current;
+        if (state.loading || state.exhausted) return;
+        const now = Date.now();
+        if (now - state.lastLoadAt < 1500) return;
+
+        const nextEvents = Math.min(state.maxHistoryEvents * 2, HISTORY_MAX_EVENTS);
+        const nextChars = Math.min(state.maxHistoryChars * 2, HISTORY_MAX_CHARS);
+        if (nextEvents === state.maxHistoryEvents && nextChars === state.maxHistoryChars) {
+          state.exhausted = true;
+          return;
+        }
+
+        state.loading = true;
+        state.lastLoadAt = now;
+        historyReloadingRef.current = true;
+        setIsLoadingMoreHistory(true);
+
+        try {
+          const response = await apiFetch(
+            `/api/terminal/${sessionId}/history?historyEvents=${nextEvents}&historyChars=${nextChars}`
+          );
+          if (!response.ok) {
+            return;
+          }
+          const snapshot = await response.json();
+          const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
+          const totalChars = history.reduce((sum, entry) => sum + (entry?.text?.length || 0), 0);
+
+          if (history.length <= state.lastCount && totalChars <= state.lastChars) {
+            state.exhausted = true;
+            return;
+          }
+
+          state.maxHistoryEvents = nextEvents;
+          state.maxHistoryChars = nextChars;
+          state.lastCount = history.length;
+          state.lastChars = totalChars;
+
+          const historyText = history.map((entry) => entry.text).join('');
+          term.reset();
+          term.write(historyText, () => {
+            if (disposed) return;
+            term.scrollToTop();
+            historyReloadingRef.current = false;
+            const pending = pendingSocketDataRef.current;
+            pendingSocketDataRef.current = [];
+            if (pending.length > 0) {
+              term.write(pending.join(''));
+            }
+          });
+        } catch {
+          // Ignore load failures; retry on next scroll-to-top.
+        } finally {
+          state.loading = false;
+          if (historyReloadingRef.current) {
+            historyReloadingRef.current = false;
+            const pending = pendingSocketDataRef.current;
+            pendingSocketDataRef.current = [];
+            if (pending.length > 0 && !disposed) {
+              term.write(pending.join(''));
+            }
+          }
+          setIsLoadingMoreHistory(false);
+        }
+      };
+      loadMoreHistoryRef.current = loadMoreHistory;
       const scrollDisposer = term.onScroll((newPos) => {
         if (onScrollDirectionRef.current && !disposed) {
           const isUserScrolling = touchStateRef.current !== null;
@@ -433,6 +562,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onScrollDirectionRef.current(direction);
             scrollThrottleTimer = setTimeout(() => { scrollThrottleTimer = null; }, 100);
           }
+        }
+        if (newPos === 0) {
+          loadMoreHistory();
         }
         lastScrollPos = newPos;
       });
@@ -506,12 +638,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         let shouldReconnect = true;
         let skipUrlDetection = true;
         let skipUrlTimeout = null;
+        let heartbeatTimer = null;
+        let lastServerPingAt = 0;
+        const HEARTBEAT_INTERVAL = 10000;
+        const HEARTBEAT_TIMEOUT = 45000;
 
         socket.onopen = () => {
           if (disposed) return;
           wsRetryCount = 0;
           resetUserInput();
           onConnectionChange?.(true);
+          lastServerPingAt = Date.now();
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
+          heartbeatTimer = setInterval(() => {
+            if (socket.readyState !== WebSocket.OPEN) return;
+            const now = Date.now();
+            if (now - lastServerPingAt > HEARTBEAT_TIMEOUT) {
+              socket.close(4000, 'Heartbeat timeout');
+            }
+          }, HEARTBEAT_INTERVAL);
           if (hadConnectionError) {
             hadConnectionError = false;
             term.reset();
@@ -525,6 +670,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         socket.onmessage = (event) => {
           if (disposed) return;
           let data = typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
+
+          lastServerPingAt = Date.now();
+          if (data === '__terminal_pong__') return;
+          if (data.includes('__terminal_ping__')) {
+            data = data.split('__terminal_ping__').join('');
+          }
+          if (data.includes('{"type":"ping","source":"terminal-client"}')) {
+            data = data.split('{"type":"ping","source":"terminal-client"}').join('');
+          }
+          if (!data) return;
 
           if (data.startsWith('{')) {
             try {
@@ -540,6 +695,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 }
                 return;
               }
+              if (msg.type === 'serverPing') {
+                return;
+              }
+              if (msg.type === 'pong' && msg.source === 'terminal-client') {
+                return;
+              }
               if (msg.type === 'cwd' && msg.cwd) {
                 onCwdChange?.(msg.cwd);
                 return;
@@ -551,6 +712,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const baseY = buffer?.baseY || 0;
           const viewportYBefore = buffer?.viewportY ?? 0;
           const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
+
+          if (historyReloadingRef.current) {
+            pendingSocketDataRef.current.push(data);
+            return;
+          }
 
           term.write(data);
 
@@ -586,6 +752,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         socket.onclose = (event) => {
           if (disposed) return;
           onConnectionChange?.(false);
+          if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+          }
           if (event.reason === 'Session ended') {
             shouldReconnect = false;
             term.write('\r\n[Terminal session ended]\r\n');
@@ -601,6 +771,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         return () => {
           shouldReconnect = false;
           if (skipUrlTimeout) clearTimeout(skipUrlTimeout);
+          if (heartbeatTimer) clearInterval(heartbeatTimer);
           socket.close();
         };
       };
@@ -733,6 +904,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         } catch {}
         webglAddonRef.current = null;
       }
+      loadMoreHistoryRef.current = null;
     };
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
@@ -826,11 +998,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           <span>Loading history...</span>
         </div>
       )}
+      {isLoadingMoreHistory && !isLoadingHistory && (
+        <div className="terminal-loading-indicator">
+          <span className="terminal-loading-spinner"></span>
+          <span>Loading more history...</span>
+        </div>
+      )}
       <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); scrollUp(); }}
-            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); startScrolling('up'); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); scrollUp(); triggerLoadMoreIfAtTop(); }}
+            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); startScrolling('up'); triggerLoadMoreIfAtTop(); }}
             onTouchEnd={(e) => { e.preventDefault(); e.stopPropagation(); stopScrolling(); }}
             onMouseDown={() => startScrolling('up')}
             onMouseUp={stopScrolling}
@@ -868,6 +1046,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             </svg>
           </button>
       </div>
+      <TerminalHistoryModal
+        isOpen={historyModalOpen}
+        sessionId={sessionId}
+        onClose={() => setHistoryModalOpen(false)}
+      />
     </div>
   );
 }

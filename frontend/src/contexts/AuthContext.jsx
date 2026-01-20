@@ -6,7 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUserState] = useState(null);
+  const [user, setUserState] = useState(() => getUser());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -22,6 +22,7 @@ export function AuthProvider({ children }) {
 
         // No tokens stored - not authenticated
         if (!accessToken && !storedRefreshToken) {
+          setUserState(null);
           setLoading(false);
           return;
         }
@@ -40,8 +41,16 @@ export function AuthProvider({ children }) {
               setLoading(false);
               return;
             }
+
+            // If not unauthorized, avoid logging out on transient errors.
+            if (response.status !== 401) {
+              setLoading(false);
+              return;
+            }
           } catch {
-            // Access token invalid, will try refresh below
+            // Network error - keep existing session and try again later.
+            setLoading(false);
+            return;
           }
         }
 
@@ -50,6 +59,7 @@ export function AuthProvider({ children }) {
           try {
             const result = await refreshTokens();
             if (result.user) {
+              setUser(result.user);
               setUserState(result.user);
             } else {
               // Fetch user data if not returned from refresh
@@ -64,8 +74,17 @@ export function AuthProvider({ children }) {
             }
             setLoading(false);
             return;
-          } catch {
-            // Refresh failed
+          } catch (err) {
+            const message = err instanceof Error ? err.message : '';
+            const isAuthFailure =
+              message === 'Token refresh failed' ||
+              message === 'No refresh token' ||
+              message === 'Invalid token response';
+            if (!isAuthFailure) {
+              setLoading(false);
+              return;
+            }
+            // Refresh failed with an auth error - clear below.
           }
         }
 

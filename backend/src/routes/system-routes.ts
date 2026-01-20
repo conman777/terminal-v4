@@ -3,6 +3,7 @@ import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 // Stats history storage
 const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
@@ -13,10 +14,14 @@ interface StatsHistoryPoint {
   timestamp: number;
   cpu: number;
   memory: number;
+  diskRead: number;   // MB/s
+  diskWrite: number;  // MB/s
 }
 
 let statsHistory: StatsHistoryPoint[] = [];
 let historyInterval: NodeJS.Timeout | null = null;
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelay.enable();
 
 function loadStatsHistory(): void {
   try {
@@ -64,10 +69,15 @@ async function collectStatsPoint(): Promise<void> {
       return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
     }, 0) / startTimes.length;
 
+    // Calculate disk I/O (uses separate 100ms sample)
+    const diskIO = await calculateDiskIO();
+
     const point: StatsHistoryPoint = {
       timestamp: Date.now(),
       cpu: Math.round(cpuUsage),
-      memory: memoryPct
+      memory: memoryPct,
+      diskRead: diskIO.readMBps,
+      diskWrite: diskIO.writeMBps
     };
 
     statsHistory.push(point);
@@ -80,6 +90,81 @@ async function collectStatsPoint(): Promise<void> {
   } catch {
     // Ignore collection errors
   }
+}
+
+interface DiskStats {
+  sectorsRead: number;
+  sectorsWrite: number;
+}
+
+/**
+ * Read /proc/diskstats and aggregate stats for all real block devices.
+ * Returns total sectors read and written across all devices.
+ */
+function readDiskStats(): DiskStats | null {
+  try {
+    const data = fs.readFileSync('/proc/diskstats', 'utf-8');
+    let totalRead = 0;
+    let totalWrite = 0;
+
+    for (const line of data.split('\n')) {
+      if (!line.trim()) continue;
+
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 14) continue;
+
+      const deviceName = parts[2];
+
+      // Filter to real block devices (exclude loop, ram, dm-)
+      // Include: sda, sdb, nvme0n1, vda, xvda, hda
+      if (!deviceName.match(/^(sd[a-z]+|nvme\d+n\d+|vd[a-z]+|xvd[a-z]+|hd[a-z]+)$/)) {
+        continue;
+      }
+
+      // Column 6 = sectors read, Column 10 = sectors written (0-indexed: 5 and 9)
+      const sectorsRead = parseInt(parts[5], 10);
+      const sectorsWritten = parseInt(parts[9], 10);
+
+      if (!isNaN(sectorsRead)) totalRead += sectorsRead;
+      if (!isNaN(sectorsWritten)) totalWrite += sectorsWritten;
+    }
+
+    return { sectorsRead: totalRead, sectorsWrite: totalWrite };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Calculate disk I/O rates by sampling /proc/diskstats twice.
+ * Returns read and write rates in MB/s.
+ */
+async function calculateDiskIO(): Promise<{ readMBps: number; writeMBps: number }> {
+  const start = readDiskStats();
+  if (!start) return { readMBps: 0, writeMBps: 0 };
+
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  const end = readDiskStats();
+  if (!end) return { readMBps: 0, writeMBps: 0 };
+
+  // Calculate deltas (handle counter wrap-around)
+  let readDelta = end.sectorsRead - start.sectorsRead;
+  let writeDelta = end.sectorsWrite - start.sectorsWrite;
+
+  // Ignore negative deltas (counter reset or device removal)
+  if (readDelta < 0) readDelta = 0;
+  if (writeDelta < 0) writeDelta = 0;
+
+  // Convert to bytes/sec: (sectors * 512 bytes/sector * 1000ms) / 100ms
+  const readBytesPerSec = (readDelta * 512 * 1000) / 100;
+  const writeBytesPerSec = (writeDelta * 512 * 1000) / 100;
+
+  // Convert to MB/s and round to 2 decimals
+  const readMBps = Math.round((readBytesPerSec / (1024 * 1024)) * 100) / 100;
+  const writeMBps = Math.round((writeBytesPerSec / (1024 * 1024)) * 100) / 100;
+
+  return { readMBps, writeMBps };
 }
 
 function startHistoryCollection(): void {
@@ -322,6 +407,12 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
     }, 0) / startTimes.length;
 
+    // Disk I/O stats (separate 100ms sample)
+    const diskIO = await calculateDiskIO();
+    const eventLoopMeanMs = Math.round(eventLoopDelay.mean / 1e6);
+    const eventLoopMaxMs = Math.round(eventLoopDelay.max / 1e6);
+    eventLoopDelay.reset();
+
     return {
       memory: {
         total: totalMem,
@@ -332,6 +423,14 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       cpu: {
         percentage: Math.round(cpuUsage),
         cores: os.cpus().length
+      },
+      disk: {
+        readMBps: diskIO.readMBps,
+        writeMBps: diskIO.writeMBps
+      },
+      eventLoop: {
+        meanMs: eventLoopMeanMs,
+        maxMs: eventLoopMaxMs
       },
       processes: getTopProcesses()
     };

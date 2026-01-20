@@ -4,7 +4,6 @@ import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
-import { PathBreadcrumb } from './components/PathBreadcrumb';
 import { SessionTabBar } from './components/SessionTabBar';
 import { SessionSelector } from './components/SessionSelector';
 const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
@@ -756,15 +755,6 @@ function AppContent() {
               onCloseSession={closeSession}
               onRenameSession={renameSession}
             />
-          )}
-
-          {projectInfo?.cwd && (
-            <div className="breadcrumb-bar">
-              <PathBreadcrumb
-                cwd={projectInfo.cwd}
-                onNavigate={handleNavigateToPath}
-              />
-            </div>
           )}
 
           <main

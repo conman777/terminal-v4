@@ -59,6 +59,17 @@ function normaliseNewlines(input: string): string {
   return input;
 }
 
+const DEFAULT_PERSIST_HISTORY_CHARS = 500000;
+const DEFAULT_PERSIST_HISTORY_EVENTS = 2000;
+const MAX_PERSIST_HISTORY_CHARS = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_PERSIST_HISTORY_CHARS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PERSIST_HISTORY_CHARS;
+})();
+const MAX_PERSIST_HISTORY_EVENTS = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_PERSIST_HISTORY_EVENTS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PERSIST_HISTORY_EVENTS;
+})();
+
 export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
   defaultShell?: string;
@@ -233,6 +244,12 @@ export class TerminalManager {
     session.pendingSave = false;
 
     try {
+      const history = session.usesTmux
+        ? []
+        : this.#limitHistory(session.buffer, {
+            maxHistoryChars: MAX_PERSIST_HISTORY_CHARS,
+            maxHistoryEvents: MAX_PERSIST_HISTORY_EVENTS
+          });
       const persisted: PersistedSession = {
         id: session.id,
         title: session.title,
@@ -240,7 +257,7 @@ export class TerminalManager {
         cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        history: session.buffer
+        history
       };
       await saveSession(session.userId, persisted);
 
@@ -446,14 +463,14 @@ export class TerminalManager {
       const history = this.#limitHistory(session.buffer, options);
       return {
         id: session.id,
-      title: session.title,
-      shell: session.shell,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      history,
-      usesTmux: session.usesTmux
-    };
-  }
+        title: session.title,
+        shell: session.shell,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        history,
+        usesTmux: session.usesTmux
+      };
+    }
 
     // Fall back to persisted sessions
     const userPersistedSessions = this.#persistedSessions.get(userId);
@@ -462,14 +479,14 @@ export class TerminalManager {
       const history = this.#limitHistory(persisted.history, options);
       return {
         id: persisted.id,
-      title: persisted.title,
-      shell: persisted.shell,
-      createdAt: persisted.createdAt,
-      updatedAt: persisted.updatedAt,
-      history,
-      usesTmux: false
-    };
-  }
+        title: persisted.title,
+        shell: persisted.shell,
+        createdAt: persisted.createdAt,
+        updatedAt: persisted.updatedAt,
+        history,
+        usesTmux: false
+      };
+    }
 
     return null;
   }

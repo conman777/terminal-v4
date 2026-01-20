@@ -473,6 +473,150 @@ export const INSPECTOR_SCRIPT = `
     }, '*');
   }
 
+  // Touch event handlers for mobile support
+  let touchStartTime = 0;
+  let touchStartElement = null;
+
+  function handleTouchStart(e) {
+    if (!inspectMode) return;
+
+    // Don't interfere with multi-touch gestures
+    if (e.touches.length > 1) return;
+
+    const touch = e.touches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+
+    // Ignore our own UI elements
+    if (el?.id?.startsWith('__preview-inspector')) return;
+
+    if (el && el !== hoveredElement) {
+      hoveredElement = el;
+      touchStartElement = el;
+      touchStartTime = Date.now();
+      updateOverlay(el);
+
+      // Show send button after 600ms for touch-hold (faster than mouse hover)
+      hideSendButton();
+
+      // Clear any existing timeout to prevent race conditions
+      if (hoverTimeout) {
+        clearTimeout(hoverTimeout);
+      }
+
+      hoverTimeout = setTimeout(() => {
+        if (hoveredElement === el && inspectMode) {
+          showSendButton(el);
+        }
+      }, 600);
+    }
+  }
+
+  function handleTouchMove(e) {
+    if (!inspectMode) return;
+
+    // Don't interfere with multi-touch gestures
+    if (e.touches.length > 1) return;
+
+    // Prevent scroll during inspect
+    e.preventDefault();
+
+    const touch = e.touches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+
+    // Ignore our own UI elements
+    if (el?.id?.startsWith('__preview-inspector')) return;
+
+    if (el && el !== hoveredElement) {
+      hoveredElement = el;
+      updateOverlay(el);
+
+      // Reset timer for new element
+      hideSendButton();
+      touchStartElement = el;
+      touchStartTime = Date.now();
+
+      // Clear any existing timeout to prevent race conditions
+      if (hoverTimeout) {
+        clearTimeout(hoverTimeout);
+      }
+
+      hoverTimeout = setTimeout(() => {
+        if (hoveredElement === el && inspectMode) {
+          showSendButton(el);
+        }
+      }, 600);
+    }
+  }
+
+  function handleTouchEnd(e) {
+    if (!inspectMode) return;
+
+    // Don't interfere with multi-touch gestures
+    if (e.changedTouches.length !== 1) return;
+
+    const touch = e.changedTouches[0];
+    const el = document.elementFromPoint(touch.clientX, touch.clientY);
+
+    // If touching send button, let it handle the click
+    if (el?.id === '__preview-inspector-send-btn') return;
+
+    // Ignore our own UI elements
+    if (el?.id?.startsWith('__preview-inspector')) return;
+
+    if (!el) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Check if this was a tap (not a long hold that already triggered send button)
+    const touchDuration = Date.now() - touchStartTime;
+    const isTap = touchDuration < 600 && touchStartElement && el === touchStartElement;
+
+    if (isTap) {
+      // Quick tap = select element
+      selectedElement = el;
+      updateSelection(el);
+
+      // Send detailed element info to parent
+      const info = getDetailedElementInfo(el);
+      window.parent.postMessage({
+        type: 'preview-element-selected',
+        element: info
+      }, '*');
+    }
+
+    // Hide overlay and send button after selection
+    overlay.style.display = 'none';
+    tooltip.style.display = 'none';
+    hideSendButton();
+
+    // Clear any pending hover timeout
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+      hoverTimeout = null;
+    }
+
+    hoveredElement = null;
+  }
+
+  function handleTouchCancel(e) {
+    if (!inspectMode) return;
+
+    // Clean up on touch cancel
+    overlay.style.display = 'none';
+    tooltip.style.display = 'none';
+    hideSendButton();
+
+    // Clear any pending hover timeout
+    if (hoverTimeout) {
+      clearTimeout(hoverTimeout);
+      hoverTimeout = null;
+    }
+
+    hoveredElement = null;
+    touchStartElement = null;
+  }
+
   function setInspectMode(enabled) {
     inspectMode = enabled;
     document.body.style.cursor = enabled ? 'crosshair' : '';
@@ -517,10 +661,16 @@ export const INSPECTOR_SCRIPT = `
     }
   });
 
-  // Add event listeners
+  // Add event listeners for both mouse and touch
   document.addEventListener('mousemove', handleMouseMove, true);
   document.addEventListener('mouseout', handleMouseOut, true);
   document.addEventListener('click', handleClick, true);
+
+  // Touch event listeners for mobile support
+  document.addEventListener('touchstart', handleTouchStart, true);
+  document.addEventListener('touchmove', handleTouchMove, { capture: true, passive: false });
+  document.addEventListener('touchend', handleTouchEnd, true);
+  document.addEventListener('touchcancel', handleTouchCancel, true);
 
   // Update selection position on scroll/resize
   window.addEventListener('scroll', () => {
