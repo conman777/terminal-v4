@@ -37,6 +37,15 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     };
   };
 
+  const shouldSendHistory = (request: { query?: unknown }) => {
+    const query = (request.query || {}) as Record<string, string | undefined>;
+    const raw = String(query.history || '').toLowerCase();
+    if (raw === '0' || raw === 'false' || raw === 'no') {
+      return false;
+    }
+    return true;
+  };
+
   app.get('/api/terminal', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {
@@ -354,6 +363,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       socket.close(4404, 'Terminal session not found');
       return;
     }
+    const sendHistory = shouldSendHistory(request);
 
     // Generate unique client ID for this WebSocket connection
     const clientId = randomUUID();
@@ -374,9 +384,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     send(JSON.stringify({ type: 'clientId', clientId }));
 
     if (!deps.terminalManager.isActive(snapshot.id)) {
-      snapshot.history.forEach((entry) => {
-        send(entry.text);
-      });
+      if (sendHistory) {
+        snapshot.history.forEach((entry) => {
+          send(entry.text);
+        });
+      }
       socket.close(1000, 'Session ended');
       return;
     }
@@ -400,9 +412,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       send(event.text);
     });
 
-    snapshot.history.forEach((entry) => {
-      send(entry.text);
-    });
+    if (sendHistory) {
+      snapshot.history.forEach((entry) => {
+        send(entry.text);
+      });
+    }
 
     isBuffering = false;
     for (const event of bufferedEvents) {

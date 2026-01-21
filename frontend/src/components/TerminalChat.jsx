@@ -50,6 +50,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const historyReloadingRef = useRef(false);
   const pendingSocketDataRef = useRef([]);
   const loadMoreHistoryRef = useRef(null);
+  const shouldReplayHistoryRef = useRef(true);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const HISTORY_MAX_EVENTS = 20000;
@@ -228,6 +229,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Reset loading state when session changes
   useEffect(() => {
+    shouldReplayHistoryRef.current = true;
     setIsLoadingHistory(true);
     setIsLoadingMoreHistory(false);
     historyStateRef.current = {
@@ -637,7 +639,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       window.addEventListener('focus', handleFocus);
       document.addEventListener('visibilitychange', handleVisibility);
 
-      const buildSocketUrl = () => {
+      const buildSocketUrl = (requestHistory) => {
         const token = getAccessToken();
         const base = import.meta.env.VITE_API_URL || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
@@ -645,6 +647,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (isMobile) {
           url.searchParams.set('historyChars', '300000');
         }
+        url.searchParams.set('history', requestHistory ? '1' : '0');
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
         return url.toString();
       };
@@ -657,7 +660,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const existing = socketRef.current;
         if (existing) existing.close();
 
-        const socket = new WebSocket(buildSocketUrl());
+        const requestHistory = shouldReplayHistoryRef.current;
+        const socket = new WebSocket(buildSocketUrl(requestHistory));
         socketRef.current = socket;
         let hadConnectionError = false;
         let shouldReconnect = true;
@@ -674,6 +678,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           resetUserInput();
           onConnectionChange?.(true);
           lastServerPingAt = Date.now();
+          if (requestHistory) {
+            shouldReplayHistoryRef.current = false;
+          }
           if (heartbeatTimer) clearInterval(heartbeatTimer);
           heartbeatTimer = setInterval(() => {
             if (socket.readyState !== WebSocket.OPEN) return;
@@ -682,7 +689,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               socket.close(4000, 'Heartbeat timeout');
             }
           }, HEARTBEAT_INTERVAL);
-          if (hadConnectionError) {
+          if (hadConnectionError && requestHistory) {
             hadConnectionError = false;
             term.reset();
           }

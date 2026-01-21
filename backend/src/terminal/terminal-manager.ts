@@ -719,6 +719,10 @@ export class TerminalManager {
     updateSessionMetadata(userId, id, { title, shell, cwd, createdAt }).catch((error) => {
       console.error(`Failed to save session metadata for ${id}:`, error);
     });
+    // Persist an initial session file so tmux sessions don't get "recovered" after restarts
+    void this.#saveSessionToDisk(session).catch((error) => {
+      console.error(`Failed to persist initial terminal session ${id}:`, error);
+    });
 
     // Execute initial command if provided
     if (options.initialCommand) {
