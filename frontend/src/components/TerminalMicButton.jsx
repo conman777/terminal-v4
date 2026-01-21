@@ -78,14 +78,9 @@ export function TerminalMicButton({ sessionId, disabled, inline = false }) {
     </button>
   );
 
-  // Inline mode: just return the button
-  if (inline) {
-    return buttonElement;
-  }
-
-  // Floating mode: wrap in container with error display
+  // Always show error tooltip, even in inline mode
   return (
-    <div className="terminal-mic-container">
+    <div className={inline ? "terminal-mic-inline-container" : "terminal-mic-container"}>
       {error && <div className="terminal-mic-error">{error}</div>}
       {buttonElement}
     </div>

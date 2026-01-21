@@ -8694,6 +8694,15 @@ textarea:focus-visible {
   letter-spacing: 2px;
 }
 
+.terminal-mic-container {
+  position: relative;
+}
+
+.terminal-mic-inline-container {
+  position: relative;
+  display: inline-flex;
+}
+
 .terminal-mic-error {
   position: absolute;
   bottom: 100%;
@@ -8706,6 +8715,7 @@ textarea:focus-visible {
   font-size: 0.75rem;
   white-space: nowrap;
   animation: fade-in 0.2s ease-out;
+  z-index: 1000;
 }
 
 /* Inline Mic Button (for status bar) */
