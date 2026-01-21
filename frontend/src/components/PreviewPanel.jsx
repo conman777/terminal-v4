@@ -163,6 +163,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileSplitRafRef = useRef(null);
 
   const baseIframeSrc = useMemo(() => {
+    // Prevent viewing Terminal V4 in its own preview panel (port 3020)
+    if (url && (url.includes(':3020') || url.includes('preview-3020'))) {
+      console.warn('[Preview] Cannot view Terminal V4 (port 3020) in its own preview panel');
+      return null;
+    }
     const result = toPreviewUrl(url);
     console.log('[Preview] URL conversion:', url, '->', result);
     return result;
@@ -227,19 +232,25 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const handleClearCookies = useCallback(async () => {
     if (!previewPort) return;
     try {
+      // Capture iframe src before async to prevent stale state updates
+      const currentIframeSrc = baseIframeSrc;
       const token = getAccessToken();
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
       await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
-      setHasCookies(false);
-      // Refresh the preview to apply cleared cookies
-      if (baseIframeSrc) {
-        setIsLoading(true);
-        setError(null);
-        setLogs([]);
-        setProxyLogs([]);
-        const cacheBuster = `_cb=${Date.now()}`;
-        const separator = baseIframeSrc.includes('?') ? '&' : '?';
-        setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+
+      // Only update state if iframe src hasn't changed during the async operation
+      if (currentIframeSrc === baseIframeSrc) {
+        setHasCookies(false);
+        // Refresh the preview to apply cleared cookies
+        if (baseIframeSrc) {
+          setIsLoading(true);
+          setError(null);
+          setLogs([]);
+          setProxyLogs([]);
+          const cacheBuster = `_cb=${Date.now()}`;
+          const separator = baseIframeSrc.includes('?') ? '&' : '?';
+          setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+        }
       }
     } catch (err) {
       console.error('Failed to clear cookies:', err);
@@ -300,14 +311,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (!showLogs || !isDocumentVisible || logFilter === 'client') {
       return;
     }
+    let disposed = false;
     const fetchProxyLogs = async () => {
+      if (disposed) return;
       try {
         const token = getAccessToken();
         const since = lastProxyLogTimestamp.current;
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         const res = await fetch(`/api/preview/${previewPort}/proxy-logs?since=${since}`, { headers });
-        if (!res.ok) return;
+        if (disposed || !res.ok) return;
         const data = await res.json();
+        if (disposed) return;
         if (data.logs && data.logs.length > 0) {
           setProxyLogs(prev => {
             const newLogs = [...prev, ...data.logs];
@@ -328,7 +342,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     fetchProxyLogs();
     // Poll every 2 seconds while logs are visible
     const interval = setInterval(fetchProxyLogs, 2000);
-    return () => clearInterval(interval);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
   }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 
   // Poll for process logs (stdout/stderr from dev server)
@@ -342,14 +359,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (!showLogs || !isDocumentVisible || logFilter === 'client' || logFilter === 'proxy') {
       return;
     }
+    let disposed = false;
     const fetchProcessLogs = async () => {
+      if (disposed) return;
       try {
         const token = getAccessToken();
         const since = lastProcessLogTimestamp.current;
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         const res = await fetch(`/api/preview/${previewPort}/process-logs?since=${since}`, { headers });
-        if (!res.ok) return;
+        if (disposed || !res.ok) return;
         const data = await res.json();
+        if (disposed) return;
         if (data.logs && data.logs.length > 0) {
           setProcessLogs(prev => {
             const newLogs = [...prev, ...data.logs];
@@ -370,11 +390,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     fetchProcessLogs();
     // Poll every 2 seconds while logs are visible
     const interval = setInterval(fetchProcessLogs, 2000);
-    return () => clearInterval(interval);
+    return () => {
+      disposed = true;
+      clearInterval(interval);
+    };
   }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 
   useEffect(() => {
     if (skipUrlSyncRef.current) {
+      // Reset flag after a delay to prevent race conditions
+      setTimeout(() => {
+        skipUrlSyncRef.current = false;
+      }, 100);
       return;
     }
     setIframeSrc(baseIframeSrc);
@@ -413,7 +440,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         lastSyncedUrlRef.current = normalizedNext;
         if (onUrlChange) {
           skipUrlSyncRef.current = true;
-          onUrlChange(normalizedNext);
+          // Batch URL change with requestAnimationFrame to prevent race conditions
+          requestAnimationFrame(() => {
+            onUrlChange(normalizedNext);
+          });
         }
       } else if (event.data?.type === 'preview-storage-request') {
         const requestedPort = parseInt(event.data.port, 10);
@@ -487,12 +517,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       skipUrlSyncRef.current = false;
       return;
     }
-    setLogs([]);
-    setSelectedElement(null);
-    setInspectMode(false);
-    setShowEditInput(false);
-    setShowStyleEditor(false);
-    setEditDescription('');
+    let disposed = false;
+    // Guard against stale state updates
+    if (!disposed) {
+      setLogs([]);
+      setSelectedElement(null);
+      setInspectMode(false);
+      setShowEditInput(false);
+      setShowStyleEditor(false);
+      setEditDescription('');
+    }
+    return () => {
+      disposed = true;
+    };
   }, [url]);
 
   // Focus URL input when shown
@@ -930,26 +967,47 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Navigation handlers for browser history
   const handleBack = useCallback(() => {
-    if (historyIndex > 0) {
-      const prevIndex = historyIndex - 1;
-      const prevUrl = historyStack[prevIndex];
-      setHistoryIndex(prevIndex);
-      if (onUrlChange) {
-        onUrlChange(prevUrl);
+    // Use functional setState to avoid stale closures
+    setHistoryIndex(currentIndex => {
+      if (currentIndex > 0) {
+        const prevIndex = currentIndex - 1;
+        setHistoryStack(currentStack => {
+          const prevUrl = currentStack[prevIndex];
+          if (onUrlChange && prevUrl) {
+            // Batch with requestAnimationFrame to prevent race conditions
+            requestAnimationFrame(() => {
+              onUrlChange(prevUrl);
+            });
+          }
+          return currentStack;
+        });
+        return prevIndex;
       }
-    }
-  }, [historyIndex, historyStack, onUrlChange]);
+      return currentIndex;
+    });
+  }, [onUrlChange]);
 
   const handleForward = useCallback(() => {
-    if (historyIndex < historyStack.length - 1) {
-      const nextIndex = historyIndex + 1;
-      const nextUrl = historyStack[nextIndex];
-      setHistoryIndex(nextIndex);
-      if (onUrlChange) {
-        onUrlChange(nextUrl);
-      }
-    }
-  }, [historyIndex, historyStack, onUrlChange]);
+    // Use functional setState to avoid stale closures
+    setHistoryIndex(currentIndex => {
+      setHistoryStack(currentStack => {
+        if (currentIndex < currentStack.length - 1) {
+          const nextIndex = currentIndex + 1;
+          const nextUrl = currentStack[nextIndex];
+          if (onUrlChange && nextUrl) {
+            // Batch with requestAnimationFrame to prevent race conditions
+            requestAnimationFrame(() => {
+              onUrlChange(nextUrl);
+            });
+          }
+          // Update index in outer scope
+          setHistoryIndex(nextIndex);
+        }
+        return currentStack;
+      });
+      return currentIndex;
+    });
+  }, [onUrlChange]);
 
   // Update history stack when URL changes (user navigation, not history navigation)
   useEffect(() => {
@@ -1173,15 +1231,29 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   useEffect(() => {
     if (!isDraggingBrowserSplit) return;
 
+    let rafId = null;
+
     const handleMouseMove = (e) => {
-      if (!browserSplitRef.current) return;
-      const rect = browserSplitRef.current.getBoundingClientRect();
-      const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
-      const clamped = Math.min(Math.max(newPosition, 30), 70);
-      setBrowserSplitPosition(clamped);
+      // Throttle with requestAnimationFrame for better performance
+      if (rafId !== null) return;
+
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+
+        if (!browserSplitRef.current) return;
+        const rect = browserSplitRef.current.getBoundingClientRect();
+        const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
+        const clamped = Math.min(Math.max(newPosition, 30), 70);
+        setBrowserSplitPosition(clamped);
+      });
     };
 
     const handleMouseUp = () => {
+      // Cancel any pending rAF
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       setIsDraggingBrowserSplit(false);
       // Save final position to localStorage
       setBrowserSplitPosition(pos => {
@@ -1195,6 +1267,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     return () => {
+      // Cancel pending rAF on cleanup
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
@@ -1265,64 +1341,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
   }, [isDraggingMobileSplit, handleMobileSplitTouchMove, handleMobileSplitTouchEnd]);
 
-  // Keyboard shortcuts for mobile (when external keyboard is connected)
-  useEffect(() => {
-    if (!isMobile) return;
-
-    const handleKeyDown = (e) => {
-      // Ignore if user is typing in an input/textarea
-      const activeElement = document.activeElement;
-      if (activeElement && (
-        activeElement.tagName === 'INPUT' ||
-        activeElement.tagName === 'TEXTAREA' ||
-        activeElement.isContentEditable
-      )) {
-        return;
-      }
-
-      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
-
-      // Cmd/Ctrl+I: Toggle inspect mode
-      if (isCmdOrCtrl && e.key === 'i') {
-        e.preventDefault();
-        setInspectMode(prev => !prev);
-        return;
-      }
-
-      // Cmd/Ctrl+R: Refresh preview
-      if (isCmdOrCtrl && e.key === 'r') {
-        e.preventDefault();
-        handleRefresh();
-        return;
-      }
-
-      // Cmd/Ctrl+K: Toggle mobile split view
-      if (isCmdOrCtrl && e.key === 'k') {
-        e.preventDefault();
-        handleToggleMobileSplit();
-        return;
-      }
-
-      // Escape: Exit inspect mode or close panels
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        if (inspectMode) {
-          setInspectMode(false);
-        } else if (showStyleEditor) {
-          setShowStyleEditor(false);
-        } else if (showLogs) {
-          setShowLogs(false);
-        }
-        return;
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isMobile, inspectMode, showStyleEditor, showLogs, handleRefresh, handleToggleMobileSplit]);
 
   // Auto-select default terminal session
   useEffect(() => {
@@ -1348,29 +1366,49 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [activeSessionId, activeSessions, selectedTerminalSession]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (consolidated for both mobile and desktop)
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Ignore if user is typing in an input/textarea (important for mobile)
+      const activeElement = document.activeElement;
+      if (activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.isContentEditable
+      )) {
+        return;
+      }
+
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+
       // Cmd/Ctrl + I: Toggle inspector
-      if ((e.metaKey || e.ctrlKey) && e.key === 'i') {
+      if (isCmdOrCtrl && e.key === 'i') {
         e.preventDefault();
-        handleToggleInspect();
+        if (isMobile) {
+          setInspectMode(prev => !prev);
+        } else {
+          handleToggleInspect();
+        }
       }
 
       // Cmd/Ctrl + R: Refresh preview
-      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+      if (isCmdOrCtrl && e.key === 'r') {
         e.preventDefault();
         handleRefresh();
       }
 
-      // Cmd/Ctrl + K: Toggle split terminal
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // Cmd/Ctrl + K: Toggle split (mobile split on mobile, terminal split on desktop)
+      if (isCmdOrCtrl && e.key === 'k') {
         e.preventDefault();
-        handleToggleTerminalSplit();
+        if (isMobile) {
+          handleToggleMobileSplit();
+        } else {
+          handleToggleTerminalSplit();
+        }
       }
 
-      // Cmd/Ctrl + 1-9: Switch terminal session
-      if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
+      // Cmd/Ctrl + 1-9: Switch terminal session (desktop only)
+      if (!isMobile && isCmdOrCtrl && e.key >= '1' && e.key <= '9') {
         e.preventDefault();
         const index = parseInt(e.key) - 1;
         if (activeSessions && activeSessions[index]) {
@@ -1380,25 +1418,39 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
       // Escape: Close inspector or logs
       if (e.key === 'Escape') {
-        if (selectedElement) {
-          setSelectedElement(null);
-        } else if (showLogs) {
-          setShowLogs(false);
-        } else if (showKeyboardHelp) {
-          setShowKeyboardHelp(false);
+        e.preventDefault();
+        if (isMobile) {
+          // Mobile-specific escape handling
+          if (inspectMode) {
+            setInspectMode(false);
+          } else if (showStyleEditor) {
+            setShowStyleEditor(false);
+          } else if (showLogs) {
+            setShowLogs(false);
+          }
+        } else {
+          // Desktop escape handling
+          if (selectedElement) {
+            setSelectedElement(null);
+          } else if (showLogs) {
+            setShowLogs(false);
+          } else if (showKeyboardHelp) {
+            setShowKeyboardHelp(false);
+          }
         }
       }
 
-      // ? : Show keyboard help
-      if (e.key === '?' && !e.metaKey && !e.ctrlKey) {
+      // ? : Show keyboard help (desktop only)
+      if (!isMobile && e.key === '?' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         setShowKeyboardHelp(true);
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [inspectMode, selectedElement, showLogs, showKeyboardHelp, activeSessions, handleRefresh, handleToggleInspect, handleToggleTerminalSplit]);
+    // Use document.addEventListener to avoid duplicate listeners
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isMobile, inspectMode, selectedElement, showLogs, showStyleEditor, showKeyboardHelp, activeSessions, handleRefresh, handleToggleInspect, handleToggleTerminalSplit, handleToggleMobileSplit]);
 
   // Auto-expand logs when errors appear
   useEffect(() => {
@@ -1420,7 +1472,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         >
           {!iframeSrc ? (
             <div className="preview-empty">
-              {projectInfo && projectInfo.projectType !== 'unknown' ? (
+              {url && (url.includes(':3020') || url.includes('preview-3020')) ? (
+                <>
+                  <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
+                  <h3>Cannot Preview Terminal V4</h3>
+                  <p>Terminal V4 (port 3020) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                  <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector.</p>
+                </>
+              ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
                 <>
                   <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
                   <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
@@ -1867,7 +1926,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <div className="preview-inspector-section">
                   <div className="preview-inspector-label">Parents</div>
                   <div className="preview-inspector-breadcrumb">
-                    {selectedElement.parentChain.reverse().map((parent, i) => (
+                    {[...selectedElement.parentChain].reverse().map((parent, i) => (
                       <span key={i} className="breadcrumb-item">
                         {i > 0 && <span className="breadcrumb-sep"> › </span>}
                         <span className="breadcrumb-tag">{parent.selector}</span>
@@ -2426,7 +2485,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           <div className="preview-content">
             {!iframeSrc ? (
               <div className="preview-empty">
-                {projectInfo && projectInfo.projectType !== 'unknown' ? (
+                {url && (url.includes(':3020') || url.includes('preview-3020')) ? (
+                  <>
+                    <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
+                    <h3>Cannot Preview Terminal V4</h3>
+                    <p>Terminal V4 (port 3020) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                    <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector above.</p>
+                  </>
+                ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
                   <>
                     <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
                     <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>

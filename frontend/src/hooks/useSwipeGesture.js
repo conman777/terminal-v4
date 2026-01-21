@@ -47,14 +47,14 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       const absY = Math.abs(deltaY);
 
       if (!swipeLockRef.current) {
-        // Determine intent once user moves enough.
-        if (absX > 10 || absY > 10) {
-          swipeLockRef.current = absX > absY ? 'horizontal' : 'vertical';
+        // Determine intent once user moves enough, bias toward vertical to preserve scrolling.
+        if (absX > 12 || absY > 12) {
+          swipeLockRef.current = absX > absY + 6 ? 'horizontal' : 'vertical';
         }
       }
 
       if (swipeLockRef.current === 'horizontal') {
-        // Prevent vertical scroll when horizontal swipe is intended.
+        // Prevent vertical scroll when horizontal swipe is strongly intended.
         e.preventDefault();
       }
     };

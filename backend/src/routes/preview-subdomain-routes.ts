@@ -12,6 +12,8 @@ const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
 const PREVIEW_PATH_PATTERN = /^\/preview\/(\d+)(\/.*)?$/;
 const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW === 'true';
 const PREVIEW_PORT_RANGE = UNRESTRICTED_PREVIEW ? { min: 1, max: 65535 } : { min: 3000, max: 9999 };
+const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for response buffering
+const RESPONSE_READ_TIMEOUT = 30000; // 30 second timeout for reading responses
 
 // Headers to skip when forwarding
 const SKIP_HEADERS = new Set([
@@ -469,7 +471,7 @@ const PREVIEW_DEBUG_SCRIPT = `
       } else if (init.body instanceof FormData) {
         requestBody = '[FormData]';
       } else if (init.body instanceof Blob) {
-        requestBody = '[Blob: ' + init.body.size + ' bytes]';
+        requestBody = '[Blob: ' + ((init.body.size || 0).toLocaleString()) + ' bytes]';
       }
     }
 
@@ -571,7 +573,7 @@ const PREVIEW_DEBUG_SCRIPT = `
       } else if (body instanceof FormData) {
         requestBody = '[FormData]';
       } else if (body instanceof Blob) {
-        requestBody = '[Blob: ' + body.size + ' bytes]';
+        requestBody = '[Blob: ' + ((body.size || 0).toLocaleString()) + ' bytes]';
       }
     }
 
@@ -872,9 +874,13 @@ function getPreviewPort(host: string | undefined): number | null {
   const match = hostname.match(PREVIEW_SUBDOMAIN_PATTERN);
   if (!match) return null;
 
-  const port = parseInt(match[1], 10);
-  // Validate port range
-  if (Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) return null;
+  const portStr = match[1];
+  // Pre-validate that string contains only digits to prevent parseInt edge cases
+  if (!/^\d+$/.test(portStr)) return null;
+
+  const port = parseInt(portStr, 10);
+  // Validate port is a safe integer and within allowed range
+  if (!Number.isSafeInteger(port) || Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) return null;
   return port;
 }
 
@@ -888,8 +894,14 @@ function getPreviewPathMatch(url: string | undefined): { port: number; path: str
   }
   const match = parsed.pathname.match(PREVIEW_PATH_PATTERN);
   if (!match) return null;
-  const port = parseInt(match[1], 10);
-  if (Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) {
+
+  const portStr = match[1];
+  // Pre-validate that string contains only digits to prevent parseInt edge cases
+  if (!/^\d+$/.test(portStr)) return null;
+
+  const port = parseInt(portStr, 10);
+  // Validate port is a safe integer and within allowed range
+  if (!Number.isSafeInteger(port) || Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) {
     return null;
   }
   const path = (match[2] || '/') + parsed.search + parsed.hash;
@@ -926,6 +938,20 @@ function isWebSocketUpgrade(request: FastifyRequest): boolean {
   return false;
 }
 
+// RFC 6265 validation for cookie names and values
+function isValidCookieName(name: string): boolean {
+  // RFC 6265: token = 1*<any CHAR except CTLs or separators>
+  // Allowed: !#$%&'*+-.0-9A-Z^_`a-z|~
+  return /^[!#$%&'*+\-.0-9A-Z^_`a-z|~]+$/.test(name);
+}
+
+function isValidCookieValue(value: string): boolean {
+  // RFC 6265: cookie-value = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE )
+  // cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
+  // Excludes control chars, space, ", comma, semicolon, backslash
+  return /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/.test(value);
+}
+
 function mergeCookieHeaders(requestCookies: string, storedCookies: string): string {
   const merged = new Map<string, string>();
 
@@ -936,6 +962,15 @@ function mergeCookieHeaders(requestCookies: string, storedCookies: string): stri
     if (eqIndex < 0) continue;
     const name = trimmed.slice(0, eqIndex).trim();
     const value = trimmed.slice(eqIndex + 1).trim();
+    // Validate cookie name and value per RFC 6265
+    if (!isValidCookieName(name)) {
+      console.warn(`[Preview] Invalid cookie name rejected: ${name}`);
+      continue;
+    }
+    if (!isValidCookieValue(value)) {
+      console.warn(`[Preview] Invalid cookie value rejected for ${name}`);
+      continue;
+    }
     if (!merged.has(name)) {
       merged.set(name, value);
     }
@@ -949,6 +984,15 @@ function mergeCookieHeaders(requestCookies: string, storedCookies: string): stri
     const name = trimmed.slice(0, eqIndex).trim();
     if (merged.has(name)) continue;
     const value = trimmed.slice(eqIndex + 1).trim();
+    // Validate cookie name and value per RFC 6265
+    if (!isValidCookieName(name)) {
+      console.warn(`[Preview] Invalid cookie name rejected: ${name}`);
+      continue;
+    }
+    if (!isValidCookieValue(value)) {
+      console.warn(`[Preview] Invalid cookie value rejected for ${name}`);
+      continue;
+    }
     merged.set(name, value);
   }
 
@@ -1433,15 +1477,25 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Buffer request body for non-GET requests (onRequest runs before body parsing)
       let body: Buffer | undefined = undefined;
       if (request.method !== 'GET' && request.method !== 'HEAD') {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request.raw) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
-        if (chunks.length > 0) {
-          body = Buffer.concat(chunks);
-          forwardHeaders['content-length'] = String(body.length);
-        } else {
-          delete forwardHeaders['content-length'];
+        try {
+          const chunks: Buffer[] = [];
+          for await (const chunk of request.raw) {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          }
+          if (chunks.length > 0) {
+            body = Buffer.concat(chunks);
+            forwardHeaders['content-length'] = String(body.length);
+          } else {
+            delete forwardHeaders['content-length'];
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[Preview] Failed to buffer request body for ${request.method} ${request.url}:`, message);
+          reply.code(400).send({
+            error: 'Invalid request body',
+            message: 'Failed to read request body'
+          });
+          return reply;
         }
       } else {
         delete forwardHeaders['content-length'];
@@ -1546,14 +1600,26 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       let responseBodyBuffer: Buffer | null = null;
       if (response.body) {
         // Extract cache-buster from request URL, or generate one
-        const url = new URL(requestPath, `http://localhost:${port}`);
-        const cacheBuster = url.searchParams.get('_cb') || Date.now().toString();
+        let cacheBuster: string;
+        try {
+          const url = new URL(requestPath, `http://localhost:${port}`);
+          const cbParam = url.searchParams.get('_cb');
+          // Validate cache buster is numeric to prevent XSS
+          cacheBuster = (cbParam && /^\d+$/.test(cbParam)) ? cbParam : Date.now().toString();
+        } catch {
+          // If URL parsing fails, generate fresh cache buster
+          cacheBuster = Date.now().toString();
+        }
         const contentType = response.headers.get('content-type') || '';
         const isHtml = contentType.includes('text/html');
         const isCss = contentType.includes('text/css') || requestPath.endsWith('.css') || requestPath.includes('.css?');
         const isJs = contentType.includes('javascript') || requestPath.endsWith('.js') || requestPath.endsWith('.mjs');
         const shouldRewrite = isHtml || isCss || (isJs && (UNRESTRICTED_PREVIEW || isPathPreview));
         const rewriteUrlValue = (value: string) => {
+          // Check skip BEFORE normalization to catch framework paths like /_next/
+          if (shouldSkipRewrite(value)) {
+            return { url: value, skip: true };
+          }
           let normalized = rewriteLocalAbsoluteUrl(value, port, previewOrigin, previewBasePath);
           normalized = prefixPreviewBasePath(normalized, previewBasePath);
           const isPreviewHost = normalized.startsWith(previewOrigin) ||
@@ -1585,11 +1651,46 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         } else {
           const reader = response.body.getReader();
           const chunks: Uint8Array[] = [];
+          let totalSize = 0;
+          let timeoutId: NodeJS.Timeout | null = null;
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
+          try {
+            // Set up timeout
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              timeoutId = setTimeout(() => {
+                reader.cancel('Response read timeout');
+                reject(new Error('Response read timeout exceeded'));
+              }, RESPONSE_READ_TIMEOUT);
+            });
+
+            // Race between reading and timeout
+            await Promise.race([
+              (async () => {
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+
+                  totalSize += value.length;
+                  if (totalSize > MAX_RESPONSE_SIZE) {
+                    reader.cancel('Response too large');
+                    throw new Error(`Response size exceeds ${MAX_RESPONSE_SIZE} bytes`);
+                  }
+
+                  chunks.push(value);
+                }
+              })(),
+              timeoutPromise
+            ]);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[Preview] Response read error for ${request.url}:`, message);
+            reply.code(502).send({
+              error: 'Response read error',
+              message: message.includes('timeout') ? 'Response read timeout' : 'Response too large'
+            });
+            return reply;
+          } finally {
+            if (timeoutId) clearTimeout(timeoutId);
           }
 
           responseBodyBuffer = Buffer.concat(chunks);

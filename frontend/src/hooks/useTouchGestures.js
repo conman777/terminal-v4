@@ -62,7 +62,13 @@ export function useTouchGestures(isMobile, onTap, options = {}) {
     const state = touchStateRef.current;
     touchStateRef.current = null;
     clearLongPressTimer();
-    if (!state || state.moved || state.longPressFired) return;
+    if (!state) return;
+    if (state.longPressFired) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (state.moved) return;
     onTap?.(event);
   }, [clearLongPressTimer, isMobile, onTap]);
 
