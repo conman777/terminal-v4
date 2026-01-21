@@ -191,23 +191,20 @@ export function SessionTabBar({
         aria-label="Terminal sessions"
       >
         {sessions.map(session => (
-          <div
+          <SessionTab
             key={session.id}
-            onContextMenu={(e) => handleContextMenu(e, session.id)}
-          >
-            <SessionTab
-              session={session}
-              isActive={session.id === activeSessionId}
-              hasUnread={sessionActivity?.[session.id]?.hasUnread}
-              onSelect={onSelectSession}
-              onClose={onCloseSession}
-              onRename={onRenameSession}
-              onCloseOthers={handleCloseOthers}
-              onDragStart={handleDragStart}
-              onDragEnd={handleDragEnd}
-              onDrop={handleDrop}
-            />
-          </div>
+            session={session}
+            isActive={session.id === activeSessionId}
+            hasUnread={sessionActivity?.[session.id]?.hasUnread}
+            onSelect={onSelectSession}
+            onClose={onCloseSession}
+            onRename={onRenameSession}
+            onCloseOthers={handleCloseOthers}
+            onDragStart={handleDragStart}
+            onDragEnd={handleDragEnd}
+            onDrop={handleDrop}
+            onContextMenu={handleContextMenu}
+          />
         ))}
 
         <button

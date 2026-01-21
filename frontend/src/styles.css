@@ -10602,7 +10602,7 @@ textarea:focus-visible {
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   padding: 0 8px;
-  height: 36px;
+  height: 42px;
   flex-shrink: 0;
 }
 
@@ -10624,12 +10624,12 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 8px 14px;
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   white-space: nowrap;
   cursor: pointer;
   transition: all var(--transition-fast);

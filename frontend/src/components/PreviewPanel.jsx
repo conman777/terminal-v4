@@ -5,15 +5,6 @@ import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
 import { TerminalChat } from './TerminalChat';
 import { StyleEditor } from './StyleEditor';
-import { RecorderPanel } from './browser/automation/RecorderPanel';
-import { TestRunner } from './browser/automation/TestRunner';
-import { CookieManager } from './browser/automation/CookieManager';
-import { PreviewToolbar } from './preview/PreviewToolbar';
-import { NavigationControls } from './preview/NavigationControls';
-import { ScreenshotTools } from './preview/ScreenshotTools';
-import { DevicePresets } from './preview/DevicePresets';
-import { VisualDiffViewer } from './browser/VisualDiffViewer';
-import { SessionSwitcher } from './browser/SessionSwitcher';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -117,16 +108,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
-  // Phase 4: Advanced Testing Features state
-  const [showDevicePresets, setShowDevicePresets] = useState(false);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [showVisualDiff, setShowVisualDiff] = useState(false);
-  const [visualDiffResult, setVisualDiffResult] = useState(null);
-  const [showSessionSwitcher, setShowSessionSwitcher] = useState(false);
-  // Automation modals
-  const [showRecorderPanel, setShowRecorderPanel] = useState(false);
-  const [showTestRunner, setShowTestRunner] = useState(false);
-  const [showCookieManager, setShowCookieManager] = useState(false);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
@@ -824,146 +805,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       window.open(targetUrl, '_blank', 'noopener,noreferrer');
     }
   }, [baseIframeSrc, iframeSrc]);
-
-  // Phase 4: Device Presets Handlers
-  const handleDeviceSelect = useCallback((device) => {
-    setSelectedDevice(device);
-    setShowDevicePresets(false);
-
-    // Apply device viewport via CSS transform to iframe wrapper
-    if (iframeRef.current) {
-      const iframeWrapper = iframeRef.current.parentElement;
-      if (iframeWrapper) {
-        // Calculate scale to fit device in viewport
-        const scale = Math.min(
-          iframeWrapper.clientWidth / device.width,
-          iframeWrapper.clientHeight / device.height,
-          1
-        );
-
-        iframeWrapper.style.width = `${device.width}px`;
-        iframeWrapper.style.height = `${device.height}px`;
-        iframeWrapper.style.transform = `scale(${scale})`;
-        iframeWrapper.style.transformOrigin = 'top left';
-        iframeWrapper.style.margin = '0 auto';
-      }
-    }
-
-    // Inject viewport meta tag into iframe
-    if (iframeRef.current && iframeRef.current.contentWindow) {
-      try {
-        const iframeDoc = iframeRef.current.contentDocument || iframeRef.current.contentWindow.document;
-
-        // Inject or update viewport meta tag
-        let viewportMeta = iframeDoc.querySelector('meta[name="viewport"]');
-        if (!viewportMeta) {
-          viewportMeta = iframeDoc.createElement('meta');
-          viewportMeta.setAttribute('name', 'viewport');
-          iframeDoc.head.appendChild(viewportMeta);
-        }
-        viewportMeta.setAttribute('content', `width=${device.width}, initial-scale=${1 / (device.pixelRatio || 1)}`);
-
-        // Note: User agent override not possible in iframe due to browser security.
-        // The navigator.userAgent property is read-only and cannot be overridden
-        // from the parent frame. User agent can only be changed server-side via
-        // Playwright's browser context. Consider implementing this in the backend
-        // if user agent simulation is needed for testing.
-        // See: https://developer.mozilla.org/en-US/docs/Web/API/Navigator/userAgent
-      } catch (err) {
-        console.warn('Could not modify iframe viewport:', err);
-      }
-    }
-  }, []);
-
-  const handleResetDevice = useCallback(() => {
-    setSelectedDevice(null);
-
-    // Reset iframe wrapper styles
-    if (iframeRef.current) {
-      const iframeWrapper = iframeRef.current.parentElement;
-      if (iframeWrapper) {
-        iframeWrapper.style.width = '';
-        iframeWrapper.style.height = '';
-        iframeWrapper.style.transform = '';
-        iframeWrapper.style.transformOrigin = '';
-        iframeWrapper.style.margin = '';
-      }
-    }
-  }, []);
-
-  // Phase 4: Visual Regression Testing Handlers
-  const handleVisualTest = useCallback(async () => {
-    if (!previewPort) {
-      alert('No preview port detected');
-      return;
-    }
-
-    try {
-      const testName = `preview-${previewPort}`;
-      const response = await apiFetch(`/api/browser/visual-test/${testName}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          url: iframeSrc,
-          viewport: selectedDevice ? {
-            width: selectedDevice.width,
-            height: selectedDevice.height,
-            deviceScaleFactor: selectedDevice.pixelRatio || 1
-          } : undefined
-        })
-      });
-
-      setVisualDiffResult(response);
-      setShowVisualDiff(true);
-    } catch (err) {
-      console.error('Visual test failed:', err);
-      alert(`Visual test failed: ${err.message}`);
-    }
-  }, [previewPort, iframeSrc, selectedDevice]);
-
-  const handleSetBaseline = useCallback(async () => {
-    if (!previewPort) {
-      alert('No preview port detected');
-      return;
-    }
-
-    try {
-      const testName = `preview-${previewPort}`;
-      await apiFetch(`/api/browser/visual-test/${testName}/baseline`, {
-        method: 'POST',
-        body: JSON.stringify({
-          url: iframeSrc,
-          viewport: selectedDevice ? {
-            width: selectedDevice.width,
-            height: selectedDevice.height,
-            deviceScaleFactor: selectedDevice.pixelRatio || 1
-          } : undefined
-        })
-      });
-
-      alert('Baseline set successfully!');
-    } catch (err) {
-      console.error('Failed to set baseline:', err);
-      alert(`Failed to set baseline: ${err.message}`);
-    }
-  }, [previewPort, iframeSrc, selectedDevice]);
-
-  const handleAcceptBaseline = useCallback(async () => {
-    if (!visualDiffResult || !previewPort) return;
-
-    try {
-      const testName = `preview-${previewPort}`;
-      await apiFetch(`/api/browser/visual-test/${testName}/baseline`, {
-        method: 'PUT'
-      });
-
-      setShowVisualDiff(false);
-      setVisualDiffResult(null);
-      alert('New baseline accepted!');
-    } catch (err) {
-      console.error('Failed to accept baseline:', err);
-      alert(`Failed to accept baseline: ${err.message}`);
-    }
-  }, [visualDiffResult, previewPort]);
 
   // Navigation handlers for browser history
   const handleBack = useCallback(() => {
@@ -2216,100 +2057,38 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           />
         </form>
         <div className="preview-actions">
-          {/* Navigation Controls */}
-          <NavigationControls
-            onBack={handleBack}
-            onForward={handleForward}
-            onReload={handleRefresh}
-            canGoBack={historyIndex > 0}
-            canGoForward={historyIndex < historyStack.length - 1}
-            isLoading={isLoading}
-          />
-
-          {/* Screenshot Tools */}
-          <ScreenshotTools
-            previewPort={previewPort}
-            selectedElement={selectedElement}
-          />
-
-          {/* Phase 4: Device Presets Button */}
-          <Tooltip text="Device presets" shortcut="⌘D">
-            <button
-              type="button"
-              className={`preview-action-btn ${selectedDevice ? 'active' : ''}`}
-              onClick={() => setShowDevicePresets(true)}
-              disabled={!iframeSrc}
-              aria-label="Device presets"
-              title={selectedDevice ? `Device: ${selectedDevice.name}` : 'Select device preset'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="5" y="2" width="14" height="20" rx="2" />
-                <path d="M12 18h.01" />
-              </svg>
-            </button>
-          </Tooltip>
-
-          {/* Reset Device Button (only show when device is selected) */}
-          {selectedDevice && (
-            <Tooltip text="Reset to default viewport">
-              <button
-                type="button"
-                className="preview-action-btn"
-                onClick={handleResetDevice}
-                aria-label="Reset device"
-              >
-                ↻
-              </button>
-            </Tooltip>
-          )}
-
-          {/* Phase 4: Visual Test Button */}
-          <Tooltip text="Visual regression test">
+          {/* Simple back/forward/reload buttons */}
+          <Tooltip text="Go back">
             <button
               type="button"
               className="preview-action-btn"
-              onClick={handleVisualTest}
-              disabled={!iframeSrc}
-              aria-label="Visual test"
+              onClick={handleBack}
+              disabled={historyIndex <= 0}
+              aria-label="Go back"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
+              ←
             </button>
           </Tooltip>
-
-          {/* Phase 4: Set Baseline Button */}
-          <Tooltip text="Set visual baseline">
+          <Tooltip text="Go forward">
             <button
               type="button"
               className="preview-action-btn"
-              onClick={handleSetBaseline}
-              disabled={!iframeSrc}
-              aria-label="Set baseline"
+              onClick={handleForward}
+              disabled={historyIndex >= historyStack.length - 1}
+              aria-label="Go forward"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
-                <polyline points="17 21 17 13 7 13 7 21" />
-                <polyline points="7 3 7 8 15 8" />
-              </svg>
+              →
             </button>
           </Tooltip>
-
-          {/* Phase 4: Session Switcher Button */}
-          <Tooltip text="Browser sessions">
+          <Tooltip text="Reload" shortcut="⌘R">
             <button
               type="button"
               className="preview-action-btn"
-              onClick={() => setShowSessionSwitcher(true)}
-              aria-label="Browser sessions"
+              onClick={handleRefresh}
+              disabled={!iframeSrc}
+              aria-label="Reload preview"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-              </svg>
+              {isLoading ? '⋯' : '↻'}
             </button>
           </Tooltip>
 
@@ -2354,50 +2133,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <line x1="12" y1="19" x2="20" y2="19" />
               </svg>
               {(logs.length + proxyLogs.length) > 0 && <span className="preview-log-badge-sm">{logs.length + proxyLogs.length}</span>}
-            </button>
-          </Tooltip>
-          <Tooltip text="Action Recorder" shortcut="">
-            <button
-              type="button"
-              className="preview-action-btn"
-              onClick={() => setShowRecorderPanel(true)}
-              disabled={!iframeSrc}
-              aria-label="Open Action Recorder"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <circle cx="12" cy="12" r="3" fill="currentColor"></circle>
-              </svg>
-            </button>
-          </Tooltip>
-          <Tooltip text="Run Tests" shortcut="">
-            <button
-              type="button"
-              className="preview-action-btn"
-              onClick={() => setShowTestRunner(true)}
-              disabled={!iframeSrc}
-              aria-label="Run Tests"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-              </svg>
-            </button>
-          </Tooltip>
-          <Tooltip text="Manage Cookies" shortcut="">
-            <button
-              type="button"
-              className="preview-action-btn"
-              onClick={() => setShowCookieManager(true)}
-              disabled={!iframeSrc}
-              aria-label="Manage Cookies"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.4 0-8-3.6-8-8s3.6-8 8-8 8 3.6 8 8-3.6 8-8 8z"></path>
-                <circle cx="8" cy="9" r="1"></circle>
-                <circle cx="16" cy="10" r="1"></circle>
-                <circle cx="10" cy="14" r="1"></circle>
-                <circle cx="15" cy="15" r="1"></circle>
-              </svg>
             </button>
           </Tooltip>
           {previewPort && (
@@ -3003,44 +2738,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         </div>
       )}
 
-      {/* Automation Modals */}
-      {showRecorderPanel && (
-        <RecorderPanel onClose={() => setShowRecorderPanel(false)} />
-      )}
-
-      {showTestRunner && (
-        <TestRunner onClose={() => setShowTestRunner(false)} />
-      )}
-
-      {showCookieManager && (
-        <CookieManager onClose={() => setShowCookieManager(false)} />
-      )}
-
-      {/* Phase 4: Device Presets Modal */}
-      {showDevicePresets && (
-        <DevicePresets
-          onDeviceSelect={handleDeviceSelect}
-          onClose={() => setShowDevicePresets(false)}
-        />
-      )}
-
-      {/* Phase 4: Visual Diff Viewer */}
-      {showVisualDiff && visualDiffResult && (
-        <VisualDiffViewer
-          comparisonResult={visualDiffResult}
-          baselineImage={visualDiffResult.baselineImage}
-          currentImage={visualDiffResult.currentImage}
-          onClose={() => setShowVisualDiff(false)}
-          onAcceptBaseline={handleAcceptBaseline}
-        />
-      )}
-
-      {/* Phase 4: Session Switcher */}
-      {showSessionSwitcher && (
-        <SessionSwitcher
-          onClose={() => setShowSessionSwitcher(false)}
-        />
-      )}
     </div>
   );
 }

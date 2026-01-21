@@ -619,19 +619,21 @@ function AppContent() {
                 </button>
               </div>
               {leftPanelMode === 'terminal' ? (
-                <SessionSelector
-                  activeSessions={activeSessions}
-                  inactiveSessions={inactiveSessions}
-                  activeSessionId={activeSessionId}
-                  onSelectSession={handleSelectSession}
-                  onRestoreSession={handleRestoreSession}
-                  onCreateSession={createSession}
-                  onCloseSession={closeSession}
-                  onRenameSession={renameSession}
-                  isLoading={loadingSessions}
-                  sessionLoadError={sessionLoadError}
-                  onRetryLoad={retryLoadSessions}
-                />
+                activeSessions.length > 1 ? (
+                  <SessionSelector
+                    activeSessions={activeSessions}
+                    inactiveSessions={inactiveSessions}
+                    activeSessionId={activeSessionId}
+                    onSelectSession={handleSelectSession}
+                    onRestoreSession={handleRestoreSession}
+                    onCreateSession={createSession}
+                    onCloseSession={closeSession}
+                    onRenameSession={renameSession}
+                    isLoading={loadingSessions}
+                    sessionLoadError={sessionLoadError}
+                    onRetryLoad={retryLoadSessions}
+                  />
+                ) : null
               ) : (
                 <ClaudeCodeSessionSelector
                   sessions={claudeCodeSessions}

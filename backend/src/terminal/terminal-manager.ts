@@ -169,6 +169,7 @@ function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
 export class TerminalManager {
   #sessions = new Map<string, ManagedTerminal>();
   #persistedSessions = new Map<string, Map<string, PersistedSession>>(); // userId -> sessionId -> session
+  #recoveredUsers = new Set<string>(); // Track which users have had recovery run
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
   #counter = 0;
@@ -217,7 +218,10 @@ export class TerminalManager {
     console.log(`Loaded ${persisted.length} persisted terminal sessions for user ${userId}`);
 
     // Auto-restore sessions that have surviving tmux processes
-    if (this.#useTmux) {
+    // Only run recovery once per user to prevent duplicate recovered sessions
+    if (this.#useTmux && !this.#recoveredUsers.has(userId)) {
+      this.#recoveredUsers.add(userId);
+
       // First, recover any orphaned tmux sessions (tmux exists but no valid persisted data)
       const tmuxSessions = listTmuxSessions();
       for (const tmuxId of tmuxSessions) {

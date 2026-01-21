@@ -5,8 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsup src/index.ts --format esm --sourcemap --dts --external ws && npm run copy-migrations",
-    "copy-migrations": "mkdir -p dist/storage/migrations && cp -r src/storage/migrations/*.sql dist/storage/migrations/",
+    "build": "tsup src/index.ts --format esm --sourcemap --dts --external ws",
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
     "test": "vitest run",

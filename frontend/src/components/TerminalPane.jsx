@@ -98,43 +98,45 @@ export const TerminalPane = memo(function TerminalPane({
       onDrop={handleDrop}
     >
       <div className="pane-header">
-        {/* Session mini-tab with dropdown */}
-        <div className="pane-session-tab">
-          <button
-            type="button"
-            className="pane-session-btn"
-            onClick={handleSessionClick}
-          >
-            <span className="pane-session-title">
-              {currentSession?.title || 'No session'}
-            </span>
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
+        {/* Session mini-tab with dropdown - only show in split-pane mode with multiple sessions */}
+        {canClose && sessions.length > 1 && (
+          <div className="pane-session-tab">
+            <button
+              type="button"
+              className="pane-session-btn"
+              onClick={handleSessionClick}
+            >
+              <span className="pane-session-title">
+                {currentSession?.title || 'No session'}
+              </span>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
 
-          {showSessionMenu && (
-            <div className="pane-session-menu">
-              {sessions.map(session => {
-                const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className={`pane-session-option ${session.id === pane.sessionId ? 'active' : ''} ${hasUnread ? 'unread' : ''}`}
-                    onClick={() => handleSessionSelect(session.id)}
-                  >
-                    {hasUnread && <span className="session-unread-dot" />}
-                    <span className="session-option-title">{session.title}</span>
-                  </button>
-                );
-              })}
-              {sessions.length === 0 && (
-                <div className="pane-session-empty">No sessions available</div>
-              )}
-            </div>
-          )}
-        </div>
+            {showSessionMenu && (
+              <div className="pane-session-menu">
+                {sessions.map(session => {
+                  const hasUnread = sessionActivity?.[session.id]?.hasUnread;
+                  return (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className={`pane-session-option ${session.id === pane.sessionId ? 'active' : ''} ${hasUnread ? 'unread' : ''}`}
+                      onClick={() => handleSessionSelect(session.id)}
+                    >
+                      {hasUnread && <span className="session-unread-dot" />}
+                      <span className="session-option-title">{session.title}</span>
+                    </button>
+                  );
+                })}
+                {sessions.length === 0 && (
+                  <div className="pane-session-empty">No sessions available</div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="pane-controls">
           <button

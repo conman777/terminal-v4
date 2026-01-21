@@ -13,7 +13,8 @@ export const SessionTab = memo(function SessionTab({
   onCloseOthers,
   onDragStart,
   onDragEnd,
-  onDrop
+  onDrop,
+  onContextMenu
 }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
@@ -98,8 +99,10 @@ export const SessionTab = memo(function SessionTab({
   // Context menu handler
   const handleContextMenu = useCallback((e) => {
     e.preventDefault();
-    // Will be handled by parent SessionTabBar
-  }, []);
+    if (onContextMenu) {
+      onContextMenu(e, session.id);
+    }
+  }, [onContextMenu, session.id]);
 
   const tabClasses = [
     'session-tab-item',

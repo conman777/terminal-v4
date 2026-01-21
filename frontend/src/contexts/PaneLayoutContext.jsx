@@ -34,15 +34,21 @@ export function PaneLayoutProvider({ children }) {
 
   // Initialize first pane with active session if not set (called from App)
   const initializePaneWithSession = useCallback((sessionId) => {
-    if (sessionId && paneLayout.panes[0]?.sessionId === null) {
-      setPaneLayout(prev => ({
+    if (!sessionId) return;
+
+    // Update the active pane's session
+    setPaneLayout(prev => {
+      const activePaneIndex = prev.panes.findIndex(p => p.id === prev.activePaneId);
+      if (activePaneIndex === -1) return prev;
+
+      return {
         ...prev,
         panes: prev.panes.map((pane, i) =>
-          i === 0 ? { ...pane, sessionId } : pane
+          i === activePaneIndex ? { ...pane, sessionId } : pane
         )
-      }));
-    }
-  }, [paneLayout.panes]);
+      };
+    });
+  }, []);
 
   // Handle session selection in a specific pane
   const setPaneSession = useCallback((paneId, sessionId) => {

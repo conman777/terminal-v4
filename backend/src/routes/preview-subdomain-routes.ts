@@ -1208,13 +1208,8 @@ function proxyWebSocketConnection(
     targetPath.includes('/_hmr') ||
     targetPath.startsWith('/api/preview/');
 
-  // Log connection only for application WebSockets (not dev tools)
-  const connectionId = !isDevToolWs ? logWebSocketConnection(port, {
-    url: targetUrl,
-    protocols: getWebSocketProtocols(request) || [],
-    timestamp: Date.now(),
-    status: 'connecting'
-  }) : null;
+  // WebSocket logging removed
+  const connectionId = null;
 
   const closeBoth = (code: number, reason: string) => {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
@@ -1232,14 +1227,6 @@ function proxyWebSocketConnection(
       // Log sent messages (only non-dev tools)
       if (!isDevToolWs && connectionId) {
         const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
-        logWebSocketMessage(port, {
-          connectionId,
-          direction: 'sent',
-          timestamp: Date.now(),
-          data: dataStr.length > 1000 ? dataStr.substring(0, 1000) + '...' : dataStr,
-          size: Buffer.byteLength(data),
-          format: isBinary ? 'binary' : 'text'
-        });
       }
     }
   });
@@ -1251,14 +1238,6 @@ function proxyWebSocketConnection(
       // Log received messages (only non-dev tools)
       if (!isDevToolWs && connectionId) {
         const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
-        logWebSocketMessage(port, {
-          connectionId,
-          direction: 'received',
-          timestamp: Date.now(),
-          data: dataStr.length > 1000 ? dataStr.substring(0, 1000) + '...' : dataStr,
-          size: Buffer.byteLength(data),
-          format: isBinary ? 'binary' : 'text'
-        });
       }
     }
   });
@@ -1266,13 +1245,6 @@ function proxyWebSocketConnection(
   targetWs.on('open', () => {
     // Update connection status
     if (!isDevToolWs && connectionId) {
-      logWebSocketConnection(port, {
-        id: connectionId,
-        url: targetUrl,
-        protocols: getWebSocketProtocols(request) || [],
-        timestamp: Date.now(),
-        status: 'connected'
-      });
     }
   });
 
@@ -1281,14 +1253,6 @@ function proxyWebSocketConnection(
 
     // Log error
     if (!isDevToolWs && connectionId) {
-      logWebSocketConnection(port, {
-        id: connectionId,
-        url: targetUrl,
-        protocols: getWebSocketProtocols(request) || [],
-        timestamp: Date.now(),
-        status: 'error',
-        error: error.message
-      });
     }
 
     closeBoth(1011, 'Preview WebSocket upstream error');
@@ -1297,15 +1261,6 @@ function proxyWebSocketConnection(
   targetWs.on('close', (code: number, reason: string) => {
     // Log closure
     if (!isDevToolWs && connectionId) {
-      logWebSocketConnection(port, {
-        id: connectionId,
-        url: targetUrl,
-        protocols: getWebSocketProtocols(request) || [],
-        timestamp: Date.now(),
-        status: 'closed',
-        closeCode: code,
-        closeReason: reason
-      });
     }
 
     if (socket.readyState === WebSocket.OPEN) {

@@ -14,26 +14,19 @@ import { registerSettingsRoutes } from './routes/settings-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
 import { registerPreviewLogsRoutes } from './routes/preview-logs-routes';
-import { registerBrowserRoutes } from './routes/browser-routes';
-import { registerBrowserSessionRoutes } from './routes/browser-session-routes';
 import { registerExternalProxyRoutes } from './routes/external-proxy-routes';
 import { registerProcessRoutes } from './routes/process-routes';
 import { registerSystemRoutes } from './routes/system-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { registerFileRoutes } from './routes/file-routes';
 import { registerScreenshotRoutes } from './routes/screenshot-routes';
-import { registerPreviewPerformanceRoutes } from './routes/preview-performance-routes';
-import { registerBrowserSettingsRoutes } from './routes/browser-settings-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
 import { assertAuthConfig } from './auth/auth-service';
-import { stopCleanupInterval, initStorage as initPreviewLogsStorage } from './preview/preview-logs-service';
-import { initProxyLogStorage } from './preview/request-log-store';
-import { SQLiteStorage } from './storage/sqlite-storage';
-import { stopSessionManager } from './routes/browser-session-routes';
+import { stopCleanupInterval } from './preview/preview-logs-service';
 import { migrateOrphanedSessions } from './migrations/migrate-sessions';
 import { startMemoryMonitoring, stopMemoryMonitoring } from './utils/memory-monitor';
 
@@ -71,11 +64,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Migrate orphaned sessions from old storage location (one-time)
   await migrateOrphanedSessions();
 
-  // Initialize browser storage and persistence
-  const browserStorage = new SQLiteStorage();
-  initPreviewLogsStorage(browserStorage);
-  initProxyLogStorage(browserStorage);
-
   // Fail fast on insecure auth configuration
   assertAuthConfig();
 
@@ -109,12 +97,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerFileRoutes(app);
   await registerProcessRoutes(app);
   await registerSystemRoutes(app);
-  await registerBrowserRoutes(app);
-  await registerBrowserSessionRoutes(app);
   await registerExternalProxyRoutes(app);
   await registerScreenshotRoutes(app);
-  await registerPreviewPerformanceRoutes(app);
-  await registerBrowserSettingsRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
@@ -166,7 +150,6 @@ async function start() {
     try {
       stopMemoryMonitoring();
       stopCleanupInterval();
-      await stopSessionManager();
       await server.close();
       await terminalManager.closeAll();
       closeDatabase();
