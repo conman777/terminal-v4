@@ -4,33 +4,43 @@ This document describes the Performance Monitoring and WebSocket Debugging featu
 
 ## Overview
 
-Phase 5 adds three major features to the preview system:
+Phase 5 describes three DevTools features for the preview system:
 
 1. **Performance Monitoring** - Track Core Web Vitals, load metrics, and runtime performance
 2. **WebSocket Debugging** - Inspect WebSocket connections and messages
-3. **Browser Settings** - Configure session timeouts, limits, and quality settings
+3. **Browser Settings** - Configure browser session timeouts, limits, and quality settings
+
+## Current Status (2026-01)
+
+**Implemented**
+- Preview logs + proxy logs (Network/Console tabs) in `backend/src/routes/preview-logs-routes.ts`
+  and `backend/src/routes/preview-api-routes.ts`.
+- Storage/evaluate endpoints for the Storage and Console tabs in
+  `backend/src/routes/preview-api-routes.ts`.
+
+**Not yet wired in the backend**
+- Performance metrics endpoints used by `frontend/src/components/devtools/PerformanceTab.jsx`.
+- WebSocket debug endpoints used by `frontend/src/components/devtools/WebSocketTab.jsx`.
+- Browser Settings endpoints used by `frontend/src/components/settings/BrowserSettings.jsx`.
 
 ## Performance Monitoring
 
 ### Architecture
 
-The performance monitoring system consists of:
+The frontend UI is present, and the preview subdomain injects a metrics script,
+but the backend endpoints are not implemented yet.
 
-- **Client-side injection script** (`PERFORMANCE_MONITOR_SCRIPT` in `preview-subdomain-routes.ts`)
-  - Automatically injected into all HTML pages
-  - Uses PerformanceObserver API to track metrics
-  - Batches and sends metrics to backend every 2 seconds
-  - Lightweight design to avoid impacting page performance
-
-- **Backend storage** (`performance-service.ts`)
-  - In-memory storage of metrics per port
-  - Automatic cleanup of old metrics
-  - WebSocket streaming for live updates
-
-- **Frontend UI** (`PerformanceTab.jsx`)
-  - Displays metrics with pass/fail indicators
-  - Real-time FPS graph
-  - Export functionality for reports
+- **Client-side injection script** (`PERFORMANCE_MONITOR_SCRIPT` in
+  `backend/src/routes/preview-subdomain-routes.ts`)
+  - Injects PerformanceObserver metrics
+  - Sends batches to `/api/preview/:port/performance`
+- **Frontend UI** (`frontend/src/components/devtools/PerformanceTab.jsx`)
+  - Fetches `/api/preview/:port/performance`
+  - Subscribes to `/api/preview/:port/performance/stream`
+- **Backend TODO**
+  - Add in-memory storage + trimming
+  - Add GET/DELETE `/api/preview/:port/performance`
+  - Add WS `/api/preview/:port/performance/stream`
 
 ### Metrics Tracked
 
@@ -98,19 +108,14 @@ The monitoring script is designed to be lightweight:
 
 ### Architecture
 
-The WebSocket debugging system intercepts WebSocket connections through the preview proxy:
+The WebSocket Debugger UI exists, but the backend routes are not implemented.
 
-- **Server-side interceptor** (`websocket-interceptor.ts`)
-  - Logs connection events (open, close, error)
-  - Captures all sent and received messages
-  - Stores message format (text/binary) and size
-  - Automatically filters HMR WebSockets to reduce noise
-
-- **Frontend UI** (`WebSocketTab.jsx`)
-  - Connection list with status badges
-  - Message log with filtering (sent/received)
-  - JSON formatting for structured data
-  - Message detail view with copy functionality
+- **Frontend UI** (`frontend/src/components/devtools/WebSocketTab.jsx`)
+  - Fetches `/api/preview/:port/websockets`
+  - Clears with `DELETE /api/preview/:port/websockets`
+- **Backend TODO**
+  - Implement a connection/message store
+  - Add GET/DELETE `/api/preview/:port/websockets`
 
 ### Features
 
@@ -149,10 +154,9 @@ Click any message to see:
 
 ### HMR Whitelist
 
-Hot Module Replacement (HMR) WebSockets are automatically whitelisted to reduce noise:
+Planned behavior once WebSocket logging is implemented:
 - Vite HMR connections are not logged
 - Only application WebSockets are tracked
-- Configurable in `websocket-interceptor.ts`
 
 ### Usage
 
@@ -167,24 +171,19 @@ Hot Module Replacement (HMR) WebSockets are automatically whitelisted to reduce 
 
 ### Architecture
 
-The browser settings system provides centralized configuration for browser session management:
+The Browser Settings UI expects backend endpoints that are not implemented in
+the current backend. If you want this feature, add a settings service and
+routes, then wire them into `backend/src/routes/settings-routes.ts` or a new
+routes module.
 
-- **Backend service** (`browser-settings-service.ts`)
-  - Stores settings in JSON file
-  - Validates all updates
-  - Provides defaults
-  - Used by browser-session-service
+- **Frontend UI**: `frontend/src/components/settings/BrowserSettings.jsx`
+- **Expected endpoints**:
+  - GET `/api/settings/browser`
+  - PUT `/api/settings/browser`
+  - POST `/api/settings/browser/reset`
 
-- **API endpoints** (`browser-settings-routes.ts`)
-  - GET `/api/settings/browser` - Get current settings
-  - PUT `/api/settings/browser` - Update settings
-  - POST `/api/settings/browser/reset` - Reset to defaults
-
-- **Frontend UI** (`BrowserSettings.jsx`)
-  - Form with sliders and inputs
-  - Real-time validation
-  - Shows current vs default values
-  - Immediate effect on save
+These settings describe the intended surface for the UI; they are not applied
+until the backend endpoints are implemented.
 
 ### Settings
 
@@ -240,23 +239,38 @@ The browser settings system provides centralized configuration for browser sessi
 
 ## API Endpoints
 
-### Performance Monitoring
+### Implemented (Preview DevTools)
+
+```
+GET    /api/preview/:port/logs
+POST   /api/preview/:port/logs
+DELETE /api/preview/:port/logs
+
+GET    /api/preview/:port/proxy-logs
+DELETE /api/preview/:port/proxy-logs
+
+GET    /api/preview/active-ports
+
+GET    /api/preview/:port/storage
+POST   /api/preview/:port/storage
+
+POST   /api/preview/:port/evaluate
+```
+
+### Planned / Unwired
 
 ```
 POST /api/preview/:port/performance
-Body: { metrics: PerformanceMetric[] }
-- Track metrics from client
-
-GET /api/preview/:port/performance?since=timestamp
-- Get all metrics since timestamp
-- Returns: { port, metrics, latestTimestamp }
-
+GET  /api/preview/:port/performance
 DELETE /api/preview/:port/performance
-- Clear all metrics for port
+WS   /api/preview/:port/performance/stream
 
-WebSocket /api/preview/:port/performance/stream
-- Stream real-time metric updates
-- Sends updates every 1 second
+GET  /api/preview/:port/websockets
+DELETE /api/preview/:port/websockets
+
+GET  /api/settings/browser
+PUT  /api/settings/browser
+POST /api/settings/browser/reset
 ```
 
 ### WebSocket Debugging
@@ -411,10 +425,8 @@ POST /api/settings/browser/reset
 
 ### Settings Not Saving
 
-- Check browser console for API errors
-- Verify `/api/settings/browser` endpoint is accessible
-- Check file permissions on settings file
-- Ensure valid ranges (settings are validated)
+- This UI is not wired to backend endpoints yet. Implement
+  `/api/settings/browser` before troubleshooting further.
 
 ### Performance Impact
 
@@ -448,8 +460,8 @@ Potential improvements for Phase 6+:
 
 ## Related Documentation
 
-- `/docs/BROWSER_SESSIONS.md` - Browser session management
-- `/docs/PREVIEW_SYSTEM.md` - Preview proxy architecture
-- `/backend/src/browser/performance-service.ts` - Performance storage
-- `/backend/src/preview/websocket-interceptor.ts` - WebSocket interception
-- `/backend/src/settings/browser-settings-service.ts` - Settings management
+- `/docs/architecture/SYSTEM_ARCHITECTURE.md` - Preview proxy architecture
+- `/docs/architecture/API_ARCHITECTURE.md` - API surface
+- `/backend/src/routes/preview-subdomain-routes.ts` - Performance injection script
+- `/backend/src/routes/preview-logs-routes.ts` - Console/log ingestion
+- `/backend/src/routes/preview-api-routes.ts` - Proxy logs, storage, eval

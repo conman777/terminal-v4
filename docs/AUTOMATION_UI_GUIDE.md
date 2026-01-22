@@ -4,6 +4,14 @@
 
 The Phase 6 Automation UI provides a complete browser automation testing workflow directly in Terminal V4's preview panel. Record actions, generate test code, run tests in parallel, and manage cookies - all without leaving the terminal.
 
+## Current Status (2026-01)
+
+- The automation UI described here is not wired in the current frontend.
+- The backend does not implement the recorder/test/cookie endpoints listed below.
+- Only the basic browser automation API under `/api/browser/*` exists today
+  (see `docs/architecture/API_ARCHITECTURE.md` and
+  `backend/src/routes/browser-routes.ts`).
+
 ## Components
 
 ### 1. RecorderPanel
@@ -209,7 +217,7 @@ All automation tools are accessible via the preview toolbar:
 - **📊 Tests**: Open TestRunner
 - **🍪 Cookies**: Open CookieManager
 
-## API Endpoints
+## API Endpoints (Planned)
 
 ### Recording
 

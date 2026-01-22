@@ -66,6 +66,8 @@ Key files:
 - Optional tmux integration for persistence across restarts (Linux/macOS).
 - Sessions are stored per-user as JSON for history and metadata.
 - WebSocket stream (`/api/terminal/:id/ws`) is the primary IO channel.
+- Tmux sessions only persist across restarts if the OS service does not kill
+  child processes (see Operations Notes below).
 
 Key files:
 - `backend/src/terminal/terminal-manager.ts`
@@ -191,7 +193,7 @@ Key files:
 
 ### SQLite (terminal.db)
 Location: `backend/data/terminal.db` by default, overridden by
-`TERMINAL_DATA_DIR`. Stores:
+`TERMINAL_DATA_DIR` or `DATA_DIR`. Stores:
 - `users`
 - `refresh_tokens`
 - `user_settings`
@@ -199,17 +201,28 @@ Location: `backend/data/terminal.db` by default, overridden by
 ### File-Based Stores (JSON)
 Under `backend/data/users/<userId>/`:
 - `sessions/*.json` (terminal history)
+- `sessions-metadata.json` (lightweight session index for recovery)
 - `claude-code/*.json`
 - `bookmarks.json`
+- `notes.json`
 
 ### Preview Cookies
 Stored in `backend/data/preview-cookies.json` by default (overridable via
-`DATA_DIR`).
+`TERMINAL_DATA_DIR` or `DATA_DIR`).
 
 ### In-Memory Stores
 - Preview logs (console/network/DOM)
 - Proxy request logs
 - Process logs
+
+## Operations Notes
+
+- **Stable data directory**: In production, set `TERMINAL_DATA_DIR` explicitly.
+  Bundled builds resolve `data` relative to `dist/`, which can otherwise flip
+  storage between `backend/data` and repo-root `data`.
+- **Tmux persistence**: `rebuild.sh` restarts the systemd service. To keep tmux
+  sessions alive across rebuilds, the service should use `KillMode=process` (or
+  run tmux outside the service cgroup). See `docs/development/SETUP.md`.
 
 ## Security and Sandboxing
 

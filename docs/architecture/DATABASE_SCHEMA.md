@@ -7,7 +7,7 @@ is stored as JSON files under `backend/data/users/`.
 
 Location:
 - Default: `backend/data/terminal.db`
-- Override with `TERMINAL_DATA_DIR`
+- Override with `TERMINAL_DATA_DIR` or `DATA_DIR`
 
 ### migrations
 Tracks applied migrations.
@@ -48,12 +48,15 @@ Indexes:
 - `idx_refresh_tokens_token_hash` on `token_hash`
 
 ### user_settings
-Stores per-user settings (currently Groq API key).
+Stores per-user settings.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `user_id` | TEXT | Primary key, FK -> users.id |
 | `groq_api_key` | TEXT | Stored in plaintext |
+| `preview_url` | TEXT | Last-used preview URL |
+| `terminal_font_size` | INTEGER | Terminal font size (8-32) |
+| `sidebar_collapsed` | INTEGER | 0/1 boolean |
 | `updated_at` | TEXT | ISO timestamp |
 
 ## File-Based Storage
@@ -61,17 +64,18 @@ Stores per-user settings (currently Groq API key).
 These are JSON files stored under `backend/data/users/<userId>/`:
 
 - `sessions/*.json` (terminal session history + metadata)
+- `sessions-metadata.json` (lightweight title/cwd index for recovery)
 - `claude-code/*.json` (Claude Code session events + metadata)
 - `bookmarks.json` (command bookmarks)
+- `notes.json` (notes)
 
 ## Preview Cookie Store
 
 - File: `backend/data/preview-cookies.json`
-- Override base dir with `DATA_DIR`
+- Override base dir with `TERMINAL_DATA_DIR` or `DATA_DIR`
 
 ## In-Memory Stores (Not Persisted)
 
 - Preview logs (`/api/preview/:port/logs`)
 - Proxy request logs (`/api/preview/:port/proxy-logs`)
 - Process logs (`/api/process-logs`)
-

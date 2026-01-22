@@ -2,6 +2,11 @@
 
 This document outlines the plan to fix 19 identified bugs across the codebase.
 
+**Status (2026-01)**: This plan predates several refactors. Some items have
+already been fixed (for example, the `/proc` cwd lookup now uses `readlink` in
+`backend/src/routes/preview-api-routes.ts`). Validate file paths and current
+behavior before executing this plan.
+
 ## Overview
 
 | Priority | Count | Estimated Effort |

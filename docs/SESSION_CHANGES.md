@@ -27,3 +27,8 @@ This document summarizes the changes applied during the current support session.
 
 ## Diagnostics
 - Added WebSocket RTT diagnostics and server event loop timing in Settings.
+
+## Persistence & Ops
+- Pinned `TERMINAL_DATA_DIR` to keep a single data directory across rebuilds.
+- Migrated repo-root `data/` sessions into `backend/data/` with backups and conflict logs.
+- Updated systemd service to use `KillMode=process` so tmux sessions survive rebuilds.

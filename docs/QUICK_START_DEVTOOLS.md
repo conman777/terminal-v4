@@ -36,6 +36,9 @@ Quick reference for using the Preview DevTools features.
 ### Common Issues
 
 **No metrics appearing?**
+- The backend endpoints `/api/preview/:port/performance` and
+  `/api/preview/:port/performance/stream` are not implemented in the current
+  backend. The UI will stay empty until those routes are added.
 - Reload the preview page
 - Check browser console for errors
 - Verify page fully loaded
@@ -67,6 +70,8 @@ Quick reference for using the Preview DevTools features.
 ### Common Issues
 
 **WebSocket not appearing?**
+- The backend endpoints `/api/preview/:port/websockets` are not implemented in
+  the current backend. The UI will stay empty until those routes are added.
 - Verify it's not HMR (Vite hot reload)
 - Check connection URL matches preview
 - Look for errors in connection status
@@ -82,6 +87,10 @@ Quick reference for using the Preview DevTools features.
 
 - Mobile: Hamburger menu → Browser Settings
 - Desktop: Settings → Browser Settings
+
+**Note:** The UI calls `/api/settings/browser` endpoints that are not currently
+implemented in the backend. The panel will not persist settings until those
+routes are added.
 
 ### Common Adjustments
 
@@ -126,6 +135,5 @@ Quick reference for using the Preview DevTools features.
 ## Getting Help
 
 - Full documentation: `/docs/PHASE5_PERFORMANCE_DEBUGGING.md`
-- Browser sessions: `/docs/BROWSER_SESSIONS.md`
-- Preview system: `/docs/PREVIEW_SYSTEM.md`
-- API reference: See Phase 5 docs
+- Architecture: `/docs/architecture/SYSTEM_ARCHITECTURE.md`
+- API reference: `/docs/architecture/API_ARCHITECTURE.md`

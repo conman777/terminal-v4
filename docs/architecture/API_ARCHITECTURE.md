@@ -68,6 +68,9 @@ WebSocket notes:
 | GET | `/api/preview/:port/proxy-logs` | Yes | Server-side proxy logs |
 | DELETE | `/api/preview/:port/proxy-logs` | Yes | Clear proxy logs |
 | GET | `/api/preview/active-ports` | Yes | List active preview ports |
+| GET | `/api/preview/:port/storage` | Yes | Request storage snapshot (local/session/cookies) |
+| POST | `/api/preview/:port/storage` | Yes | Queue storage update (set/remove/clear/import) |
+| POST | `/api/preview/:port/evaluate` | Yes | Queue JS evaluation in preview context |
 | POST | `/api/preview/:port/logs` | Public | Receive injected client logs |
 | GET | `/api/preview/:port/logs` | Public | Read preview logs |
 | DELETE | `/api/preview/:port/logs` | Yes | Clear preview logs |
@@ -155,3 +158,23 @@ Preview subdomain routing:
 | GET | `/api/health` | Public | Health check |
 | POST | `/api/system/rebuild` | Yes | Run `rebuild.sh` |
 | GET | `/api/system/stats` | Yes | CPU and RAM stats |
+| GET | `/api/system/stats/history` | Yes | Stats history (range: `1h`, `6h`, `24h`, `7d`, `30d`) |
+| GET | `/api/latency/ws` | Yes | WebSocket ping/pong for RTT diagnostics |
+
+## Bookmarks
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/bookmarks` | Yes | List bookmarks |
+| POST | `/api/bookmarks` | Yes | Create bookmark |
+| PUT | `/api/bookmarks/:id` | Yes | Update bookmark |
+| DELETE | `/api/bookmarks/:id` | Yes | Delete bookmark |
+
+## Notes
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/notes` | Yes | List notes |
+| POST | `/api/notes` | Yes | Create note |
+| PUT | `/api/notes/:id` | Yes | Update note |
+| DELETE | `/api/notes/:id` | Yes | Delete note |

@@ -43,7 +43,34 @@ Backend configuration (set in `backend/.env` or your shell):
 Notes:
 - `TERMINAL_DATA_DIR` (or `DATA_DIR`) sets the base data directory for SQLite,
   terminal/Claude Code sessions, bookmarks, notes, and preview cookies.
-  Default is `backend/data` (repo-relative) regardless of working directory.
+  Default is `backend/data` (repo-relative) in dev; set it explicitly in prod.
+- For systemd/production, set `TERMINAL_DATA_DIR` explicitly so rebuilds keep
+  using the same data directory (otherwise a bundled build may resolve `data`
+  at the repo root).
+
+## Production Service (systemd)
+
+To keep tmux-backed terminals alive across `rebuild.sh` restarts, the service
+should avoid killing child processes. The recommended unit file:
+
+```
+[Service]
+Type=simple
+User=conor
+WorkingDirectory=/home/conor/terminal-v4/backend
+EnvironmentFile=/home/conor/terminal-v4/backend/.env
+ExecStart=/usr/bin/node --enable-source-maps /home/conor/terminal-v4/backend/dist/index.js
+KillMode=process
+Restart=always
+RestartSec=10
+```
+
+After changes:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart terminal-v4
+```
 
 Frontend configuration (set in `frontend/.env` or your shell):
 
