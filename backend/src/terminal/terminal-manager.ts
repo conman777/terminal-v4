@@ -773,14 +773,34 @@ export class TerminalManager {
       session.clientDimensions.set(clientId, { cols, rows });
     }
 
-    // Use the calling client's dimensions directly
-    // This ensures the PTY matches the active client's viewport
-    // Other connected clients may see formatting issues, but the active one works correctly
-    if (cols !== session.currentCols || rows !== session.currentRows) {
-      session.currentCols = cols;
-      session.currentRows = rows;
-      session.process.resize(cols, rows);
+    // Use the LARGEST dimensions among all connected clients
+    // This prevents mobile clients from shrinking the terminal when desktop is also connected
+    // Desktop users get proper wide terminals; mobile users see wrapped text (acceptable tradeoff)
+    const maxDims = this.#getMaxClientDimensions(session, cols, rows);
+
+    if (maxDims.cols !== session.currentCols || maxDims.rows !== session.currentRows) {
+      session.currentCols = maxDims.cols;
+      session.currentRows = maxDims.rows;
+      session.process.resize(maxDims.cols, maxDims.rows);
     }
+  }
+
+  // Calculate the maximum dimensions across all connected clients
+  // Falls back to provided defaults if no clients are tracked
+  #getMaxClientDimensions(
+    session: { clientDimensions: Map<string, { cols: number; rows: number }> },
+    defaultCols: number,
+    defaultRows: number
+  ): { cols: number; rows: number } {
+    let maxCols = defaultCols;
+    let maxRows = defaultRows;
+
+    for (const dims of session.clientDimensions.values()) {
+      if (dims.cols > maxCols) maxCols = dims.cols;
+      if (dims.rows > maxRows) maxRows = dims.rows;
+    }
+
+    return { cols: maxCols, rows: maxRows };
   }
 
   // Remove a client's dimensions (called when WebSocket disconnects)
@@ -792,18 +812,14 @@ export class TerminalManager {
 
     session.clientDimensions.delete(clientId);
 
-    // If there are remaining clients, use the first one's dimensions
+    // If there are remaining clients, use the LARGEST dimensions among them
     // Otherwise keep current dimensions (will be updated when next client resizes)
     if (session.clientDimensions.size > 0) {
-      const iterator = session.clientDimensions.values();
-      const first = iterator.next();
-      if (!first.done && first.value) {
-        const firstDims = first.value;
-        if (firstDims.cols !== session.currentCols || firstDims.rows !== session.currentRows) {
-          session.currentCols = firstDims.cols;
-          session.currentRows = firstDims.rows;
-          session.process.resize(firstDims.cols, firstDims.rows);
-        }
+      const maxDims = this.#getMaxClientDimensions(session, session.currentCols, session.currentRows);
+      if (maxDims.cols !== session.currentCols || maxDims.rows !== session.currentRows) {
+        session.currentCols = maxDims.cols;
+        session.currentRows = maxDims.rows;
+        session.process.resize(maxDims.cols, maxDims.rows);
       }
     }
   }
