@@ -18,7 +18,8 @@
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.0",
     "react-window": "^2.2.5",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "terminal-v4": "file:.."
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

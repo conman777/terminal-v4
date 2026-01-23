@@ -38,6 +38,7 @@ export interface ManagedTerminal {
   buffer: TerminalStreamEvent[];
   bufferCharCount: number;
   subscribers: Set<(event: TerminalStreamEvent | null) => void>;
+  inputBuffer: string;
   saveTimer?: NodeJS.Timeout;
   saveInProgress?: boolean;  // Prevent concurrent saves
   pendingSave?: boolean;     // Track if save requested while another in progress

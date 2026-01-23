@@ -99,6 +99,27 @@ describe('TerminalManager', () => {
     }
   });
 
+  it('updates stored cwd when cd input arrives in incremental chunks', async () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn(() => fakeProcess);
+    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+
+    const snapshot = manager.createSession(TEST_USER_ID, { cwd: process.cwd() });
+    const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-cwd-'));
+
+    try {
+      manager.write(TEST_USER_ID, snapshot.id, 'c');
+      manager.write(TEST_USER_ID, snapshot.id, 'd ');
+      manager.write(TEST_USER_ID, snapshot.id, `"${tmpDir}"`);
+      manager.write(TEST_USER_ID, snapshot.id, '\n');
+
+      const projectInfo = await manager.getProjectInfo(TEST_USER_ID, snapshot.id);
+      expect(projectInfo?.cwd).toBe(tmpDir);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('caps buffered output to avoid unbounded memory growth', () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);

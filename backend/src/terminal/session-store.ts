@@ -45,13 +45,15 @@ function getSessionFilePath(userId: string, sessionId: string): string {
 
 // Lightweight metadata index that survives session file corruption
 // Stores just id -> title mapping for recovery purposes
+export interface SessionMetadata {
+  title: string;
+  shell: string;
+  cwd: string;
+  createdAt: string;
+}
+
 interface SessionMetadataIndex {
-  [sessionId: string]: {
-    title: string;
-    shell: string;
-    cwd: string;
-    createdAt: string;
-  };
+  [sessionId: string]: SessionMetadata;
 }
 
 function getMetadataIndexPath(userId: string): string {
@@ -105,9 +107,13 @@ export async function updateSessionMetadata(
 export async function getSessionMetadata(
   userId: string,
   sessionId: string
-): Promise<{ title: string; shell: string; cwd: string; createdAt: string } | null> {
+): Promise<SessionMetadata | null> {
   const index = await loadMetadataIndex(userId);
   return index[sessionId] || null;
+}
+
+export async function listSessionMetadata(userId: string): Promise<SessionMetadataIndex> {
+  return loadMetadataIndex(userId);
 }
 
 export async function deleteSessionMetadata(userId: string, sessionId: string): Promise<void> {

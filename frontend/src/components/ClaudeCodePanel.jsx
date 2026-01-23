@@ -6,6 +6,7 @@ export default function ClaudeCodePanel({
   viewportHeight,
   onUrlDetected,
   fontSize,
+  webglEnabled,
   onScrollDirection,
   onRegisterFocusTerminal,
   usesTmux
@@ -31,6 +32,7 @@ export default function ClaudeCodePanel({
         viewportHeight={viewportHeight}
         onUrlDetected={onUrlDetected}
         fontSize={fontSize}
+        webglEnabled={webglEnabled}
         usesTmux={usesTmux}
         onScrollDirection={onScrollDirection}
         onRegisterFocusTerminal={onRegisterFocusTerminal}

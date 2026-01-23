@@ -20,6 +20,7 @@ export const TerminalPane = memo(function TerminalPane({
   viewportHeight,
   onUrlDetected,
   fontSize,
+  webglEnabled,
   sessionActivity,
   projectInfo,
   onCwdChange
@@ -233,6 +234,7 @@ export const TerminalPane = memo(function TerminalPane({
               viewportHeight={viewportHeight}
               onUrlDetected={onUrlDetected}
               fontSize={fontSize}
+              webglEnabled={webglEnabled}
               usesTmux={currentSession?.usesTmux}
               viewMode={viewMode}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}

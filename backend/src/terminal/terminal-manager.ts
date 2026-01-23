@@ -19,6 +19,7 @@ import {
   loadAllSessions,
   updateSessionMetadata,
   getSessionMetadata,
+  listSessionMetadata,
   deleteSessionMetadata
 } from './session-store';
 import {
@@ -209,7 +210,10 @@ export class TerminalManager {
 
   async loadUserSessions(userId: string): Promise<void> {
     // Always reload from disk to detect external changes (deletions, other tabs, etc.)
-    const persisted = await loadAllSessions(userId);
+    const [persisted, metadataIndex] = await Promise.all([
+      loadAllSessions(userId),
+      listSessionMetadata(userId)
+    ]);
     const userSessions = new Map<string, PersistedSession>();
     for (const session of persisted) {
       userSessions.set(session.id, session);
@@ -223,31 +227,29 @@ export class TerminalManager {
       this.#recoveredUsers.add(userId);
 
       // First, recover any orphaned tmux sessions (tmux exists but no valid persisted data)
+      const metadataIds = new Set(Object.keys(metadataIndex));
       const tmuxSessions = listTmuxSessions();
       for (const tmuxId of tmuxSessions) {
         if (!userSessions.has(tmuxId)) {
-          // Tmux exists but no valid persisted data - create minimal entry
-          const cwd = getTmuxSessionCwd(tmuxId) || process.cwd();
-
-          // Try to get title from metadata index (survives session file corruption)
-          const metadata = await getSessionMetadata(userId, tmuxId);
-          let title: string;
-          if (metadata?.title) {
-            title = metadata.title;
-            console.log(`[TerminalManager] Recovering orphaned tmux session with saved title: ${tmuxId} -> ${title}`);
-          } else {
-            // Fall back to directory name
-            const dirName = path.basename(cwd);
-            title = dirName && dirName !== '/' ? `${dirName} (recovered)` : 'Recovered Terminal';
-            console.log(`[TerminalManager] Recovering orphaned tmux session: ${tmuxId} -> ${title}`);
+          if (!metadataIds.has(tmuxId)) {
+            continue;
           }
+
+          // Tmux exists but no valid persisted data - create minimal entry from metadata
+          const metadata = metadataIndex[tmuxId] || (await getSessionMetadata(userId, tmuxId));
+          if (!metadata) {
+            continue;
+          }
+          const tmuxCwd = getTmuxSessionCwd(tmuxId) || metadata.cwd || process.cwd();
+          const title = metadata.title || path.basename(tmuxCwd) || 'Recovered Terminal';
+          console.log(`[TerminalManager] Recovering orphaned tmux session from metadata: ${tmuxId} -> ${title}`);
 
           const recovered: PersistedSession = {
             id: tmuxId,
             title,
-            shell: metadata?.shell || this.#defaultShell,
-            cwd: metadata?.cwd || cwd,
-            createdAt: metadata?.createdAt || new Date().toISOString(),
+            shell: metadata.shell || this.#defaultShell,
+            cwd: metadata.cwd || tmuxCwd,
+            createdAt: metadata.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
             history: []
           };
@@ -690,6 +692,7 @@ export class TerminalManager {
       buffer: [],
       bufferCharCount: 0,
       subscribers: new Set(),
+      inputBuffer: '',
       dataHandler,
       exitHandler,
       clientDimensions: new Map(),
@@ -758,7 +761,7 @@ export class TerminalManager {
     // Flush output buffer before processing input for better responsiveness
     session.outputBatcher?.flush();
 
-    this.#maybeUpdateCwdFromInput(session, input);
+    this.#processInputForCwd(session, input);
     session.process.write(normaliseNewlines(input));
   }
 
@@ -1134,6 +1137,7 @@ export class TerminalManager {
       buffer: hasTmuxSession ? [] : [...persisted.history],
       bufferCharCount: hasTmuxSession ? 0 : persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
       subscribers: new Set(),
+      inputBuffer: '',
       dataHandler,
       exitHandler,
       clientDimensions: new Map(),
@@ -1162,64 +1166,123 @@ export class TerminalManager {
     return this.getSession(userId, id);
   }
 
-  #maybeUpdateCwdFromInput(session: ManagedTerminal, input: string): void {
+  #processInputForCwd(session: ManagedTerminal, input: string): void {
     if (!input) return;
-    if (!input.includes('\n') && !input.includes('\r')) return;
 
-    const normalized = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const lines = normalized.split('\n');
+    let buffer = session.inputBuffer || '';
     const previousCwd = session.cwd;
+    let cwdChanged = false;
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    const commitLine = () => {
+      const line = buffer;
+      buffer = '';
+      if (this.#updateCwdFromLine(session, line)) {
+        cwdChanged = true;
+      }
+    };
 
-      // Handle bare 'cd' command (goes to home directory)
-      if (trimmed === 'cd') {
-        const home = process.env.HOME;
-        if (home && fs.existsSync(home)) {
-          session.cwd = home;
+    let i = 0;
+    while (i < input.length) {
+      const char = input[i];
+
+      if (char === '\x1b') {
+        const next = input[i + 1];
+        if (next === '[') {
+          let j = i + 2;
+          while (j < input.length) {
+            const code = input.charCodeAt(j);
+            if (code >= 0x40 && code <= 0x7e) {
+              j += 1;
+              break;
+            }
+            j += 1;
+          }
+          i = j;
+          continue;
+        }
+        i += 2;
+        continue;
+      }
+
+      if (char === '\r' || char === '\n') {
+        commitLine();
+        i += 1;
+        if (char === '\r' && input[i] === '\n') {
+          i += 1;
         }
         continue;
       }
 
-      const match = trimmed.match(/^cd(?:\s+\/d)?\s+(?<path>.+)$/i);
-      if (!match?.groups?.path) continue;
-
-      let target = match.groups.path.trim();
-      if (
-        (target.startsWith('"') && target.endsWith('"')) ||
-        (target.startsWith("'") && target.endsWith("'"))
-      ) {
-        target = target.slice(1, -1);
+      if (char === '\x7f' || char === '\b') {
+        buffer = buffer.slice(0, -1);
+        i += 1;
+        continue;
       }
 
-      if (!target) continue;
-
-      // Expand "~" on Unix-like systems.
-      if (target === '~' || target.startsWith('~/')) {
-        const home = process.env.HOME;
-        if (home) {
-          target = path.join(home, target.slice(1));
-        }
+      if (char.charCodeAt(0) < 32) {
+        i += 1;
+        continue;
       }
 
-      const resolvedTarget = path.resolve(session.cwd || process.cwd(), target);
-      try {
-        if (fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()) {
-          session.cwd = resolvedTarget;
-        }
-      } catch {
-        // Ignore invalid paths.
-      }
+      buffer += char;
+      i += 1;
     }
 
-    // Notify subscribers if cwd changed
-    if (session.cwd !== previousCwd) {
+    session.inputBuffer = buffer;
+
+    if (cwdChanged && session.cwd !== previousCwd) {
       const cwdMessage = JSON.stringify({ type: 'cwd', cwd: session.cwd });
       session.subscribers.forEach((subscriber) => {
         subscriber({ text: cwdMessage, ts: Date.now() });
       });
     }
+  }
+
+  #updateCwdFromLine(session: ManagedTerminal, line: string): boolean {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+
+    const previousCwd = session.cwd;
+
+    // Handle bare 'cd' command (goes to home directory)
+    if (trimmed === 'cd') {
+      const home = process.env.HOME;
+      if (home && fs.existsSync(home)) {
+        session.cwd = home;
+      }
+      return session.cwd !== previousCwd;
+    }
+
+    const match = trimmed.match(/^cd(?:\s+\/d)?\s+(?<path>.+)$/i);
+    if (!match?.groups?.path) return false;
+
+    let target = match.groups.path.trim();
+    if (
+      (target.startsWith('"') && target.endsWith('"')) ||
+      (target.startsWith("'") && target.endsWith("'"))
+    ) {
+      target = target.slice(1, -1);
+    }
+
+    if (!target) return false;
+
+    // Expand "~" on Unix-like systems.
+    if (target === '~' || target.startsWith('~/')) {
+      const home = process.env.HOME;
+      if (home) {
+        target = path.join(home, target.slice(1));
+      }
+    }
+
+    const resolvedTarget = path.resolve(session.cwd || process.cwd(), target);
+    try {
+      if (fs.existsSync(resolvedTarget) && fs.statSync(resolvedTarget).isDirectory()) {
+        session.cwd = resolvedTarget;
+      }
+    } catch {
+      // Ignore invalid paths.
+    }
+
+    return session.cwd !== previousCwd;
   }
 }

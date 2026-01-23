@@ -17,7 +17,7 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal' }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal' }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -45,6 +45,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
+  const webglEnabledRef = useRef(webglEnabled !== false);
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
   const readerSyncRef = useRef(null);
@@ -112,7 +113,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     stopScrolling,
     exitCopyModeIfActive,
     cleanup: cleanupScrolling
-  } = useTerminalScrolling(xtermRef, sendToTerminal);
+  } = useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef);
 
   // Mobile keyboard input handler - forwards keystrokes to terminal
   const handleMobileInput = useCallback((e) => {
@@ -525,6 +526,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [usesTmux]);
 
   useEffect(() => {
+    webglEnabledRef.current = webglEnabled !== false;
+  }, [webglEnabled]);
+
+  useEffect(() => {
     scrollModeRef.current = isScrollMode;
   }, [isScrollMode]);
 
@@ -753,8 +758,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       hasOpened = true;
       term.open(container);
 
-      // Enable WebGL GPU rendering for better performance (except on mobile)
-      if (!isMobile) {
+      const initWebglAddon = () => {
+        if (!webglEnabledRef.current || isMobile || webglAddonRef.current) {
+          return;
+        }
         try {
           const webglAddon = new WebglAddon();
           webglAddon.onContextLoss(() => {
@@ -782,7 +789,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         } catch (error) {
           console.warn('[WebGL] Failed to initialize, using canvas fallback:', error);
         }
-      }
+      };
+      initWebglAddon();
 
       const textarea = term.textarea;
       let isComposing = false;
@@ -1002,6 +1010,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const requestHistory = shouldReplayHistoryRef.current;
         const socket = new WebSocket(buildSocketUrl(requestHistory));
+        socket.binaryType = 'arraybuffer';
         socketRef.current = socket;
         let hadConnectionError = false;
         let shouldReconnect = true;
@@ -1009,6 +1018,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         let skipUrlTimeout = null;
         let heartbeatTimer = null;
         let lastServerPingAt = 0;
+        const messageQueue = [];
+        let processingQueue = false;
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = 45000;
 
@@ -1040,93 +1051,109 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }, 500);
         };
 
-        socket.onmessage = async (event) => {
-          if (disposed) return;
-
-          // Handle binary frames (ArrayBuffer or Blob) for bandwidth optimization
-          let data;
-          if (event.data instanceof ArrayBuffer) {
+        const decodeSocketData = async (payload) => {
+          if (payload instanceof ArrayBuffer) {
             const decoder = new TextDecoder();
-            data = decoder.decode(event.data);
-          } else if (event.data instanceof Blob) {
-            data = await event.data.text();
-          } else {
-            // Text frame (fallback for backward compatibility)
-            data = event.data;
+            return decoder.decode(payload);
           }
+          if (payload instanceof Blob) {
+            return payload.text();
+          }
+          return payload;
+        };
 
-          lastServerPingAt = Date.now();
-          if (data === '__terminal_pong__') return;
-          if (data.includes('__terminal_ping__')) {
-            data = data.split('__terminal_ping__').join('');
-          }
-          if (data.includes('{"type":"ping","source":"terminal-client"}')) {
-            data = data.split('{"type":"ping","source":"terminal-client"}').join('');
-          }
-          if (!data) return;
+        const processMessageQueue = async () => {
+          if (processingQueue) return;
+          processingQueue = true;
 
-          if (data.startsWith('{')) {
-            try {
-              const msg = JSON.parse(data);
-              if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
-                clientIdRef.current = msg.clientId;
-                const { cols, rows } = term;
-                if (cols && rows) {
-                  apiFetch(`/api/terminal/${sessionId}/resize`, {
-                    method: 'POST',
-                    body: { cols, rows, clientId: msg.clientId }
-                  }).catch(() => {});
+          while (messageQueue.length > 0 && !disposed) {
+            const event = messageQueue.shift();
+            if (!event) break;
+
+            let data = await decodeSocketData(event.data);
+            if (disposed) break;
+
+            lastServerPingAt = Date.now();
+            if (data === '__terminal_pong__') continue;
+            if (data.includes('__terminal_ping__')) {
+              data = data.split('__terminal_ping__').join('');
+            }
+            if (data.includes('{"type":"ping","source":"terminal-client"}')) {
+              data = data.split('{"type":"ping","source":"terminal-client"}').join('');
+            }
+            if (!data) continue;
+
+            if (data.startsWith('{')) {
+              try {
+                const msg = JSON.parse(data);
+                if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
+                  clientIdRef.current = msg.clientId;
+                  const { cols, rows } = term;
+                  if (cols && rows) {
+                    apiFetch(`/api/terminal/${sessionId}/resize`, {
+                      method: 'POST',
+                      body: { cols, rows, clientId: msg.clientId }
+                    }).catch(() => {});
+                  }
+                  continue;
                 }
-                return;
+                if (msg.type === 'serverPing') {
+                  continue;
+                }
+                if (msg.type === 'pong' && msg.source === 'terminal-client') {
+                  continue;
+                }
+                if (msg.type === 'cwd' && msg.cwd) {
+                  onCwdChange?.(msg.cwd);
+                  continue;
+                }
+              } catch { /* Not valid JSON */ }
+            }
+
+            const buffer = term.buffer?.active;
+            const baseY = buffer?.baseY || 0;
+            const viewportYBefore = buffer?.viewportY ?? 0;
+            const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
+
+            if (historyReloadingRef.current) {
+              pendingSocketDataRef.current.push(data);
+              continue;
+            }
+
+            if (viewModeRef.current === 'reader') {
+              term.write(data, scheduleReaderSync);
+            } else {
+              term.write(data);
+              appendToReader(data);
+            }
+
+            if (!wasAtBottom) {
+              const newBuffer = term.buffer?.active;
+              const viewportYAfter = newBuffer?.viewportY ?? 0;
+              const delta = viewportYBefore - viewportYAfter;
+              if (delta !== 0) term.scrollLines(delta);
+            }
+
+            if (!skipUrlDetection) {
+              resetIdleTimer(isScrollingRef.current);
+            }
+
+            if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
+              const url = extractPreviewUrl(data);
+              if (url && !detectedUrlsRef.current.has(url)) {
+                detectedUrlsRef.current.add(url);
+                onUrlDetected(url);
               }
-              if (msg.type === 'serverPing') {
-                return;
-              }
-              if (msg.type === 'pong' && msg.source === 'terminal-client') {
-                return;
-              }
-              if (msg.type === 'cwd' && msg.cwd) {
-                onCwdChange?.(msg.cwd);
-                return;
-              }
-            } catch { /* Not valid JSON */ }
-          }
-
-          const buffer = term.buffer?.active;
-          const baseY = buffer?.baseY || 0;
-          const viewportYBefore = buffer?.viewportY ?? 0;
-          const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
-
-          if (historyReloadingRef.current) {
-            pendingSocketDataRef.current.push(data);
-            return;
-          }
-
-          if (viewModeRef.current === 'reader') {
-            term.write(data, scheduleReaderSync);
-          } else {
-            term.write(data);
-            appendToReader(data);
-          }
-
-          if (!wasAtBottom) {
-            const newBuffer = term.buffer?.active;
-            const viewportYAfter = newBuffer?.viewportY ?? 0;
-            const delta = viewportYBefore - viewportYAfter;
-            if (delta !== 0) term.scrollLines(delta);
-          }
-
-          if (!skipUrlDetection) {
-            resetIdleTimer(isScrollingRef.current);
-          }
-
-          if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
-            const url = extractPreviewUrl(data);
-            if (url && !detectedUrlsRef.current.has(url)) {
-              detectedUrlsRef.current.add(url);
-              onUrlDetected(url);
             }
           }
+
+          processingQueue = false;
+        };
+
+        socket.onmessage = (event) => {
+          if (disposed) return;
+          messageQueue.push(event);
+          void processMessageQueue();
         };
 
         socket.onerror = () => {
@@ -1145,6 +1172,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             clearInterval(heartbeatTimer);
             heartbeatTimer = null;
           }
+          messageQueue.length = 0;
           if (event.reason === 'Session ended') {
             shouldReconnect = false;
             term.write('\r\n[Terminal session ended]\r\n');
@@ -1329,6 +1357,41 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, onUrlDetected, isMobile]);
+
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+    if (isMobile) return;
+
+    if (webglEnabledRef.current) {
+      if (!webglAddonRef.current) {
+        try {
+          const webglAddon = new WebglAddon();
+          webglAddon.onContextLoss(() => {
+            console.warn('[WebGL] Context lost, falling back to canvas renderer');
+            try {
+              webglAddon.dispose();
+            } catch {}
+            if (webglAddonRef.current === webglAddon) {
+              webglAddonRef.current = null;
+            }
+          });
+          term.loadAddon(webglAddon);
+          webglAddonRef.current = webglAddon;
+        } catch (error) {
+          console.warn('[WebGL] Failed to initialize, using canvas fallback:', error);
+        }
+      }
+      return;
+    }
+
+    if (webglAddonRef.current) {
+      try {
+        webglAddonRef.current.dispose();
+      } catch {}
+      webglAddonRef.current = null;
+    }
+  }, [webglEnabled, isMobile]);
 
   // Handle font size changes without recreating terminal
   useEffect(() => {

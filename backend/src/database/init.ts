@@ -88,6 +88,12 @@ function runMigrations(db: Database.Database): void {
         ALTER TABLE user_settings ADD COLUMN terminal_font_size INTEGER DEFAULT 14;
         ALTER TABLE user_settings ADD COLUMN sidebar_collapsed INTEGER DEFAULT 0;
       `
+    },
+    {
+      name: '006_add_terminal_webgl_enabled',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN terminal_webgl_enabled INTEGER DEFAULT 1;
+      `
     }
   ];
 

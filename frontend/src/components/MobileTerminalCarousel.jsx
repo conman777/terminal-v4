@@ -11,6 +11,7 @@ export function MobileTerminalCarousel({
   viewportHeight,
   onUrlDetected,
   fontSize,
+  webglEnabled,
   onScrollDirection,
   onRegisterFocusTerminal
 }) {
@@ -84,6 +85,7 @@ export function MobileTerminalCarousel({
           viewportHeight={viewportHeight}
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
+          webglEnabled={webglEnabled}
           usesTmux={currentSession?.usesTmux}
           viewMode={viewMode}
           onScrollDirection={onScrollDirection}

@@ -82,7 +82,7 @@ function Tooltip({ children, text, shortcut }) {
   );
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1442,6 +1442,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   keybarOpen={false}
                   viewportHeight={null}
                   fontSize={fontSize}
+                  webglEnabled={webglEnabled}
                   onUrlDetected={onUrlDetected || (() => {})}
                   usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                   onRegisterImageUpload={() => {}}
@@ -2346,6 +2347,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     keybarOpen={false}
                     viewportHeight={null}
                     fontSize={fontSize}
+                    webglEnabled={webglEnabled}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                     onRegisterImageUpload={() => {}}

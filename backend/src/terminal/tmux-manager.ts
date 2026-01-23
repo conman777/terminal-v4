@@ -1,4 +1,4 @@
-import { execSync, spawn, exec } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { TerminalProcess, TerminalSpawnOptions } from './terminal-types';
 
@@ -10,8 +10,8 @@ function applyHistoryLimit(sessionName: string): void {
     return;
   }
   try {
-    execSync(`tmux set-option -t "${sessionName}" history-limit ${TMUX_HISTORY_LIMIT} 2>/dev/null`, {
-      stdio: 'pipe'
+    execFileSync('tmux', ['set-option', '-t', sessionName, 'history-limit', String(TMUX_HISTORY_LIMIT)], {
+      stdio: ['ignore', 'pipe', 'ignore']
     });
   } catch {
     // Ignore failures (tmux might not be running or session might be gone)
@@ -28,7 +28,7 @@ export function isTmuxAvailable(): boolean {
   }
 
   try {
-    execSync('which tmux', { stdio: 'pipe' });
+    execFileSync('which', ['tmux'], { stdio: ['ignore', 'pipe', 'ignore'] });
     return true;
   } catch {
     return false;
@@ -48,7 +48,9 @@ export function getTmuxSessionName(sessionId: string): string {
 export function tmuxSessionExists(sessionId: string): boolean {
   const sessionName = getTmuxSessionName(sessionId);
   try {
-    execSync(`tmux has-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
+    execFileSync('tmux', ['has-session', '-t', sessionName], {
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
     return true;
   } catch (error) {
     // Exit code 1 means session doesn't exist (normal), other errors are unexpected
@@ -64,9 +66,9 @@ export function tmuxSessionExists(sessionId: string): boolean {
  */
 export function listTmuxSessions(): string[] {
   try {
-    const output = execSync('tmux list-sessions -F "#{session_name}" 2>/dev/null', {
+    const output = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}'], {
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
     return output
       .split('\n')
@@ -88,7 +90,9 @@ export function listTmuxSessions(): string[] {
 export function killTmuxSession(sessionId: string): boolean {
   const sessionName = getTmuxSessionName(sessionId);
   try {
-    execSync(`tmux kill-session -t "${sessionName}" 2>/dev/null`, { stdio: 'pipe' });
+    execFileSync('tmux', ['kill-session', '-t', sessionName], {
+      stdio: ['ignore', 'pipe', 'ignore']
+    });
     return true;
   } catch (error) {
     console.warn(`[tmux] Failed to kill session ${sessionId}:`, error);
@@ -125,7 +129,17 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
 
     // First create the detached session
     try {
-      execSync(`tmux new-session -d -s "${sessionName}" -x ${options.cols} -y ${options.rows} "${options.shell}"`, {
+      execFileSync('tmux', [
+        'new-session',
+        '-d',
+        '-s',
+        sessionName,
+        '-x',
+        String(options.cols),
+        '-y',
+        String(options.rows),
+        options.shell
+      ], {
         cwd: options.cwd || process.cwd(),
         env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
         stdio: 'pipe'
@@ -178,8 +192,8 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
   // Resize method - use tmux resize
   emitter.resize = (cols: number, rows: number) => {
     try {
-      execSync(`tmux resize-window -t "${sessionName}" -x ${cols} -y ${rows} 2>/dev/null`, {
-        stdio: 'pipe'
+      execFileSync('tmux', ['resize-window', '-t', sessionName, '-x', String(cols), '-y', String(rows)], {
+        stdio: ['ignore', 'pipe', 'ignore']
       });
     } catch {
       // Ignore resize errors
@@ -215,14 +229,21 @@ export function spawnTmuxWithPty(
     // Create new detached tmux session with the specified shell
     console.log(`[tmux] Creating new session: ${sessionName} with shell: ${options.shell}`);
     try {
-      execSync(
-        `tmux new-session -d -s "${sessionName}" -x ${options.cols} -y ${options.rows} "${options.shell}"`,
-        {
-          cwd: options.cwd || process.cwd(),
-          env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
-          stdio: 'pipe'
-        }
-      );
+      execFileSync('tmux', [
+        'new-session',
+        '-d',
+        '-s',
+        sessionName,
+        '-x',
+        String(options.cols),
+        '-y',
+        String(options.rows),
+        options.shell
+      ], {
+        cwd: options.cwd || process.cwd(),
+        env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
+        stdio: 'pipe'
+      });
     } catch (error) {
       console.error(`[tmux] Failed to create session:`, error);
       throw error;
@@ -259,8 +280,8 @@ export function spawnTmuxWithPty(
     ptyProcess.resize(cols, rows);
     // Also resize the tmux window
     try {
-      execSync(`tmux resize-window -t "${sessionName}" -x ${cols} -y ${rows} 2>/dev/null`, {
-        stdio: 'pipe'
+      execFileSync('tmux', ['resize-window', '-t', sessionName, '-x', String(cols), '-y', String(rows)], {
+        stdio: ['ignore', 'pipe', 'ignore']
       });
     } catch {
       // Ignore
@@ -289,10 +310,10 @@ export function destroyTmuxSession(sessionId: string): void {
 export function getTmuxSessionCwd(sessionId: string): string | null {
   const sessionName = getTmuxSessionName(sessionId);
   try {
-    const output = execSync(
-      `tmux display-message -t "${sessionName}" -p "#{pane_current_path}"`,
-      { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-    );
+    const output = execFileSync('tmux', ['display-message', '-t', sessionName, '-p', '#{pane_current_path}'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
     return output.trim() || null;
   } catch {
     return null;

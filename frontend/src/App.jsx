@@ -201,6 +201,16 @@ function AppContent() {
     }
   });
 
+  const [terminalWebglEnabled, setTerminalWebglEnabled] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalWebglEnabled');
+      if (stored !== null) return stored === 'true';
+      return true;
+    } catch {
+      return true;
+    }
+  });
+
   // Fetch settings from server on mount
   useEffect(() => {
     const fetchSettings = async () => {
@@ -213,6 +223,12 @@ function AppContent() {
             setTerminalFontSize(data.terminalFontSize);
             try {
               localStorage.setItem('terminalFontSize', String(data.terminalFontSize));
+            } catch { /* ignore */ }
+          }
+          if (data.terminalWebglEnabled !== null && data.terminalWebglEnabled !== undefined) {
+            setTerminalWebglEnabled(data.terminalWebglEnabled);
+            try {
+              localStorage.setItem('terminalWebglEnabled', String(data.terminalWebglEnabled));
             } catch { /* ignore */ }
           }
           if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
@@ -245,6 +261,20 @@ function AppContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalFontSize: size })
     }).catch(e => console.error('Failed to save terminal font size to server', e));
+  }, []);
+
+  const updateTerminalWebglEnabled = useCallback((enabled) => {
+    setTerminalWebglEnabled(enabled);
+    try {
+      localStorage.setItem('terminalWebglEnabled', String(enabled));
+    } catch (e) {
+      console.error('Failed to save terminal WebGL setting to localStorage', e);
+    }
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terminalWebglEnabled: enabled })
+    }).catch(e => console.error('Failed to save terminal WebGL setting to server', e));
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -513,6 +543,8 @@ function AppContent() {
           onAddRecentFolder={addRecentFolder}
           terminalFontSize={terminalFontSize}
           onFontSizeChange={updateTerminalFontSize}
+          terminalWebglEnabled={terminalWebglEnabled}
+          onWebglChange={updateTerminalWebglEnabled}
         />
         <BookmarkModal
           isOpen={showBookmarks}
@@ -699,6 +731,7 @@ function AppContent() {
                     viewportHeight={viewportHeight}
                     onUrlDetected={handleUrlDetected}
                     fontSize={terminalFontSize}
+                    webglEnabled={terminalWebglEnabled}
                     sessionActivity={sessionActivity}
                     projectInfo={projectInfo}
                   />
@@ -721,6 +754,7 @@ function AppContent() {
                       viewportHeight={viewportHeight}
                       onUrlDetected={handleUrlDetected}
                       fontSize={terminalFontSize}
+                      webglEnabled={terminalWebglEnabled}
                       usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
                     />
                   </Suspense>
@@ -749,6 +783,7 @@ function AppContent() {
                     activeSessions={activeSessions}
                     activeSessionId={activeSessionId}
                     fontSize={terminalFontSize}
+                    webglEnabled={terminalWebglEnabled}
                     onUrlDetected={handlePreviewUrlChange}
                     mainTerminalMinimized={mainTerminalMinimized}
                     onToggleMainTerminal={handleToggleMainTerminal}
@@ -790,6 +825,7 @@ function AppContent() {
                   viewportHeight={viewportHeight}
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
+                  webglEnabled={terminalWebglEnabled}
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                 />
@@ -806,6 +842,7 @@ function AppContent() {
                     viewportHeight={viewportHeight}
                     onUrlDetected={handleUrlDetected}
                     fontSize={terminalFontSize}
+                    webglEnabled={terminalWebglEnabled}
                     onScrollDirection={handleScrollDirectionSafe}
                     onRegisterFocusTerminal={handleRegisterFocusTerminal}
                     usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
@@ -828,6 +865,7 @@ function AppContent() {
                   activeSessions={activeSessions}
                   activeSessionId={activeSessionId}
                   fontSize={terminalFontSize}
+                  webglEnabled={terminalWebglEnabled}
                   onUrlDetected={handlePreviewUrlChange}
                 />
               </Suspense>

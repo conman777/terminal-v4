@@ -6,6 +6,7 @@ interface UserSettings {
   previewUrl: string | null;
   terminalFontSize: number | null;
   sidebarCollapsed: boolean | null;
+  terminalWebglEnabled: boolean | null;
 }
 
 interface UpdateSettingsBody {
@@ -13,6 +14,7 @@ interface UpdateSettingsBody {
   previewUrl?: string | null;
   terminalFontSize?: number | null;
   sidebarCollapsed?: boolean | null;
+  terminalWebglEnabled?: boolean | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -25,7 +27,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -36,7 +38,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       hasGroqApiKey: !!groqApiKey,
       previewUrl: row?.preview_url || null,
       terminalFontSize: row?.terminal_font_size ?? null,
-      sidebarCollapsed: row?.sidebar_collapsed === 1
+      sidebarCollapsed: row?.sidebar_collapsed === 1,
+      terminalWebglEnabled: row?.terminal_webgl_enabled === null || row?.terminal_webgl_enabled === undefined
+        ? null
+        : row?.terminal_webgl_enabled === 1
     };
   });
 
@@ -48,7 +53,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed } = request.body || {};
+    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -73,6 +78,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         reply.code(400).send({ error: 'Terminal font size must be between 8 and 32' });
         return;
       }
+    }
+
+    if (terminalWebglEnabled !== undefined && terminalWebglEnabled !== null && typeof terminalWebglEnabled !== 'boolean') {
+      reply.code(400).send({ error: 'Terminal WebGL setting must be a boolean' });
+      return;
     }
 
     const db = getDatabase();
@@ -102,16 +112,21 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('sidebar_collapsed = ?');
         values.push(sidebarCollapsed ? 1 : 0);
       }
+      if (terminalWebglEnabled !== undefined) {
+        updates.push('terminal_webgl_enabled = ?');
+        values.push(terminalWebglEnabled ? 1 : 0);
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
         terminalFontSize ?? null,
         sidebarCollapsed ? 1 : 0,
+        terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
         now
       );
     }

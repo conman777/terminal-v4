@@ -71,10 +71,11 @@ function Sparkline({ data, color, height = 32, width = 120 }) {
   );
 }
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange }) {
+export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const resolvedWebglEnabled = terminalWebglEnabled !== false;
   const [systemStats, setSystemStats] = useState(null);
   const [statsHistory, setStatsHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState('24h');
@@ -434,6 +435,26 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
               <span className="font-size-value">{terminalFontSize}px</span>
             </div>
             <small>Adjust terminal text size (changes apply immediately)</small>
+          </div>
+          <div className="form-group">
+            <label>Terminal Renderer</label>
+            <div className="mode-toggle" role="group" aria-label="Terminal renderer">
+              <button
+                type="button"
+                className={`mode-btn ${resolvedWebglEnabled ? 'active' : ''}`}
+                onClick={() => onWebglChange?.(true)}
+              >
+                WebGL
+              </button>
+              <button
+                type="button"
+                className={`mode-btn ${!resolvedWebglEnabled ? 'active' : ''}`}
+                onClick={() => onWebglChange?.(false)}
+              >
+                Canvas
+              </button>
+            </div>
+            <small>Use WebGL for GPU acceleration; switch to Canvas if you see glitches.</small>
           </div>
 
           {/* System Resources Section */}
