@@ -126,6 +126,7 @@ export const SessionTab = memo(function SessionTab({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       data-session-id={session.id}
+      title={`Session ID: ${session.id}`}
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
