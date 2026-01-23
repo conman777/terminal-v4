@@ -7,7 +7,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
  * Supports auto-scrolling to bottom as new content arrives.
  * Supports keyboard input - keystrokes are forwarded to the terminal.
  */
-export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection, onLoadMore, onInput, isMobile }) {
+export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, onScrollDirection, onLoadMore, onInput, isMobile }) {
   const containerRef = useRef(null);
   const inputRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -24,6 +24,17 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
     }
   }, [content, autoScroll]);
 
+  // Force scroll to bottom when switching into reader view
+  useEffect(() => {
+    if (!scrollToken || !containerRef.current) return;
+    setAutoScroll(true);
+    requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      }
+    });
+  }, [scrollToken]);
+
   // Focus on mount so keyboard works immediately
   useEffect(() => {
     // Delay to ensure DOM is ready and previous focus is cleared
@@ -39,6 +50,19 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
     }, 100);
     return () => clearTimeout(timer);
   }, [isMobile]);
+
+  const scrollToBottom = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const sendInput = useCallback((text) => {
+    if (!onInput) return;
+    setAutoScroll(true);
+    onInput(text);
+    requestAnimationFrame(scrollToBottom);
+  }, [onInput, scrollToBottom]);
 
   // Click handler to ensure focus is maintained
   const handleClick = useCallback(() => {
@@ -73,7 +97,7 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
     if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
       e.preventDefault();
       navigator.clipboard?.readText().then((text) => {
-        if (text) onInput(text);
+        if (text) sendInput(text);
       }).catch(() => {});
       return;
     }
@@ -83,7 +107,7 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
       e.preventDefault();
       const code = e.key.toLowerCase().charCodeAt(0) - 96; // a=1, b=2, c=3...
       if (code > 0 && code < 27) {
-        onInput(String.fromCharCode(code));
+        sendInput(String.fromCharCode(code));
       }
       return;
     }
@@ -105,22 +129,22 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
 
     if (keyMap[e.key]) {
       e.preventDefault();
-      onInput(keyMap[e.key]);
+      sendInput(keyMap[e.key]);
     } else if (!targetIsInput && e.key.length === 1 && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
-      onInput(e.key);
+      sendInput(e.key);
     }
-  }, [onInput]);
+  }, [onInput, sendInput]);
 
   // Text input handler
   const handleInput = useCallback((e) => {
     if (!onInput) return;
     const value = e.target.value;
     if (value) {
-      onInput(value);
+      sendInput(value);
       e.target.value = ''; // Clear after sending
     }
-  }, [onInput]);
+  }, [onInput, sendInput]);
 
   // Detect user scroll to manage auto-scroll behavior
   const handleScroll = useCallback(() => {
@@ -165,30 +189,32 @@ export function ReaderView({ content, lines, cursor, fontSize, onScrollDirection
       onScroll={handleScroll}
       style={{ fontSize: fontSize || 14, fontFamily: resolvedFontFamily }}
     >
-      <pre className="reader-view-content">
+      <pre
+        className="reader-view-content"
+        style={lineHeight ? { lineHeight: `${lineHeight}px` } : undefined}
+      >
         {Array.isArray(lines) && lines.length > 0
-          ? lines.map((line, index) => {
-            const showCursor = cursor && cursor.line === index;
-            const lineText = line ?? '';
-            const column = showCursor ? Math.max(0, cursor.column) : 0;
-            const paddedLine = showCursor && column > lineText.length
-              ? lineText.padEnd(column, ' ')
-              : lineText;
-            const cursorChar = showCursor ? '\u00a0' : '';
-            const before = showCursor ? paddedLine.slice(0, column) : paddedLine;
-            const after = showCursor ? paddedLine.slice(column + 1) : '';
+          ? lines.map((lineSegments, index) => {
             const needsNewline = index < lines.length - 1;
+            if (!Array.isArray(lineSegments)) {
+              return (
+                <span key={index}>
+                  {lineSegments}
+                  {needsNewline ? '\n' : ''}
+                </span>
+              );
+            }
             return (
               <span key={index}>
-                {showCursor ? (
-                  <>
-                    {before}
-                    <span className="reader-view-cursor">{cursorChar}</span>
-                    {after}
-                  </>
-                ) : (
-                  before
-                )}
+                {lineSegments.map((segment, segmentIndex) => (
+                  <span
+                    key={`${index}-${segmentIndex}`}
+                    className={segment.isCursor ? 'reader-view-cursor' : undefined}
+                    style={segment.style}
+                  >
+                    {segment.text}
+                  </span>
+                ))}
                 {needsNewline ? '\n' : ''}
               </span>
             );

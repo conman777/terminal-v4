@@ -37,7 +37,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
-  const [readerCursor, setReaderCursor] = useState(null);
+  const [readerLineHeight, setReaderLineHeight] = useState(null);
+  const readerLineHeightRef = useRef(null);
+  const [readerScrollToken, setReaderScrollToken] = useState(0);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
@@ -202,99 +204,230 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const syncReaderBuffer = useCallback(() => {
     const term = xtermRef.current;
     const buffer = term?.buffer?.active;
-    if (!buffer) return;
-    const hintText = 'Use /skills to list available skills';
-    const contextRegex = /\b\d+% context left\b.*$/i;
-    const sanitizeLine = (line, cursorColumnOverride) => {
-      if (!line) {
-        return { text: '', column: cursorColumnOverride };
-      }
-      const ranges = [];
-      let searchFrom = 0;
-      while (true) {
-        const idx = line.indexOf(hintText, searchFrom);
-        if (idx === -1) break;
-        ranges.push([idx, idx + hintText.length]);
-        searchFrom = idx + hintText.length;
-      }
-      const contextMatch = contextRegex.exec(line);
-      if (contextMatch && typeof contextMatch.index === 'number') {
-        ranges.push([contextMatch.index, line.length]);
-      }
+    if (!buffer || !term) return;
 
-      if (ranges.length === 0) {
-        return { text: line, column: cursorColumnOverride };
-      }
+    const themeColors = term._core?._themeService?.colors;
+    const nextLineHeight = term._core?._renderService?.dimensions?.css?.cell?.height;
+    if (Number.isFinite(nextLineHeight) && nextLineHeight > 0 && nextLineHeight !== readerLineHeightRef.current) {
+      readerLineHeightRef.current = nextLineHeight;
+      setReaderLineHeight(nextLineHeight);
+    }
+    const themeOptions = term.options?.theme || {};
+    const defaultFg = themeColors?.foreground?.css || themeOptions.foreground || '#d4d4d4';
+    const defaultBg = themeColors?.background?.css || themeOptions.background || '#1e1e1e';
+    const defaultFgLower = defaultFg.toLowerCase();
+    const defaultBgLower = defaultBg.toLowerCase();
 
-      ranges.sort((a, b) => a[0] - b[0]);
-      const merged = [];
-      for (const range of ranges) {
-        const last = merged[merged.length - 1];
-        if (!last || range[0] > last[1]) {
-          merged.push([...range]);
-        } else {
-          last[1] = Math.max(last[1], range[1]);
-        }
+    const buildDefaultPalette = () => {
+      const base = [
+        '#2e3436', '#cc0000', '#4e9a06', '#c4a000',
+        '#3465a4', '#75507b', '#06989a', '#d3d7cf',
+        '#555753', '#ef2929', '#8ae234', '#fce94f',
+        '#729fcf', '#ad7fa8', '#34e2e2', '#eeeeec'
+      ];
+      const palette = base.slice();
+      const steps = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+      const toHex = (value) => value.toString(16).padStart(2, '0');
+      for (let i = 0; i < 216; i++) {
+        const r = steps[Math.floor(i / 36) % 6];
+        const g = steps[Math.floor(i / 6) % 6];
+        const b = steps[i % 6];
+        palette.push(`#${toHex(r)}${toHex(g)}${toHex(b)}`);
       }
-
-      let cursorColumn = cursorColumnOverride;
-      let removed = 0;
-      let lastIndex = 0;
-      let text = '';
-      for (const [start, end] of merged) {
-        if (start > lastIndex) {
-          text += line.slice(lastIndex, start);
-        }
-        if (cursorColumn !== null && cursorColumn !== undefined) {
-          if (cursorColumn > start) {
-            if (cursorColumn < end) {
-              cursorColumn = start - removed;
-            } else {
-              cursorColumn -= (end - start);
-            }
-          }
-        }
-        removed += end - start;
-        lastIndex = end;
+      for (let i = 0; i < 24; i++) {
+        const c = 8 + i * 10;
+        palette.push(`#${toHex(c)}${toHex(c)}${toHex(c)}`);
       }
-      text += line.slice(lastIndex);
-      const trimmed = text.replace(/\s+$/g, '');
-      if (cursorColumn !== null && cursorColumn !== undefined) {
-        cursorColumn = Math.min(cursorColumn, trimmed.length);
-      }
-      return { text: trimmed, column: cursorColumn };
+      return palette;
     };
 
-    const lines = [];
-    const cursorLine = buffer.baseY + buffer.cursorY;
-    const cursorColumn = buffer.cursorX;
-    let nextCursor = null;
-    for (let i = 0; i < buffer.length; i++) {
-      const line = buffer.getLine(i);
-      const raw = line ? line.translateToString(false) : '';
-      if (i === cursorLine) {
-        const sanitized = sanitizeLine(raw, cursorColumn);
-        lines.push(sanitized.text);
-        if (sanitized.column !== null && sanitized.column !== undefined) {
-          nextCursor = { line: i, column: sanitized.column };
-        }
+    const ansiPalette = Array.isArray(themeColors?.ansi) && themeColors.ansi.length >= 16
+      ? themeColors.ansi.map((color) => color?.css || defaultFg)
+      : buildDefaultPalette();
+
+    const rgbToCss = (value) => `#${(value & 0xffffff).toString(16).padStart(6, '0')}`;
+
+    const resolveColor = (cell, isForeground) => {
+      if (!cell) return isForeground ? defaultFg : defaultBg;
+      if (isForeground) {
+        if (cell.isFgDefault()) return defaultFg;
+        if (cell.isFgRGB()) return rgbToCss(cell.getFgColor());
+        if (cell.isFgPalette()) return ansiPalette[cell.getFgColor()] || defaultFg;
       } else {
-        lines.push(sanitizeLine(raw, null).text);
+        if (cell.isBgDefault()) return defaultBg;
+        if (cell.isBgRGB()) return rgbToCss(cell.getBgColor());
+        if (cell.isBgPalette()) return ansiPalette[cell.getBgColor()] || defaultBg;
+      }
+      return isForeground ? defaultFg : defaultBg;
+    };
+
+    const bufferLineCount = buffer.length;
+    const cols = term.cols || 0;
+    const cursorLine = buffer.baseY + buffer.cursorY;
+    const cursorColumn = Math.min(buffer.cursorX, cols);
+    const nullCell = buffer.getNullCell();
+    const lines = [];
+    let lastNonEmpty = -1;
+
+    for (let i = 0; i < bufferLineCount; i++) {
+      const line = buffer.getLine(i);
+      if (!line || cols <= 0) {
+        lines.push([]);
+        continue;
+      }
+
+      const effectiveCursorCol = i === cursorLine ? cursorColumn : null;
+      const scanLimit = cols - 1;
+      let lastContentCol = -1;
+      for (let col = scanLimit; col >= 0; col--) {
+        const cell = line.getCell(col, nullCell);
+        if (!cell || cell.getWidth() === 0) continue;
+        if (cell.getCode() !== 0 || !cell.isAttributeDefault()) {
+          lastContentCol = col;
+          break;
+        }
+      }
+
+      const cursorClamp = effectiveCursorCol === null ? -1 : Math.min(effectiveCursorCol, cols - 1);
+      const hasVirtualCursor = effectiveCursorCol === cols && cols > 0;
+      let maxCol = Math.max(lastContentCol, cursorClamp);
+
+      if (maxCol < 0) {
+        lines.push([]);
+        continue;
+      }
+
+      let currentKey = null;
+      let currentSegment = null;
+      const segments = [];
+      let lineHasContent = false;
+
+      for (let col = 0; col <= maxCol; col++) {
+        const cell = line.getCell(col, nullCell);
+        if (!cell || cell.getWidth() === 0) {
+          continue;
+        }
+
+        const isCursor = !hasVirtualCursor && effectiveCursorCol === col;
+        const rawChars = cell.getChars();
+        const text = rawChars && rawChars.length > 0 ? rawChars : ' ';
+
+        let fg = resolveColor(cell, true);
+        let bg = resolveColor(cell, false);
+        if (cell.isInverse()) {
+          const swap = fg;
+          fg = bg;
+          bg = swap;
+        }
+
+        const style = {};
+        let fgKey = '';
+        let bgKey = '';
+        if (isCursor) {
+          style['--cursor-bg'] = fg || defaultFg;
+          style['--cursor-fg'] = bg || defaultBg;
+          style['--cursor-text'] = fg || defaultFg;
+          fgKey = String(style['--cursor-fg']).toLowerCase();
+          bgKey = String(style['--cursor-bg']).toLowerCase();
+        } else {
+          if (cell.isInvisible()) {
+            style.color = 'transparent';
+            fgKey = 'transparent';
+          } else if (fg && fg.toLowerCase() !== defaultFgLower) {
+            style.color = fg;
+            fgKey = fg.toLowerCase();
+          }
+          if (bg && bg.toLowerCase() !== defaultBgLower) {
+            style.backgroundColor = bg;
+            bgKey = bg.toLowerCase();
+          }
+        }
+
+        if (cell.isBold()) {
+          style.fontWeight = 700;
+        }
+        if (cell.isItalic()) {
+          style.fontStyle = 'italic';
+        }
+        const decorations = [];
+        if (cell.isUnderline()) decorations.push('underline');
+        if (cell.isStrikethrough()) decorations.push('line-through');
+        if (cell.isOverline()) decorations.push('overline');
+        if (decorations.length > 0) {
+          style.textDecoration = decorations.join(' ');
+        }
+
+        const styleKey = [
+          isCursor ? 'c' : 'n',
+          fgKey,
+          bgKey,
+          cell.isBold() ? 'b' : '',
+          cell.isItalic() ? 'i' : '',
+          cell.isUnderline() ? 'u' : '',
+          cell.isStrikethrough() ? 's' : '',
+          cell.isOverline() ? 'o' : '',
+          cell.isInvisible() ? 'x' : ''
+        ].join('|');
+
+        if (currentKey !== styleKey) {
+          if (currentSegment) {
+            segments.push(currentSegment);
+          }
+          currentKey = styleKey;
+          currentSegment = {
+            text,
+            style,
+            isCursor
+          };
+        } else {
+          currentSegment.text += text;
+        }
+
+        const hasStyle = !isCursor && (
+          style.backgroundColor ||
+          style.color ||
+          style.fontWeight ||
+          style.fontStyle ||
+          style.textDecoration
+        );
+        if (isCursor) {
+          lineHasContent = true;
+        } else if (text.trim() !== '') {
+          lineHasContent = true;
+        } else if (hasStyle) {
+          lineHasContent = true;
+        }
+      }
+
+      if (currentSegment) {
+        segments.push(currentSegment);
+      }
+
+      if (hasVirtualCursor) {
+        segments.push({
+          text: ' ',
+          style: {
+            '--cursor-bg': defaultFg,
+            '--cursor-fg': defaultBg,
+            '--cursor-text': defaultFg
+          },
+          isCursor: true
+        });
+        lineHasContent = true;
+      }
+
+      lines.push(segments);
+      if (lineHasContent) {
+        lastNonEmpty = i;
       }
     }
 
-    let lastNonEmpty = -1;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i] && lines[i].trimEnd() !== '') {
-        lastNonEmpty = i;
-        break;
-      }
-    }
-    const lastLineIndex = Math.max(lastNonEmpty, nextCursor ? nextCursor.line : -1);
+    const viewportBottom = Math.min(bufferLineCount - 1, buffer.baseY + term.rows - 1);
+    const lastLineIndex = Math.max(lastNonEmpty, cursorLine, viewportBottom);
     const visibleLines = lastLineIndex >= 0 ? lines.slice(0, lastLineIndex + 1) : [];
-    replaceReaderBuffer(visibleLines.join('\n'));
+    const textLines = visibleLines.map((lineSegments) => lineSegments.map((segment) => segment.text).join(''));
+    replaceReaderBuffer(textLines.join('\n'));
     setReaderLines(visibleLines);
-    setReaderCursor(nextCursor);
   }, [replaceReaderBuffer]);
 
   const scheduleReaderSync = useCallback(() => {
@@ -383,6 +516,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     viewModeRef.current = viewMode;
     if (viewMode === 'reader') {
+      setReaderScrollToken(Date.now());
       syncReaderBuffer();
     }
   }, [viewMode, syncReaderBuffer]);
@@ -494,10 +628,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const flushInputBuffer = () => {
       if (disposed) return;
+      if (inputFlushRef.current) {
+        clearTimeout(inputFlushRef.current);
+        inputFlushRef.current = null;
+      }
       if (!inputBufferRef.current) return;
       const payload = inputBufferRef.current;
       inputBufferRef.current = '';
-      inputFlushRef.current = null;
       sendTerminalInput(payload);
     };
 
@@ -505,7 +642,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!data || disposed) return;
       inputBufferRef.current += data;
       if (!inputFlushRef.current) {
-        inputFlushRef.current = requestAnimationFrame(flushInputBuffer);
+        inputFlushRef.current = setTimeout(flushInputBuffer, 0);
       }
       if (data.includes('\r')) {
         flushInputBuffer();
@@ -1143,7 +1280,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         unregisterTerminalSender(sessionId, sendUserInput);
       }
       if (inputFlushRef.current) {
-        cancelAnimationFrame(inputFlushRef.current);
+        clearTimeout(inputFlushRef.current);
         inputFlushRef.current = null;
       }
       inputBufferRef.current = '';
@@ -1239,7 +1376,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         <ReaderView
           content={readerBuffer}
           lines={readerLines}
-          cursor={readerCursor}
+          lineHeight={readerLineHeight}
+          scrollToken={readerScrollToken}
           fontSize={fontSize || (isMobile ? 20 : 14)}
           onScrollDirection={onScrollDirection}
           onLoadMore={handleReaderLoadMore}
