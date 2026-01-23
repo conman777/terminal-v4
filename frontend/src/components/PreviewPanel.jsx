@@ -6,6 +6,62 @@ import { apiFetch } from '../utils/api';
 import { TerminalChat } from './TerminalChat';
 import { StyleEditor } from './StyleEditor';
 
+// Icon Components
+const Icons = {
+  Back: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 12H5M12 19l-7-7 7-7" />
+    </svg>
+  ),
+  Forward: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 12h14M12 5l7 7-7 7" />
+    </svg>
+  ),
+  Refresh: ({ className }) => (
+    <svg className={className} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+    </svg>
+  ),
+  Inspect: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 8l-4 4 4 4M16 12H8" />
+    </svg>
+  ),
+  Terminal: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  ),
+  External: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+    </svg>
+  ),
+  Close: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  ),
+  Browser: () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="18" rx="2" ry="2" />
+      <line x1="2" y1="9" x2="22" y2="9" />
+      <line x1="2" y1="15" x2="22" y2="15" />
+      <line x1="12" y1="9" x2="12" y2="21" />
+    </svg>
+  ),
+  Lock: () => (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0110 0v4" />
+    </svg>
+  )
+};
+
 // Format timestamp for log display
 function formatTime(timestamp) {
   const date = new Date(timestamp);
@@ -1316,43 +1372,36 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {url && (url.includes(':3020') || url.includes('preview-3020')) ? (
                 <>
                   <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
-                  <h3>Cannot Preview Terminal V4</h3>
-                  <p>Terminal V4 (port 3020) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
-                  <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector.</p>
+                  <h3>Cannot Preview</h3>
+                  <p>Terminal V4 (port 3020) cannot be viewed here to prevent infinite recursion.</p>
                 </>
               ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
                 <>
                   <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
-                  <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
+                  <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)}</h3>
                   {projectInfo.projectType === 'static' ? (
-                    <>
-                      <p>Static site detected.</p>
-                      <button
-                        type="button"
-                        className="btn-primary project-action-btn"
-                        onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
-                      >
-                        Open Static Site
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className="btn-primary project-action-btn"
+                      onClick={() => onUrlChange && onUrlChange(projectInfo.indexPath)}
+                    >
+                      Open Site
+                    </button>
                   ) : projectInfo.startCommand ? (
-                    <>
-                      <p>Run the dev server:</p>
-                      <button
-                        type="button"
-                        className="btn-primary project-action-btn"
-                        onClick={() => onStartProject && onStartProject(projectInfo.startCommand)}
-                      >
-                        {projectInfo.startCommand}
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className="btn-primary project-action-btn"
+                      onClick={() => onStartProject && onStartProject(projectInfo.startCommand)}
+                    >
+                      {projectInfo.startCommand}
+                    </button>
                   ) : (
                     <p>No start script detected.</p>
                   )}
                 </>
               ) : (
                 <>
-                  <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
+                  <div className="preview-empty-icon"><Icons.Browser /></div>
                   <h3>No URL</h3>
                   <p>Start a dev server or enter a URL</p>
                 </>
@@ -1455,6 +1504,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 />
               ) : (
                 <div className="preview-empty">
+                  <div className="preview-empty-icon" style={{ fontSize: '32px', width: '64px', height: '64px' }}><Icons.Terminal /></div>
                   <p>No terminal session selected</p>
                 </div>
               )}
@@ -1931,10 +1981,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             disabled={!iframeSrc}
             aria-label={inspectMode ? 'Exit inspect mode' : 'Inspect elements'}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
-              <path d="M13 13l6 6" />
-            </svg>
+            <Icons.Inspect />
           </button>
           <button
             type="button"
@@ -1943,10 +1990,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             disabled={!iframeSrc || !activeSessions || activeSessions.length === 0}
             aria-label={mobileSplitEnabled ? 'Hide terminal' : 'Show terminal'}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="18" rx="1" />
-              <rect x="14" y="3" width="7" height="18" rx="1" />
-            </svg>
+            <Icons.Terminal />
           </button>
           <button
             type="button"
@@ -1955,11 +1999,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             disabled={!iframeSrc}
             aria-label="Open in new tab"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
+            <Icons.External />
           </button>
           <button
             type="button"
@@ -1971,7 +2011,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
-            {(logs.length + proxyLogs.length + processLogs.length) > 0 && <span className="preview-log-badge">{logs.length + proxyLogs.length + processLogs.length}</span>}
+            {(logs.length + proxyLogs.length + processLogs.length) > 0 && <span className="preview-log-badge">{(logs.length + proxyLogs.length + processLogs.length)}</span>}
           </button>
         </div>
       </div>
@@ -1983,7 +2023,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     <div className="preview-panel">
       <div className="preview-header">
         <div className="preview-title">
-          <span className="preview-icon">{'\u2699'}</span>
+          <span className="preview-icon"><Icons.Browser /></span>
           <span>Browser</span>
         </div>
         {/* Port selector dropdown */}
@@ -2048,17 +2088,24 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           )}
         </div>
         <form className="preview-url-form" onSubmit={handleUrlSubmit}>
-          <input
-            type="text"
-            className="preview-url-input"
-            value={inputUrl}
-            onChange={(e) => setInputUrl(e.target.value)}
-            placeholder="http://localhost:3000 or C:\path\to\index.html"
-            aria-label="Preview URL"
-          />
+          <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
+            {iframeSrc && iframeSrc.startsWith('https') && (
+              <span style={{ position: 'absolute', left: '12px', color: '#10b981' }} title="Secure connection">
+                <Icons.Lock />
+              </span>
+            )}
+            <input
+              type="text"
+              className="preview-url-input"
+              value={inputUrl}
+              onChange={(e) => setInputUrl(e.target.value)}
+              placeholder="http://localhost:3000 or C:\path\to\index.html"
+              aria-label="Preview URL"
+              style={iframeSrc && iframeSrc.startsWith('https') ? { paddingLeft: '32px' } : {}}
+            />
+          </div>
         </form>
         <div className="preview-actions">
-          {/* Simple back/forward/reload buttons */}
           <Tooltip text="Go back">
             <button
               type="button"
@@ -2067,7 +2114,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={historyIndex <= 0}
               aria-label="Go back"
             >
-              ←
+              <Icons.Back />
             </button>
           </Tooltip>
           <Tooltip text="Go forward">
@@ -2078,7 +2125,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={historyIndex >= historyStack.length - 1}
               aria-label="Go forward"
             >
-              →
+              <Icons.Forward />
             </button>
           </Tooltip>
           <Tooltip text="Reload" shortcut="⌘R">
@@ -2089,9 +2136,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={!iframeSrc}
               aria-label="Reload preview"
             >
-              {isLoading ? '⋯' : '↻'}
+              <Icons.Refresh className={isLoading ? 'rotating' : ''} />
             </button>
           </Tooltip>
+
+          <div style={{ width: '1px', height: '20px', background: 'var(--preview-border)', margin: '0 4px' }} />
 
           <Tooltip text={inspectMode ? 'Exit inspect mode' : 'Inspect elements'} shortcut="⌘I">
             <button
@@ -2101,10 +2150,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={!iframeSrc}
               aria-label="Inspect elements"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
-                <path d="M13 13l6 6" />
-              </svg>
+              <Icons.Inspect />
             </button>
           </Tooltip>
           <Tooltip text={browserSplitEnabled ? 'Hide Terminal' : 'Show Terminal'} shortcut="⌘K">
@@ -2115,10 +2161,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={!iframeSrc}
               aria-label="Toggle terminal split"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="7" height="18" rx="1" />
-                <rect x="14" y="3" width="7" height="18" rx="1" />
-              </svg>
+              <Icons.Terminal />
             </button>
           </Tooltip>
           <Tooltip text={showDevTools ? 'Hide DevTools' : 'Show DevTools'} shortcut="⌘⇧D">
@@ -2129,7 +2172,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={!iframeSrc}
               aria-label="Toggle DevTools"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="4 17 10 11 4 5" />
                 <line x1="12" y1="19" x2="20" y2="19" />
               </svg>
@@ -2145,34 +2188,27 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               disabled={!hasCookies}
               aria-label="Clear cookies"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M8 12h8" />
                 {hasCookies && <circle cx="12" cy="12" r="3" fill="currentColor" />}
               </svg>
             </button>
           )}
-          <Tooltip text="Refresh preview" shortcut="⌘R">
+          
+          <div style={{ width: '1px', height: '20px', background: 'var(--preview-border)', margin: '0 4px' }} />
+          
+          <Tooltip text="Open in new tab">
             <button
               type="button"
               className="preview-action-btn"
-              onClick={handleRefresh}
+              onClick={handleOpenExternal}
               disabled={!iframeSrc}
-              aria-label="Refresh"
+              aria-label="Open in new tab"
             >
-              {'\u21BB'}
+              <Icons.External />
             </button>
           </Tooltip>
-          <button
-            type="button"
-            className="preview-action-btn"
-            onClick={handleOpenExternal}
-            title="Open in new tab"
-            disabled={!iframeSrc}
-            aria-label="Open in new tab"
-          >
-            {'\u2197'}
-          </button>
           {onToggleMainTerminal && (
             <Tooltip text={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}>
               <button
@@ -2181,18 +2217,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 onClick={onToggleMainTerminal}
                 aria-label={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   {mainTerminalMinimized ? (
                     <>
-                      {/* Restore icon - two panes */}
                       <rect x="3" y="3" width="8" height="18" rx="1" />
                       <rect x="13" y="3" width="8" height="18" rx="1" />
                     </>
                   ) : (
-                    <>
-                      {/* Maximize icon - single full pane */}
-                      <rect x="3" y="3" width="18" height="18" rx="1" />
-                    </>
+                    <rect x="3" y="3" width="18" height="18" rx="1" />
                   )}
                 </svg>
               </button>
@@ -2205,7 +2237,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             title="Close browser"
             aria-label="Close browser"
           >
-            {'\u00D7'}
+            <Icons.Close />
           </button>
         </div>
       </div>
@@ -2245,7 +2277,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       </>
                     ) : projectInfo.startCommand ? (
                       <>
-                        <p>Run the dev server:</p>
+                        <p>Run the dev server to start previewing your application:</p>
                         <button
                           type="button"
                           className="btn-primary project-action-btn"
@@ -2257,18 +2289,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     ) : (
                       <p>No start script detected. Add a <code>dev</code> or <code>start</code> script to your package.json.</p>
                     )}
-                    <p className="project-cwd">
+                    <div className="project-cwd">
                       <code>{projectInfo.cwd}</code>
-                    </p>
+                    </div>
                   </>
                 ) : (
                   <>
-                    <div className="preview-empty-icon">{'\u{1F4BB}'}</div>
-                    <h3>No URL</h3>
-                    <p>Start a dev server in the terminal, or enter a local file path like:</p>
-                    <p className="preview-hint">
+                    <div className="preview-empty-icon"><Icons.Browser /></div>
+                    <h3>Ready to Preview</h3>
+                    <p>Start a dev server in the terminal, or enter a local file path to see your project in action.</p>
+                    <div className="preview-hint">
+                      <p>Try entering a path like:</p>
                       <code>C:\path\to\project\index.html</code>
-                    </p>
+                    </div>
                   </>
                 )}
               </div>
@@ -2333,11 +2366,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   <span className="preview-terminal-no-sessions">No terminal sessions</span>
                 )}
                 <button
-                  className="preview-terminal-toggle"
+                  className="preview-action-btn"
                   onClick={handleToggleTerminalSplit}
                   title="Close terminal"
                 >
-                  ×
+                  <Icons.Close />
                 </button>
               </div>
               <div className="preview-terminal-content">
