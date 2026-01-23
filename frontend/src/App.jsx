@@ -265,12 +265,22 @@ function AppContent() {
     });
   }, []);
 
-  // Initialize first pane with active session
+  // Initialize pane with active session
+  // - In single-pane mode: always sync pane to active session (tab switching)
+  // - In multi-pane mode: only initialize if pane has no session yet
   useEffect(() => {
-    if (activeSessionId) {
+    if (!activeSessionId) return;
+    const isSinglePane = paneLayout.panes.length === 1;
+    const activePane = paneLayout.panes.find(p => p.id === paneLayout.activePaneId);
+
+    if (isSinglePane) {
+      // Single pane: tabs control which session is shown
+      initializePaneWithSession(activeSessionId);
+    } else if (activePane && !activePane.sessionId) {
+      // Multi-pane: only initialize empty panes
       initializePaneWithSession(activeSessionId);
     }
-  }, [activeSessionId, initializePaneWithSession]);
+  }, [activeSessionId, initializePaneWithSession, paneLayout.panes, paneLayout.activePaneId]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
