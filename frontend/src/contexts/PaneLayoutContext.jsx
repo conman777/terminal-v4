@@ -2,18 +2,168 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 
 const PaneLayoutContext = createContext(null);
 
+const MAX_PANES = 8;
+
+// Helper: Count total panes in tree
+function countPanes(node) {
+  if (!node) return 0;
+  if (node.type === 'pane') return 1;
+  return node.children.reduce((sum, child) => sum + countPanes(child), 0);
+}
+
+// Helper: Get all panes as flat array
+function getAllPanes(node, result = []) {
+  if (!node) return result;
+  if (node.type === 'pane') {
+    result.push(node);
+  } else if (node.children) {
+    node.children.forEach(child => getAllPanes(child, result));
+  }
+  return result;
+}
+
+// Helper: Find pane and its parent in tree
+function findPaneInTree(node, paneId, parent = null, index = -1) {
+  if (!node) return null;
+  if (node.type === 'pane' && node.id === paneId) {
+    return { node, parent, index };
+  }
+  if (node.children) {
+    for (let i = 0; i < node.children.length; i++) {
+      const result = findPaneInTree(node.children[i], paneId, node, i);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+// Helper: Deep clone a node
+function cloneNode(node) {
+  if (!node) return null;
+  if (node.type === 'pane') {
+    return { ...node };
+  }
+  return {
+    ...node,
+    children: node.children.map(cloneNode)
+  };
+}
+
+// Helper: Simplify tree (remove single-child splits)
+function simplifyTree(node) {
+  if (!node || node.type === 'pane') return node;
+
+  // Recursively simplify children first
+  node.children = node.children.map(simplifyTree);
+
+  // If split has only one child, replace with that child
+  if (node.children.length === 1) {
+    return node.children[0];
+  }
+
+  // Flatten nested splits with same direction
+  const newChildren = [];
+  for (const child of node.children) {
+    if (child.type === 'split' && child.direction === node.direction) {
+      newChildren.push(...child.children);
+    } else {
+      newChildren.push(child);
+    }
+  }
+  node.children = newChildren;
+
+  return node;
+}
+
+// Helper: Remove pane from tree
+function removePaneFromTree(root, paneId) {
+  if (!root) return null;
+  if (root.type === 'pane') {
+    return root.id === paneId ? null : root;
+  }
+
+  const newChildren = root.children
+    .map(child => removePaneFromTree(child, paneId))
+    .filter(Boolean);
+
+  if (newChildren.length === 0) return null;
+
+  return simplifyTree({ ...root, children: newChildren });
+}
+
+// Migrate old flat layout to tree structure
+function migrateLayout(saved) {
+  // Already tree-based
+  if (saved.root) return saved;
+
+  // Old flat structure: { type, panes, activePaneId }
+  const { type, panes, activePaneId } = saved;
+
+  if (!panes || panes.length === 0) {
+    return {
+      root: { type: 'pane', id: 'pane-1', sessionId: null },
+      activePaneId: 'pane-1'
+    };
+  }
+
+  if (panes.length === 1) {
+    return {
+      root: { type: 'pane', id: panes[0].id, sessionId: panes[0].sessionId },
+      activePaneId: activePaneId || panes[0].id
+    };
+  }
+
+  // Multiple panes - create appropriate split
+  let direction = 'horizontal';
+  if (type === 'vertical') direction = 'vertical';
+  else if (type === 'grid') direction = 'vertical'; // Grid becomes vertical split of horizontal rows
+
+  if (type === 'grid' && panes.length >= 2) {
+    // Convert grid to nested structure: 2 columns per row
+    const rows = [];
+    for (let i = 0; i < panes.length; i += 2) {
+      if (i + 1 < panes.length) {
+        rows.push({
+          type: 'split',
+          direction: 'horizontal',
+          children: [
+            { type: 'pane', id: panes[i].id, sessionId: panes[i].sessionId },
+            { type: 'pane', id: panes[i + 1].id, sessionId: panes[i + 1].sessionId }
+          ]
+        });
+      } else {
+        rows.push({ type: 'pane', id: panes[i].id, sessionId: panes[i].sessionId });
+      }
+    }
+
+    return {
+      root: rows.length === 1 ? rows[0] : { type: 'split', direction: 'vertical', children: rows },
+      activePaneId: activePaneId || panes[0].id
+    };
+  }
+
+  // Horizontal or vertical - simple linear split
+  return {
+    root: {
+      type: 'split',
+      direction,
+      children: panes.map(p => ({ type: 'pane', id: p.id, sessionId: p.sessionId }))
+    },
+    activePaneId: activePaneId || panes[0].id
+  };
+}
+
 export function PaneLayoutProvider({ children }) {
-  // Split pane layout state
+  // Tree-based layout state
   const [paneLayout, setPaneLayout] = useState(() => {
     try {
       const saved = localStorage.getItem('paneLayout');
       if (saved) {
-        return JSON.parse(saved);
+        return migrateLayout(JSON.parse(saved));
       }
     } catch {}
     return {
-      type: 'single',
-      panes: [{ id: 'pane-1', sessionId: null }],
+      root: { type: 'pane', id: 'pane-1', sessionId: null },
       activePaneId: 'pane-1'
     };
   });
@@ -36,71 +186,75 @@ export function PaneLayoutProvider({ children }) {
   const initializePaneWithSession = useCallback((sessionId) => {
     if (!sessionId) return;
 
-    // Update the active pane's session
     setPaneLayout(prev => {
-      const activePaneIndex = prev.panes.findIndex(p => p.id === prev.activePaneId);
-      if (activePaneIndex === -1) return prev;
-
-      return {
-        ...prev,
-        panes: prev.panes.map((pane, i) =>
-          i === activePaneIndex ? { ...pane, sessionId } : pane
-        )
-      };
+      const newRoot = cloneNode(prev.root);
+      const found = findPaneInTree(newRoot, prev.activePaneId);
+      if (found) {
+        found.node.sessionId = sessionId;
+      }
+      return { ...prev, root: newRoot };
     });
   }, []);
 
   // Handle session selection in a specific pane
   const setPaneSession = useCallback((paneId, sessionId) => {
-    setPaneLayout(prev => ({
-      ...prev,
-      panes: prev.panes.map(pane =>
-        pane.id === paneId ? { ...pane, sessionId } : pane
-      )
-    }));
+    setPaneLayout(prev => {
+      const newRoot = cloneNode(prev.root);
+      const found = findPaneInTree(newRoot, paneId);
+      if (found) {
+        found.node.sessionId = sessionId;
+      }
+      return { ...prev, root: newRoot };
+    });
     return sessionId;
   }, []);
 
   // Handle pane focus
   const focusPane = useCallback((paneId) => {
-    setPaneLayout(prev => ({
-      ...prev,
-      activePaneId: paneId
-    }));
-    const pane = paneLayout.panes.find(p => p.id === paneId);
+    setPaneLayout(prev => ({ ...prev, activePaneId: paneId }));
+    const panes = getAllPanes(paneLayout.root);
+    const pane = panes.find(p => p.id === paneId);
     return pane?.sessionId || null;
-  }, [paneLayout.panes]);
+  }, [paneLayout.root]);
 
   // Handle pane split
   const splitPane = useCallback((paneId, direction) => {
     setPaneLayout(prev => {
-      if (prev.panes.length >= 4) return prev;
+      const paneCount = countPanes(prev.root);
+      if (paneCount >= MAX_PANES) return prev;
+
+      const newRoot = cloneNode(prev.root);
+      const found = findPaneInTree(newRoot, paneId);
+      if (!found) return prev;
 
       const newPaneId = `pane-${Date.now()}`;
-      let newType = prev.type;
-      let newPanes = [...prev.panes];
+      const newPane = { type: 'pane', id: newPaneId, sessionId: null };
 
-      if (prev.type === 'single') {
-        newType = direction === 'horizontal' ? 'horizontal' : 'vertical';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'horizontal' && direction === 'vertical') {
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'vertical' && direction === 'horizontal') {
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'horizontal' || prev.type === 'vertical') {
-        newType = 'grid';
-        newPanes.push({ id: newPaneId, sessionId: null });
-      } else if (prev.type === 'grid' && prev.panes.length < 4) {
-        newPanes.push({ id: newPaneId, sessionId: null });
+      // If this is the root pane (no parent), create a new split
+      if (!found.parent) {
+        return {
+          ...prev,
+          root: {
+            type: 'split',
+            direction,
+            children: [found.node, newPane]
+          }
+        };
       }
 
-      return {
-        ...prev,
-        type: newType,
-        panes: newPanes
-      };
+      // If parent split direction matches, add sibling
+      if (found.parent.direction === direction) {
+        found.parent.children.splice(found.index + 1, 0, newPane);
+      } else {
+        // Replace pane with a new split containing original + new pane
+        found.parent.children[found.index] = {
+          type: 'split',
+          direction,
+          children: [found.node, newPane]
+        };
+      }
+
+      return { ...prev, root: simplifyTree(newRoot) };
     });
   }, []);
 
@@ -112,27 +266,21 @@ export function PaneLayoutProvider({ children }) {
     }
 
     setPaneLayout(prev => {
-      if (prev.panes.length <= 1) return prev;
+      const paneCount = countPanes(prev.root);
+      if (paneCount <= 1) return prev;
 
-      const newPanes = prev.panes.filter(p => p.id !== paneId);
-      let newType = prev.type;
+      const newRoot = removePaneFromTree(cloneNode(prev.root), paneId);
+      if (!newRoot) return prev;
 
-      if (newPanes.length === 1) {
-        newType = 'single';
-      } else if (newPanes.length === 2) {
-        newType = prev.type === 'vertical' ? 'vertical' : 'horizontal';
-      } else if (newPanes.length === 3) {
-        newType = 'grid';
-      }
-
+      // Update active pane if needed
       let newActivePaneId = prev.activePaneId;
       if (paneId === prev.activePaneId) {
-        newActivePaneId = newPanes[0]?.id || 'pane-1';
+        const panes = getAllPanes(newRoot);
+        newActivePaneId = panes[0]?.id || 'pane-1';
       }
 
       return {
-        type: newType,
-        panes: newPanes,
+        root: newRoot,
         activePaneId: newActivePaneId
       };
     });
@@ -178,9 +326,19 @@ export function PaneLayoutProvider({ children }) {
     setIsDragging(false);
   }, []);
 
+  // Compute legacy-compatible layout object for components that need it
+  const legacyLayout = {
+    type: paneLayout.root.type === 'pane' ? 'single' : paneLayout.root.direction,
+    panes: getAllPanes(paneLayout.root),
+    activePaneId: paneLayout.activePaneId
+  };
+
   const value = {
-    // Pane layout state
+    // Tree-based layout
     paneLayout,
+    // Legacy flat layout for backward compatibility
+    legacyLayout,
+
     fullscreenPaneId,
     splitPosition,
     isDragging,
@@ -198,7 +356,11 @@ export function PaneLayoutProvider({ children }) {
     startDragging,
     updateSplitPosition,
     stopDragging,
-    setIsDragging
+    setIsDragging,
+
+    // Helpers
+    getAllPanes: () => getAllPanes(paneLayout.root),
+    countPanes: () => countPanes(paneLayout.root)
   };
 
   return (

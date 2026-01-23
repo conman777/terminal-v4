@@ -56,19 +56,6 @@ export default function Sidebar({
           )}
 
           <SidebarSection
-            title="Recent"
-            icon="clock"
-            items={recentFolders.slice(0, 5)}
-            onSelect={onFolderSelect}
-            onPin={onPinFolder}
-            onUnpin={onUnpinFolder}
-            pinnedFolders={pinnedFolders}
-            currentPath={currentPath}
-            showPinAction={true}
-            defaultExpanded={true}
-          />
-
-          <SidebarSection
             title="Projects"
             icon="folder-git"
             items={projects}
@@ -82,6 +69,19 @@ export default function Sidebar({
             defaultExpanded={true}
             showSearch={true}
             onAddFolder={onAddScanFolder}
+          />
+
+          <SidebarSection
+            title="Recent"
+            icon="clock"
+            items={recentFolders.slice(0, 5)}
+            onSelect={onFolderSelect}
+            onPin={onPinFolder}
+            onUnpin={onUnpinFolder}
+            pinnedFolders={pinnedFolders}
+            currentPath={currentPath}
+            showPinAction={true}
+            defaultExpanded={true}
           />
         </div>
       )}

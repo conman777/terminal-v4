@@ -7,7 +7,7 @@ import { useEffect, useCallback, useRef } from 'react';
  * - Cmd+B: Toggle sidebar
  * - Cmd+P: Toggle preview
  * - Cmd+\: Toggle full-screen terminal
- * - Cmd+1/2/3/4: Focus pane 1/2/3/4
+ * - Cmd+1-8: Focus pane 1-8
  * - Cmd+T: New terminal
  * - Cmd+W: Close current terminal
  * - Escape: Exit full-screen mode
@@ -106,8 +106,8 @@ export function useKeyboardShortcuts({
       return;
     }
 
-    // Cmd+1/2/3/4 - focus pane
-    if (cmdOrCtrl && e.key >= '1' && e.key <= '4') {
+    // Cmd+1-8 - focus pane
+    if (cmdOrCtrl && e.key >= '1' && e.key <= '8') {
       const paneIndex = parseInt(e.key, 10) - 1;
       if (paneIndex < paneCount) {
         e.preventDefault();

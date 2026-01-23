@@ -71,6 +71,7 @@ function AppContent() {
 
   const {
     paneLayout,
+    legacyLayout,
     fullscreenPaneId,
     splitPosition,
     isDragging,
@@ -270,8 +271,8 @@ function AppContent() {
   // - In multi-pane mode: only initialize if pane has no session yet
   useEffect(() => {
     if (!activeSessionId) return;
-    const isSinglePane = paneLayout.panes.length === 1;
-    const activePane = paneLayout.panes.find(p => p.id === paneLayout.activePaneId);
+    const isSinglePane = legacyLayout.panes.length === 1;
+    const activePane = legacyLayout.panes.find(p => p.id === legacyLayout.activePaneId);
 
     if (isSinglePane) {
       // Single pane: tabs control which session is shown
@@ -280,7 +281,7 @@ function AppContent() {
       // Multi-pane: only initialize empty panes
       initializePaneWithSession(activeSessionId);
     }
-  }, [activeSessionId, initializePaneWithSession, paneLayout.panes, paneLayout.activePaneId]);
+  }, [activeSessionId, initializePaneWithSession, legacyLayout.panes, legacyLayout.activePaneId]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
@@ -329,14 +330,14 @@ function AppContent() {
     onToggleSidebar: toggleSidebar,
     onTogglePreview: togglePreview,
     onToggleFullScreen: () => {
-      const activePaneId = paneLayout.activePaneId;
+      const activePaneId = legacyLayout.activePaneId;
       if (activePaneId) {
         toggleFullscreen(activePaneId);
       }
     },
     onFocusPane: (index) => {
-      if (paneLayout.panes[index]) {
-        handlePaneFocus(paneLayout.panes[index].id);
+      if (legacyLayout.panes[index]) {
+        handlePaneFocus(legacyLayout.panes[index].id);
       }
     },
     onNewTerminal: createSession,
@@ -347,7 +348,7 @@ function AppContent() {
     },
     onExitFullScreen: exitFullscreen,
     isFullScreen: !!fullscreenPaneId,
-    paneCount: paneLayout.panes.length,
+    paneCount: legacyLayout.panes.length,
     enabled: !isMobile
   });
 
@@ -683,7 +684,8 @@ function AppContent() {
                   </div>
                 ) : (
                   <SplitPaneContainer
-                    layout={paneLayout}
+                    layout={legacyLayout}
+                    paneLayout={paneLayout}
                     sessions={activeSessions}
                     onPaneSessionSelect={handlePaneSessionSelect}
                     onPaneSplit={splitPane}

@@ -982,6 +982,10 @@ button {
   right: 0;
   bottom: 0;
   user-select: text;
+  font-kerning: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  text-rendering: optimizeSpeed;
 }
 
 .reader-view-content {
@@ -991,6 +995,9 @@ button {
   word-break: break-word;
   line-height: 1.0;
   user-select: text;
+  font-kerning: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
 }
 
 /* Mobile optimizations for reader view */
@@ -1022,18 +1029,57 @@ button {
   }
 }
 
-/* Hidden mobile input - positioned to trigger virtual keyboard */
+/* Hidden mobile input - iOS requires minimal visibility to trigger keyboard */
 .reader-view-mobile-input {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 1px;
-  height: 1px;
+  bottom: 10px;
+  left: 10px;
+  width: 50px;
+  height: 30px;
   opacity: 0.01;
   border: none;
   padding: 0;
   margin: 0;
-  z-index: 1;
+  z-index: 10;
+  font-size: 16px; /* Prevents iOS zoom on focus */
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+}
+
+/* Mobile keyboard input overlay - tappable for iOS keyboard */
+.mobile-keyboard-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: transparent;
+  caret-color: var(--cursor-bg, #fff);
+  font-size: 16px; /* Prevents iOS zoom */
+  z-index: 100;
+  -webkit-appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-keyboard-input:focus {
+  outline: none;
+}
+
+/* Mobile keyboard active - override xterm's inline styles (fallback) */
+.xterm-helper-textarea.mobile-keyboard-active {
+  position: fixed !important;
+  left: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  opacity: 0.01 !important;
+  z-index: 10 !important;
+  pointer-events: auto !important;
+  font-size: 16px !important; /* Prevents iOS zoom */
 }
 
 /* Reader View Toggle Button */
@@ -7067,11 +7113,6 @@ button {
 
 /* Safe area support - additional specificity for browsers that support it */
 @supports (padding: env(safe-area-inset-top)) {
-  /* When header is collapsed, move keybar up to stay hidden */
-  .layout.mobile.nav-collapsed .mobile-keybar {
-    top: env(safe-area-inset-top, 0px);
-  }
-
   .mobile-header {
     padding-top: env(safe-area-inset-top);
     height: var(--mobile-header-height);

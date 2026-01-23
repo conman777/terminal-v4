@@ -28,6 +28,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const clientIdRef = useRef(null);
   const inputBufferRef = useRef('');
   const inputFlushRef = useRef(null);
+  const mobileInputRef = useRef(null);
   const isMobile = useMobileDetect();
   const performanceMode = true;
   const { activeSessionId, sessions, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
@@ -113,33 +114,53 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     cleanup: cleanupScrolling
   } = useTerminalScrolling(xtermRef, sendToTerminal);
 
-  // Mobile keyboard control
+  // Mobile keyboard input handler - forwards keystrokes to terminal
+  const handleMobileInput = useCallback((e) => {
+    const value = e.target.value;
+    if (value && sendTerminalInputRef.current) {
+      sendTerminalInputRef.current(value);
+    }
+    e.target.value = ''; // Clear after sending
+  }, []);
+
+  const handleMobileKeyDown = useCallback((e) => {
+    if (!sendTerminalInputRef.current) return;
+    // Handle special keys
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\r');
+    } else if (e.key === 'Backspace') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x7f');
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\t');
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x1b');
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x1b[A');
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x1b[B');
+    } else if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x1b[D');
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      sendTerminalInputRef.current('\x1b[C');
+    }
+  }, []);
+
+  // Mobile keyboard control - now also focuses the mobile input
   const setMobileInputEnabled = useCallback((enabled) => {
     if (!isMobile) return;
-    const term = xtermRef.current;
-    if (!term) return;
-    const textarea = term.textarea;
-    if (!textarea) return;
-
     if (enabled) {
-      textarea.style.left = '0';
-      textarea.style.top = '0';
-      textarea.style.width = '1px';
-      textarea.style.height = '1px';
-      textarea.style.opacity = '0.01';
-      textarea.style.zIndex = '1';
-      textarea.style.pointerEvents = 'none';
-      textarea.readOnly = false;
-      textarea.inputMode = 'text';
-      term.focus();
+      // Focus the mobile input to trigger iOS keyboard
+      setTimeout(() => mobileInputRef.current?.focus(), 50);
     } else {
-      textarea.blur();
-      textarea.style.left = '-9999px';
-      textarea.style.opacity = '1';
-      textarea.style.zIndex = '-1';
-      textarea.style.pointerEvents = 'auto';
-      textarea.readOnly = true;
-      textarea.inputMode = 'none';
+      mobileInputRef.current?.blur();
     }
   }, [isMobile]);
 
@@ -343,12 +364,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }
         }
 
-        if (cell.isBold()) {
-          style.fontWeight = 700;
-        }
-        if (cell.isItalic()) {
-          style.fontStyle = 'italic';
-        }
         const decorations = [];
         if (cell.isUnderline()) decorations.push('underline');
         if (cell.isStrikethrough()) decorations.push('line-through');
@@ -1372,6 +1387,23 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           pointerEvents: viewMode === 'terminal' ? 'auto' : 'none'
         }}
       ></div>
+      {/* Mobile keyboard input overlay - visible and tappable for iOS */}
+      {isMobile && viewMode === 'terminal' && keybarOpen && (
+        <input
+          ref={mobileInputRef}
+          type="text"
+          className="mobile-keyboard-input"
+          onInput={handleMobileInput}
+          onKeyDown={handleMobileKeyDown}
+          autoCapitalize="off"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck="false"
+          inputMode="text"
+          enterKeyHint="send"
+          aria-label="Terminal input"
+        />
+      )}
       {viewMode === 'reader' && (
         <ReaderView
           content={readerBuffer}

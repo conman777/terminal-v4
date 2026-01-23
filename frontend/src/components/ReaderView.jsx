@@ -35,21 +35,16 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     });
   }, [scrollToken]);
 
-  // Focus on mount so keyboard works immediately
+  // Focus on mount and when switching to reader view so keyboard works
   useEffect(() => {
-    // Delay to ensure DOM is ready and previous focus is cleared
+    if (!isMobile) return;
     const timer = setTimeout(() => {
-      const target = inputRef.current || containerRef.current;
-      if (target) {
-        target.focus();
-        // Verify focus actually worked, retry if needed
-        if (document.activeElement !== target) {
-          setTimeout(() => target.focus(), 100);
-        }
+      if (inputRef.current) {
+        inputRef.current.focus();
       }
     }, 100);
     return () => clearTimeout(timer);
-  }, [isMobile]);
+  }, [isMobile, scrollToken]);
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
@@ -225,6 +220,9 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
       {/* Hidden input for keyboard capture */}
       <input
         ref={inputRef}
+        type="text"
+        inputMode="text"
+        enterKeyHint="send"
         className="reader-view-mobile-input"
         onInput={handleInput}
         onKeyDown={handleKeyDown}

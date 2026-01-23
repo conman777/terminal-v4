@@ -79,30 +79,30 @@ export function SessionSelector({
   };
 
   return (
-    <div className="session-selector" ref={dropdownRef}>
+    <div className="session-selector-modern" ref={dropdownRef}>
       <button
         type="button"
-        className="session-selector-btn"
+        className={`session-selector-btn-modern ${isOpen ? 'open' : ''}`}
         onClick={() => setIsOpen(!isOpen)}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
       >
-        <span className="session-selector-label">
+        <span className="session-selector-label-modern">
           {activeSession ? activeSession.title : 'No Terminal'}
         </span>
-        <span className={`session-selector-arrow${isOpen ? ' open' : ''}`}>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <span className={`session-selector-arrow-modern ${isOpen ? 'open' : ''}`}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
         </span>
       </button>
 
       {isOpen && (
-        <div className="session-selector-dropdown">
-          <div className="session-selector-list">
-            {isLoading && <div className="session-selector-empty">Loading...</div>}
+        <div className="session-selector-dropdown-modern">
+          <div className="session-selector-list-modern">
+            {isLoading && <div className="session-selector-empty-modern">Loading...</div>}
             {sessionLoadError && (
-              <div className="session-selector-error">
+              <div className="session-selector-error-modern">
                 <span>{sessionLoadError}</span>
                 <button type="button" onClick={(e) => { e.stopPropagation(); onRetryLoad?.(); }}>
                   Retry
@@ -110,14 +110,14 @@ export function SessionSelector({
               </div>
             )}
             {!isLoading && !sessionLoadError && activeSessions.length === 0 && (
-              <div className="session-selector-empty">No active terminals</div>
+              <div className="session-selector-empty-modern">No active terminals</div>
             )}
             {activeSessions.map((session) => {
               const isRenaming = renamingId === session.id;
               return (
                 <div
                   key={session.id}
-                  className={`session-selector-item${session.id === activeSessionId ? ' active' : ''}`}
+                  className={`session-selector-item-modern ${session.id === activeSessionId ? 'active' : ''}`}
                   onClick={() => {
                     if (!isRenaming) {
                       handleSelect(session);
@@ -134,10 +134,10 @@ export function SessionSelector({
                     }
                   }}
                 >
-                  <div className="session-selector-item-info">
+                  <div className="session-selector-item-info-modern">
                     {isRenaming ? (
                       <input
-                        className="session-selector-rename-input"
+                        className="session-selector-rename-input-modern"
                         value={renameValue}
                         maxLength={60}
                         onChange={(e) => setRenameValue(e.target.value)}
@@ -154,24 +154,24 @@ export function SessionSelector({
                       />
                     ) : (
                       <>
-                        <span className="session-selector-item-title">{session.title}</span>
-                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
+                        <span className="session-selector-item-title-modern">{session.title}</span>
+                        <span className="session-selector-item-shell-modern">{session.shell || 'Shell'}</span>
                       </>
                     )}
                   </div>
-                  <div className="session-selector-item-actions">
+                  <div className="session-selector-item-actions-modern">
                     {isRenaming ? (
                       <>
                         <button
                           type="button"
-                          className="session-selector-item-save"
+                          className="session-selector-action-btn-modern save"
                           onClick={(e) => commitRename(e, session.id)}
                         >
                           Save
                         </button>
                         <button
                           type="button"
-                          className="session-selector-item-cancel"
+                          className="session-selector-action-btn-modern"
                           onClick={cancelRename}
                         >
                           Cancel
@@ -181,18 +181,26 @@ export function SessionSelector({
                       <>
                         <button
                           type="button"
-                          className="session-selector-item-rename"
+                          className="session-selector-action-btn-modern"
                           onClick={(e) => startRename(e, session)}
+                          title="Rename"
                         >
-                          Rename
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
                         </button>
                         <button
                           type="button"
-                          className="session-selector-item-close"
+                          className="session-selector-action-btn-modern delete"
                           onClick={(e) => handleClose(e, session.id)}
                           aria-label="Close terminal"
+                          title="Close"
                         >
-                          ×
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
                         </button>
                       </>
                     )}
@@ -202,14 +210,14 @@ export function SessionSelector({
             })}
 
             {!isLoading && inactiveSessions.length > 0 && (
-              <div className="session-selector-section-title">Inactive</div>
+              <div className="session-selector-section-title-modern">Inactive</div>
             )}
             {inactiveSessions.map((session) => {
               const isRenaming = renamingId === session.id;
               return (
                 <div
                   key={session.id}
-                  className="session-selector-item inactive"
+                  className="session-selector-item-modern inactive"
                   onClick={() => {
                     if (!isRenaming) {
                       onRestoreSession(session.id);
@@ -217,21 +225,12 @@ export function SessionSelector({
                     }
                   }}
                   role="option"
-                  aria-selected={session.id === activeSessionId}
                   tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (isRenaming) return;
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onRestoreSession(session.id);
-                      setIsOpen(false);
-                    }
-                  }}
                 >
-                  <div className="session-selector-item-info">
+                  <div className="session-selector-item-info-modern">
                     {isRenaming ? (
                       <input
-                        className="session-selector-rename-input"
+                        className="session-selector-rename-input-modern"
                         value={renameValue}
                         maxLength={60}
                         onChange={(e) => setRenameValue(e.target.value)}
@@ -248,27 +247,27 @@ export function SessionSelector({
                       />
                     ) : (
                       <>
-                        <span className="session-selector-item-title">
-                          <span className="session-inactive-icon" title="Inactive terminal">{'\u23F8'}</span>
+                        <span className="session-selector-item-title-modern">
+                          <span className="session-inactive-icon-modern">⏸</span>
                           {session.title}
                         </span>
-                        <span className="session-selector-item-shell">{session.shell || 'Shell'}</span>
+                        <span className="session-selector-item-shell-modern">{session.shell || 'Shell'}</span>
                       </>
                     )}
                   </div>
-                  <div className="session-selector-item-actions">
+                  <div className="session-selector-item-actions-modern">
                     {isRenaming ? (
                       <>
                         <button
                           type="button"
-                          className="session-selector-item-save"
+                          className="session-selector-action-btn-modern save"
                           onClick={(e) => commitRename(e, session.id)}
                         >
                           Save
                         </button>
                         <button
                           type="button"
-                          className="session-selector-item-cancel"
+                          className="session-selector-action-btn-modern"
                           onClick={cancelRename}
                         >
                           Cancel
@@ -278,29 +277,41 @@ export function SessionSelector({
                       <>
                         <button
                           type="button"
-                          className="session-selector-item-restore"
+                          className="session-selector-action-btn-modern restore"
                           onClick={(e) => {
                             e.stopPropagation();
                             onRestoreSession(session.id);
                             setIsOpen(false);
                           }}
+                          title="Restore"
                         >
-                          Restore
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="23 4 23 10 17 10" />
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                          </svg>
                         </button>
                         <button
                           type="button"
-                          className="session-selector-item-rename"
+                          className="session-selector-action-btn-modern"
                           onClick={(e) => startRename(e, session)}
+                          title="Rename"
                         >
-                          Rename
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                          </svg>
                         </button>
                         <button
                           type="button"
-                          className="session-selector-item-close"
+                          className="session-selector-action-btn-modern delete"
                           onClick={(e) => handleClose(e, session.id)}
                           aria-label="Delete terminal"
+                          title="Delete"
                         >
-                          ×
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="3 6 5 6 21 6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
                         </button>
                       </>
                     )}
@@ -311,16 +322,260 @@ export function SessionSelector({
           </div>
           <button
             type="button"
-            className="session-selector-new"
+            className="session-selector-new-modern"
             onClick={() => {
               onCreateSession();
               setIsOpen(false);
             }}
           >
-            + New Terminal
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            New Terminal
           </button>
         </div>
       )}
+
+      <style jsx>{`
+        .session-selector-modern {
+          position: relative;
+          display: inline-block;
+        }
+
+        .session-selector-btn-modern {
+          height: 32px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0 12px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-default, #3f3f46);
+          border-radius: 8px;
+          color: var(--text-primary, #fafafa);
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .session-selector-btn-modern:hover {
+          border-color: var(--border-hover, #52525b);
+          background: var(--bg-elevated, #27272a);
+        }
+
+        .session-selector-btn-modern.open {
+          border-color: var(--accent-primary, #f59e0b);
+          box-shadow: 0 0 0 2px var(--accent-primary-dim);
+        }
+
+        .session-selector-label-modern {
+          max-width: 150px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .session-selector-arrow-modern {
+          display: flex;
+          align-items: center;
+          opacity: 0.5;
+          transition: transform 0.2s ease;
+        }
+
+        .session-selector-arrow-modern.open {
+          transform: rotate(180deg);
+          opacity: 1;
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .session-selector-dropdown-modern {
+          position: absolute;
+          top: calc(100% + 8px);
+          left: 0;
+          width: 320px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-default, #3f3f46);
+          border-radius: 10px;
+          box-shadow: var(--shadow-lg);
+          z-index: 1000;
+          overflow: hidden;
+          display: flex;
+          flex-direction: column;
+          animation: dropdownFadeIn 0.2s ease-out;
+        }
+
+        @keyframes dropdownFadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .session-selector-list-modern {
+          max-height: 400px;
+          overflow-y: auto;
+          padding: 6px;
+        }
+
+        .session-selector-item-modern {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 8px 10px;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          gap: 12px;
+          margin-bottom: 2px;
+        }
+
+        .session-selector-item-modern:hover {
+          background: var(--bg-elevated, #27272a);
+        }
+
+        .session-selector-item-modern.active {
+          background: var(--accent-primary-dim);
+        }
+
+        .session-selector-item-info-modern {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+
+        .session-selector-item-title-modern {
+          font-size: 13px;
+          font-weight: 600;
+          color: var(--text-primary, #fafafa);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .session-selector-item-modern.active .session-selector-item-title-modern {
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .session-selector-item-shell-modern {
+          font-size: 11px;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .session-selector-item-actions-modern {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          opacity: 0;
+          transition: opacity 0.15s ease;
+        }
+
+        .session-selector-item-modern:hover .session-selector-item-actions-modern,
+        .session-selector-item-modern.active .session-selector-item-actions-modern {
+          opacity: 1;
+        }
+
+        .session-selector-action-btn-modern {
+          width: 26px;
+          height: 26px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          color: var(--text-muted, #71717a);
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .session-selector-action-btn-modern:hover {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+          border-color: var(--border-default, #3f3f46);
+        }
+
+        .session-selector-action-btn-modern.delete:hover {
+          background: rgba(244, 63, 94, 0.15);
+          color: var(--error, #f43f5e);
+          border-color: rgba(244, 63, 94, 0.2);
+        }
+
+        .session-selector-action-btn-modern.restore:hover {
+          background: rgba(16, 185, 129, 0.15);
+          color: var(--success, #10b981);
+          border-color: rgba(16, 185, 129, 0.2);
+        }
+
+        .session-selector-action-btn-modern.save {
+          background: var(--accent-primary, #f59e0b);
+          color: var(--bg-primary, #09090b);
+          border: none;
+          width: auto;
+          padding: 0 8px;
+          font-size: 11px;
+          font-weight: 700;
+        }
+
+        .session-selector-rename-input-modern {
+          width: 100%;
+          height: 24px;
+          background: var(--bg-primary, #09090b);
+          border: 1px solid var(--accent-primary, #f59e0b);
+          border-radius: 4px;
+          color: var(--text-primary, #fafafa);
+          font-size: 12px;
+          padding: 0 6px;
+          outline: none;
+        }
+
+        .session-selector-section-title-modern {
+          padding: 10px 10px 6px;
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 1px;
+        }
+
+        .session-selector-new-modern {
+          width: 100%;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          background: var(--bg-elevated, #27272a);
+          border: none;
+          border-top: 1px solid var(--border-subtle, #27272a);
+          color: var(--accent-primary, #f59e0b);
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: background 0.2s ease;
+        }
+
+        .session-selector-new-modern:hover {
+          background: var(--bg-surface, #18181b);
+        }
+
+        .session-inactive-icon-modern {
+          opacity: 0.5;
+          font-size: 10px;
+        }
+
+        .session-selector-empty-modern {
+          padding: 20px;
+          text-align: center;
+          color: var(--text-muted, #71717a);
+          font-style: italic;
+          font-size: 13px;
+        }
+      `}</style>
     </div>
   );
 }
