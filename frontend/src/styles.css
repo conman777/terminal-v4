@@ -8758,6 +8758,64 @@ textarea:focus-visible {
   animation: pulse-requesting 1s ease-in-out infinite;
 }
 
+/* Audio Waveform Visualizer */
+.audio-waveform-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(220, 38, 38, 0.15);
+  border-radius: 20px;
+  padding: 4px 6px 4px 12px;
+  animation: fade-in 0.2s ease-out;
+}
+
+.audio-waveform {
+  display: block;
+}
+
+.terminal-mic-stop,
+.terminal-mic-stop-inline {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #dc2626;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.terminal-mic-stop {
+  width: 40px;
+  height: 40px;
+}
+
+.terminal-mic-stop:hover,
+.terminal-mic-stop-inline:hover {
+  background: #b91c1c;
+  transform: scale(1.05);
+}
+
+.terminal-mic-stop:active,
+.terminal-mic-stop-inline:active {
+  transform: scale(0.95);
+}
+
+/* Recording active state for container */
+.terminal-mic-container.recording-active,
+.terminal-mic-inline-container.recording-active {
+  position: relative;
+}
+
+/* Desktop floating waveform */
+.terminal-mic-container.recording-active .audio-waveform-container {
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+}
+
 /* Mobile Status Bar */
 .mobile-status-bar {
   display: flex;

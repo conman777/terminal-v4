@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
+import { AudioWaveform } from './AudioWaveform';
 
 export function TerminalMicButton({ sessionId, disabled, inline = false }) {
   const sendToTerminal = useCallback(async (text) => {
@@ -16,15 +17,7 @@ export function TerminalMicButton({ sessionId, disabled, inline = false }) {
     }
   }, [sessionId]);
 
-  const { isRecording, isChecking, isRequesting, isTranscribing, error, toggleRecording } = useVoiceInput(sendToTerminal);
-
-  // Determine button state classes
-  const buttonClasses = [
-    inline ? 'terminal-mic-button-inline' : 'terminal-mic-button',
-    isRecording ? 'recording' : '',
-    isChecking ? 'checking' : '',
-    isRequesting ? 'requesting' : ''
-  ].filter(Boolean).join(' ');
+  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(sendToTerminal);
 
   // Icon size based on inline mode
   const iconSize = inline ? 16 : 20;
@@ -37,6 +30,42 @@ export function TerminalMicButton({ sessionId, disabled, inline = false }) {
       : isRecording
         ? 'Stop recording'
         : 'Start voice input';
+
+  // Show waveform when recording with active stream
+  if (isRecording && audioStream) {
+    return (
+      <div className={inline ? "terminal-mic-inline-container recording-active" : "terminal-mic-container recording-active"}>
+        {error && <div className="terminal-mic-error">{error}</div>}
+        <div className="audio-waveform-container">
+          <AudioWaveform
+            audioStream={audioStream}
+            width={inline ? 100 : 140}
+            height={inline ? 28 : 36}
+            barCount={inline ? 20 : 28}
+          />
+          <button
+            type="button"
+            onClick={toggleRecording}
+            className={inline ? "terminal-mic-stop-inline" : "terminal-mic-stop"}
+            aria-label="Stop recording"
+            title="Stop recording"
+          >
+            <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Determine button state classes
+  const buttonClasses = [
+    inline ? 'terminal-mic-button-inline' : 'terminal-mic-button',
+    isRecording ? 'recording' : '',
+    isChecking ? 'checking' : '',
+    isRequesting ? 'requesting' : ''
+  ].filter(Boolean).join(' ');
 
   const buttonElement = (
     <button

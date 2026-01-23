@@ -18,6 +18,7 @@ export function useVoiceInput(onTranscribed) {
   const [isRequesting, setIsRequesting] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState(null);
+  const [audioStream, setAudioStream] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -46,6 +47,7 @@ export function useVoiceInput(onTranscribed) {
         // Ignore errors during cleanup
       }
       streamRef.current = null;
+      setAudioStream(null);
     }
 
     // Clear audio chunks
@@ -119,6 +121,7 @@ export function useVoiceInput(onTranscribed) {
       // Permission granted, hide requesting state
       setIsRequesting(false);
       streamRef.current = stream;
+      setAudioStream(stream);
 
       // Try webm first, fall back to other formats
       const mimeType = MediaRecorder.isTypeSupported('audio/webm')
@@ -142,6 +145,7 @@ export function useVoiceInput(onTranscribed) {
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
           streamRef.current = null;
+          setAudioStream(null);
         }
 
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
@@ -250,6 +254,7 @@ export function useVoiceInput(onTranscribed) {
     isRequesting,
     isTranscribing,
     error,
+    audioStream,
     toggleRecording,
     startRecording,
     stopRecording
