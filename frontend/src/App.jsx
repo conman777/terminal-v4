@@ -2,12 +2,10 @@ import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } fro
 import { TerminalChat } from './components/TerminalChat';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
-import { MobileHeader } from './components/MobileHeader';
 import { MobileKeybar } from './components/MobileKeybar';
 import { SessionTabBar } from './components/SessionTabBar';
-import { SessionSelector } from './components/SessionSelector';
 const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
-import ClaudeCodeSessionSelector from './components/ClaudeCodeSessionSelector';
+import { Header } from './components/Header';
 import Sidebar from './components/Sidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
@@ -539,21 +537,41 @@ function AppContent() {
 
       {isMobile && (
         <>
-          <MobileHeader
+          <Header
+            isMobile={true}
+            leftPanelMode={leftPanelMode}
+            setLeftPanelMode={setLeftPanelMode}
             activeSessions={activeSessions}
             inactiveSessions={inactiveSessions}
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
             onRestoreSession={handleRestoreSession}
             onCreateSession={createSession}
-            onRenameSession={renameSession}
             onCloseSession={closeSession}
+            onRenameSession={renameSession}
+            loadingSessions={loadingSessions}
+            sessionLoadError={sessionLoadError}
+            onRetryLoad={retryLoadSessions}
+            claudeCodeSessions={claudeCodeSessions}
+            activeClaudeCodeId={activeClaudeCodeId}
+            onSelectClaudeCode={selectClaudeCode}
+            onNewClaudeCode={startClaudeCode}
+            onDeleteClaudeCode={deleteClaudeCode}
+            setShowApiSettings={setShowApiSettings}
             onOpenSettings={handleOpenSettings}
-            onOpenApiSettings={() => setShowApiSettings(true)}
-            onOpenBrowserSettings={() => setShowBrowserSettings(true)}
-            onOpenBookmarks={() => setShowBookmarks(true)}
-            keybarOpen={keybarOpen}
+            showPreview={showPreview}
+            onTogglePreview={togglePreview}
+            setShowBookmarks={setShowBookmarks}
+            setShowNotes={setShowNotes}
+            setShowProcessManager={setShowProcessManager}
+            showFileManager={showFileManager}
+            onToggleFileManager={() => setShowFileManager(!showFileManager)}
+            user={user}
+            logout={logout}
+            // Mobile specific props
+            isNavCollapsed={isNavCollapsed}
             onToggleKeybar={handleToggleKeybar}
+            keybarOpen={keybarOpen}
             projects={projects}
             projectsLoading={projectsLoading}
             onFolderSelect={handleSidebarFolderSelect}
@@ -562,10 +580,7 @@ function AppContent() {
             mobileView={mobileView}
             onViewChange={setMobileView}
             previewUrl={previewUrl}
-            showFileManager={showFileManager}
-            onToggleFileManager={() => setShowFileManager(!showFileManager)}
             onNavigateToPath={handleNavigateToPath}
-            isNavCollapsed={isNavCollapsed}
           />
           <MobileKeybar
             sessionId={activeSessionId}
@@ -592,166 +607,38 @@ function AppContent() {
             onAddScanFolder={handleAddScanFolder}
           />
           <div className="main-container">
-          <header className="app-header">
-            <div className="header-left">
-              <h1 className="app-title">Terminal</h1>
-              <div className="mode-toggle">
-                <button
-                  className={`mode-btn ${leftPanelMode === 'terminal' ? 'active' : ''}`}
-                  onClick={() => setLeftPanelMode('terminal')}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="4 17 10 11 4 5" />
-                    <line x1="12" y1="19" x2="20" y2="19" />
-                  </svg>
-                  Terminal
-                </button>
-                <button
-                  className={`mode-btn ${leftPanelMode === 'claude-code' ? 'active' : ''}`}
-                  onClick={() => setLeftPanelMode('claude-code')}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="10" />
-                    <path d="M12 16v-4" />
-                    <path d="M12 8h.01" />
-                  </svg>
-                  Claude
-                </button>
-              </div>
-              {leftPanelMode === 'terminal' ? (
-                activeSessions.length > 1 ? (
-                  <SessionSelector
-                    activeSessions={activeSessions}
-                    inactiveSessions={inactiveSessions}
-                    activeSessionId={activeSessionId}
-                    onSelectSession={handleSelectSession}
-                    onRestoreSession={handleRestoreSession}
-                    onCreateSession={createSession}
-                    onCloseSession={closeSession}
-                    onRenameSession={renameSession}
-                    isLoading={loadingSessions}
-                    sessionLoadError={sessionLoadError}
-                    onRetryLoad={retryLoadSessions}
-                  />
-                ) : null
-              ) : (
-                <ClaudeCodeSessionSelector
-                  sessions={claudeCodeSessions}
-                  activeId={activeClaudeCodeId}
-                  onSelect={selectClaudeCode}
-                  onNew={startClaudeCode}
-                  onDelete={deleteClaudeCode}
-                />
-              )}
-            </div>
-            <div className="header-actions">
-              <button
-                className="header-btn"
-                type="button"
-                onClick={() => setShowApiSettings(true)}
-                aria-label="API Settings"
-                title="API Settings"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-                </svg>
-              </button>
-              <button
-                className="header-btn"
-                type="button"
-                onClick={handleOpenSettings}
-                aria-label="Settings"
-                title="Settings"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </button>
-              <button
-                className={`header-btn${showPreview ? ' active' : ''}`}
-                type="button"
-                onClick={togglePreview}
-                aria-label="Toggle Browser"
-                title={showPreview ? 'Hide Browser' : 'Show Browser'}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <line x1="12" y1="3" x2="12" y2="21" />
-                </svg>
-              </button>
-              <button
-                className="header-btn"
-                type="button"
-                onClick={() => setShowBookmarks(true)}
-                aria-label="Bookmarks"
-                title="Bookmarks"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-                </svg>
-              </button>
-              <button
-                className="header-btn"
-                type="button"
-                onClick={() => setShowNotes(true)}
-                aria-label="Notes"
-                title="Notes"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
-                  <polyline points="10 9 9 9 8 9" />
-                </svg>
-              </button>
-              <button
-                className="header-btn"
-                type="button"
-                onClick={() => setShowProcessManager(true)}
-                aria-label="Process Manager"
-                title="Process Manager"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                  <line x1="8" y1="21" x2="16" y2="21" />
-                  <line x1="12" y1="17" x2="12" y2="21" />
-                </svg>
-              </button>
-              <button
-                className={`header-btn${showFileManager ? ' active' : ''}`}
-                type="button"
-                onClick={() => setShowFileManager(!showFileManager)}
-                aria-label="File Manager"
-                title={showFileManager ? 'Hide Files' : 'Show Files'}
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                </svg>
-              </button>
-              <div className="header-user-badge" title={user?.username}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
-                <span>{user?.username}</span>
-              </div>
-              <button
-                className="header-btn logout-btn"
-                type="button"
-                onClick={logout}
-                aria-label="Logout"
-                title="Logout"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                  <polyline points="16 17 21 12 16 7" />
-                  <line x1="21" y1="12" x2="9" y2="12" />
-                </svg>
-              </button>
-            </div>
-          </header>
+            <Header
+              isMobile={false}
+              leftPanelMode={leftPanelMode}
+              setLeftPanelMode={setLeftPanelMode}
+              activeSessions={activeSessions}
+              inactiveSessions={inactiveSessions}
+              activeSessionId={activeSessionId}
+              onSelectSession={handleSelectSession}
+              onRestoreSession={handleRestoreSession}
+              onCreateSession={createSession}
+              onCloseSession={closeSession}
+              onRenameSession={renameSession}
+              loadingSessions={loadingSessions}
+              sessionLoadError={sessionLoadError}
+              onRetryLoad={retryLoadSessions}
+              claudeCodeSessions={claudeCodeSessions}
+              activeClaudeCodeId={activeClaudeCodeId}
+              onSelectClaudeCode={selectClaudeCode}
+              onNewClaudeCode={startClaudeCode}
+              onDeleteClaudeCode={deleteClaudeCode}
+              setShowApiSettings={setShowApiSettings}
+              onOpenSettings={handleOpenSettings}
+              showPreview={showPreview}
+              onTogglePreview={togglePreview}
+              setShowBookmarks={setShowBookmarks}
+              setShowNotes={setShowNotes}
+              setShowProcessManager={setShowProcessManager}
+              showFileManager={showFileManager}
+              onToggleFileManager={() => setShowFileManager(!showFileManager)}
+              user={user}
+              logout={logout}
+            />
 
           {/* Session tab bar - only show in terminal mode */}
           {leftPanelMode === 'terminal' && activeSessions.length > 0 && (

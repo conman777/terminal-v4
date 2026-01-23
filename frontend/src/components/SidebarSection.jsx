@@ -91,9 +91,9 @@ export default function SidebarSection({
   };
 
   return (
-    <div className="sidebar-section">
+    <div className="sidebar-section-modern">
       <div
-        className="sidebar-section-header"
+        className={`sidebar-section-header-modern ${isExpanded ? 'expanded' : ''}`}
         onClick={() => setIsExpanded(!isExpanded)}
         role="button"
         tabIndex={0}
@@ -104,42 +104,44 @@ export default function SidebarSection({
           }
         }}
       >
-        <span className={`sidebar-section-chevron ${isExpanded ? 'expanded' : ''}`}>
-          <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+        <span className={`sidebar-section-chevron-modern ${isExpanded ? 'expanded' : ''}`}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="9 18 15 12 9 6" />
           </svg>
         </span>
-        <span className="sidebar-section-icon">{renderIcon()}</span>
-        <span className="sidebar-section-title">{title}</span>
-        {loading && <span className="sidebar-section-loader" />}
+        <span className="sidebar-section-icon-modern">{renderIcon()}</span>
+        <span className="sidebar-section-title-modern">{title}</span>
+        {loading && <span className="sidebar-section-loader-modern" />}
         {onAddFolder && (
           <button
             type="button"
-            className="sidebar-section-add"
+            className="sidebar-section-add-modern"
             onClick={(e) => {
               e.stopPropagation();
               onAddFolder();
             }}
             title="Add folder to scan"
           >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
         )}
       </div>
 
       {isExpanded && (
-        <div className="sidebar-section-content">
+        <div className="sidebar-section-content-modern">
           {showSearch && items.length > 0 && (
-            <div className="sidebar-search">
-              <svg className="sidebar-search-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z" />
+            <div className="sidebar-search-modern">
+              <svg className="sidebar-search-icon-modern" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
               </svg>
               <input
                 type="text"
-                className="sidebar-search-input"
-                placeholder="Search projects..."
+                className="sidebar-search-input-modern"
+                placeholder="Search..."
                 value={inputValue}
                 onChange={(e) => {
                   const value = e.target.value;
@@ -154,7 +156,7 @@ export default function SidebarSection({
               />
               {inputValue && (
                 <button
-                  className="sidebar-search-clear"
+                  className="sidebar-search-clear-modern"
                   onClick={(e) => {
                     e.stopPropagation();
                     setInputValue('');
@@ -170,36 +172,193 @@ export default function SidebarSection({
             </div>
           )}
           {loading && items.length === 0 ? (
-            <div className="sidebar-empty">Scanning...</div>
+            <div className="sidebar-empty-modern">Scanning...</div>
           ) : items.length === 0 ? (
-            <div className="sidebar-empty">No items</div>
+            <div className="sidebar-empty-modern">No items</div>
           ) : filteredItems.length === 0 ? (
-            <div className="sidebar-empty">No matches for "{searchQuery}"</div>
+            <div className="sidebar-empty-modern">No matches for "{searchQuery}"</div>
           ) : (
-            filteredItems.map((item, index) => {
-              // Handle both string paths and Project objects
-              const path = typeof item === 'string' ? item : item.path;
-              const name = typeof item === 'string' ? getFolderName(item) : item.name;
-              const branch = typeof item === 'string' ? undefined : item.branch;
+            <div className="sidebar-items-list-modern">
+              {filteredItems.map((item, index) => {
+                // Handle both string paths and Project objects
+                const path = typeof item === 'string' ? item : item.path;
+                const name = typeof item === 'string' ? getFolderName(item) : item.name;
+                const branch = typeof item === 'string' ? undefined : item.branch;
 
-              return (
-                <SidebarItem
-                  key={path || index}
-                  path={path}
-                  name={name}
-                  branch={branch}
-                  isActive={normalizePath(path) === currentNormalized}
-                  isPinned={isPinned(path)}
-                  onSelect={onSelect}
-                  onPin={onPin}
-                  onUnpin={onUnpin}
-                  showPinAction={showPinAction}
-                />
-              );
-            })
+                return (
+                  <SidebarItem
+                    key={path || index}
+                    path={path}
+                    name={name}
+                    branch={branch}
+                    isActive={normalizePath(path) === currentNormalized}
+                    isPinned={isPinned(path)}
+                    onSelect={onSelect}
+                    onPin={onPin}
+                    onUnpin={onUnpin}
+                    showPinAction={showPinAction}
+                  />
+                );
+              })}
+            </div>
           )}
         </div>
       )}
+
+      <style jsx>{`
+        .sidebar-section-modern {
+          margin-bottom: 4px;
+        }
+
+        .sidebar-section-header-modern {
+          height: 32px;
+          display: flex;
+          align-items: center;
+          padding: 0 8px;
+          cursor: pointer;
+          user-select: none;
+          transition: background 0.15s ease;
+          border-radius: 4px;
+          margin: 2px 6px;
+          color: var(--text-secondary, #a1a1aa);
+        }
+
+        .sidebar-section-header-modern:hover {
+          background: var(--bg-surface, #18181b);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .sidebar-section-chevron-modern {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          margin-right: 4px;
+          opacity: 0.5;
+        }
+
+        .sidebar-section-chevron-modern.expanded {
+          transform: rotate(90deg);
+        }
+
+        .sidebar-section-icon-modern {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin-right: 8px;
+          opacity: 0.8;
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .sidebar-section-title-modern {
+          font-size: 12px;
+          font-weight: 600;
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .sidebar-section-add-modern {
+          width: 20px;
+          height: 20px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          border-radius: 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: all 0.15s ease;
+        }
+
+        .sidebar-section-header-modern:hover .sidebar-section-add-modern {
+          opacity: 1;
+        }
+
+        .sidebar-section-add-modern:hover {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .sidebar-section-content-modern {
+          padding-bottom: 8px;
+        }
+
+        .sidebar-search-modern {
+          position: relative;
+          margin: 4px 10px 8px;
+        }
+
+        .sidebar-search-icon-modern {
+          position: absolute;
+          left: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          color: var(--text-muted, #71717a);
+          pointer-events: none;
+        }
+
+        .sidebar-search-input-modern {
+          width: 100%;
+          height: 28px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          border-radius: 4px;
+          padding: 0 28px 0 28px;
+          color: var(--text-primary, #fafafa);
+          font-size: 12px;
+          outline: none;
+          transition: border-color 0.2s ease;
+        }
+
+        .sidebar-search-input-modern:focus {
+          border-color: var(--accent-primary, #f59e0b);
+        }
+
+        .sidebar-search-clear-modern {
+          position: absolute;
+          right: 8px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          cursor: pointer;
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .sidebar-empty-modern {
+          padding: 8px 24px;
+          font-size: 11px;
+          color: var(--text-muted, #71717a);
+          font-style: italic;
+        }
+
+        .sidebar-items-list-modern {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .sidebar-section-loader-modern {
+          width: 12px;
+          height: 12px;
+          border: 1.5px solid var(--accent-primary-dim);
+          border-top-color: var(--accent-primary);
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+          margin-right: 8px;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }

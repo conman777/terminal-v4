@@ -163,15 +163,15 @@ export function MobileHeader({
 
   return (
     <>
-      <header className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}`}>
+      <header className={`mobile-header-modern${isNavCollapsed ? ' nav-collapsed' : ''}`}>
         {/* Menu button */}
         <button
-          className="mobile-header-btn"
+          className="mobile-header-btn-modern"
           onClick={() => setShowDrawer(true)}
           aria-label="Menu"
           type="button"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="3" y1="12" x2="21" y2="12" />
             <line x1="3" y1="6" x2="21" y2="6" />
             <line x1="3" y1="18" x2="21" y2="18" />
@@ -179,7 +179,7 @@ export function MobileHeader({
         </button>
 
         {/* Inline session tabs */}
-        <div className="mobile-header-tabs" ref={tabsRef}>
+        <div className="mobile-header-tabs-modern" ref={tabsRef}>
           {activeSessions.map((session) => (
             <MobileTab
               key={session.id}
@@ -197,71 +197,32 @@ export function MobileHeader({
           ))}
           <button
             type="button"
-            className="mobile-header-tab add-tab"
+            className="mobile-header-tab-add"
             onClick={onCreateSession}
             aria-label="New terminal"
           >
-            +
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
           </button>
         </div>
 
-        {/* Overflow dropdown for many tabs */}
-        {hasOverflow && (
-          <div className="mobile-header-overflow" ref={overflowRef}>
-            <button
-              type="button"
-              className="mobile-header-overflow-btn"
-              onClick={() => setShowOverflow(!showOverflow)}
-              aria-label={`Show all ${activeSessions.length} terminals`}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-              <span className="mobile-header-overflow-count">{activeSessions.length}</span>
-            </button>
-
-            {showOverflow && (
-              <div className="mobile-header-overflow-menu">
-                <div className="mobile-header-overflow-header">
-                  All Terminals ({activeSessions.length})
-                </div>
-                <div className="mobile-header-overflow-list">
-                  {activeSessions.map(session => (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className={`mobile-header-overflow-item${session.id === activeSessionId ? ' active' : ''}`}
-                      onClick={() => handleOverflowSelect(session.id)}
-                    >
-                      <span className="mobile-header-overflow-title">{session.title || 'Terminal'}</span>
-                      {session.id === activeSessionId && (
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Action buttons */}
-        <div className="mobile-header-actions">
+        <div className="mobile-header-actions-modern">
           <button
-            className="mobile-header-btn"
+            className={`mobile-header-btn-modern${mobileView === 'preview' ? ' active' : ''}`}
             onClick={() => onViewChange?.('preview')}
             aria-label="Preview"
             type="button"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx="12" cy="12" r="3" />
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="12" y1="3" x2="12" y2="21" />
             </svg>
           </button>
           <button
-            className="mobile-header-btn"
+            className={`mobile-header-btn-modern${showFileManager ? ' active' : ''}`}
             onClick={onToggleFileManager}
             aria-label="Files"
             type="button"
@@ -270,25 +231,133 @@ export function MobileHeader({
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
           </button>
-          <button
-            className="mobile-header-btn"
-            onClick={onToggleKeybar}
-            aria-label={keybarOpen ? 'Hide keyboard' : 'Show keyboard'}
-            type="button"
-          >
-            {keybarOpen ? (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            ) : (
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
-                <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
-              </svg>
-            )}
-          </button>
         </div>
+
+        <style jsx>{`
+          .mobile-header-modern {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 48px;
+            background: var(--bg-primary, #09090b);
+            border-bottom: 1px solid var(--border-default, #3f3f46);
+            display: flex;
+            align-items: center;
+            padding: 0 8px;
+            z-index: 1000;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+          }
+
+          .mobile-header-modern.nav-collapsed {
+            transform: translateY(-100%);
+          }
+
+          .mobile-header-btn-modern {
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary, #a1a1aa);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+          }
+
+          .mobile-header-btn-modern:active {
+            background: var(--bg-surface, #18181b);
+            color: var(--text-primary, #fafafa);
+            transform: scale(0.92);
+          }
+
+          .mobile-header-btn-modern.active {
+            color: var(--accent-primary, #f59e0b);
+            background: var(--accent-primary-dim);
+          }
+
+          .mobile-header-tabs-modern {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            overflow-x: auto;
+            scrollbar-width: none;
+            gap: 8px;
+            padding: 0 8px;
+            mask-image: linear-gradient(to right, transparent, black 15px, black calc(100% - 15px), transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 15px, black calc(100% - 15px), transparent);
+          }
+
+          .mobile-header-tabs-modern::-webkit-scrollbar {
+            display: none;
+          }
+
+          :global(.mobile-header-tab) {
+            flex-shrink: 0;
+            height: 30px;
+            padding: 0 12px;
+            background: var(--bg-surface, #18181b);
+            border: 1px solid var(--border-subtle, #27272a);
+            border-radius: 15px;
+            color: var(--text-secondary, #a1a1aa);
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+            max-width: 120px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.2s ease;
+          }
+
+          :global(.mobile-header-tab.active) {
+            background: var(--accent-primary-dim);
+            border-color: var(--accent-primary, #f59e0b);
+            color: var(--accent-primary, #f59e0b);
+            box-shadow: var(--shadow-glow);
+          }
+
+          .mobile-header-tab-add {
+            flex-shrink: 0;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: var(--bg-elevated, #27272a);
+            border: 1px solid var(--border-default, #3f3f46);
+            color: var(--text-muted, #71717a);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+          }
+
+          .mobile-header-tab-add:active {
+            transform: scale(0.9);
+            background: var(--border-default, #3f3f46);
+          }
+
+          .mobile-header-actions-modern {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            flex-shrink: 0;
+          }
+
+          :global(.mobile-header-tab-input) {
+            height: 30px;
+            background: var(--bg-elevated, #27272a);
+            border: 1px solid var(--accent-primary, #f59e0b);
+            border-radius: 15px;
+            color: var(--text-primary, #fafafa);
+            padding: 0 12px;
+            font-size: 12px;
+            width: 100px;
+            outline: none;
+          }
+        `}</style>
       </header>
 
       <MobileDrawer

@@ -28,43 +28,156 @@ export default function SidebarItem({
 
   return (
     <div
-      className={`sidebar-item ${isActive ? 'active' : ''}`}
+      className={`sidebar-item-modern ${isActive ? 'active' : ''}`}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       title={path}
     >
-      <span className="sidebar-item-icon">
+      <span className="sidebar-item-icon-modern">
         {branch ? (
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.492 2.492 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="6" y1="3" x2="6" y2="15" />
+            <circle cx="18" cy="6" r="3" />
+            <circle cx="6" cy="18" r="3" />
+            <path d="M18 9a9 9 0 0 1-9 9" />
           </svg>
         ) : (
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
         )}
       </span>
 
-      <span className="sidebar-item-name">{name}</span>
+      <span className="sidebar-item-name-modern">{name}</span>
 
       {branch && (
-        <span className="project-badge">{branch}</span>
+        <span className="sidebar-item-badge-modern">{branch}</span>
       )}
 
       {showPinAction && (isHovered || isPinned) && (
-        <div className="sidebar-item-actions">
+        <div className="sidebar-item-actions-modern" onClick={e => e.stopPropagation()}>
           <button
-            className={`sidebar-pin-btn ${isPinned ? 'pinned' : ''}`}
+            className={`sidebar-item-pin-btn-modern ${isPinned ? 'pinned' : ''}`}
             onClick={handlePinClick}
-            title={isPinned ? 'Unpin folder' : 'Pin folder'}
+            title={isPinned ? 'Unpin' : 'Pin'}
+            type="button"
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M4.456.734a1.75 1.75 0 0 1 2.826.504l.613 1.327a3.08 3.08 0 0 0 2.084 1.707l2.454.584c1.332.317 1.8 1.972.832 2.94L11.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06L10 11.06l-2.204 2.205c-.968.968-2.623.5-2.94-.832l-.584-2.454a3.08 3.08 0 0 0-1.707-2.084l-1.327-.613a1.75 1.75 0 0 1-.504-2.826L4.456.734Z" />
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14" />
+              <path d="M16.5 9.4 7 14.9" />
+              <polyline points="3.2 6.9 12 12 20.8 6.9" />
+              <path d="M12 22V12" />
             </svg>
           </button>
         </div>
       )}
+
+      <style jsx>{`
+        .sidebar-item-modern {
+          height: 30px;
+          display: flex;
+          align-items: center;
+          padding: 0 12px;
+          padding-left: 28px;
+          cursor: pointer;
+          user-select: none;
+          transition: all 0.15s ease;
+          color: var(--text-secondary, #a1a1aa);
+          position: relative;
+          gap: 10px;
+        }
+
+        .sidebar-item-modern:hover {
+          background: var(--bg-surface, #18181b);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .sidebar-item-modern.active {
+          background: var(--accent-primary-dim);
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .sidebar-item-modern.active::before {
+          content: '';
+          position: absolute;
+          left: 0;
+          top: 4px;
+          bottom: 4px;
+          width: 3px;
+          background: var(--accent-primary, #f59e0b);
+          border-radius: 0 2px 2px 0;
+          box-shadow: var(--shadow-glow);
+        }
+
+        .sidebar-item-icon-modern {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0.6;
+          flex-shrink: 0;
+        }
+
+        .sidebar-item-modern.active .sidebar-item-icon-modern {
+          opacity: 1;
+        }
+
+        .sidebar-item-name-modern {
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          flex: 1;
+        }
+
+        .sidebar-item-badge-modern {
+          font-size: 10px;
+          background: var(--bg-elevated, #27272a);
+          padding: 1px 6px;
+          border-radius: 10px;
+          color: var(--text-muted, #71717a);
+          max-width: 80px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .sidebar-item-actions-modern {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          opacity: 0;
+          transition: opacity 0.15s ease;
+        }
+
+        .sidebar-item-modern:hover .sidebar-item-actions-modern {
+          opacity: 1;
+        }
+
+        .sidebar-item-pin-btn-modern {
+          width: 22px;
+          height: 22px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .sidebar-item-pin-btn-modern:hover {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .sidebar-item-pin-btn-modern.pinned {
+          color: var(--accent-primary, #f59e0b);
+          opacity: 1;
+        }
+      `}</style>
     </div>
   );
 }

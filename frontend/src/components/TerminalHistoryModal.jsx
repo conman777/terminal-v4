@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../utils/api';
 
-const HISTORY_CHARS = 1000000;
+const HISTORY_CHARS = 5000000;
 
 function stripAnsi(text) {
   // eslint-disable-next-line no-control-regex

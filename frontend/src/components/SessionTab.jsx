@@ -131,12 +131,12 @@ export const SessionTab = memo(function SessionTab({
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
     >
-      {hasUnread && <span className="tab-unread-dot" />}
+      {hasUnread && <span className="tab-unread-dot-modern" />}
 
       {isRenaming ? (
         <input
           ref={inputRef}
-          className="tab-rename-input"
+          className="tab-rename-input-modern"
           value={renameValue}
           onChange={(e) => setRenameValue(e.target.value)}
           onBlur={handleRenameSubmit}
@@ -145,21 +145,120 @@ export const SessionTab = memo(function SessionTab({
           maxLength={60}
         />
       ) : (
-        <span className="tab-title">{session.title}</span>
+        <span className="tab-title-modern">{session.title}</span>
       )}
 
       <button
         type="button"
-        className="tab-close-btn"
+        className="tab-close-btn-modern"
         onClick={handleClose}
         aria-label={`Close ${session.title}`}
         tabIndex={-1}
       >
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+
+      <style jsx>{`
+        .session-tab-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          height: 28px;
+          padding: 0 10px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          border-radius: 6px;
+          color: var(--text-secondary, #a1a1aa);
+          font-size: 13px;
+          font-weight: 500;
+          white-space: nowrap;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          position: relative;
+          user-select: none;
+        }
+
+        .session-tab-item:hover:not(.active) {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+          border-color: var(--border-default, #3f3f46);
+        }
+
+        .session-tab-item.active {
+          background: var(--accent-primary-dim);
+          border-color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary, #f59e0b);
+          box-shadow: var(--shadow-glow);
+          z-index: 5;
+        }
+
+        .session-tab-item.unread:not(.active) {
+          color: var(--text-primary, #fafafa);
+        }
+
+        .tab-unread-dot-modern {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--accent-primary, #f59e0b);
+          flex-shrink: 0;
+          box-shadow: var(--shadow-glow);
+        }
+
+        .tab-title-modern {
+          max-width: 140px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .tab-close-btn-modern {
+          width: 18px;
+          height: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: inherit;
+          border-radius: 4px;
+          opacity: 0.5;
+          transition: all 0.2s ease;
+          margin-right: -4px;
+        }
+
+        .tab-close-btn-modern:hover {
+          background: rgba(244, 63, 94, 0.15);
+          color: var(--error, #f43f5e);
+          opacity: 1;
+        }
+
+        .tab-rename-input-modern {
+          background: var(--bg-primary, #09090b);
+          border: 1px solid var(--accent-primary, #f59e0b);
+          border-radius: 4px;
+          color: var(--text-primary, #fafafa);
+          font-size: 12px;
+          padding: 0 6px;
+          height: 20px;
+          width: 120px;
+          outline: none;
+          box-shadow: 0 0 10px var(--accent-primary-dim);
+        }
+
+        .session-tab-item.dragging {
+          opacity: 0.4;
+          transform: scale(0.95);
+        }
+
+        .session-tab-item.drag-over {
+          border-style: dashed;
+          background: var(--accent-primary-dim);
+          transform: scale(1.02);
+        }
+      `}</style>
     </div>
   );
 });

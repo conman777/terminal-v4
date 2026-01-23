@@ -4,7 +4,7 @@ import type { PersistedSession } from './session-store';
 // Terminal dimension constants
 export const DEFAULT_COLS = 120;
 export const DEFAULT_ROWS = 32;
-export const MAX_BUFFER_CHARS = 5_000_000;
+export const MAX_BUFFER_CHARS = 20_000_000;
 export const SAVE_DEBOUNCE_MS = 2000;
 export const CWD_TIMEOUT_MS = 1000;
 

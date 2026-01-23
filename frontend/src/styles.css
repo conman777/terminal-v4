@@ -1156,6 +1156,123 @@ button {
   text-transform: uppercase;
 }
 
+/* ===========================================
+   Reader View - Clean text view for terminal output
+   =========================================== */
+
+.reader-view {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 12px 16px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  user-select: text;
+}
+
+.reader-view-content {
+  margin: 0;
+  white-space: pre;
+  word-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.0;
+  user-select: text;
+}
+
+/* Mobile optimizations for reader view */
+@media (max-width: 768px) {
+  .reader-view {
+    padding: 8px 12px;
+  }
+}
+
+.layout.mobile .reader-view {
+  padding: 8px 12px;
+}
+
+/* Reader View focus - no visible outline since keyboard works */
+.reader-view:focus {
+  outline: none;
+}
+
+.reader-view-cursor {
+  background: #d4d4d4;
+  color: #1e1e1e;
+  animation: reader-view-cursor-blink 1.2s step-end infinite;
+}
+
+@keyframes reader-view-cursor-blink {
+  50% {
+    background: transparent;
+    color: #d4d4d4;
+  }
+}
+
+/* Hidden mobile input - positioned to trigger virtual keyboard */
+.reader-view-mobile-input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  border: none;
+  padding: 0;
+  margin: 0;
+  z-index: 1;
+}
+
+/* Reader View Toggle Button */
+.terminal-view-toggle-btn {
+  position: absolute;
+  bottom: 1rem;
+  right: calc(1rem + 48px + 48px + 1rem);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.terminal-view-toggle-btn svg {
+  display: block;
+}
+
+.terminal-view-toggle-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  transform: scale(1.05);
+}
+
+/* Hide toggle button on mobile - it will be in the status bar */
+@media (max-width: 768px) {
+  .terminal-view-toggle-btn {
+    display: none !important;
+  }
+}
+
+.layout.mobile .terminal-view-toggle-btn {
+  display: none !important;
+}
+
+/* Show toggle button on desktop */
+.layout:not(.mobile) .terminal-view-toggle-btn {
+  display: flex;
+}
+
 /* Terminal Image Upload */
 .terminal-image-btn {
   position: absolute;
@@ -10665,185 +10782,10 @@ textarea:focus-visible {
    =========================================== */
 
 .session-tab-bar-container {
-  display: flex;
-  align-items: center;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
-  padding: 0 8px;
-  height: 42px;
-  flex-shrink: 0;
+  display: contents;
 }
 
-.session-tab-bar-container .session-tab-bar {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.session-tab-bar-container .session-tab-bar::-webkit-scrollbar {
-  display: none;
-}
-
-.session-tab-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 14px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  position: relative;
-}
-
-.session-tab-item:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-
-.session-tab-item.active {
-  background: var(--accent-primary-dim);
-  color: var(--accent-primary);
-}
-
-.session-tab-item.unread::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-}
-
-.session-tab-item.unread {
-  padding-left: 16px;
-}
-
-.session-tab-item.dragging {
-  opacity: 0.5;
-}
-
-.session-tab-item.drag-over {
-  background: var(--accent-primary-dim);
-  border: 1px dashed var(--accent-primary);
-}
-
-.tab-unread-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  flex-shrink: 0;
-}
-
-.tab-title {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tab-rename-input {
-  background: var(--bg-base);
-  border: 1px solid var(--accent-primary);
-  border-radius: 4px;
-  color: var(--text-primary);
-  font-size: 13px;
-  padding: 2px 6px;
-  width: 100px;
-  outline: none;
-}
-
-.tab-close-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: var(--text-muted);
-  opacity: 0;
-  transition: all var(--transition-fast);
-  cursor: pointer;
-}
-
-.session-tab-item:hover .tab-close-btn {
-  opacity: 1;
-}
-
-.tab-close-btn:hover {
-  background: var(--bg-elevated);
-  color: var(--error);
-}
-
-.session-tab-new {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  background: transparent;
-  border: 1px dashed var(--border-default);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  flex-shrink: 0;
-  margin-left: 4px;
-}
-
-.session-tab-new:hover {
-  background: var(--bg-elevated);
-  border-color: var(--accent-primary);
-  color: var(--accent-primary);
-}
-
-/* Session Tab Scroll Buttons */
-.session-tab-scroll-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: all var(--transition-fast);
-}
-
-.session-tab-scroll-btn:hover {
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  border-color: var(--border-default);
-}
-
-.session-tab-scroll-btn.left {
-  margin-right: 4px;
-}
-
-.session-tab-scroll-btn.right {
-  margin-left: 4px;
-}
-
-/* Session Tab Overflow Menu */
+/* Session Tab Bar Styles moved to components via styled-jsx */
 .session-tab-overflow {
   position: relative;
   flex-shrink: 0;
@@ -10870,90 +10812,7 @@ textarea:focus-visible {
   border-color: var(--border-default);
 }
 
-.session-tab-count {
-  font-weight: 500;
-  color: var(--accent-primary);
-}
-
-.session-tab-overflow-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: 4px;
-  min-width: 220px;
-  max-width: 300px;
-  max-height: 400px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: 1000;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.session-tab-overflow-header {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-muted);
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.session-tab-overflow-list {
-  overflow-y: auto;
-  padding: 4px;
-}
-
-.session-tab-overflow-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 12px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-}
-
-.session-tab-overflow-item:hover {
-  background: var(--bg-surface);
-  color: var(--text-primary);
-}
-
-.session-tab-overflow-item.active {
-  background: var(--accent-primary-dim);
-  color: var(--accent-primary);
-}
-
-.overflow-item-title {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overflow-unread-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-  flex-shrink: 0;
-}
-
-.overflow-check {
-  flex-shrink: 0;
-  color: var(--accent-primary);
-}
+/* Legacy Session Tab Bar styles removed */
 
 /* ===========================================
    Context Menu
@@ -11107,6 +10966,16 @@ textarea:focus-visible {
 .status-bar-btn:hover:not(:disabled) {
   background: var(--bg-elevated);
   color: var(--text-primary);
+}
+
+.status-bar-btn.active {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary);
+}
+
+.status-bar-btn.active:hover:not(:disabled) {
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary-light);
 }
 
 .status-bar-btn:disabled {

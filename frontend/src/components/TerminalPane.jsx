@@ -31,6 +31,11 @@ export const TerminalPane = memo(function TerminalPane({
   const [isConnected, setIsConnected] = useState(false);
   const [currentCwd, setCurrentCwd] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [viewMode, setViewMode] = useState('terminal'); // 'terminal' | 'reader'
+
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
+  }, []);
 
   const currentSession = sessions.find(s => s.id === pane.sessionId);
 
@@ -229,6 +234,7 @@ export const TerminalPane = memo(function TerminalPane({
               onUrlDetected={onUrlDetected}
               fontSize={fontSize}
               usesTmux={currentSession?.usesTmux}
+              viewMode={viewMode}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
               onConnectionChange={handleConnectionChange}
               onCwdChange={handleCwdChange}
@@ -239,6 +245,8 @@ export const TerminalPane = memo(function TerminalPane({
               gitBranch={projectInfo?.gitBranch}
               onImageUpload={handleImageUpload}
               isConnected={isConnected}
+              viewMode={viewMode}
+              onToggleViewMode={handleToggleViewMode}
             />
           </div>
         ) : (

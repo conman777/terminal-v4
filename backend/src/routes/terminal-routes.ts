@@ -21,8 +21,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     let maxHistoryEvents = hasQueryEvents ? historyEvents : undefined;
 
     if (!maxHistoryChars && !maxHistoryEvents) {
-      const defaultChars = Number.parseInt(process.env.TERMINAL_HISTORY_CHARS || '500000', 10);
-      const defaultEvents = Number.parseInt(process.env.TERMINAL_HISTORY_EVENTS || '2000', 10);
+      const defaultChars = Number.parseInt(process.env.TERMINAL_HISTORY_CHARS || '5000000', 10);
+      const defaultEvents = Number.parseInt(process.env.TERMINAL_HISTORY_EVENTS || '20000', 10);
       if (Number.isFinite(defaultChars) && defaultChars > 0) {
         maxHistoryChars = defaultChars;
       }

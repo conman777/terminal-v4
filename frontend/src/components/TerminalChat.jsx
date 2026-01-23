@@ -14,8 +14,10 @@ import { useImageUpload } from '../hooks/useImageUpload';
 import { useTerminalScrolling } from '../hooks/useTerminalScrolling';
 import { useIdleDetection } from '../hooks/useIdleDetection';
 import { TerminalHistoryModal } from './TerminalHistoryModal';
+import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
+import { ReaderView } from './ReaderView';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal' }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -33,14 +35,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [isScrollMode, setIsScrollMode] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
+  const [readerLines, setReaderLines] = useState(null);
+  const [readerCursor, setReaderCursor] = useState(null);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const scrollModeRef = useRef(false);
+  const viewModeRef = useRef(viewMode);
+  const readerSyncRef = useRef(null);
+  const INITIAL_HISTORY_EVENTS = 10000;
+  const INITIAL_HISTORY_CHARS = 5000000;
+  const HISTORY_MAX_EVENTS = 100000;
+  const HISTORY_MAX_CHARS = 20000000;
+  const SCROLLBACK_DESKTOP = 100000;
+  const SCROLLBACK_MOBILE = 10000;
   const historyStateRef = useRef({
-    maxHistoryEvents: 2000,
-    maxHistoryChars: 500000,
+    maxHistoryEvents: INITIAL_HISTORY_EVENTS,
+    maxHistoryChars: INITIAL_HISTORY_CHARS,
     exhausted: false,
     loading: false,
     lastCount: 0,
@@ -53,9 +66,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const shouldReplayHistoryRef = useRef(true);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
-  const HISTORY_MAX_EVENTS = 20000;
-  const HISTORY_MAX_CHARS = 2000000;
-
   const triggerLoadMoreIfAtTop = useCallback(() => {
     const term = xtermRef.current;
     const loadMore = loadMoreHistoryRef.current;
@@ -164,8 +174,151 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   });
 
+  // Handler for reader view keyboard input
+  const handleReaderInput = useCallback((data) => {
+    if (!data) return;
+    if (sendTerminalInputRef.current) {
+      sendTerminalInputRef.current(data);
+    } else {
+      // Fallback: send directly if ref not ready yet
+      const socket = socketRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(data);
+        return;
+      }
+      apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        body: { command: data }
+      }).catch((error) => {
+        console.error('Failed to send terminal input:', error);
+      });
+    }
+  }, [sessionId]);
+
+  const handleReaderLoadMore = useCallback(() => {
+    loadMoreHistoryRef.current?.();
+  }, []);
+
+  const syncReaderBuffer = useCallback(() => {
+    const term = xtermRef.current;
+    const buffer = term?.buffer?.active;
+    if (!buffer) return;
+    const hintText = 'Use /skills to list available skills';
+    const contextRegex = /\b\d+% context left\b.*$/i;
+    const sanitizeLine = (line, cursorColumnOverride) => {
+      if (!line) {
+        return { text: '', column: cursorColumnOverride };
+      }
+      const ranges = [];
+      let searchFrom = 0;
+      while (true) {
+        const idx = line.indexOf(hintText, searchFrom);
+        if (idx === -1) break;
+        ranges.push([idx, idx + hintText.length]);
+        searchFrom = idx + hintText.length;
+      }
+      const contextMatch = contextRegex.exec(line);
+      if (contextMatch && typeof contextMatch.index === 'number') {
+        ranges.push([contextMatch.index, line.length]);
+      }
+
+      if (ranges.length === 0) {
+        return { text: line, column: cursorColumnOverride };
+      }
+
+      ranges.sort((a, b) => a[0] - b[0]);
+      const merged = [];
+      for (const range of ranges) {
+        const last = merged[merged.length - 1];
+        if (!last || range[0] > last[1]) {
+          merged.push([...range]);
+        } else {
+          last[1] = Math.max(last[1], range[1]);
+        }
+      }
+
+      let cursorColumn = cursorColumnOverride;
+      let removed = 0;
+      let lastIndex = 0;
+      let text = '';
+      for (const [start, end] of merged) {
+        if (start > lastIndex) {
+          text += line.slice(lastIndex, start);
+        }
+        if (cursorColumn !== null && cursorColumn !== undefined) {
+          if (cursorColumn > start) {
+            if (cursorColumn < end) {
+              cursorColumn = start - removed;
+            } else {
+              cursorColumn -= (end - start);
+            }
+          }
+        }
+        removed += end - start;
+        lastIndex = end;
+      }
+      text += line.slice(lastIndex);
+      const trimmed = text.replace(/\s+$/g, '');
+      if (cursorColumn !== null && cursorColumn !== undefined) {
+        cursorColumn = Math.min(cursorColumn, trimmed.length);
+      }
+      return { text: trimmed, column: cursorColumn };
+    };
+
+    const lines = [];
+    const cursorLine = buffer.baseY + buffer.cursorY;
+    const cursorColumn = buffer.cursorX;
+    let nextCursor = null;
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      const raw = line ? line.translateToString(false) : '';
+      if (i === cursorLine) {
+        const sanitized = sanitizeLine(raw, cursorColumn);
+        lines.push(sanitized.text);
+        if (sanitized.column !== null && sanitized.column !== undefined) {
+          nextCursor = { line: i, column: sanitized.column };
+        }
+      } else {
+        lines.push(sanitizeLine(raw, null).text);
+      }
+    }
+
+    let lastNonEmpty = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i] && lines[i].trimEnd() !== '') {
+        lastNonEmpty = i;
+        break;
+      }
+    }
+    const lastLineIndex = Math.max(lastNonEmpty, nextCursor ? nextCursor.line : -1);
+    const visibleLines = lastLineIndex >= 0 ? lines.slice(0, lastLineIndex + 1) : [];
+    replaceReaderBuffer(visibleLines.join('\n'));
+    setReaderLines(visibleLines);
+    setReaderCursor(nextCursor);
+  }, [replaceReaderBuffer]);
+
+  const scheduleReaderSync = useCallback(() => {
+    if (readerSyncRef.current) return;
+    readerSyncRef.current = requestAnimationFrame(() => {
+      readerSyncRef.current = null;
+      if (viewModeRef.current !== 'reader') return;
+      syncReaderBuffer();
+    });
+  }, [syncReaderBuffer]);
+
+  // Blur xterm terminal when reader view is active to prevent it from capturing keyboard events
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term?.textarea) return;
+
+    if (viewMode === 'reader') {
+      term.textarea.blur();
+    }
+  }, [viewMode]);
+
   const handleTerminalTap = useCallback((event) => {
     if (!isMobile || event?.defaultPrevented) return;
+    if (viewMode === 'reader') return;
     const target = event?.target;
     if (target instanceof Element) {
       if (target.closest('button, input, textarea, select, a')) {
@@ -177,7 +330,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return;
     }
     setMobileInputEnabled(true);
-  }, [isMobile, setMobileInputEnabled, setScrollMode]);
+  }, [isMobile, setMobileInputEnabled, setScrollMode, viewMode]);
 
   // Touch gesture handling
   const handleLongPress = useCallback(() => {
@@ -227,14 +380,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     scrollModeRef.current = isScrollMode;
   }, [isScrollMode]);
 
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+    if (viewMode === 'reader') {
+      syncReaderBuffer();
+    }
+  }, [viewMode, syncReaderBuffer]);
+
+  useEffect(() => {
+    return () => {
+      if (readerSyncRef.current) {
+        cancelAnimationFrame(readerSyncRef.current);
+        readerSyncRef.current = null;
+      }
+    };
+  }, []);
+
   // Reset loading state when session changes
   useEffect(() => {
     shouldReplayHistoryRef.current = true;
     setIsLoadingHistory(true);
     setIsLoadingMoreHistory(false);
     historyStateRef.current = {
-      maxHistoryEvents: 2000,
-      maxHistoryChars: 500000,
+      maxHistoryEvents: INITIAL_HISTORY_EVENTS,
+      maxHistoryChars: INITIAL_HISTORY_CHARS,
       exhausted: false,
       loading: false,
       lastCount: 0,
@@ -283,8 +452,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let resizeObserver = null;
 
     const scrollback = performanceMode
-      ? (isMobile ? 2000 : 20000)
-      : (isMobile ? 5000 : 100000);
+      ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
+      : (isMobile ? SCROLLBACK_MOBILE * 2 : SCROLLBACK_DESKTOP * 3);
     const term = new Terminal({
       cursorBlink: false,
       fontSize: fontSize || (isMobile ? 20 : 14),
@@ -551,14 +720,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           const historyText = history.map((entry) => entry.text).join('');
           term.reset();
+          clearReader();
           term.write(historyText, () => {
             if (disposed) return;
+            if (viewModeRef.current === 'reader') {
+              syncReaderBuffer();
+            } else {
+              appendToReader(historyText);
+            }
             term.scrollToTop();
             historyReloadingRef.current = false;
             const pending = pendingSocketDataRef.current;
             pendingSocketDataRef.current = [];
             if (pending.length > 0) {
-              term.write(pending.join(''));
+              const pendingText = pending.join('');
+              if (viewModeRef.current === 'reader') {
+                term.write(pendingText, scheduleReaderSync);
+              } else {
+                term.write(pendingText);
+                appendToReader(pendingText);
+              }
             }
           });
         } catch {
@@ -570,7 +751,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             const pending = pendingSocketDataRef.current;
             pendingSocketDataRef.current = [];
             if (pending.length > 0 && !disposed) {
-              term.write(pending.join(''));
+              const pendingText = pending.join('');
+              if (viewModeRef.current === 'reader') {
+                term.write(pendingText, scheduleReaderSync);
+              } else {
+                term.write(pendingText);
+                appendToReader(pendingText);
+              }
             }
           }
           setIsLoadingMoreHistory(false);
@@ -644,8 +831,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const base = import.meta.env.VITE_API_URL || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
         if (token) url.searchParams.set('token', token);
-        if (isMobile) {
-          url.searchParams.set('historyChars', '300000');
+        if (requestHistory) {
+          url.searchParams.set('historyChars', String(INITIAL_HISTORY_CHARS));
+          url.searchParams.set('historyEvents', String(INITIAL_HISTORY_EVENTS));
         }
         url.searchParams.set('history', requestHistory ? '1' : '0');
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -692,6 +880,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (hadConnectionError && requestHistory) {
             hadConnectionError = false;
             term.reset();
+            clearReader();
           }
           skipUrlTimeout = setTimeout(() => {
             skipUrlDetection = false;
@@ -761,7 +950,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             return;
           }
 
-          term.write(data);
+          if (viewModeRef.current === 'reader') {
+            term.write(data, scheduleReaderSync);
+          } else {
+            term.write(data);
+            appendToReader(data);
+          }
 
           if (!wasAtBottom) {
             const newBuffer = term.buffer?.active;
@@ -1033,7 +1227,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onTouchEndCapture={handleTouchEndCapture}
       onTouchCancelCapture={handleTouchCancelCapture}
     >
-      <div ref={terminalRef} className="xterm-container"></div>
+      <div
+        ref={terminalRef}
+        className="xterm-container"
+        style={{
+          visibility: viewMode === 'terminal' ? 'visible' : 'hidden',
+          pointerEvents: viewMode === 'terminal' ? 'auto' : 'none'
+        }}
+      ></div>
+      {viewMode === 'reader' && (
+        <ReaderView
+          content={readerBuffer}
+          lines={readerLines}
+          cursor={readerCursor}
+          fontSize={fontSize || (isMobile ? 20 : 14)}
+          onScrollDirection={onScrollDirection}
+          onLoadMore={handleReaderLoadMore}
+          onInput={handleReaderInput}
+          isMobile={isMobile}
+        />
+      )}
 
       {isMobile && isScrollMode && (
         <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>

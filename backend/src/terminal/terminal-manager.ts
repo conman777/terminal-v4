@@ -59,8 +59,8 @@ function normaliseNewlines(input: string): string {
   return input;
 }
 
-const DEFAULT_PERSIST_HISTORY_CHARS = 500000;
-const DEFAULT_PERSIST_HISTORY_EVENTS = 2000;
+const DEFAULT_PERSIST_HISTORY_CHARS = 5_000_000;
+const DEFAULT_PERSIST_HISTORY_EVENTS = 20_000;
 const MAX_PERSIST_HISTORY_CHARS = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_PERSIST_HISTORY_CHARS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PERSIST_HISTORY_CHARS;

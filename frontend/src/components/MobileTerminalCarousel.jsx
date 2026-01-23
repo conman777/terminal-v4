@@ -46,6 +46,11 @@ export function MobileTerminalCarousel({
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
   const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
+  const [viewMode, setViewMode] = useState('terminal'); // 'terminal' | 'reader'
+
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
+  }, []);
 
   const handleRegisterImageUpload = useCallback((trigger) => {
     setTriggerImageUpload(() => trigger);
@@ -80,6 +85,7 @@ export function MobileTerminalCarousel({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           usesTmux={currentSession?.usesTmux}
+          viewMode={viewMode}
           onScrollDirection={onScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
@@ -92,6 +98,8 @@ export function MobileTerminalCarousel({
         sessionId={currentSession.id}
         onImageUpload={triggerImageUpload}
         onOpenHistory={triggerHistoryPanel}
+        viewMode={viewMode}
+        onToggleViewMode={handleToggleViewMode}
       />
     </div>
   );

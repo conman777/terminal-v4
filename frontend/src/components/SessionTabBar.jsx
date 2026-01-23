@@ -169,16 +169,16 @@ export function SessionTabBar({
   const hasOverflow = canScrollLeft || canScrollRight;
 
   return (
-    <div className="session-tab-bar-container">
+    <div className="session-tab-bar-container-modern">
       {/* Left scroll button */}
       {canScrollLeft && (
         <button
           type="button"
-          className="session-tab-scroll-btn left"
+          className="session-tab-scroll-btn-modern left"
           onClick={() => handleScroll('left')}
           aria-label="Scroll tabs left"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>
         </button>
@@ -186,7 +186,7 @@ export function SessionTabBar({
 
       <div
         ref={tabBarRef}
-        className="session-tab-bar"
+        className="session-tab-bar-modern"
         role="tablist"
         aria-label="Terminal sessions"
       >
@@ -209,12 +209,12 @@ export function SessionTabBar({
 
         <button
           type="button"
-          className="session-tab-new"
+          className="session-tab-new-modern"
           onClick={onCreateSession}
           aria-label="New terminal"
           title="New terminal (Cmd+T)"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
@@ -225,11 +225,11 @@ export function SessionTabBar({
       {canScrollRight && (
         <button
           type="button"
-          className="session-tab-scroll-btn right"
+          className="session-tab-scroll-btn-modern right"
           onClick={() => handleScroll('right')}
           aria-label="Scroll tabs right"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </button>
@@ -237,39 +237,39 @@ export function SessionTabBar({
 
       {/* Overflow dropdown menu */}
       {hasOverflow && (
-        <div className="session-tab-overflow" ref={overflowRef}>
+        <div className="session-tab-overflow-modern" ref={overflowRef}>
           <button
             type="button"
-            className="session-tab-overflow-btn"
+            className="session-tab-overflow-btn-modern"
             onClick={() => setShowOverflow(!showOverflow)}
             aria-label={`Show all ${sessions.length} terminals`}
             title={`Show all ${sessions.length} terminals`}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
             </svg>
-            <span className="session-tab-count">{sessions.length}</span>
+            <span className="session-tab-count-modern">{sessions.length}</span>
           </button>
 
           {showOverflow && (
-            <div className="session-tab-overflow-menu">
-              <div className="session-tab-overflow-header">
+            <div className="session-tab-overflow-menu-modern">
+              <div className="session-tab-overflow-header-modern">
                 All Terminals ({sessions.length})
               </div>
-              <div className="session-tab-overflow-list">
+              <div className="session-tab-overflow-list-modern">
                 {sessions.map(session => (
                   <button
                     key={session.id}
                     type="button"
-                    className={`session-tab-overflow-item ${session.id === activeSessionId ? 'active' : ''}`}
+                    className={`session-tab-overflow-item-modern ${session.id === activeSessionId ? 'active' : ''}`}
                     onClick={() => handleOverflowSelect(session.id)}
                   >
                     {sessionActivity?.[session.id]?.hasUnread && (
-                      <span className="overflow-unread-dot" />
+                      <span className="overflow-unread-dot-modern" />
                     )}
-                    <span className="overflow-item-title">{session.title}</span>
+                    <span className="overflow-item-title-modern">{session.title}</span>
                     {session.id === activeSessionId && (
-                      <svg className="overflow-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <svg className="overflow-check-modern" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     )}
@@ -289,6 +289,180 @@ export function SessionTabBar({
           onClose={handleCloseContextMenu}
         />
       )}
+
+      <style jsx>{`
+        .session-tab-bar-container-modern {
+          display: flex;
+          align-items: center;
+          background: var(--bg-primary, #09090b);
+          border-bottom: 1px solid var(--border-subtle, #27272a);
+          padding: 0 4px;
+          height: 38px;
+          flex-shrink: 0;
+          position: relative;
+        }
+
+        .session-tab-bar-modern {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          flex: 1;
+          overflow-x: auto;
+          scrollbar-width: none;
+          height: 100%;
+          padding: 0 4px;
+        }
+
+        .session-tab-bar-modern::-webkit-scrollbar {
+          display: none;
+        }
+
+        .session-tab-scroll-btn-modern {
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          color: var(--text-muted, #71717a);
+          border-radius: 6px;
+          cursor: pointer;
+          z-index: 10;
+          transition: all 0.2s ease;
+        }
+
+        .session-tab-scroll-btn-modern:hover {
+          color: var(--text-primary, #fafafa);
+          background: var(--bg-elevated, #27272a);
+        }
+
+        .session-tab-new-modern {
+          flex-shrink: 0;
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          margin-left: 4px;
+        }
+
+        .session-tab-new-modern:hover {
+          background: var(--bg-surface, #18181b);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .session-tab-overflow-modern {
+          position: relative;
+          margin-left: 4px;
+        }
+
+        .session-tab-overflow-btn-modern {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          height: 28px;
+          padding: 0 10px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          color: var(--text-secondary, #a1a1aa);
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .session-tab-overflow-btn-modern:hover {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .session-tab-overflow-menu-modern {
+          position: absolute;
+          top: calc(100% + 8px);
+          right: 0;
+          width: 200px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-default, #3f3f46);
+          border-radius: 8px;
+          box-shadow: var(--shadow-lg);
+          z-index: 1000;
+          padding: 6px;
+          animation: dropdownFadeIn 0.2s ease-out;
+        }
+
+        @keyframes dropdownFadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .session-tab-overflow-header-modern {
+          padding: 8px 12px;
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          border-bottom: 1px solid var(--border-subtle, #27272a);
+          margin-bottom: 4px;
+        }
+
+        .session-tab-overflow-list-modern {
+          max-height: 300px;
+          overflow-y: auto;
+        }
+
+        .session-tab-overflow-item-modern {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 12px;
+          background: transparent;
+          border: none;
+          color: var(--text-primary, #fafafa);
+          font-size: 13px;
+          text-align: left;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: background 0.15s ease;
+        }
+
+        .session-tab-overflow-item-modern:hover {
+          background: var(--bg-elevated, #27272a);
+        }
+
+        .session-tab-overflow-item-modern.active {
+          color: var(--accent-primary, #f59e0b);
+          background: var(--accent-primary-dim);
+        }
+
+        .overflow-unread-dot-modern {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--accent-primary, #f59e0b);
+          box-shadow: var(--shadow-glow);
+        }
+
+        .overflow-item-title-modern {
+          flex: 1;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .overflow-check-modern {
+          opacity: 0.8;
+        }
+      `}</style>
     </div>
   );
 }
