@@ -6268,6 +6268,106 @@ button {
   }
 }
 
+/* Mobile Header Base Styles */
+.mobile-header {
+  display: none;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  z-index: 999;
+  backdrop-filter: blur(10px);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.mobile-header.nav-collapsed {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Mobile Header Tabs */
+.mobile-header-tabs {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  gap: 6px;
+  padding: 4px 0;
+  min-width: 0;
+}
+
+.mobile-header-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-header-tab {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 32px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-header-tab:active {
+  transform: scale(0.96);
+}
+
+.mobile-header-tab.active {
+  position: relative;
+  background: rgba(245, 158, 11, 0.15);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  box-shadow: var(--amber-glow-subtle);
+}
+
+.mobile-header-tab-input {
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent-primary);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  min-width: 60px;
+  max-width: 120px;
+  min-height: 32px;
+  outline: none;
+}
+
+.mobile-header-tab-add {
+  flex-shrink: 0;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 16px;
+  min-width: 36px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
 /* Modernized Mobile Header */
 .mobile-header-actions {
   display: flex;
@@ -6879,7 +6979,85 @@ button {
   opacity: 0.6;
 }
 
+/* Mobile Keybar */
+.mobile-keybar {
+  position: fixed;
+  top: var(--mobile-header-height, 48px);
+  left: 0;
+  right: 0;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 10px 14px 14px;
+  z-index: 998;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+  transform: translateY(-100%);
+  transition: transform var(--transition-slow);
+  pointer-events: none;
+}
 
+.mobile-keybar.open {
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.mobile-keybar-handle {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 10px;
+}
+
+.mobile-keybar-drag-indicator {
+  width: 44px;
+  height: 4px;
+  background: var(--border-default);
+  border-radius: 2px;
+}
+
+.mobile-keybar-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.mobile-keybar-row:last-child {
+  margin-bottom: 0;
+}
+
+.mobile-key {
+  flex: 1;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  padding: 14px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.mobile-key:active {
+  transform: scale(0.95);
+  background: var(--accent-primary-dim);
+  border-color: var(--accent-primary);
+}
+
+.mobile-key-special {
+  background: var(--accent-secondary-dim);
+  border-color: var(--accent-secondary);
+  color: var(--accent-secondary);
+}
+
+.mobile-key-special:active {
+  background: rgba(16, 185, 129, 0.3);
+}
 
 /* Mobile View Switcher */
 .mobile-view-switcher {

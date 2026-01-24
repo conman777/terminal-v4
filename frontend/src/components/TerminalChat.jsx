@@ -1450,8 +1450,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           pointerEvents: viewMode === 'terminal' ? 'auto' : 'none'
         }}
       ></div>
-      {/* Mobile keyboard input overlay - visible and tappable for iOS */}
-      {isMobile && viewMode === 'terminal' && keybarOpen && (
+      {/* Mobile keyboard input overlay - always visible and tappable for iOS */}
+      {isMobile && viewMode === 'terminal' && (
         <input
           ref={mobileInputRef}
           type="text"
