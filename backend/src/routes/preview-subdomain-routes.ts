@@ -1458,12 +1458,55 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
       // Make proxied request with timing
       const startTime = Date.now();
-      const response = await fetch(targetUrl, {
+      let response = await fetch(targetUrl, {
         method: request.method,
         headers: forwardHeaders,
         body,
         redirect: 'manual'
       });
+
+      // Follow internal redirects when app redirects to its own base path (e.g., /preview/8080/)
+      // This prevents redirect loops when apps are configured with a base path matching the preview path
+      const MAX_INTERNAL_REDIRECTS = 5;
+      let redirectCount = 0;
+      while (
+        response.status >= 300 &&
+        response.status < 400 &&
+        redirectCount < MAX_INTERNAL_REDIRECTS
+      ) {
+        const redirectLocation = response.headers.get('location');
+        if (!redirectLocation) break;
+
+        // Check if redirect matches /preview/{port}/... pattern for the same port
+        const internalRedirectMatch = redirectLocation.match(/^\/preview\/(\d+)(\/.*)?$/);
+        if (!internalRedirectMatch) break;
+
+        const redirectPort = parseInt(internalRedirectMatch[1], 10);
+        if (redirectPort !== port) break;
+
+        // Follow this redirect internally
+        const redirectPath = internalRedirectMatch[2] || '/';
+        const internalUrl = `http://localhost:${port}${redirectLocation}`;
+
+        // Consume the response body to avoid memory leaks
+        try { await response.arrayBuffer(); } catch {}
+
+        // Build headers for redirect (exclude content-length since it's a GET)
+        const redirectHeaders: Record<string, string> = {};
+        for (const [key, value] of Object.entries(forwardHeaders)) {
+          if (key.toLowerCase() !== 'content-length') {
+            redirectHeaders[key] = value;
+          }
+        }
+
+        response = await fetch(internalUrl, {
+          method: 'GET', // Redirects are always GET
+          headers: redirectHeaders,
+          redirect: 'manual'
+        });
+        redirectCount++;
+      }
+
       const duration = Date.now() - startTime;
 
       // Set response status
