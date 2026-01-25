@@ -98,6 +98,7 @@ export function MobileTerminalCarousel({
       {/* Terminal content - swipe to change sessions */}
       <div className="carousel-content" ref={swipeRef}>
         <TerminalChat
+          key={currentSession.id}
           sessionId={currentSession.id}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}

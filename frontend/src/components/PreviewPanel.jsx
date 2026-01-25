@@ -1438,6 +1438,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             <div className="preview-mobile-terminal-content">
               {selectedTerminalSession ? (
                 <TerminalChat
+                  key={selectedTerminalSession}
                   sessionId={selectedTerminalSession}
                   keybarOpen={false}
                   viewportHeight={null}
@@ -2343,6 +2344,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <div className="preview-terminal-content">
                 {selectedTerminalSession ? (
                   <TerminalChat
+                    key={selectedTerminalSession}
                     sessionId={selectedTerminalSession}
                     keybarOpen={false}
                     viewportHeight={null}

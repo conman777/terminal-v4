@@ -36,6 +36,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [isScrollMode, setIsScrollMode] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [isCopyMode, setIsCopyMode] = useState(false);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
   const [readerLineHeight, setReaderLineHeight] = useState(null);
@@ -78,6 +79,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const pendingSocketDataRef = useRef([]);
   const loadMoreHistoryRef = useRef(null);
   const shouldReplayHistoryRef = useRef(true);
+  const reconnectSocketRef = useRef(null);
+  const pausedForOfflineRef = useRef(false);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const getHistoryConfig = useCallback(() => ({
@@ -210,8 +213,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     startScrolling,
     stopScrolling,
     exitCopyModeIfActive,
+    resetCopyModeState,
     cleanup: cleanupScrolling
-  } = useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef);
+  } = useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, { onCopyModeChange: setIsCopyMode });
 
   // Mobile keyboard input handler - forwards keystrokes to terminal
   const handleMobileInput = useCallback((e) => {
@@ -668,7 +672,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     resetHistoryCache();
     historyReloadingRef.current = false;
     pendingSocketDataRef.current = [];
-  }, [applyHistoryConfig, resetHistoryCache, sessionId]);
+    resetCopyModeState();
+  }, [applyHistoryConfig, resetCopyModeState, resetHistoryCache, sessionId]);
 
   // Register image upload trigger for external components
   useEffect(() => {
@@ -706,6 +711,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let hasOpened = false;
     let rafId = null;
     let resizeObserver = null;
+    let openRetryCount = 0;
+    const MAX_OPEN_RETRIES = 20;
+    const MIN_CONTAINER_WIDTH = 50;
+    const MIN_CONTAINER_HEIGHT = 30;
 
     const scrollback = performanceMode
       ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
@@ -852,8 +861,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!container) return;
 
       const { width, height } = container.getBoundingClientRect();
-      if (width <= 0 || height <= 0) {
-        rafId = requestAnimationFrame(openWhenReady);
+      if (width < MIN_CONTAINER_WIDTH || height < MIN_CONTAINER_HEIGHT) {
+        openRetryCount++;
+        if (openRetryCount < MAX_OPEN_RETRIES) {
+          rafId = requestAnimationFrame(openWhenReady);
+        } else {
+          console.warn('[Terminal] Container never reached viable size after', MAX_OPEN_RETRIES, 'retries');
+        }
         return;
       }
 
@@ -1103,6 +1117,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
         fitTimeoutRef.current = setTimeout(() => {
           if (disposed || !fitAddonRef.current || !xtermRef.current) return;
+          const container = terminalRef.current;
+          if (!container) return;
+          const { width, height } = container.getBoundingClientRect();
+          if (width < MIN_CONTAINER_WIDTH || height < MIN_CONTAINER_HEIGHT) return;
           try {
             const buffer = xtermRef.current.buffer?.active;
             const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
@@ -1121,10 +1139,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
           debouncedFit();
+          // Trigger reconnect if socket is closed and we're online
+          if (navigator.onLine && socketRef.current?.readyState !== WebSocket.OPEN) {
+            reconnectSocketRef.current?.();
+          }
         }
+      };
+      const handleOnline = () => {
+        pausedForOfflineRef.current = false;
+        // Attempt reconnect when coming back online
+        if (socketRef.current?.readyState !== WebSocket.OPEN) {
+          reconnectSocketRef.current?.();
+        }
+      };
+      const handleOffline = () => {
+        pausedForOfflineRef.current = true;
       };
       window.addEventListener('focus', handleFocus);
       document.addEventListener('visibilitychange', handleVisibility);
+      window.addEventListener('online', handleOnline);
+      window.addEventListener('offline', handleOffline);
 
       const buildSocketUrl = () => {
         const token = getAccessToken();
@@ -1173,8 +1207,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const connectSocket = () => {
         if (disposed) return () => {};
+        // Skip reconnect if we're offline
+        if (pausedForOfflineRef.current) return () => {};
         const existing = socketRef.current;
         if (existing) existing.close();
+        // Store reconnect function for visibility/online handlers
+        reconnectSocketRef.current = connectSocket;
 
         const shouldLoadHistory = shouldReplayHistoryRef.current;
         let socket = null;
@@ -1441,10 +1479,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               handleAuthFailure('Session expired - please refresh');
               return;
             }
-            if (shouldReconnect) {
+            if (shouldReconnect && !pausedForOfflineRef.current) {
               wsRetryCount++;
-              const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
-              setTimeout(connectSocket, delay);
+              const baseDelay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
+              const jitter = Math.random() * 500;
+              setTimeout(connectSocket, baseDelay + jitter);
             }
           };
         };
@@ -1559,6 +1598,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         window.removeEventListener('resize', handleResize);
         window.removeEventListener('focus', handleFocus);
         document.removeEventListener('visibilitychange', handleVisibility);
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
         container.removeEventListener('contextmenu', handleContextMenu);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
@@ -1619,6 +1660,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         webglAddonRef.current = null;
       }
       loadMoreHistoryRef.current = null;
+      reconnectSocketRef.current = null;
     };
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
@@ -1750,6 +1792,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       {isMobile && isScrollMode && (
         <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>
+      )}
+      {viewMode === 'terminal' && isCopyMode && (
+        <div className="terminal-copy-mode-banner">
+          <span>Copy mode - output paused</span>
+          <button
+            type="button"
+            className="terminal-copy-mode-exit"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
+            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
+          >
+            Return to live
+          </button>
+        </div>
       )}
 
       <button

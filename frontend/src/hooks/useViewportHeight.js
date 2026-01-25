@@ -46,12 +46,42 @@ export function useViewportHeight() {
     const touchPoints = navigator.maxTouchPoints || 0;
     const isTouchLike = uaMobile || uaDataMobile || coarsePointer || noHover || touchPoints > 1;
 
-    // iOS sometimes doesn't fire events reliably - poll as backup (mobile only)
-    const pollInterval = isTouchLike ? setInterval(updateHeight, 500) : null;
+    // Dynamic polling for mobile - faster during keyboard animations
+    const FAST_POLL_INTERVAL = 100;
+    const SLOW_POLL_INTERVAL = 500;
+    const KEYBOARD_ANIMATION_DURATION = 400;
+
+    let pollIntervalId = null;
+    let slowdownTimeoutId = null;
+
+    const startFastPolling = () => {
+      if (!isTouchLike) return;
+      if (slowdownTimeoutId) clearTimeout(slowdownTimeoutId);
+      if (pollIntervalId) clearInterval(pollIntervalId);
+      pollIntervalId = setInterval(updateHeight, FAST_POLL_INTERVAL);
+      // Slow down after keyboard animation completes
+      slowdownTimeoutId = setTimeout(() => {
+        if (pollIntervalId) clearInterval(pollIntervalId);
+        pollIntervalId = setInterval(updateHeight, SLOW_POLL_INTERVAL);
+      }, KEYBOARD_ANIMATION_DURATION);
+    };
+
+    // Start with slow polling on mobile
+    if (isTouchLike) {
+      pollIntervalId = setInterval(updateHeight, SLOW_POLL_INTERVAL);
+      // Switch to fast polling on focus changes (keyboard appearing/disappearing)
+      window.addEventListener('focusin', startFastPolling);
+      window.addEventListener('focusout', startFastPolling);
+    }
 
     return () => {
       window.removeEventListener('resize', updateHeight);
-      if (pollInterval) clearInterval(pollInterval);
+      if (pollIntervalId) clearInterval(pollIntervalId);
+      if (slowdownTimeoutId) clearTimeout(slowdownTimeoutId);
+      if (isTouchLike) {
+        window.removeEventListener('focusin', startFastPolling);
+        window.removeEventListener('focusout', startFastPolling);
+      }
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight);
         viewport.removeEventListener('scroll', updateHeight);
