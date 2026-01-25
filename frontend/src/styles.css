@@ -965,6 +965,37 @@ button {
   text-transform: uppercase;
 }
 
+.terminal-copy-mode-banner {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fde68a;
+  font-size: 12px;
+  z-index: 20;
+}
+
+.terminal-copy-mode-exit {
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.terminal-copy-mode-exit:hover {
+  background: rgba(251, 191, 36, 0.25);
+}
+
 /* ===========================================
    Reader View - Clean text view for terminal output
    =========================================== */
@@ -5017,7 +5048,7 @@ button {
   border-radius: 12px;
   padding: 4px 4px 4px 12px;
   box-shadow: var(--shadow-md);
-  z-index: 10;
+  z-index: 100; /* Above mobile terminal overlay (z-index: 99) */
 }
 
 .preview-url-display {

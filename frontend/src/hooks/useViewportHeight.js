@@ -56,6 +56,8 @@ export function useViewportHeight() {
 
     const startFastPolling = () => {
       if (!isTouchLike) return;
+      // Immediately check height on focus change
+      updateHeight();
       if (slowdownTimeoutId) clearTimeout(slowdownTimeoutId);
       if (pollIntervalId) clearInterval(pollIntervalId);
       pollIntervalId = setInterval(updateHeight, FAST_POLL_INTERVAL);

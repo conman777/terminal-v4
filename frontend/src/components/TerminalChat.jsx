@@ -17,7 +17,7 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal' }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal', isPrimary = false }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -49,6 +49,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const webglEnabledRef = useRef(webglEnabled !== false);
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
+  const isPrimaryRef = useRef(isPrimary);
   const readerSyncRef = useRef(null);
   const HISTORY_PAGE_EVENTS_DESKTOP = 10000;
   const HISTORY_PAGE_CHARS_DESKTOP = 5_000_000;
@@ -649,6 +650,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [viewMode, syncReaderBuffer]);
 
   useEffect(() => {
+    isPrimaryRef.current = Boolean(isPrimary);
+  }, [isPrimary]);
+
+  useEffect(() => {
     return () => {
       if (readerSyncRef.current) {
         cancelAnimationFrame(readerSyncRef.current);
@@ -1104,7 +1109,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (cols && rows) {
             apiFetch(`/api/terminal/${sessionId}/resize`, {
               method: 'POST',
-              body: { cols, rows }
+              body: isPrimaryRef.current ? { cols, rows, priority: true } : { cols, rows }
             }).catch(() => {});
           }
         }
@@ -1405,7 +1410,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     if (cols && rows) {
                       apiFetch(`/api/terminal/${sessionId}/resize`, {
                         method: 'POST',
-                        body: { cols, rows, clientId: msg.clientId }
+                        body: isPrimaryRef.current
+                          ? { cols, rows, clientId: msg.clientId, priority: true }
+                          : { cols, rows, clientId: msg.clientId }
                       }).catch(() => {});
                     }
                     continue;
@@ -1524,6 +1531,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (disposed) return;
           const resizeBody = { cols, rows };
           if (clientIdRef.current) resizeBody.clientId = clientIdRef.current;
+          if (isPrimaryRef.current) resizeBody.priority = true;
           apiFetch(`/api/terminal/${sessionId}/resize`, {
             method: 'POST',
             body: resizeBody
@@ -1714,11 +1722,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [fontSize, isMobile]);
 
   // Handle keybar/viewport changes with debounced fit
+  // Use shorter debounce on mobile for faster keyboard response
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
 
     if (fitTimeoutRef.current) clearTimeout(fitTimeoutRef.current);
 
+    const debounceTime = isMobile ? 50 : 150;
     fitTimeoutRef.current = setTimeout(() => {
       if (!fitAddonRef.current || !xtermRef.current) return;
       try {
@@ -1730,8 +1740,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       } catch (error) {
         console.error('[Terminal Fit] Failed to resize terminal:', error);
       }
-    }, 150);
-  }, [keybarOpen, viewportHeight]);
+    }, debounceTime);
+  }, [keybarOpen, viewportHeight, isMobile]);
 
   // On mobile, control keyboard by moving textarea on/off screen
   useEffect(() => {
