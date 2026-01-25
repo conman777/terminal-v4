@@ -4,6 +4,8 @@ import { useRef, useEffect, useCallback } from 'react';
 const MIN_SWIPE_DISTANCE = 50;  // Minimum pixels to count as swipe
 const MAX_SWIPE_TIME = 300;     // Max ms for quick swipe
 const MIN_VELOCITY = 0.3;       // Minimum pixels/ms for slower swipes
+const DIRECTION_LOCK_THRESHOLD = 20;  // Pixels moved before locking direction
+const DIRECTION_LOCK_BIAS = 10;       // Bias toward vertical (for scrolling)
 
 export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
   const containerRef = useRef(null);
@@ -48,8 +50,8 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
 
       if (!swipeLockRef.current) {
         // Determine intent once user moves enough, bias toward vertical to preserve scrolling.
-        if (absX > 12 || absY > 12) {
-          swipeLockRef.current = absX > absY + 6 ? 'horizontal' : 'vertical';
+        if (absX > DIRECTION_LOCK_THRESHOLD || absY > DIRECTION_LOCK_THRESHOLD) {
+          swipeLockRef.current = absX > absY + DIRECTION_LOCK_BIAS ? 'horizontal' : 'vertical';
         }
       }
 
@@ -60,17 +62,31 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
     };
 
     const handleTouchEnd = (e) => {
-      if (!enabledRef.current || !touchStartRef.current) return;
+      // CRITICAL: Always clean up refs, even if disabled or no touch start
+      // This prevents stale state when enabled toggles during active swipe
+      const hadTouchStart = touchStartRef.current !== null;
+      const wasEnabled = enabledRef.current;
+
+      if (!hadTouchStart) {
+        // Clean up anyway to ensure consistent state
+        touchStartRef.current = null;
+        touchStartTimeRef.current = null;
+        swipeLockRef.current = null;
+        return;
+      }
 
       const touch = e.changedTouches[0];
       const deltaX = touch.clientX - touchStartRef.current.x;
       const deltaTime = Date.now() - touchStartTimeRef.current;
+      const swipeLock = swipeLockRef.current;
 
-      // Reset refs
+      // Reset refs BEFORE processing to prevent stale state
       touchStartRef.current = null;
       touchStartTimeRef.current = null;
-      const swipeLock = swipeLockRef.current;
       swipeLockRef.current = null;
+
+      // Only process swipe if we were enabled
+      if (!wasEnabled) return;
 
       // Ignore vertical intent to preserve scroll behavior
       if (swipeLock === 'vertical') {
@@ -101,9 +117,15 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
     container.addEventListener('touchend', handleTouchEnd, { capture: true, passive: true });
 
     return () => {
+      // Clean up event listeners
       container.removeEventListener('touchstart', handleTouchStart, { capture: true });
       container.removeEventListener('touchmove', handleTouchMove, { capture: true });
       container.removeEventListener('touchend', handleTouchEnd, { capture: true });
+
+      // Clean up refs to prevent memory leaks and stale state
+      touchStartRef.current = null;
+      touchStartTimeRef.current = null;
+      swipeLockRef.current = null;
     };
   }, [enabled]);
 

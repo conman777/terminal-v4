@@ -18,7 +18,10 @@ export function MobileTerminalCarousel({
   // Clamp index to valid range when sessions change
   useEffect(() => {
     if (sessions.length === 0) return;
-    if (currentIndex >= sessions.length) {
+    // Handle negative index when first session is added after all were closed
+    if (currentIndex < 0) {
+      onIndexChange(0);
+    } else if (currentIndex >= sessions.length) {
       onIndexChange(sessions.length - 1);
     }
   }, [sessions.length, currentIndex, onIndexChange]);

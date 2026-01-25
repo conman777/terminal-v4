@@ -288,10 +288,9 @@ export function MobileDrawer({
           top: 0;
           left: 0;
           bottom: 0;
-          width: 85%;
-          max-width: 320px;
+          width: min(90vw, 360px);
           background: var(--bg-primary, #09090b);
-          z-index: 2000;
+          z-index: 1500;
           transform: translateX(-100%);
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           display: flex;
@@ -311,7 +310,7 @@ export function MobileDrawer({
           bottom: 0;
           background: rgba(0, 0, 0, 0.7);
           backdrop-filter: blur(4px);
-          z-index: 1999;
+          z-index: 1499;
           opacity: 0;
           pointer-events: none;
           transition: opacity 0.3s ease;

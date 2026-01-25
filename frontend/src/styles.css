@@ -7020,17 +7020,19 @@ button {
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-subtle);
   padding: 10px 14px 14px;
-  z-index: 998;
+  z-index: 1001;
   box-shadow: var(--shadow-md);
   backdrop-filter: blur(10px);
   transform: translateY(-100%);
   transition: transform var(--transition-slow);
   pointer-events: none;
+  visibility: hidden;
 }
 
 .mobile-keybar.open {
   transform: translateY(0);
   pointer-events: auto;
+  visibility: visible;
 }
 
 .mobile-keybar-handle {
@@ -7079,6 +7081,7 @@ button {
   transform: scale(0.95);
   background: var(--accent-primary-dim);
   border-color: var(--accent-primary);
+  opacity: 0.9;
 }
 
 .mobile-key-special {
@@ -7159,9 +7162,7 @@ button {
     height: var(--mobile-viewport-height, 100dvh);
     overflow: hidden;
     padding-top: var(--mobile-header-height);
-    padding-left: env(safe-area-inset-left, 0px);
-    padding-right: env(safe-area-inset-right, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    /* Safe area insets applied on .terminal-main instead to avoid duplication */
     transition: padding-top 0.2s ease;
     /* Flex container for children */
     display: flex;

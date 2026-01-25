@@ -29,15 +29,15 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     window.addEventListener('resize', updateHeight);
     const viewport = window.visualViewport;
     if (viewport) {
-      viewport.addEventListener('resize', updateHeight);
-      viewport.addEventListener('scroll', updateHeight);
+      viewport.addEventListener('resize', updateHeight, { passive: true });
+      viewport.addEventListener('scroll', updateHeight, { passive: true });
     }
 
     return () => {
       window.removeEventListener('resize', updateHeight);
       if (viewport) {
-        viewport.removeEventListener('resize', updateHeight);
-        viewport.removeEventListener('scroll', updateHeight);
+        viewport.removeEventListener('resize', updateHeight, { passive: true });
+        viewport.removeEventListener('scroll', updateHeight, { passive: true });
       }
     };
   }, [isOpen, onHeightChange]);

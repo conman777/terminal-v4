@@ -69,12 +69,14 @@ export function MobileHeader({
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [renamingSessionId, setRenamingSessionId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
-  const [showOverflow, setShowOverflow] = useState(false);
   const [hasOverflow, setHasOverflow] = useState(false);
   const tabsRef = useRef(null);
   const headerRef = useRef(null);
   const renameInputRef = useRef(null);
   const overflowRef = useRef(null);
+  // Track user scrolling to prevent auto-scroll interruption
+  const userScrollingRef = useRef(false);
+  const scrollTimeoutRef = useRef(null);
 
   // Update --mobile-header-height CSS variable
   useEffect(() => {
@@ -101,7 +103,9 @@ export function MobileHeader({
   const updateOverflowState = useCallback(() => {
     const el = tabsRef.current;
     if (!el) return;
-    setHasOverflow(el.scrollWidth > el.clientWidth + 1);
+    // Use 2px threshold for Retina displays with subpixel rendering
+    const OVERFLOW_THRESHOLD = 2;
+    setHasOverflow(el.scrollWidth > el.clientWidth + OVERFLOW_THRESHOLD);
   }, []);
 
   // Update overflow state on mount and when sessions change
@@ -117,24 +121,6 @@ export function MobileHeader({
       };
     }
   }, [activeSessions.length, updateOverflowState]);
-
-  // Close overflow menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (overflowRef.current && !overflowRef.current.contains(e.target)) {
-        setShowOverflow(false);
-      }
-    };
-    if (showOverflow) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showOverflow]);
-
-  const handleOverflowSelect = useCallback((sessionId) => {
-    onSelectSession(sessionId);
-    setShowOverflow(false);
-  }, [onSelectSession]);
 
   const handleTabLongPress = useCallback((sessionId, coords) => {
     setTabContextMenu({ sessionId, x: coords.x, y: coords.y });
@@ -174,8 +160,20 @@ export function MobileHeader({
     setTabContextMenu(null);
   }, [onCloseSession]);
 
-  // Auto-scroll active tab into view
+  // Handle user manual scrolling to prevent auto-scroll interruption
+  const handleUserScroll = useCallback(() => {
+    userScrollingRef.current = true;
+    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    scrollTimeoutRef.current = setTimeout(() => {
+      userScrollingRef.current = false;
+    }, 150);
+  }, []);
+
+  // Auto-scroll active tab into view (but don't interrupt user scrolling)
   useEffect(() => {
+    // Don't auto-scroll if user is actively scrolling tabs manually
+    if (userScrollingRef.current) return;
+
     if (tabsRef.current && activeSessionId) {
       const activeTab = tabsRef.current.querySelector('.mobile-header-tab.active');
       if (activeTab) {
@@ -297,7 +295,7 @@ export function MobileHeader({
         {/* Second row for tabs - only in terminal mode */}
         {(mobileView === 'terminal' || mobileView === 'preview') && (
           <div className="mobile-header-tabs-row">
-            <div className="mobile-header-tabs-modern" ref={tabsRef}>
+            <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
               {activeSessions.map((session) => (
                 <MobileTab
                   key={session.id}
@@ -338,7 +336,7 @@ export function MobileHeader({
             border-bottom: 1px solid var(--border-default, #3f3f46);
             display: flex;
             flex-direction: column;
-            z-index: 2000;
+            z-index: 1000;
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             /* Remove backdrop-filter as it causes z-index context issues on some browsers */
             /* backdrop-filter: blur(12px); */
@@ -406,7 +404,7 @@ export function MobileHeader({
           }
 
           .mobile-header-tabs-row {
-            height: 36px;
+            height: 44px;
             border-top: 1px solid var(--border-subtle, #27272a);
             display: flex;
             align-items: center;
@@ -430,19 +428,23 @@ export function MobileHeader({
 
           :global(.mobile-header-tab) {
             flex-shrink: 0;
-            height: 26px;
-            padding: 0 10px;
+            height: 36px;
+            min-height: 36px;
+            padding: 0 12px;
             background: var(--bg-surface, #18181b);
             border: 1px solid var(--border-subtle, #27272a);
-            border-radius: 13px;
+            border-radius: 18px;
             color: var(--text-secondary, #a1a1aa);
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 600;
             white-space: nowrap;
             max-width: 100px;
             overflow: hidden;
             text-overflow: ellipsis;
             transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
           }
 
           :global(.mobile-header-tab.active) {
@@ -454,8 +456,8 @@ export function MobileHeader({
 
           .mobile-header-tab-add {
             flex-shrink: 0;
-            width: 26px;
-            height: 26px;
+            width: 36px;
+            height: 36px;
             border-radius: 50%;
             background: var(--bg-elevated, #27272a);
             border: 1px solid var(--border-default, #3f3f46);
@@ -466,13 +468,13 @@ export function MobileHeader({
           }
 
           :global(.mobile-header-tab-input) {
-            height: 26px;
+            height: 36px;
             background: var(--bg-primary, #09090b);
             border: 1px solid var(--accent-primary, #f59e0b);
-            border-radius: 13px;
+            border-radius: 18px;
             color: var(--text-primary, #fafafa);
-            padding: 0 10px;
-            font-size: 11px;
+            padding: 0 12px;
+            font-size: 12px;
             width: 90px;
             outline: none;
           }

@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { isTouchLikeDevice } from '../utils/deviceDetection';
 
 // Track the real visible viewport height so mobile layouts can react to browser chrome and keyboards.
 export function useViewportHeight() {
@@ -11,6 +12,9 @@ export function useViewportHeight() {
   });
 
   const lastHeightRef = useRef(height);
+  // Timer refs to prevent memory leaks in event handler closures
+  const pollIntervalIdRef = useRef(null);
+  const slowdownTimeoutIdRef = useRef(null);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -20,11 +24,16 @@ export function useViewportHeight() {
     const updateHeight = () => {
       const viewport = window.visualViewport;
       const nextHeight = Math.round(viewport ? viewport.height : window.innerHeight);
-      // Only update if actually changed to avoid unnecessary rerenders
-      if (nextHeight !== lastHeightRef.current) {
-        lastHeightRef.current = nextHeight;
-        setHeight(nextHeight);
-      }
+
+      // CRITICAL: Use callback form for atomic check-and-set to prevent race conditions
+      // during rapid height changes (e.g., iOS keyboard animation)
+      setHeight((prevHeight) => {
+        if (nextHeight !== prevHeight) {
+          lastHeightRef.current = nextHeight;
+          return nextHeight;
+        }
+        return prevHeight;
+      });
     };
 
     updateHeight();
@@ -38,48 +47,53 @@ export function useViewportHeight() {
       viewport.addEventListener('scroll', updateHeight);
     }
 
-    const ua = navigator.userAgent || '';
-    const uaMobile = /Mobi|Android|iPhone|iPad|iPod|Windows Phone|BlackBerry|Opera Mini/i.test(ua);
-    const uaDataMobile = navigator.userAgentData?.mobile === true;
-    const coarsePointer = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
-    const noHover = window.matchMedia?.('(hover: none)')?.matches ?? false;
-    const touchPoints = navigator.maxTouchPoints || 0;
-    const isTouchLike = uaMobile || uaDataMobile || coarsePointer || noHover || touchPoints > 1;
+    const isTouchLike = isTouchLikeDevice();
 
     // Dynamic polling for mobile - faster during keyboard animations
-    const FAST_POLL_INTERVAL = 100;
-    const SLOW_POLL_INTERVAL = 500;
-    const KEYBOARD_ANIMATION_DURATION = 400;
-
-    let pollIntervalId = null;
-    let slowdownTimeoutId = null;
+    // iOS keyboard typically takes ~350ms to animate, poll fast during this time
+    const FAST_POLL_INTERVAL = 100;   // Poll every 100ms during keyboard animation
+    const SLOW_POLL_INTERVAL = 500;   // Poll every 500ms otherwise
+    const KEYBOARD_ANIMATION_DURATION = 400;  // Wait 400ms before slowing down
 
     const startFastPolling = () => {
       if (!isTouchLike) return;
       // Immediately check height on focus change
       updateHeight();
-      if (slowdownTimeoutId) clearTimeout(slowdownTimeoutId);
-      if (pollIntervalId) clearInterval(pollIntervalId);
-      pollIntervalId = setInterval(updateHeight, FAST_POLL_INTERVAL);
+
+      // Clear any existing timers via refs
+      if (slowdownTimeoutIdRef.current) {
+        clearTimeout(slowdownTimeoutIdRef.current);
+        slowdownTimeoutIdRef.current = null;
+      }
+      if (pollIntervalIdRef.current) {
+        clearInterval(pollIntervalIdRef.current);
+        pollIntervalIdRef.current = null;
+      }
+
+      // Start fast polling
+      pollIntervalIdRef.current = setInterval(updateHeight, FAST_POLL_INTERVAL);
+
       // Slow down after keyboard animation completes
-      slowdownTimeoutId = setTimeout(() => {
-        if (pollIntervalId) clearInterval(pollIntervalId);
-        pollIntervalId = setInterval(updateHeight, SLOW_POLL_INTERVAL);
+      slowdownTimeoutIdRef.current = setTimeout(() => {
+        if (pollIntervalIdRef.current) {
+          clearInterval(pollIntervalIdRef.current);
+          pollIntervalIdRef.current = null;
+        }
+        pollIntervalIdRef.current = setInterval(updateHeight, SLOW_POLL_INTERVAL);
       }, KEYBOARD_ANIMATION_DURATION);
     };
 
     // Start with slow polling on mobile
     if (isTouchLike) {
-      pollIntervalId = setInterval(updateHeight, SLOW_POLL_INTERVAL);
+      pollIntervalIdRef.current = setInterval(updateHeight, SLOW_POLL_INTERVAL);
       // Switch to fast polling on focus changes (keyboard appearing/disappearing)
       window.addEventListener('focusin', startFastPolling);
       window.addEventListener('focusout', startFastPolling);
     }
 
     return () => {
+      // Clean up event listeners
       window.removeEventListener('resize', updateHeight);
-      if (pollIntervalId) clearInterval(pollIntervalId);
-      if (slowdownTimeoutId) clearTimeout(slowdownTimeoutId);
       if (isTouchLike) {
         window.removeEventListener('focusin', startFastPolling);
         window.removeEventListener('focusout', startFastPolling);
@@ -87,6 +101,16 @@ export function useViewportHeight() {
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight);
         viewport.removeEventListener('scroll', updateHeight);
+      }
+
+      // CRITICAL: Clean up timers using refs to prevent memory leaks
+      if (pollIntervalIdRef.current) {
+        clearInterval(pollIntervalIdRef.current);
+        pollIntervalIdRef.current = null;
+      }
+      if (slowdownTimeoutIdRef.current) {
+        clearTimeout(slowdownTimeoutIdRef.current);
+        slowdownTimeoutIdRef.current = null;
       }
     };
   }, []);
