@@ -1484,7 +1484,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         const redirectPort = parseInt(internalRedirectMatch[1], 10);
         if (redirectPort !== port) break;
 
-        // Follow this redirect internally
+        // Follow this redirect internally - use full redirect location since app expects it
         const redirectPath = internalRedirectMatch[2] || '/';
         const internalUrl = `http://localhost:${port}${redirectLocation}`;
 
@@ -1505,6 +1505,19 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           redirect: 'manual'
         });
         redirectCount++;
+      }
+
+      // Fallback: if 404 and we stripped a prefix, try with the full path
+      // This handles apps configured with base path matching /preview/{port}/
+      if (response.status === 404 && previewBasePath && requestPath !== request.url) {
+        const fullPathUrl = `http://localhost:${port}${previewBasePath}${requestPath}`;
+        try { await response.arrayBuffer(); } catch {} // Consume body
+        response = await fetch(fullPathUrl, {
+          method: request.method,
+          headers: forwardHeaders,
+          body: request.method !== 'GET' && request.method !== 'HEAD' ? body : undefined,
+          redirect: 'manual'
+        });
       }
 
       const duration = Date.now() - startTime;
