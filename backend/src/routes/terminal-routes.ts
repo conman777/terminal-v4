@@ -128,7 +128,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
     const historyLimits = parseHistoryLimit(request);
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
+      ...historyLimits,
+      includeHistory: true
+    });
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -248,7 +251,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     const historyLimits = parseHistoryLimit(request);
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
+      ...historyLimits,
+      includeHistory: true
+    });
     if (!snapshot) {
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
@@ -360,13 +366,16 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
+    const sendHistory = shouldSendHistory(request);
     const historyLimits = parseHistoryLimit(request);
-    const snapshot = deps.terminalManager.getSession(userId, request.params.id, historyLimits);
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
+      ...historyLimits,
+      includeHistory: sendHistory
+    });
     if (!snapshot) {
       socket.close(4404, 'Terminal session not found');
       return;
     }
-    const sendHistory = shouldSendHistory(request);
 
     // Generate unique client ID for this WebSocket connection
     const clientId = randomUUID();

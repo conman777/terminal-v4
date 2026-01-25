@@ -519,12 +519,13 @@ export class TerminalManager {
   getSession(
     userId: string,
     id: string,
-    options: { maxHistoryChars?: number; maxHistoryEvents?: number; beforeTs?: number } = {}
+    options: { maxHistoryChars?: number; maxHistoryEvents?: number; beforeTs?: number; includeHistory?: boolean } = {}
   ): TerminalSessionSnapshot | null {
+    const includeHistory = options.includeHistory !== false;
     // Check active sessions first
     const session = this.#sessions.get(id);
     if (session && session.userId === userId) {
-      const history = this.#limitHistory(session.buffer, options);
+      const history = includeHistory ? this.#limitHistory(session.buffer, options) : [];
       return {
         id: session.id,
         title: session.title,
@@ -540,7 +541,7 @@ export class TerminalManager {
     const userPersistedSessions = this.#persistedSessions.get(userId);
     const persisted = userPersistedSessions?.get(id);
     if (persisted) {
-      const history = this.#limitHistory(persisted.history, options);
+      const history = includeHistory ? this.#limitHistory(persisted.history, options) : [];
       return {
         id: persisted.id,
         title: persisted.title,
