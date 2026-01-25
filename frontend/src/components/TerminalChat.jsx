@@ -5,7 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
-import { getAccessToken } from '../utils/auth';
+import { getAccessToken, isAccessTokenExpired, refreshTokens } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import { useFaviconFlash } from '../hooks/useFaviconFlash';
@@ -1000,196 +1000,296 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         return url.toString();
       };
 
+      const isAuthFailure = (error) => {
+        const message = error instanceof Error ? error.message : '';
+        return message === 'Token refresh failed' || message === 'No refresh token' || message === 'Invalid token response';
+      };
+
+      const ensureFreshSocketToken = async () => {
+        const token = getAccessToken();
+        if (!token) {
+          return { ok: false, message: 'Session expired - please refresh' };
+        }
+        if (!isAccessTokenExpired(token, 30)) {
+          return { ok: true };
+        }
+        try {
+          let timeoutId = null;
+          await Promise.race([
+            refreshTokens(),
+            new Promise((_, reject) => {
+              timeoutId = setTimeout(() => reject(new Error('Refresh timeout')), 5000);
+            })
+          ]).finally(() => {
+            if (timeoutId) clearTimeout(timeoutId);
+          });
+          return { ok: true };
+        } catch (error) {
+          if (isAuthFailure(error)) {
+            return { ok: false, message: 'Session expired - please refresh' };
+          }
+          return { ok: true };
+        }
+      };
+
       let wsRetryCount = 0;
       const MAX_WS_RETRY_DELAY = 30000;
 
       const connectSocket = () => {
-        if (disposed) return;
+        if (disposed) return () => {};
         const existing = socketRef.current;
         if (existing) existing.close();
 
         const requestHistory = shouldReplayHistoryRef.current;
-        const socket = new WebSocket(buildSocketUrl(requestHistory));
-        socket.binaryType = 'arraybuffer';
-        socketRef.current = socket;
+        let socket = null;
         let hadConnectionError = false;
         let shouldReconnect = true;
         let skipUrlDetection = true;
         let skipUrlTimeout = null;
         let heartbeatTimer = null;
+        let connectTimeout = null;
         let lastServerPingAt = 0;
         const messageQueue = [];
         let processingQueue = false;
+        let didOpen = false;
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = 45000;
+        const CONNECT_TIMEOUT = 15000;
 
-        socket.onopen = () => {
-          if (disposed) return;
-          wsRetryCount = 0;
-          resetUserInput();
-          onConnectionChange?.(true);
-          lastServerPingAt = Date.now();
-          if (requestHistory) {
-            shouldReplayHistoryRef.current = false;
-          }
-          if (heartbeatTimer) clearInterval(heartbeatTimer);
-          heartbeatTimer = setInterval(() => {
-            if (socket.readyState !== WebSocket.OPEN) return;
-            const now = Date.now();
-            if (now - lastServerPingAt > HEARTBEAT_TIMEOUT) {
-              socket.close(4000, 'Heartbeat timeout');
-            }
-          }, HEARTBEAT_INTERVAL);
-          if (hadConnectionError && requestHistory) {
-            hadConnectionError = false;
-            term.reset();
-            clearReader();
-          }
-          skipUrlTimeout = setTimeout(() => {
-            skipUrlDetection = false;
+        const markDisconnected = () => {
+          onConnectionChange?.(false);
+          if (!didOpen) {
             setIsLoadingHistory(false);
-          }, 500);
-        };
-
-        const decodeSocketData = async (payload) => {
-          if (payload instanceof ArrayBuffer) {
-            const decoder = new TextDecoder();
-            return decoder.decode(payload);
           }
-          if (payload instanceof Blob) {
-            return payload.text();
-          }
-          return payload;
         };
 
-        const processMessageQueue = async () => {
-          if (processingQueue) return;
-          processingQueue = true;
-
-          while (messageQueue.length > 0 && !disposed) {
-            const event = messageQueue.shift();
-            if (!event) break;
-
-            let data = await decodeSocketData(event.data);
-            if (disposed) break;
-
-            lastServerPingAt = Date.now();
-            if (data === '__terminal_pong__') continue;
-            if (data.includes('__terminal_ping__')) {
-              data = data.split('__terminal_ping__').join('');
-            }
-            if (data.includes('{"type":"ping","source":"terminal-client"}')) {
-              data = data.split('{"type":"ping","source":"terminal-client"}').join('');
-            }
-            if (!data) continue;
-
-            if (data.startsWith('{')) {
-              try {
-                const msg = JSON.parse(data);
-                if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
-                  clientIdRef.current = msg.clientId;
-                  const { cols, rows } = term;
-                  if (cols && rows) {
-                    apiFetch(`/api/terminal/${sessionId}/resize`, {
-                      method: 'POST',
-                      body: { cols, rows, clientId: msg.clientId }
-                    }).catch(() => {});
-                  }
-                  continue;
-                }
-                if (msg.type === 'serverPing') {
-                  continue;
-                }
-                if (msg.type === 'pong' && msg.source === 'terminal-client') {
-                  continue;
-                }
-                if (msg.type === 'cwd' && msg.cwd) {
-                  onCwdChange?.(msg.cwd);
-                  continue;
-                }
-              } catch { /* Not valid JSON */ }
-            }
-
-            const buffer = term.buffer?.active;
-            const baseY = buffer?.baseY || 0;
-            const viewportYBefore = buffer?.viewportY ?? 0;
-            const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
-
-            if (historyReloadingRef.current) {
-              pendingSocketDataRef.current.push(data);
-              continue;
-            }
-
-            if (viewModeRef.current === 'reader') {
-              term.write(data, scheduleReaderSync);
-            } else {
-              term.write(data);
-              appendToReader(data);
-            }
-
-            if (!wasAtBottom) {
-              const newBuffer = term.buffer?.active;
-              const viewportYAfter = newBuffer?.viewportY ?? 0;
-              const delta = viewportYBefore - viewportYAfter;
-              if (delta !== 0) term.scrollLines(delta);
-            }
-
-            if (!skipUrlDetection) {
-              resetIdleTimer(isScrollingRef.current);
-            }
-
-            if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
-              const url = extractPreviewUrl(data);
-              if (url && !detectedUrlsRef.current.has(url)) {
-                detectedUrlsRef.current.add(url);
-                onUrlDetected(url);
-              }
-            }
-          }
-
-          processingQueue = false;
-        };
-
-        socket.onmessage = (event) => {
-          if (disposed) return;
-          messageQueue.push(event);
-          void processMessageQueue();
-        };
-
-        socket.onerror = () => {
-          if (disposed) return;
+        const handleAuthFailure = (message) => {
+          shouldReconnect = false;
+          setIsLoadingHistory(false);
           onConnectionChange?.(false);
           if (!hadConnectionError) {
             hadConnectionError = true;
-            term.write('\r\n[Connection lost – attempting to reconnect…]\r\n');
+            term.write(`\r\n[${message || 'Session expired - please refresh'}]\r\n`);
           }
         };
 
-        socket.onclose = (event) => {
-          if (disposed) return;
-          onConnectionChange?.(false);
-          if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
-          }
-          messageQueue.length = 0;
-          if (event.reason === 'Session ended') {
-            shouldReconnect = false;
-            term.write('\r\n[Terminal session ended]\r\n');
+        const startSocket = async () => {
+          const authResult = await ensureFreshSocketToken();
+          if (disposed || !shouldReconnect) return;
+          if (!authResult.ok) {
+            handleAuthFailure(authResult.message);
             return;
           }
-          if (shouldReconnect) {
-            wsRetryCount++;
-            const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
-            setTimeout(connectSocket, delay);
-          }
+
+          socket = new WebSocket(buildSocketUrl(requestHistory));
+          socket.binaryType = 'arraybuffer';
+          socketRef.current = socket;
+          if (connectTimeout) clearTimeout(connectTimeout);
+          connectTimeout = setTimeout(() => {
+            if (disposed || didOpen || !socket) return;
+            markDisconnected();
+            if (!hadConnectionError) {
+              hadConnectionError = true;
+              term.write('\r\n[Connection timed out – retrying…]\r\n');
+            }
+            try {
+              socket.close(4408, 'Connection timeout');
+            } catch {}
+          }, CONNECT_TIMEOUT);
+
+          socket.onopen = () => {
+            if (disposed) return;
+            didOpen = true;
+            if (connectTimeout) {
+              clearTimeout(connectTimeout);
+              connectTimeout = null;
+            }
+            wsRetryCount = 0;
+            resetUserInput();
+            onConnectionChange?.(true);
+            lastServerPingAt = Date.now();
+            if (requestHistory) {
+              shouldReplayHistoryRef.current = false;
+            }
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
+            heartbeatTimer = setInterval(() => {
+              if (socket.readyState !== WebSocket.OPEN) return;
+              const now = Date.now();
+              if (now - lastServerPingAt > HEARTBEAT_TIMEOUT) {
+                socket.close(4000, 'Heartbeat timeout');
+              }
+            }, HEARTBEAT_INTERVAL);
+            if (hadConnectionError && requestHistory) {
+              hadConnectionError = false;
+              term.reset();
+              clearReader();
+            }
+            skipUrlTimeout = setTimeout(() => {
+              skipUrlDetection = false;
+              setIsLoadingHistory(false);
+            }, 500);
+          };
+
+          const decodeSocketData = async (payload) => {
+            if (payload instanceof ArrayBuffer) {
+              const decoder = new TextDecoder();
+              return decoder.decode(payload);
+            }
+            if (payload instanceof Blob) {
+              return payload.text();
+            }
+            return payload;
+          };
+
+          const processMessageQueue = async () => {
+            if (processingQueue) return;
+            processingQueue = true;
+
+            while (messageQueue.length > 0 && !disposed) {
+              const event = messageQueue.shift();
+              if (!event) break;
+
+              let data = await decodeSocketData(event.data);
+              if (disposed) break;
+
+              lastServerPingAt = Date.now();
+              if (data === '__terminal_pong__') continue;
+              if (data.includes('__terminal_ping__')) {
+                data = data.split('__terminal_ping__').join('');
+              }
+              if (data.includes('{"type":"ping","source":"terminal-client"}')) {
+                data = data.split('{"type":"ping","source":"terminal-client"}').join('');
+              }
+              if (!data) continue;
+
+              if (data.startsWith('{')) {
+                try {
+                  const msg = JSON.parse(data);
+                  if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
+                    clientIdRef.current = msg.clientId;
+                    const { cols, rows } = term;
+                    if (cols && rows) {
+                      apiFetch(`/api/terminal/${sessionId}/resize`, {
+                        method: 'POST',
+                        body: { cols, rows, clientId: msg.clientId }
+                      }).catch(() => {});
+                    }
+                    continue;
+                  }
+                  if (msg.type === 'serverPing') {
+                    continue;
+                  }
+                  if (msg.type === 'pong' && msg.source === 'terminal-client') {
+                    continue;
+                  }
+                  if (msg.type === 'cwd' && msg.cwd) {
+                    onCwdChange?.(msg.cwd);
+                    continue;
+                  }
+                } catch { /* Not valid JSON */ }
+              }
+
+              const buffer = term.buffer?.active;
+              const baseY = buffer?.baseY || 0;
+              const viewportYBefore = buffer?.viewportY ?? 0;
+              const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
+
+              if (historyReloadingRef.current) {
+                pendingSocketDataRef.current.push(data);
+                continue;
+              }
+
+              if (viewModeRef.current === 'reader') {
+                term.write(data, scheduleReaderSync);
+              } else {
+                term.write(data);
+                appendToReader(data);
+              }
+
+              if (!wasAtBottom) {
+                const newBuffer = term.buffer?.active;
+                const viewportYAfter = newBuffer?.viewportY ?? 0;
+                const delta = viewportYBefore - viewportYAfter;
+                if (delta !== 0) term.scrollLines(delta);
+              }
+
+              if (!skipUrlDetection) {
+                resetIdleTimer(isScrollingRef.current);
+              }
+
+              if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
+                const url = extractPreviewUrl(data);
+                if (url && !detectedUrlsRef.current.has(url)) {
+                  detectedUrlsRef.current.add(url);
+                  onUrlDetected(url);
+                }
+              }
+            }
+
+            processingQueue = false;
+          };
+
+          socket.onmessage = (event) => {
+            if (disposed) return;
+            messageQueue.push(event);
+            void processMessageQueue();
+          };
+
+          socket.onerror = () => {
+            if (disposed) return;
+            if (connectTimeout) {
+              clearTimeout(connectTimeout);
+              connectTimeout = null;
+            }
+            markDisconnected();
+            if (!hadConnectionError) {
+              hadConnectionError = true;
+              term.write('\r\n[Connection lost – attempting to reconnect…]\r\n');
+            }
+          };
+
+          socket.onclose = (event) => {
+            if (disposed) return;
+            if (connectTimeout) {
+              clearTimeout(connectTimeout);
+              connectTimeout = null;
+            }
+            markDisconnected();
+            if (heartbeatTimer) {
+              clearInterval(heartbeatTimer);
+              heartbeatTimer = null;
+            }
+            messageQueue.length = 0;
+            if (event.reason === 'Session ended') {
+              shouldReconnect = false;
+              term.write('\r\n[Terminal session ended]\r\n');
+              return;
+            }
+            if (event.reason === 'Terminal session not found' || event.code === 4404) {
+              shouldReconnect = false;
+              term.write('\r\n[Terminal session not found]\r\n');
+              return;
+            }
+            if (event.reason === 'Unauthorized' || event.code === 4401) {
+              handleAuthFailure('Session expired - please refresh');
+              return;
+            }
+            if (shouldReconnect) {
+              wsRetryCount++;
+              const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
+              setTimeout(connectSocket, delay);
+            }
+          };
         };
+
+        void startSocket();
 
         return () => {
           shouldReconnect = false;
           if (skipUrlTimeout) clearTimeout(skipUrlTimeout);
           if (heartbeatTimer) clearInterval(heartbeatTimer);
-          socket.close();
+          if (connectTimeout) clearTimeout(connectTimeout);
+          if (socket) socket.close();
         };
       };
 

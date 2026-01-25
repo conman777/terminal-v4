@@ -59,6 +59,28 @@ export function getAuthInitializing() {
   return isAuthInitializing;
 }
 
+function decodeJwtPayload(token) {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  try {
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payload.padEnd(payload.length + (4 - (payload.length % 4)) % 4, '=');
+    const decoded = atob(padded);
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+export function isAccessTokenExpired(token, skewSeconds = 30) {
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== 'number') {
+    return true;
+  }
+  return Date.now() >= (payload.exp - skewSeconds) * 1000;
+}
+
 // Centralized token refresh - ensures only one refresh happens at a time
 export async function refreshTokens() {
   // If already refreshing, wait for that to complete

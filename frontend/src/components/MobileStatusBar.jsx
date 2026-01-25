@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
 import { apiFetch } from '../utils/api';
 
-export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode }) {
+export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true }) {
   const [inputText, setInputText] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const inputRef = useRef(null);
@@ -90,7 +90,7 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
       ) : (
         <>
           <div className="mobile-status-left">
-            <span className="status-dot connected" />
+            <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
           </div>
 
           <div className="mobile-status-right">

@@ -48,6 +48,7 @@ export function MobileTerminalCarousel({
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
   const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
   const [viewMode, setViewMode] = useState('terminal'); // 'terminal' | 'reader'
+  const [isConnected, setIsConnected] = useState(false);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -59,6 +60,10 @@ export function MobileTerminalCarousel({
 
   const handleRegisterHistoryPanel = useCallback((trigger) => {
     setTriggerHistoryPanel(() => trigger);
+  }, []);
+
+  const handleConnectionChange = useCallback((connected) => {
+    setIsConnected(connected);
   }, []);
 
   // No sessions - show empty state
@@ -92,6 +97,7 @@ export function MobileTerminalCarousel({
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
+          onConnectionChange={handleConnectionChange}
         />
       </div>
 
@@ -102,6 +108,7 @@ export function MobileTerminalCarousel({
         onOpenHistory={triggerHistoryPanel}
         viewMode={viewMode}
         onToggleViewMode={handleToggleViewMode}
+        isConnected={isConnected}
       />
     </div>
   );
