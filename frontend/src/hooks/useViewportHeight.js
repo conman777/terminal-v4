@@ -38,13 +38,20 @@ export function useViewportHeight() {
       viewport.addEventListener('scroll', updateHeight);
     }
 
-    // iOS sometimes doesn't fire events reliably - poll as backup
-    // This catches edge cases where events are missed (500ms is sufficient)
-    const pollInterval = setInterval(updateHeight, 500);
+    const ua = navigator.userAgent || '';
+    const uaMobile = /Mobi|Android|iPhone|iPad|iPod|Windows Phone|BlackBerry|Opera Mini/i.test(ua);
+    const uaDataMobile = navigator.userAgentData?.mobile === true;
+    const coarsePointer = window.matchMedia?.('(pointer: coarse)')?.matches ?? false;
+    const noHover = window.matchMedia?.('(hover: none)')?.matches ?? false;
+    const touchPoints = navigator.maxTouchPoints || 0;
+    const isTouchLike = uaMobile || uaDataMobile || coarsePointer || noHover || touchPoints > 1;
+
+    // iOS sometimes doesn't fire events reliably - poll as backup (mobile only)
+    const pollInterval = isTouchLike ? setInterval(updateHeight, 500) : null;
 
     return () => {
       window.removeEventListener('resize', updateHeight);
-      clearInterval(pollInterval);
+      if (pollInterval) clearInterval(pollInterval);
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight);
         viewport.removeEventListener('scroll', updateHeight);

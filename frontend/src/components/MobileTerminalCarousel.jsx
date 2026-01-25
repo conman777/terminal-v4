@@ -47,7 +47,14 @@ export function MobileTerminalCarousel({
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
   const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
-  const [viewMode, setViewMode] = useState('terminal'); // 'terminal' | 'reader'
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      const stored = localStorage.getItem('mobileTerminalViewMode');
+      return stored === 'reader' ? 'reader' : 'terminal';
+    } catch {
+      return 'terminal';
+    }
+  }); // 'terminal' | 'reader'
   const [isConnected, setIsConnected] = useState(false);
 
   const handleToggleViewMode = useCallback(() => {
@@ -65,6 +72,12 @@ export function MobileTerminalCarousel({
   const handleConnectionChange = useCallback((connected) => {
     setIsConnected(connected);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('mobileTerminalViewMode', viewMode);
+    } catch {}
+  }, [viewMode]);
 
   // No sessions - show empty state
   if (sessions.length === 0) {

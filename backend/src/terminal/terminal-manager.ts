@@ -88,6 +88,7 @@ export interface TerminalManagerOptions {
  */
 class OutputBatcher {
   private buffer: string[] = [];
+  private bufferSize = 0;
   private timer: NodeJS.Timeout | null = null;
   private readonly maxDelay: number;
   private readonly maxSize: number;
@@ -101,9 +102,9 @@ class OutputBatcher {
 
   append(data: string): void {
     this.buffer.push(data);
-    const size = this.buffer.reduce((acc, s) => acc + s.length, 0);
+    this.bufferSize += data.length;
 
-    if (size >= this.maxSize) {
+    if (this.bufferSize >= this.maxSize) {
       // Buffer full - flush immediately
       this.flush();
     } else if (!this.timer) {
@@ -120,6 +121,7 @@ class OutputBatcher {
     if (this.buffer.length > 0) {
       const combined = this.buffer.join('');
       this.buffer = [];
+      this.bufferSize = 0;
       this.sendCallback(combined);
     }
   }
@@ -517,7 +519,7 @@ export class TerminalManager {
   getSession(
     userId: string,
     id: string,
-    options: { maxHistoryChars?: number; maxHistoryEvents?: number } = {}
+    options: { maxHistoryChars?: number; maxHistoryEvents?: number; beforeTs?: number } = {}
   ): TerminalSessionSnapshot | null {
     // Check active sessions first
     const session = this.#sessions.get(id);
@@ -555,21 +557,22 @@ export class TerminalManager {
 
   #limitHistory(
     history: TerminalStreamEvent[],
-    options: { maxHistoryChars?: number; maxHistoryEvents?: number }
+    options: { maxHistoryChars?: number; maxHistoryEvents?: number; beforeTs?: number }
   ): TerminalStreamEvent[] {
-    const { maxHistoryChars, maxHistoryEvents } = options;
-    if (!maxHistoryChars && !maxHistoryEvents) {
+    const { maxHistoryChars, maxHistoryEvents, beforeTs } = options;
+    if (!maxHistoryChars && !maxHistoryEvents && !beforeTs) {
       return [...history];
     }
 
+    const endIndex = beforeTs ? this.#findHistoryEndIndex(history, beforeTs) : history.length;
     let startIndex = 0;
-    if (maxHistoryEvents && history.length > maxHistoryEvents) {
-      startIndex = history.length - maxHistoryEvents;
+    if (maxHistoryEvents && endIndex - startIndex > maxHistoryEvents) {
+      startIndex = Math.max(0, endIndex - maxHistoryEvents);
     }
 
     if (maxHistoryChars) {
       let charCount = 0;
-      for (let i = history.length - 1; i >= startIndex; i -= 1) {
+      for (let i = endIndex - 1; i >= startIndex; i -= 1) {
         charCount += history[i]?.text?.length ?? 0;
         if (charCount > maxHistoryChars) {
           startIndex = i;
@@ -578,7 +581,23 @@ export class TerminalManager {
       }
     }
 
-    return history.slice(startIndex);
+    return history.slice(startIndex, endIndex);
+  }
+
+  #findHistoryEndIndex(history: TerminalStreamEvent[], beforeTs: number): number {
+    if (!Number.isFinite(beforeTs) || beforeTs <= 0) return history.length;
+    let low = 0;
+    let high = history.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const ts = history[mid]?.ts ?? 0;
+      if (ts >= beforeTs) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
   }
 
   #handleData(session: ManagedTerminal, chunk: string) {

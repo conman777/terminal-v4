@@ -49,27 +49,125 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
   const readerSyncRef = useRef(null);
-  const INITIAL_HISTORY_EVENTS = 10000;
-  const INITIAL_HISTORY_CHARS = 5000000;
-  const HISTORY_MAX_EVENTS = 100000;
-  const HISTORY_MAX_CHARS = 20000000;
+  const HISTORY_PAGE_EVENTS_DESKTOP = 10000;
+  const HISTORY_PAGE_CHARS_DESKTOP = 5_000_000;
+  const HISTORY_MAX_EVENTS_DESKTOP = 100_000;
+  const HISTORY_MAX_CHARS_DESKTOP = 20_000_000;
+  const HISTORY_PAGE_EVENTS_MOBILE = 2000;
+  const HISTORY_PAGE_CHARS_MOBILE = 1_000_000;
+  const HISTORY_MAX_EVENTS_MOBILE = 20_000;
+  const HISTORY_MAX_CHARS_MOBILE = 5_000_000;
   const SCROLLBACK_DESKTOP = 100000;
   const SCROLLBACK_MOBILE = 10000;
   const historyStateRef = useRef({
-    maxHistoryEvents: INITIAL_HISTORY_EVENTS,
-    maxHistoryChars: INITIAL_HISTORY_CHARS,
+    pageEvents: HISTORY_PAGE_EVENTS_DESKTOP,
+    pageChars: HISTORY_PAGE_CHARS_DESKTOP,
+    maxHistoryEvents: HISTORY_MAX_EVENTS_DESKTOP,
+    maxHistoryChars: HISTORY_MAX_CHARS_DESKTOP,
     exhausted: false,
     loading: false,
     lastCount: 0,
     lastChars: 0,
-    lastLoadAt: 0
+    lastLoadAt: 0,
+    oldestTs: null
   });
+  const historyEntriesRef = useRef([]);
+  const historyTextRef = useRef('');
+  const historyCharCountRef = useRef(0);
   const historyReloadingRef = useRef(false);
   const pendingSocketDataRef = useRef([]);
   const loadMoreHistoryRef = useRef(null);
   const shouldReplayHistoryRef = useRef(true);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
+  const getHistoryConfig = useCallback(() => ({
+    pageEvents: isMobile ? HISTORY_PAGE_EVENTS_MOBILE : HISTORY_PAGE_EVENTS_DESKTOP,
+    pageChars: isMobile ? HISTORY_PAGE_CHARS_MOBILE : HISTORY_PAGE_CHARS_DESKTOP,
+    maxEvents: isMobile ? HISTORY_MAX_EVENTS_MOBILE : HISTORY_MAX_EVENTS_DESKTOP,
+    maxChars: isMobile ? HISTORY_MAX_CHARS_MOBILE : HISTORY_MAX_CHARS_DESKTOP
+  }), [isMobile]);
+
+  const applyHistoryConfig = useCallback(() => {
+    const config = getHistoryConfig();
+    historyStateRef.current.pageEvents = config.pageEvents;
+    historyStateRef.current.pageChars = config.pageChars;
+    historyStateRef.current.maxHistoryEvents = config.maxEvents;
+    historyStateRef.current.maxHistoryChars = config.maxChars;
+  }, [getHistoryConfig]);
+
+  const resetHistoryCache = useCallback(() => {
+    historyEntriesRef.current = [];
+    historyTextRef.current = '';
+    historyCharCountRef.current = 0;
+    historyStateRef.current.lastCount = 0;
+    historyStateRef.current.lastChars = 0;
+    historyStateRef.current.oldestTs = null;
+  }, []);
+
+  const updateHistoryText = useCallback((removedChars = 0) => {
+    if (removedChars > 0) {
+      historyTextRef.current = historyTextRef.current.slice(removedChars);
+      return;
+    }
+    historyTextRef.current = historyEntriesRef.current.map((entry) => entry.text).join('');
+  }, []);
+
+  const trimHistoryEntries = useCallback(() => {
+    const state = historyStateRef.current;
+    const entries = historyEntriesRef.current;
+    let removedChars = 0;
+
+    if (state.maxHistoryEvents && entries.length > state.maxHistoryEvents) {
+      const removeCount = entries.length - state.maxHistoryEvents;
+      const removed = entries.splice(0, removeCount);
+      removedChars += removed.reduce((sum, entry) => sum + (entry?.text?.length || 0), 0);
+      historyCharCountRef.current -= removedChars;
+    }
+
+    if (state.maxHistoryChars && historyCharCountRef.current > state.maxHistoryChars) {
+      while (entries.length > 1 && historyCharCountRef.current > state.maxHistoryChars) {
+        const removed = entries.shift();
+        if (!removed) break;
+        const removedLength = removed?.text?.length || 0;
+        removedChars += removedLength;
+        historyCharCountRef.current -= removedLength;
+      }
+    }
+
+    if (removedChars > 0) {
+      updateHistoryText(removedChars);
+    }
+
+    state.lastCount = entries.length;
+    state.lastChars = historyCharCountRef.current;
+    state.oldestTs = entries[0]?.ts ?? null;
+  }, [updateHistoryText]);
+
+  const setHistoryEntries = useCallback((entries) => {
+    historyEntriesRef.current = entries;
+    historyCharCountRef.current = entries.reduce((sum, entry) => sum + (entry?.text?.length || 0), 0);
+    updateHistoryText();
+    historyStateRef.current.lastCount = entries.length;
+    historyStateRef.current.lastChars = historyCharCountRef.current;
+    historyStateRef.current.oldestTs = entries[0]?.ts ?? null;
+  }, [updateHistoryText]);
+
+  const appendHistoryEntry = useCallback((entry) => {
+    if (!entry?.text) return;
+    historyEntriesRef.current.push(entry);
+    historyCharCountRef.current += entry.text.length;
+    historyTextRef.current += entry.text;
+    trimHistoryEntries();
+  }, [trimHistoryEntries]);
+
+  const prependHistoryEntries = useCallback((entries) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const prefixText = entries.map((entry) => entry.text || '').join('');
+    historyEntriesRef.current = [...entries, ...historyEntriesRef.current];
+    historyCharCountRef.current += prefixText.length;
+    historyTextRef.current = prefixText + historyTextRef.current;
+    trimHistoryEntries();
+  }, [trimHistoryEntries]);
   const triggerLoadMoreIfAtTop = useCallback(() => {
     const term = xtermRef.current;
     const loadMore = loadMoreHistoryRef.current;
@@ -530,6 +628,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [webglEnabled]);
 
   useEffect(() => {
+    applyHistoryConfig();
+    trimHistoryEntries();
+  }, [applyHistoryConfig, trimHistoryEntries]);
+
+  useEffect(() => {
     scrollModeRef.current = isScrollMode;
   }, [isScrollMode]);
 
@@ -555,18 +658,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     shouldReplayHistoryRef.current = true;
     setIsLoadingHistory(true);
     setIsLoadingMoreHistory(false);
-    historyStateRef.current = {
-      maxHistoryEvents: INITIAL_HISTORY_EVENTS,
-      maxHistoryChars: INITIAL_HISTORY_CHARS,
-      exhausted: false,
-      loading: false,
-      lastCount: 0,
-      lastChars: 0,
-      lastLoadAt: 0
-    };
+    applyHistoryConfig();
+    historyStateRef.current.exhausted = false;
+    historyStateRef.current.loading = false;
+    historyStateRef.current.lastCount = 0;
+    historyStateRef.current.lastChars = 0;
+    historyStateRef.current.lastLoadAt = 0;
+    historyStateRef.current.oldestTs = null;
+    resetHistoryCache();
     historyReloadingRef.current = false;
     pendingSocketDataRef.current = [];
-  }, [sessionId]);
+  }, [applyHistoryConfig, resetHistoryCache, sessionId]);
 
   // Register image upload trigger for external components
   useEffect(() => {
@@ -838,19 +940,86 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
       let scrollThrottleTimer = null;
+      const fetchHistoryPage = async (beforeTs) => {
+        const state = historyStateRef.current;
+        const params = new URLSearchParams();
+        params.set('historyEvents', String(state.pageEvents));
+        params.set('historyChars', String(state.pageChars));
+        if (beforeTs) {
+          params.set('beforeTs', String(beforeTs));
+        }
+        const response = await apiFetch(`/api/terminal/${sessionId}/history?${params.toString()}`);
+        if (!response.ok) return null;
+        const snapshot = await response.json();
+        return Array.isArray(snapshot?.history) ? snapshot.history : [];
+      };
+
+      const flushPendingSocketData = () => {
+        if (disposed) return;
+        const pending = pendingSocketDataRef.current;
+        pendingSocketDataRef.current = [];
+        if (pending.length === 0) return;
+        const pendingText = pending.join('');
+        const shouldAppendReader = viewModeRef.current === 'reader' || !isMobile;
+        if (viewModeRef.current === 'reader') {
+          term.write(pendingText, scheduleReaderSync);
+        } else {
+          term.write(pendingText);
+          if (shouldAppendReader) {
+            appendToReader(pendingText);
+          }
+        }
+        const now = Date.now();
+        pending.forEach((chunk) => appendHistoryEntry({ text: chunk, ts: now }));
+      };
+
+      const loadInitialHistory = async () => {
+        if (disposed) return;
+        const state = historyStateRef.current;
+        if (state.loading) return;
+        state.loading = true;
+        state.lastLoadAt = Date.now();
+        historyReloadingRef.current = true;
+        setIsLoadingHistory(true);
+
+        try {
+          const history = await fetchHistoryPage();
+          if (!history) return;
+          setHistoryEntries(history);
+          state.exhausted = history.length === 0;
+          term.reset();
+          clearReader();
+          const historyText = historyTextRef.current;
+          term.write(historyText, () => {
+            if (disposed) return;
+            if (viewModeRef.current === 'reader') {
+              syncReaderBuffer();
+            } else if (!isMobile) {
+              appendToReader(historyText);
+            }
+            historyReloadingRef.current = false;
+            flushPendingSocketData();
+            setIsLoadingHistory(false);
+          });
+          shouldReplayHistoryRef.current = false;
+        } catch {
+          // Ignore load failures; retry on next reconnect.
+        } finally {
+          state.loading = false;
+          if (historyReloadingRef.current) {
+            historyReloadingRef.current = false;
+            flushPendingSocketData();
+            setIsLoadingHistory(false);
+          }
+        }
+      };
+
       const loadMoreHistory = async () => {
         if (disposed) return;
         const state = historyStateRef.current;
-        if (state.loading || state.exhausted) return;
+        if (state.loading || state.exhausted || !state.oldestTs) return;
         const now = Date.now();
         if (now - state.lastLoadAt < 1500) return;
-
-        const nextEvents = Math.min(state.maxHistoryEvents * 2, HISTORY_MAX_EVENTS);
-        const nextChars = Math.min(state.maxHistoryChars * 2, HISTORY_MAX_CHARS);
-        if (nextEvents === state.maxHistoryEvents && nextChars === state.maxHistoryChars) {
-          state.exhausted = true;
-          return;
-        }
 
         state.loading = true;
         state.lastLoadAt = now;
@@ -858,49 +1027,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         setIsLoadingMoreHistory(true);
 
         try {
-          const response = await apiFetch(
-            `/api/terminal/${sessionId}/history?historyEvents=${nextEvents}&historyChars=${nextChars}`
-          );
-          if (!response.ok) {
-            return;
-          }
-          const snapshot = await response.json();
-          const history = Array.isArray(snapshot?.history) ? snapshot.history : [];
-          const totalChars = history.reduce((sum, entry) => sum + (entry?.text?.length || 0), 0);
-
-          if (history.length <= state.lastCount && totalChars <= state.lastChars) {
+          const previousOldest = state.oldestTs;
+          const history = await fetchHistoryPage(state.oldestTs);
+          if (!history || history.length === 0) {
             state.exhausted = true;
             return;
           }
+          prependHistoryEntries(history);
+          if (state.oldestTs === previousOldest) {
+            state.exhausted = true;
+          }
 
-          state.maxHistoryEvents = nextEvents;
-          state.maxHistoryChars = nextChars;
-          state.lastCount = history.length;
-          state.lastChars = totalChars;
-
-          const historyText = history.map((entry) => entry.text).join('');
+          const historyText = historyTextRef.current;
           term.reset();
           clearReader();
           term.write(historyText, () => {
             if (disposed) return;
             if (viewModeRef.current === 'reader') {
               syncReaderBuffer();
-            } else {
+            } else if (!isMobile) {
               appendToReader(historyText);
             }
             term.scrollToTop();
             historyReloadingRef.current = false;
-            const pending = pendingSocketDataRef.current;
-            pendingSocketDataRef.current = [];
-            if (pending.length > 0) {
-              const pendingText = pending.join('');
-              if (viewModeRef.current === 'reader') {
-                term.write(pendingText, scheduleReaderSync);
-              } else {
-                term.write(pendingText);
-                appendToReader(pendingText);
-              }
-            }
+            flushPendingSocketData();
           });
         } catch {
           // Ignore load failures; retry on next scroll-to-top.
@@ -908,17 +1058,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           state.loading = false;
           if (historyReloadingRef.current) {
             historyReloadingRef.current = false;
-            const pending = pendingSocketDataRef.current;
-            pendingSocketDataRef.current = [];
-            if (pending.length > 0 && !disposed) {
-              const pendingText = pending.join('');
-              if (viewModeRef.current === 'reader') {
-                term.write(pendingText, scheduleReaderSync);
-              } else {
-                term.write(pendingText);
-                appendToReader(pendingText);
-              }
-            }
+            flushPendingSocketData();
           }
           setIsLoadingMoreHistory(false);
         }
@@ -986,16 +1126,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       window.addEventListener('focus', handleFocus);
       document.addEventListener('visibilitychange', handleVisibility);
 
-      const buildSocketUrl = (requestHistory) => {
+      const buildSocketUrl = () => {
         const token = getAccessToken();
         const base = import.meta.env.VITE_API_URL || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
         if (token) url.searchParams.set('token', token);
-        if (requestHistory) {
-          url.searchParams.set('historyChars', String(INITIAL_HISTORY_CHARS));
-          url.searchParams.set('historyEvents', String(INITIAL_HISTORY_EVENTS));
-        }
-        url.searchParams.set('history', requestHistory ? '1' : '0');
+        url.searchParams.set('history', '0');
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
         return url.toString();
       };
@@ -1040,7 +1176,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const existing = socketRef.current;
         if (existing) existing.close();
 
-        const requestHistory = shouldReplayHistoryRef.current;
+        const shouldLoadHistory = shouldReplayHistoryRef.current;
         let socket = null;
         let hadConnectionError = false;
         let shouldReconnect = true;
@@ -1081,7 +1217,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             return;
           }
 
-          socket = new WebSocket(buildSocketUrl(requestHistory));
+          socket = new WebSocket(buildSocketUrl());
           socket.binaryType = 'arraybuffer';
           socketRef.current = socket;
           if (connectTimeout) clearTimeout(connectTimeout);
@@ -1108,9 +1244,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             resetUserInput();
             onConnectionChange?.(true);
             lastServerPingAt = Date.now();
-            if (requestHistory) {
-              shouldReplayHistoryRef.current = false;
-            }
             if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(() => {
               if (socket.readyState !== WebSocket.OPEN) return;
@@ -1119,26 +1252,89 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 socket.close(4000, 'Heartbeat timeout');
               }
             }, HEARTBEAT_INTERVAL);
-            if (hadConnectionError && requestHistory) {
+            if (hadConnectionError && shouldLoadHistory) {
               hadConnectionError = false;
               term.reset();
               clearReader();
             }
             skipUrlTimeout = setTimeout(() => {
               skipUrlDetection = false;
-              setIsLoadingHistory(false);
+              if (!shouldLoadHistory) {
+                setIsLoadingHistory(false);
+              }
             }, 500);
+            if (shouldLoadHistory) {
+              void loadInitialHistory();
+            }
           };
 
+          const socketDecoder = new TextDecoder();
           const decodeSocketData = async (payload) => {
             if (payload instanceof ArrayBuffer) {
-              const decoder = new TextDecoder();
-              return decoder.decode(payload);
+              return socketDecoder.decode(payload);
             }
             if (payload instanceof Blob) {
               return payload.text();
             }
             return payload;
+          };
+
+          let pendingWrite = '';
+          let pendingWriteFrame = null;
+          const flushPendingWrites = () => {
+            if (disposed) return;
+            pendingWriteFrame = null;
+            if (!pendingWrite) return;
+
+            const data = pendingWrite;
+            pendingWrite = '';
+
+            if (historyReloadingRef.current) {
+              pendingSocketDataRef.current.push(data);
+              return;
+            }
+
+            const buffer = term.buffer?.active;
+            const baseY = buffer?.baseY || 0;
+            const viewportYBefore = buffer?.viewportY ?? 0;
+            const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
+
+            appendHistoryEntry({ text: data, ts: Date.now() });
+
+            if (viewModeRef.current === 'reader') {
+              term.write(data, scheduleReaderSync);
+            } else {
+              term.write(data);
+              if (!isMobile) {
+                appendToReader(data);
+              }
+            }
+
+            if (!wasAtBottom) {
+              const newBuffer = term.buffer?.active;
+              const viewportYAfter = newBuffer?.viewportY ?? 0;
+              const delta = viewportYBefore - viewportYAfter;
+              if (delta !== 0) term.scrollLines(delta);
+            }
+
+            if (!skipUrlDetection) {
+              resetIdleTimer(isScrollingRef.current);
+            }
+
+            if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
+              const url = extractPreviewUrl(data);
+              if (url && !detectedUrlsRef.current.has(url)) {
+                detectedUrlsRef.current.add(url);
+                onUrlDetected(url);
+              }
+            }
+          };
+
+          const enqueueTerminalWrite = (data) => {
+            if (!data) return;
+            pendingWrite += data;
+            if (pendingWriteFrame) return;
+            pendingWriteFrame = requestAnimationFrame(flushPendingWrites);
           };
 
           const processMessageQueue = async () => {
@@ -1189,41 +1385,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 } catch { /* Not valid JSON */ }
               }
 
-              const buffer = term.buffer?.active;
-              const baseY = buffer?.baseY || 0;
-              const viewportYBefore = buffer?.viewportY ?? 0;
-              const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
-
               if (historyReloadingRef.current) {
                 pendingSocketDataRef.current.push(data);
                 continue;
               }
 
-              if (viewModeRef.current === 'reader') {
-                term.write(data, scheduleReaderSync);
-              } else {
-                term.write(data);
-                appendToReader(data);
-              }
-
-              if (!wasAtBottom) {
-                const newBuffer = term.buffer?.active;
-                const viewportYAfter = newBuffer?.viewportY ?? 0;
-                const delta = viewportYBefore - viewportYAfter;
-                if (delta !== 0) term.scrollLines(delta);
-              }
-
-              if (!skipUrlDetection) {
-                resetIdleTimer(isScrollingRef.current);
-              }
-
-              if (!skipUrlDetection && onUrlDetected && isServerReady(data)) {
-                const url = extractPreviewUrl(data);
-                if (url && !detectedUrlsRef.current.has(url)) {
-                  detectedUrlsRef.current.add(url);
-                  onUrlDetected(url);
-                }
-              }
+              enqueueTerminalWrite(data);
             }
 
             processingQueue = false;

@@ -14,9 +14,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     const query = (request.query || {}) as Record<string, string | undefined>;
     const historyChars = Number.parseInt(String(query.historyChars || ''), 10);
     const historyEvents = Number.parseInt(String(query.historyEvents || ''), 10);
+    const beforeTs = Number.parseInt(String(query.beforeTs || ''), 10);
 
     const hasQueryChars = Number.isFinite(historyChars) && historyChars > 0;
     const hasQueryEvents = Number.isFinite(historyEvents) && historyEvents > 0;
+    const hasBeforeTs = Number.isFinite(beforeTs) && beforeTs > 0;
     let maxHistoryChars = hasQueryChars ? historyChars : undefined;
     let maxHistoryEvents = hasQueryEvents ? historyEvents : undefined;
 
@@ -33,7 +35,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
 
     return {
       maxHistoryChars,
-      maxHistoryEvents
+      maxHistoryEvents,
+      beforeTs: hasBeforeTs ? beforeTs : undefined
     };
   };
 

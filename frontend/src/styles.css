@@ -1058,9 +1058,10 @@ button {
   border: none;
   outline: none;
   color: transparent;
-  caret-color: var(--cursor-bg, #fff);
+  caret-color: transparent;
   font-size: 16px; /* Prevents iOS zoom */
   z-index: 100;
+  appearance: none;
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
 }
