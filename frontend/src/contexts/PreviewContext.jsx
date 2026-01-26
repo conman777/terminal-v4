@@ -3,12 +3,33 @@ import { apiFetch } from '../utils/api';
 
 const PreviewContext = createContext(null);
 const PREVIEW_URL_KEY = 'terminal_preview_url';
+const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
+const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 
 export function PreviewProvider({ children }) {
+  function sanitizePreviewUrl(value) {
+    if (!value || typeof value !== 'string') return null;
+    try {
+      const parsed = new URL(value, window.location.origin);
+      const isPreviewPath = parsed.pathname.startsWith('/preview/');
+      const isApiPreview = parsed.pathname.startsWith('/api/preview');
+      const isSameOrigin = parsed.origin === window.location.origin;
+      if (isSameOrigin && !isPreviewPath && !isApiPreview) {
+        return null;
+      }
+      if (parsed.port === '3020' && !isPreviewPath && !isApiPreview) {
+        return null;
+      }
+    } catch {
+      return value.trim() || null;
+    }
+    return value.trim() || null;
+  }
+
   // Initialize from localStorage for immediate display
   const initialPreviewUrl = (() => {
     try {
-      return localStorage.getItem(PREVIEW_URL_KEY) || null;
+      return sanitizePreviewUrl(localStorage.getItem(PREVIEW_URL_KEY)) || null;
     } catch {
       return null;
     }
@@ -26,13 +47,13 @@ export function PreviewProvider({ children }) {
   }, [previewUrl]);
 
   const setPreviewUrlWithSource = useCallback((nextUrl, source) => {
-    const normalized = nextUrl || null;
+    const normalized = sanitizePreviewUrl(nextUrl) || null;
     const current = previewUrlRef.current || null;
     if (normalized === current) return;
     if (source === 'auto' && previewUrlSourceRef.current === 'user' && current) {
       return;
     }
-    previewUrlSourceRef.current = source;
+    previewUrlSourceRef.current = normalized ? source : 'auto';
     setPreviewUrl(normalized);
   }, []);
 
@@ -46,11 +67,21 @@ export function PreviewProvider({ children }) {
           const hasLocal = !!previewUrlRef.current;
           // Prefer localStorage if it exists; use server only as a fallback.
           if (data.previewUrl && !hasLocal) {
+            const sanitized = sanitizePreviewUrl(data.previewUrl);
+            if (!sanitized) {
+              setPreviewUrl(null);
+              lastSavedUrlRef.current = null;
+              previewUrlSourceRef.current = 'auto';
+              try {
+                localStorage.removeItem(PREVIEW_URL_KEY);
+              } catch {}
+              return;
+            }
             previewUrlSourceRef.current = 'user';
-            setPreviewUrl(data.previewUrl);
-            lastSavedUrlRef.current = data.previewUrl;
+            setPreviewUrl(sanitized);
+            lastSavedUrlRef.current = sanitized;
             try {
-              localStorage.setItem(PREVIEW_URL_KEY, data.previewUrl);
+              localStorage.setItem(PREVIEW_URL_KEY, sanitized);
             } catch {}
           } else if (!data.previewUrl && !hasLocal) {
             setPreviewUrl(null);
@@ -69,6 +100,30 @@ export function PreviewProvider({ children }) {
       }
     };
     fetchSettings();
+  }, []);
+
+  // Fetch preview proxy configuration (subdomain base) for URL generation
+  useEffect(() => {
+    const fetchPreviewConfig = async () => {
+      try {
+        const response = await apiFetch('/api/system/preview-config');
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data?.subdomainBase) {
+          try {
+            localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, data.subdomainBase);
+          } catch {}
+        }
+        if (Array.isArray(data?.subdomainBases)) {
+          try {
+            localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(data.subdomainBases));
+          } catch {}
+        }
+      } catch {
+        // Ignore config fetch errors; default behavior applies
+      }
+    };
+    fetchPreviewConfig();
   }, []);
 
   // Persist previewUrl to localStorage and server (debounced)

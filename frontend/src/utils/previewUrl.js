@@ -1,5 +1,33 @@
 import { getAccessToken } from './auth';
 
+const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
+const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
+
+function getPreviewSubdomainBase() {
+  if (typeof window === 'undefined') return 'localhost';
+  try {
+    const stored = localStorage.getItem(PREVIEW_SUBDOMAIN_BASE_KEY);
+    if (stored) return stored;
+    const basesRaw = localStorage.getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
+    if (basesRaw) {
+      const bases = JSON.parse(basesRaw);
+      if (Array.isArray(bases) && bases.length > 0) {
+        return bases[0];
+      }
+    }
+  } catch {}
+  return 'localhost';
+}
+
+function getEffectiveSubdomainBase() {
+  if (typeof window === 'undefined') return getPreviewSubdomainBase();
+  const uiHost = window.location.hostname || '';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost)) {
+    return `${uiHost}.nip.io`;
+  }
+  return getPreviewSubdomainBase();
+}
+
 /**
  * Add auth token to URL as query parameter
  */
@@ -25,10 +53,24 @@ export function withAuthToken(url) {
  */
 export function toPreviewUrl(inputUrl) {
   if (!inputUrl) return null;
+  let normalizedInput = inputUrl.trim();
+
+  // Add http:// for host:port inputs like localhost:3000
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(normalizedInput)) {
+    const hostPortMatch = /^[^/\s]+:\d+(?:\/|\?|#|$)/.test(normalizedInput);
+    if (hostPortMatch) {
+      normalizedInput = `http://${normalizedInput}`;
+    }
+  }
+
+  // Keep preview path URLs intact
+  if (normalizedInput.startsWith('/preview/') || normalizedInput.startsWith('/api/preview')) {
+    return normalizedInput;
+  }
 
   // Handle file:// URLs
-  if (inputUrl.startsWith('file:///')) {
-    const filePath = decodeURIComponent(inputUrl.replace('file:///', ''));
+  if (normalizedInput.startsWith('file:///')) {
+    const filePath = decodeURIComponent(normalizedInput.replace('file:///', ''));
     const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
     const directory = filePath.substring(0, lastSlash);
     const filename = filePath.substring(lastSlash + 1);
@@ -36,38 +78,45 @@ export function toPreviewUrl(inputUrl) {
   }
 
   // Handle Windows-style paths (C:\... or C:/...)
-  if (/^[A-Za-z]:[/\\]/.test(inputUrl)) {
-    const lastSlash = Math.max(inputUrl.lastIndexOf('/'), inputUrl.lastIndexOf('\\'));
-    const directory = inputUrl.substring(0, lastSlash);
-    const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
+  if (/^[A-Za-z]:[/\\]/.test(normalizedInput)) {
+    const lastSlash = Math.max(normalizedInput.lastIndexOf('/'), normalizedInput.lastIndexOf('\\'));
+    const directory = normalizedInput.substring(0, lastSlash);
+    const filename = normalizedInput.substring(lastSlash + 1) || 'index.html';
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
   // Handle Unix-style absolute paths
-  if (inputUrl.startsWith('/') && !inputUrl.startsWith('//')) {
-    const lastSlash = inputUrl.lastIndexOf('/');
-    const directory = inputUrl.substring(0, lastSlash) || '/';
-    const filename = inputUrl.substring(lastSlash + 1) || 'index.html';
+  if (normalizedInput.startsWith('/') && !normalizedInput.startsWith('//')) {
+    const lastSlash = normalizedInput.lastIndexOf('/');
+    const directory = normalizedInput.substring(0, lastSlash) || '/';
+    const filename = normalizedInput.substring(lastSlash + 1) || 'index.html';
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 
   // Handle localhost/local network URLs - use preview subdomain or local proxy path
   try {
-    const parsed = new URL(inputUrl);
+    const parsed = new URL(normalizedInput);
+    const uiOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    if (uiOrigin && parsed.origin === uiOrigin) {
+      return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    }
     const hostname = parsed.hostname;
-    const isLocalhost = ['localhost', '127.0.0.1', '0.0.0.0'].includes(hostname);
+    const isLoopback = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(hostname);
     const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
+    const uiProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
     const uiHost = typeof window !== 'undefined' ? window.location.hostname : '';
-    const isLocalUiHost =
-      ['localhost', '127.0.0.1', '0.0.0.0'].includes(uiHost) ||
-      /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(uiHost);
+    const uiIsLoopback = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(uiHost);
+    const uiIsIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost);
+    const canUseLocalSubdomain = uiProtocol === 'http:';
+    const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
+    const subdomainBase = getEffectiveSubdomainBase();
 
-    if ((isLocalhost || isPrivateIP) && parsed.port) {
+    if ((isLoopback || isPrivateIP) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
-      if (isLocalUiHost) {
-        return `/preview/${parsed.port}${path}`;
+      if (isLoopback && canUseLocalSubdomain && (uiIsLoopback || uiIsIp)) {
+        return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
       }
-      return `https://preview-${parsed.port}.conordart.com${path}`;
+      return `/preview/${parsed.port}${path}`;
     }
   } catch {
     // Not a valid URL, fall through
@@ -75,13 +124,13 @@ export function toPreviewUrl(inputUrl) {
 
   // External HTTP(S) URLs - route through proxy
   try {
-    const parsed = new URL(inputUrl);
+    const parsed = new URL(normalizedInput);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-      return withAuthToken(`/api/proxy-external?url=${encodeURIComponent(inputUrl)}`);
+      return withAuthToken(`/api/proxy-external?url=${encodeURIComponent(normalizedInput)}`);
     }
   } catch {
     // Not a valid URL
   }
 
-  return inputUrl;
+  return normalizedInput;
 }

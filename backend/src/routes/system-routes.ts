@@ -9,6 +9,15 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean);
+const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'conordart.com';
+const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0.0.1,::1')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean);
 
 interface StatsHistoryPoint {
   timestamp: number;
@@ -300,6 +309,20 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // Clean up on server shutdown
   app.addHook('onClose', async () => {
     stopHistoryCollection();
+  });
+
+  app.get('/api/system/preview-config', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+
+    return reply.send({
+      subdomainBase: PREVIEW_SUBDOMAIN_BASE,
+      subdomainBases: PREVIEW_SUBDOMAIN_BASES,
+      proxyHosts: PREVIEW_PROXY_HOSTS,
+      preferPathBased: true
+    });
   });
 
   // Get stats history for charts

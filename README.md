@@ -4,14 +4,20 @@ A browser-based terminal emulator that provides remote access to your system's c
 
 ## Features
 
-- 🖥️ **Full PTY Support** - Run interactive programs (Claude CLI, Python REPL, vim, etc.)
-- 🎨 **xterm.js Terminal** - Proper ANSI color rendering and terminal emulation
-- 🔄 **Multiple Sessions** - Create and manage multiple terminal sessions simultaneously
-- ❌ **Close Terminals** - Terminate any terminal session with × button
-- ⚙️ **Configurable Working Directory** - Set default starting directory for new terminals
-- 🌐 **Remote Access** - Access your terminal from any browser on your network
-- ⚡ **Real-time Streaming** - WebSocket stream for instant terminal output
-- 📱 **Responsive UI** - Works on desktop and mobile browsers
+- 🖥️ **Full PTY Support** - Run interactive programs (Claude CLI, Python REPL, vim, etc.) with optional tmux persistence
+- 🎨 **xterm.js Terminal** - Professional terminal UI with ANSI colors and WebGL acceleration
+- 🔄 **Multiple Sessions** - Create and manage unlimited terminal sessions with split-pane layouts
+- 🤖 **Claude Code Integration** - Native Claude CLI with SSE streaming and multiple sessions
+- 🔍 **Preview & DevTools** - Preview local dev servers with console, network, storage, and performance monitoring
+- 📁 **File Management** - Upload, download, rename, delete, and unzip files
+- 📊 **System Monitoring** - Real-time CPU, RAM, disk I/O stats with historical tracking
+- 🎤 **Voice Input** - AI-powered voice-to-text with Groq Whisper
+- 📱 **Mobile Optimized** - Touch gestures, mobile keybar, and responsive UI
+- 📸 **Screenshots & Recording** - Capture screenshots and record videos of preview panels
+- 📝 **Bookmarks & Notes** - Save commands and project notes
+- 🌐 **Remote Access** - Access your terminal from any browser with JWT authentication
+
+See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 
 ## Requirements
 
@@ -20,31 +26,14 @@ A browser-based terminal emulator that provides remote access to your system's c
 
 ## Quick Start
 
-1. **Install dependencies:**
-   ```bash
-   cd backend && npm install
-   cd ../frontend && npm install
-   ```
+See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 
-2. **Start the backend:**
-   ```bash
-   cd backend
-   npm run dev
-   ```
-   Backend runs on `http://localhost:3020`
-
-3. **Start the frontend:**
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-   Frontend runs on `http://localhost:5173`
-
-4. **Open your browser:**
-   - Local: `http://localhost:5173`
-   - Network: `http://<your-ip>:5173`
-
-5. **Click "New"** to create a terminal session and start typing commands!
+**TL;DR:**
+1. Install dependencies: `cd backend && npm install && cd ../frontend && npm install`
+2. Create `.env` with JWT secrets and optional API keys
+3. Start backend: `cd backend && npm run dev`
+4. Start frontend: `cd frontend && npm run dev`
+5. Open `http://localhost:5173` and create your first terminal!
 
 ## Project Structure
 
@@ -93,7 +82,7 @@ terminal-v4/
 - `JWT_SECRET` - JWT signing secret (required in production)
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
-- `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits and rewrites JS module imports for cache-busting (use with care on exposed deployments)
+- `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits (use with care on exposed deployments)
 
 ### Default Shell
 
@@ -144,10 +133,22 @@ See `docs/architecture/SYSTEM_ARCHITECTURE.md` for detailed security recommendat
 
 ## Documentation
 
-- 📖 [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) - Complete system design
+### Architecture
+- 📖 [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) - Complete system design and components
+- 🔌 [API Architecture](docs/architecture/API_ARCHITECTURE.md) - API endpoints and patterns
+- 🗄️ [Database Schema](docs/architecture/DATABASE_SCHEMA.md) - Data storage structure
+
+### Development
 - 🛠️ [Development Setup](docs/development/SETUP.md) - Local development guide
 - 🧪 [Testing Guide](docs/development/TESTING_GUIDE.md) - Running and writing tests
+
+### Features & Usage
+- ⭐ [Features Catalog](docs/FEATURES.md) - Comprehensive feature list
+- ⌨️ [Keyboard Shortcuts](docs/KEYBOARD_SHORTCUTS.md) - Shortcuts and gestures reference
 - 📋 [CLAUDE.md](CLAUDE.md) - Universal best practices guide
+
+### Troubleshooting
+- 🔧 [Common Issues](docs/troubleshooting/COMMON_ISSUES.md) - Solutions to frequent problems
 
 ## Testing
 

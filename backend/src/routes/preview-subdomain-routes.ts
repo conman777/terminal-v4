@@ -7,13 +7,65 @@ import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
 import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
 import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocket-interceptor.js';
 
-// Pattern to match preview subdomains: preview-{port}.conordart.com
-const PREVIEW_SUBDOMAIN_PATTERN = /^preview-(\d+)\.conordart\.com$/i;
+const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean);
+const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'conordart.com';
+const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0.0.1,::1')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Pattern to match preview subdomains: preview-{port}.<base>
+const PREVIEW_SUBDOMAIN_PATTERN = new RegExp(
+  `^preview-(\\d+)\\.(?:${PREVIEW_SUBDOMAIN_BASES.map(escapeRegExp).join('|')})$`,
+  'i'
+);
 const PREVIEW_PATH_PATTERN = /^\/preview\/(\d+)(\/.*)?$/;
 const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW === 'true';
 const PREVIEW_PORT_RANGE = UNRESTRICTED_PREVIEW ? { min: 1, max: 65535 } : { min: 3000, max: 9999 };
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for response buffering
 const RESPONSE_READ_TIMEOUT = 30000; // 30 second timeout for reading responses
+
+function formatHostForUrl(host: string): string {
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+function shouldRetryProxyError(message: string): boolean {
+  return message.includes('ECONNREFUSED') ||
+    message.includes('fetch failed') ||
+    message.includes('ECONNRESET') ||
+    message.includes('ETIMEDOUT') ||
+    message.includes('ENOTFOUND') ||
+    message.includes('EHOSTUNREACH');
+}
+
+async function fetchWithHostFallback(
+  port: number,
+  requestPath: string,
+  options: RequestInit
+): Promise<{ response: Response; upstreamHost: string }> {
+  let lastError: unknown = null;
+  for (const host of PREVIEW_PROXY_HOSTS) {
+    const targetUrl = `http://${formatHostForUrl(host)}:${port}${requestPath}`;
+    try {
+      const response = await fetch(targetUrl, options);
+      return { response, upstreamHost: host };
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!shouldRetryProxyError(message)) {
+        throw error;
+      }
+    }
+  }
+  throw lastError ?? new Error('Preview proxy failed');
+}
 
 // Headers to skip when forwarding
 const SKIP_HEADERS = new Set([
@@ -328,8 +380,11 @@ const PREVIEW_DEBUG_SCRIPT = `
     }
   }
 
-  // Send logs to code.{domain} for subdomains, or same-origin for path-based preview
-  const API_BASE = PREVIEW_BASE_PATH ? location.origin : location.protocol + '//code.' + MAIN_DOMAIN;
+  // Send logs to code.{domain} for subdomains, or same-origin for path-based/localhost preview
+  const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
+  const API_BASE = (PREVIEW_BASE_PATH || MAIN_IS_LOCAL)
+    ? location.origin
+    : location.protocol + '//code.' + MAIN_DOMAIN;
   const API_URL = API_BASE + '/api/preview/' + PORT + '/logs';
   const pendingLogs = [];
   let flushTimeout = null;
@@ -1001,19 +1056,28 @@ function mergeCookieHeaders(requestCookies: string, storedCookies: string): stri
     .join('; ');
 }
 
-function shouldSkipRewrite(urlValue: string): boolean {
-  return (
+function shouldSkipRewrite(urlValue: string, isPathPreview = false): boolean {
+  if (
     urlValue.startsWith('http://') ||
     urlValue.startsWith('https://') ||
     urlValue.startsWith('//') ||
     urlValue.startsWith('data:') ||
+    urlValue.includes('_cb=')
+  ) {
+    return true;
+  }
+
+  if (isPathPreview) {
+    return false;
+  }
+
+  return (
     urlValue.startsWith('/_next/') ||
     urlValue.startsWith('/@vite/') ||
     urlValue.startsWith('/@react-refresh') ||
     urlValue.startsWith('/@fs/') ||
     urlValue.startsWith('/@id/') ||
-    urlValue.startsWith('/node_modules/') ||
-    urlValue.includes('_cb=')
+    urlValue.startsWith('/node_modules/')
   );
 }
 
@@ -1032,6 +1096,13 @@ function prefixPreviewBasePath(urlValue: string, previewBasePath: string): strin
 }
 
 function addCacheBuster(urlValue: string, cacheBuster: string): string {
+  const pathOnly = urlValue.split('?')[0] || '';
+  if (pathOnly.includes('/@') || pathOnly.includes('/node_modules/')) {
+    return urlValue;
+  }
+  if (!pathOnly.startsWith('/') && !pathOnly.startsWith('./') && !pathOnly.startsWith('../') && !pathOnly.startsWith('http')) {
+    return urlValue;
+  }
   const separator = urlValue.includes('?') ? '&' : '?';
   return `${urlValue}${separator}_cb=${cacheBuster}`;
 }
@@ -1094,18 +1165,26 @@ function rewriteSrcset(
 function rewriteJsImports(
   js: string,
   cacheBuster: string,
-  rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean }
+  rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean },
+  shouldBust = true
 ): string {
   const rewriteSpecifier = (specifier: string) => {
     const normalized = rewriteUrlValue ? rewriteUrlValue(specifier) : { url: specifier, skip: shouldSkipRewrite(specifier) };
     if (normalized.skip) return specifier;
-    return addCacheBuster(normalized.url, cacheBuster);
+    return shouldBust ? addCacheBuster(normalized.url, cacheBuster) : normalized.url;
   };
 
   let rewritten = js.replace(
     /\b(import|export)\s+[^'"]*?from\s+(["'])([^"']+)\2/gi,
     (match, keyword, quote, specifier) => {
       return match.replace(specifier, rewriteSpecifier(specifier));
+    }
+  );
+
+  rewritten = rewritten.replace(
+    /\bimport\s+(["'])([^"']+)\1/gi,
+    (match, quote, specifier) => {
+      return `import ${quote}${rewriteSpecifier(specifier)}${quote}`;
     }
   );
 
@@ -1121,7 +1200,7 @@ function rewriteJsImports(
 
 function isPrivateHostname(hostname: string): boolean {
   const lower = hostname.toLowerCase();
-  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '0.0.0.0') {
+  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1') {
     return true;
   }
   return /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(lower);
@@ -1196,9 +1275,10 @@ function proxyWebSocketConnection(
   targetPath: string,
   previewHost: string
 ): void {
-  const targetUrl = `ws://localhost:${port}${targetPath}`;
   const forwardHeaders = buildWebSocketForwardHeaders(request, port, previewHost);
-  const targetWs = openWebSocket(targetUrl, request, forwardHeaders);
+  let upstreamWs: WebSocket | null = null;
+  let connected = false;
+  let connectIndex = 0;
 
   // Whitelist HMR/dev tool patterns to avoid logging noise
   const isDevToolWs =
@@ -1215,14 +1295,14 @@ function proxyWebSocketConnection(
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
       socket.close(code, reason);
     }
-    if (targetWs.readyState === WebSocket.OPEN || targetWs.readyState === WebSocket.CONNECTING) {
-      targetWs.close();
+    if (upstreamWs && (upstreamWs.readyState === WebSocket.OPEN || upstreamWs.readyState === WebSocket.CONNECTING)) {
+      upstreamWs.close();
     }
   };
 
   socket.on('message', (data: Buffer | string, isBinary: boolean) => {
-    if (targetWs.readyState === WebSocket.OPEN) {
-      targetWs.send(data, { binary: isBinary });
+    if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
+      upstreamWs.send(data, { binary: isBinary });
 
       // Log sent messages (only non-dev tools)
       if (!isDevToolWs && connectionId) {
@@ -1231,52 +1311,72 @@ function proxyWebSocketConnection(
     }
   });
 
-  targetWs.on('message', (data: Buffer | string, isBinary: boolean) => {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(data, { binary: isBinary });
+  const connectToUpstream = (host: string) => {
+    const targetUrl = `ws://${formatHostForUrl(host)}:${port}${targetPath}`;
+    const targetWs = openWebSocket(targetUrl, request, forwardHeaders);
+    upstreamWs = targetWs;
 
-      // Log received messages (only non-dev tools)
-      if (!isDevToolWs && connectionId) {
-        const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+    targetWs.on('message', (data: Buffer | string, isBinary: boolean) => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(data, { binary: isBinary });
+
+        // Log received messages (only non-dev tools)
+        if (!isDevToolWs && connectionId) {
+          const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+        }
       }
-    }
-  });
+    });
 
-  targetWs.on('open', () => {
-    // Update connection status
-    if (!isDevToolWs && connectionId) {
-    }
-  });
+    targetWs.on('open', () => {
+      connected = true;
+      // Update connection status
+      if (!isDevToolWs && connectionId) {
+      }
+    });
 
-  targetWs.on('error', (error: Error) => {
-    console.error(`Preview WS proxy error for port ${port}:`, error.message);
+    targetWs.on('error', (error: Error) => {
+      const message = error.message;
+      if (!connected && shouldRetryProxyError(message) && connectIndex < PREVIEW_PROXY_HOSTS.length) {
+        targetWs.close();
+        connectToUpstream(PREVIEW_PROXY_HOSTS[connectIndex++]);
+        return;
+      }
 
-    // Log error
-    if (!isDevToolWs && connectionId) {
-    }
+      console.error(`Preview WS proxy error for port ${port}:`, message);
 
-    closeBoth(1011, 'Preview WebSocket upstream error');
-  });
+      // Log error
+      if (!isDevToolWs && connectionId) {
+      }
 
-  targetWs.on('close', (code: number, reason: string) => {
-    // Log closure
-    if (!isDevToolWs && connectionId) {
-    }
+      closeBoth(1011, 'Preview WebSocket upstream error');
+    });
 
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.close(1000, 'Preview WebSocket upstream closed');
-    }
-  });
+    targetWs.on('close', () => {
+      // Log closure
+      if (!isDevToolWs && connectionId) {
+      }
+
+      if (connected && socket.readyState === WebSocket.OPEN) {
+        socket.close(1000, 'Preview WebSocket upstream closed');
+      }
+    });
+  };
+
+  if (PREVIEW_PROXY_HOSTS.length === 0) {
+    closeBoth(1011, 'Preview WebSocket upstream hosts missing');
+    return;
+  }
+  connectToUpstream(PREVIEW_PROXY_HOSTS[connectIndex++]);
 
   socket.on('close', () => {
-    if (targetWs.readyState === WebSocket.OPEN) {
-      targetWs.close();
+    if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
+      upstreamWs.close();
     }
   });
 
   socket.on('error', () => {
-    if (targetWs.readyState === WebSocket.OPEN) {
-      targetWs.close();
+    if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
+      upstreamWs.close();
     }
   });
 }
@@ -1301,7 +1401,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       return;
     }
 
-    const previewHost = getPreviewHost(request.headers.host) || `preview-${port}.conordart.com`;
+    const previewHost = getPreviewHost(request.headers.host) || `preview-${port}.${PREVIEW_SUBDOMAIN_BASE}`;
     proxyWebSocketConnection(socket, request, port, request.url, previewHost);
   });
 
@@ -1356,7 +1456,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
     const resolvedOriginHost = rawHost || hostHeader || previewHost || 'localhost';
     const previewOrigin = isPathPreview
       ? `${isSecureRequest(request) ? 'https' : 'http'}://${resolvedOriginHost}`
-      : `https://${previewHost || `preview-${port}.conordart.com`}`;
+      : `${isSecureRequest(request) ? 'https' : 'http'}://${previewHost || `preview-${port}.${PREVIEW_SUBDOMAIN_BASE}`}`;
 
     if (isWebSocketUpgrade(request)) {
       return;
@@ -1390,8 +1490,6 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       return reply;
     }
 
-    const targetUrl = `http://localhost:${port}${requestPath}`;
-
     try {
       // Build headers to forward
       const forwardHeaders: Record<string, string> = {};
@@ -1404,9 +1502,9 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       forwardHeaders['host'] = `localhost:${port}`;
 
       // Set X-Forwarded headers for apps that need to know the original request details
-      const originalHost = rawHost || originHost || request.headers.host || `preview-${port}.conordart.com`;
+      const originalHost = rawHost || originHost || request.headers.host || `preview-${port}.${PREVIEW_SUBDOMAIN_BASE}`;
       forwardHeaders['x-forwarded-host'] = originalHost;
-      const forwardedProto = isPathPreview ? (isSecureRequest(request) ? 'https' : 'http') : 'https';
+      const forwardedProto = isSecureRequest(request) ? 'https' : 'http';
       forwardHeaders['x-forwarded-proto'] = forwardedProto;
       if (isPathPreview) {
         const hostPort = typeof request.headers.host === 'string' && request.headers.host.includes(':')
@@ -1414,7 +1512,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           : (forwardedProto === 'https' ? '443' : '80');
         forwardHeaders['x-forwarded-port'] = hostPort;
       } else {
-        forwardHeaders['x-forwarded-port'] = '443';
+        forwardHeaders['x-forwarded-port'] = forwardedProto === 'https' ? '443' : '80';
       }
       forwardHeaders['x-forwarded-for'] = request.ip || '127.0.0.1';
 
@@ -1458,12 +1556,13 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
       // Make proxied request with timing
       const startTime = Date.now();
-      let response = await fetch(targetUrl, {
+      let responseData = await fetchWithHostFallback(port, requestPath, {
         method: request.method,
         headers: forwardHeaders,
         body,
         redirect: 'manual'
       });
+      let response = responseData.response;
 
       // Follow internal redirects when app redirects to its own base path (e.g., /preview/8080/)
       // This prevents redirect loops when apps are configured with a base path matching the preview path
@@ -1485,8 +1584,6 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         if (redirectPort !== port) break;
 
         // Follow this redirect internally - use full redirect location since app expects it
-        const redirectPath = internalRedirectMatch[2] || '/';
-        const internalUrl = `http://localhost:${port}${redirectLocation}`;
 
         // Consume the response body to avoid memory leaks
         try { await response.arrayBuffer(); } catch {}
@@ -1499,25 +1596,26 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           }
         }
 
-        response = await fetch(internalUrl, {
+        responseData = await fetchWithHostFallback(port, redirectLocation, {
           method: 'GET', // Redirects are always GET
           headers: redirectHeaders,
           redirect: 'manual'
         });
+        response = responseData.response;
         redirectCount++;
       }
 
       // Fallback: if 404 and we stripped a prefix, try with the full path
       // This handles apps configured with base path matching /preview/{port}/
       if (response.status === 404 && previewBasePath && requestPath !== request.url) {
-        const fullPathUrl = `http://localhost:${port}${previewBasePath}${requestPath}`;
         try { await response.arrayBuffer(); } catch {} // Consume body
-        response = await fetch(fullPathUrl, {
+        responseData = await fetchWithHostFallback(port, `${previewBasePath}${requestPath}`, {
           method: request.method,
           headers: forwardHeaders,
           body: request.method !== 'GET' && request.method !== 'HEAD' ? body : undefined,
           redirect: 'manual'
         });
+        response = responseData.response;
       }
 
       const duration = Date.now() - startTime;
@@ -1623,23 +1721,30 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         }
         const contentType = response.headers.get('content-type') || '';
         const isHtml = contentType.includes('text/html');
-        const isCss = contentType.includes('text/css') || requestPath.endsWith('.css') || requestPath.includes('.css?');
-        const isJs = contentType.includes('javascript') || requestPath.endsWith('.js') || requestPath.endsWith('.mjs');
-        const shouldRewrite = isHtml || isCss || (isJs && (UNRESTRICTED_PREVIEW || isPathPreview));
+        const isScriptPath = requestPath.startsWith('/@');
+        const isJs = contentType.includes('javascript') || requestPath.endsWith('.js') || requestPath.endsWith('.mjs') || isScriptPath;
+        const isCss = contentType.includes('text/css') || ((requestPath.endsWith('.css') || requestPath.includes('.css?')) && !isJs);
+        const shouldRewrite = isHtml || isCss || (isJs && isPathPreview);
+        // Avoid cache-busting JS imports to prevent duplicate module graphs (React #321).
+        const shouldBustScripts = false;
         const rewriteUrlValue = (value: string) => {
           // Check skip BEFORE normalization to catch framework paths like /_next/
-          if (shouldSkipRewrite(value)) {
+          if (shouldSkipRewrite(value, isPathPreview)) {
             return { url: value, skip: true };
           }
           let normalized = rewriteLocalAbsoluteUrl(value, port, previewOrigin, previewBasePath);
           normalized = prefixPreviewBasePath(normalized, previewBasePath);
           const isPreviewHost = normalized.startsWith(previewOrigin) ||
             (!!previewBasePath && (normalized === previewBasePath || normalized.startsWith(`${previewBasePath}/`)));
-          if (!isPreviewHost && shouldSkipRewrite(normalized)) {
+          if (!isPreviewHost && shouldSkipRewrite(normalized, isPathPreview)) {
             return { url: normalized, skip: true };
           }
           return { url: normalized, skip: false };
         };
+
+        if (isJs && !contentType.includes('javascript')) {
+          reply.header('content-type', 'text/javascript');
+        }
 
         if (!shouldRewrite) {
           // For raw piping, we need to set headers on reply.raw since reply.header() won't apply
@@ -1718,7 +1823,11 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
               if (normalized.skip) {
                 return match;
               }
-              return `${prefix}src=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+              const isScriptTag = /^<script/i.test(prefix.trim());
+              const rewritten = (!shouldBustScripts && isScriptTag)
+                ? normalized.url
+                : addCacheBuster(normalized.url, cacheBuster);
+              return `${prefix}src=${quote}${rewritten}${quote}`;
             }
           );
 
@@ -1760,7 +1869,12 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
               if (normalized.skip) {
                 return match;
               }
-              return `${prefix}href=${quote}${addCacheBuster(normalized.url, cacheBuster)}${quote}`;
+              const isModulePreload = /rel=(["'])modulepreload\1/i.test(match) ||
+                (/rel=(["'])preload\1/i.test(match) && /as=(["'])script\1/i.test(match));
+              const rewritten = (!shouldBustScripts && isModulePreload)
+                ? normalized.url
+                : addCacheBuster(normalized.url, cacheBuster);
+              return `${prefix}href=${quote}${rewritten}${quote}`;
             }
           );
 
@@ -1865,6 +1979,21 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
+          // Rewrite inline module scripts (e.g., Vite react-refresh preamble)
+          html = html.replace(
+            /<script([^>]*type=(["'])module\2[^>]*)>([\s\S]*?)<\/script>/gi,
+            (match, attrs, quote, scriptText) => {
+              if (/\bsrc=/.test(attrs)) {
+                return match;
+              }
+              if (!shouldBustScripts) {
+                return match;
+              }
+              const rewritten = rewriteJsImports(scriptText, cacheBuster, rewriteUrlValue, shouldBustScripts);
+              return `<script${attrs}>${rewritten}</script>`;
+            }
+          );
+
           // Inject debug script and inspector script at start of <head> to run before app code
           // CSS fix for backdrop-filter in iframes - forces proper stacking context
           const backdropFixCSS = `<style>
@@ -1908,8 +2037,8 @@ html, body { isolation: isolate; }
           reply.header('content-length', String(Buffer.byteLength(css)));
           reply.raw.removeHeader('content-encoding');
           reply.send(css);
-        } else if (UNRESTRICTED_PREVIEW && isJs) {
-          const js = rewriteJsImports(body.toString('utf-8'), cacheBuster, rewriteUrlValue);
+        } else if (isJs && isPathPreview) {
+          const js = rewriteJsImports(body.toString('utf-8'), cacheBuster, rewriteUrlValue, shouldBustScripts);
           reply.header('content-length', String(Buffer.byteLength(js)));
           reply.raw.removeHeader('content-encoding');
           reply.send(js);

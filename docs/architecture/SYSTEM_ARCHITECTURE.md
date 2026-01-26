@@ -2,11 +2,17 @@
 
 ## Overview
 
-Terminal v4 is a web-based terminal and development cockpit. It combines:
-- A PTY-backed terminal (xterm.js + node-pty)
+Terminal v4 is a comprehensive web-based terminal and development cockpit. It combines:
+- A PTY-backed terminal (xterm.js + node-pty) with tmux support
 - Claude Code sessions (Claude CLI via PTY)
-- Preview tooling for local dev servers and external sites
-- File management, project scanning, process control, and voice input
+- Preview tooling for local dev servers and external sites with DevTools
+- File management, project scanning, process control
+- Voice input and transcription
+- System monitoring (CPU, memory, disk I/O, processes, event loop)
+- Screenshot and recording capabilities
+- Mobile-optimized UI with touch gestures and specialized controls
+- Notes and bookmarks for command management
+- Split-pane terminal layouts with fullscreen mode
 
 The system is split into a React SPA frontend and a Fastify backend. The backend
 also serves the built frontend in production.
@@ -14,37 +20,45 @@ also serves the built frontend in production.
 ## High-Level Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│                               Browser                                  │
-│  ┌───────────────────────────────────────────────────────────────────┐ │
-│  │ Frontend (React + Vite)                                            │ │
-│  │ - Terminal UI (xterm.js)                                           │ │
-│  │ - Claude Code panel                                                │ │
-│  │ - Preview panel + logs                                             │ │
-│  │ - File manager / process manager / settings                        │ │
-│  │ - Mobile keybar + voice input                                      │ │
-│  └───────────────────────────────────────────────────────────────────┘ │
-│     HTTP + SSE + WebSocket (JWT)                                       │
-└────────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                          Backend (Fastify)                             │
-│  - Auth (JWT + refresh tokens)                                         │
-│  - Terminal Manager (node-pty + tmux optional)                         │
-│  - Claude Code Manager (Claude CLI via PTY)                            │
-│  - Preview/Proxy (preview subdomain, dev proxy, external proxy)        │
-│  - File + project services                                             │
-│  - Process manager + logs                                              │
-│  - Browser automation (Playwright)                                     │
-│  - Voice transcription (Groq API)                                      │
-└────────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-                  ┌───────────────────────────────┐
-                  │  PTY Processes + Local Ports  │
-                  │  (shell, dev servers, Claude) │
-                  └───────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                  Browser                                    │
+│  ┌────────────────────────────────────────────────────────────────────────┐ │
+│  │ Frontend (React + Vite)                                                 │ │
+│  │ - Terminal UI (xterm.js with split panes, reader view)                 │ │
+│  │ - Claude Code panel (SSE streaming)                                    │ │
+│  │ - Preview panel + DevTools (Console, Network, Storage, Performance)    │ │
+│  │ - File manager / process manager / settings                            │ │
+│  │ - Mobile UI (keybar, carousel, action bar, gesture support)            │ │
+│  │ - Bookmarks & Notes                                                    │ │
+│  │ - Voice input with waveform visualization                              │ │
+│  │ - System monitor (CPU, RAM, disk, processes)                           │ │
+│  └────────────────────────────────────────────────────────────────────────┘ │
+│     HTTP + SSE + WebSocket (JWT auth)                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             Backend (Fastify)                               │
+│  - Auth (JWT + refresh tokens + SQLite)                                    │
+│  - Terminal Manager (node-pty + tmux persistence)                          │
+│  - Claude Code Manager (Claude CLI via PTY)                                │
+│  - Preview/Proxy (subdomain routing, cache-busting, cookie management)     │
+│  - Preview DevTools (log injection, storage inspection)                    │
+│  - File + project services (upload, download, unzip, scanning)             │
+│  - Process manager + logs (port detection, repo start/stop)                │
+│  - Screenshot service (Playwright screenshots & recordings)                │
+│  - Voice transcription (Groq Whisper API)                                  │
+│  - System monitoring (CPU, RAM, disk I/O, event loop, history tracking)    │
+│  - Settings (user preferences, browser automation config)                  │
+│  - Bookmarks & Notes storage (JSON files)                                  │
+│  - System rebuild API                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                     ┌──────────────────────────────────┐
+                     │  PTY Processes + Local Ports     │
+                     │  (shell, dev servers, Claude CLI)│
+                     └──────────────────────────────────┘
 ```
 
 ## Backend Components
@@ -85,18 +99,23 @@ Key files:
 - `backend/src/claude-code/claude-code-store.ts`
 
 ### Preview + Proxy
-Supports three preview modes:
+Supports preview modes:
 1. **File preview**: `/api/preview?path=...&file=...` serves static files
    inside the project root.
-2. **Local dev servers**: `preview-{port}.conordart.com` proxies to
-   `localhost:{port}`, injects debug scripts, and maintains cookies.
+2. **Local dev servers**: subdomain previews use
+   `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}` (or `.localhost` in local dev) when
+   available. If the UI is accessed over a LAN IP/hostname, prefer a resolvable
+   base such as `preview-{port}.{ip}.nip.io` to keep the iframe pointing at the
+   server. Path-based `/preview/{port}/*` is the fallback, but some SPAs may
+   404 if they assume `/` as the base path.
 3. **External sites**: `/api/proxy-external?url=...` proxies external HTTP(S)
    content and injects a lightweight debug logger.
 
-Note: the preview subdomain domain (`conordart.com`) is hard-coded in both the
-frontend and backend. Update `frontend/src/components/PreviewPanel.jsx` and
-`backend/src/routes/preview-subdomain-routes.ts` if you deploy on a different
-domain.
+Note: preview subdomain bases can be configured via `PREVIEW_SUBDOMAIN_BASES`
+(or `PREVIEW_SUBDOMAIN_BASE`) in the backend, and upstream loopback fallback
+hosts via `PREVIEW_PROXY_HOSTS`.
+Path-based previews do not require any DNS changes, but subdomain previews
+should use a resolvable base when the UI is accessed over the network.
 
 Debug tooling:
 - Injected scripts capture console, errors, and network activity.
@@ -138,28 +157,117 @@ Key files:
 - `backend/src/browser/*`
 
 ### Settings + Transcribe
-- User settings stored in SQLite (`user_settings`), currently Groq API key.
-- `/api/transcribe` uses Groq Whisper for voice input.
+- User settings stored in SQLite (`user_settings`):
+  - Groq API key for voice transcription
+  - Preview URL preferences
+  - Terminal font size (8-32)
+  - Sidebar collapse state
+- `/api/transcribe` uses Groq Whisper for voice input with support for multiple audio formats.
+- Browser automation settings (idle timeout, max lifetime, cleanup intervals).
 
 Key files:
 - `backend/src/routes/settings-routes.ts`
 - `backend/src/routes/transcribe-routes.ts`
+- `backend/src/settings/browser-settings-service.ts`
+
+### System Monitoring & Statistics
+- Real-time system stats: CPU usage, memory, disk I/O (read/write MB/s), event loop delay.
+- Process monitoring: top processes by CPU/memory with port associations.
+- Stats history: 5-minute interval tracking stored to disk, queryable by time range (1h, 6h, 24h, 7d, 30d).
+- System rebuild API: trigger rebuild script remotely with output capture.
+
+Key files:
+- `backend/src/routes/system-routes.ts`
+- `backend/src/utils/memory-monitor.ts`
+
+### Screenshot & Recording Service
+- Playwright-based screenshot capture of preview panels.
+- Element-specific screenshots via CSS selector.
+- Video recording of preview sessions.
+- Screenshot management (list, retrieve, delete).
+
+Key files:
+- `backend/src/routes/screenshot-routes.ts`
+- `backend/src/preview/screenshot-service.ts`
+
+### Bookmarks & Notes
+- Command bookmarks: save frequently-used commands with optional cwd.
+- Notes: simple text notes for project documentation.
+- Stored as JSON files per user.
+- Execute bookmarks directly in terminal sessions.
+
+Key files:
+- `backend/src/routes/bookmark-routes.ts`
+- `backend/src/routes/note-routes.ts`
+- `backend/src/bookmarks/bookmark-store.ts`
+- `backend/src/notes/note-store.ts`
 
 ## Frontend Architecture
 
 ### State Providers
-- `AuthContext` manages login/session tokens.
-- `TerminalSessionContext` handles terminal sessions, bookmarks, projects.
-- `ClaudeCodeContext` manages Claude Code sessions and mode switching.
-- `PreviewContext` owns preview URL + PiP state.
-- `PaneLayoutContext` stores split-pane layout for terminals.
+- `AuthContext` manages login/session tokens and user info.
+- `TerminalSessionContext` handles terminal sessions, bookmarks, notes, projects, and recent folders.
+- `ClaudeCodeContext` manages Claude Code sessions and left panel mode switching.
+- `PreviewContext` owns preview URL, PiP state, and preview mode.
+- `PaneLayoutContext` stores split-pane layout, fullscreen state, and focus management.
 
 ### Key UI Components
-- `TerminalChat` integrates xterm.js and WebSocket IO.
-- `PreviewPanel` renders local/external previews and log panes.
-- `MobileTerminalCarousel` handles swipe navigation on mobile.
-- `MobileKeybar` provides a dedicated control row for mobile key input.
-- `FileManager` and `ProcessManagerModal` for file/process operations.
+
+**Terminal Components:**
+- `TerminalChat` integrates xterm.js, WebSocket IO, and WebGL rendering (optional).
+- `TerminalPane` wraps terminal with scrolling, history, and image upload support.
+- `SplitPaneContainer` manages multi-pane terminal layouts with draggable divider.
+- `SessionTabBar` displays active terminal tabs with drag-to-reorder.
+- `ReaderView` provides accessible terminal output reading with pagination.
+- `TerminalHistoryModal` shows session history with search.
+
+**Preview & DevTools:**
+- `PreviewPanel` renders local/external previews with iframe sandboxing.
+- `PreviewPip` picture-in-picture floating preview window.
+- `DevToolsPanel` with tabs:
+  - `ConsoleTab` captures console.log, errors, warnings.
+  - `NetworkTab` monitors HTTP requests, responses, timing.
+  - `StorageTab` inspects localStorage, sessionStorage, cookies.
+  - `WebSocketTab` monitors WebSocket connections and messages.
+  - `PerformanceTab` displays metrics (FCP, LCP, CLS, FID, TTFB).
+
+**Mobile UI:**
+- `MobileTerminalCarousel` swipe navigation between terminals.
+- `MobileKeybar` dedicated control row with common keys (Esc, Tab, Ctrl, arrows).
+- `MobileActionBar` quick actions (split, file manager, settings).
+- `MobileHeader` compact header with hamburger menu.
+- `MobileStatusBar` session info and stats.
+- `MobileDrawer` side navigation for mobile.
+
+**File & Process Management:**
+- `FileManager` file browser with upload, download, rename, delete, unzip.
+- `ProcessManagerModal` manages running dev servers and background processes.
+- `FolderBrowserModal` quick folder navigation with recents and pinned folders.
+
+**Settings & Configuration:**
+- `SettingsModal` user preferences (font size, theme, sidebar).
+- `ApiSettingsModal` Groq API key for voice transcription.
+- `BrowserSettingsModal` Playwright automation settings.
+
+**Utilities:**
+- `BookmarkModal` manage command bookmarks.
+- `NotesModal` manage project notes.
+- `TerminalMicButton` voice input with waveform visualization.
+- `AudioWaveform` visual feedback for voice recording.
+- `StyleEditor` customize UI colors and themes.
+
+### Custom Hooks
+- `useTerminalStream` manages WebSocket terminal I/O.
+- `useTerminalScrolling` handles terminal scroll behavior and auto-scroll.
+- `useTerminalBuffer` manages terminal output history.
+- `useVoiceInput` handles microphone recording and transcription.
+- `useKeyboardShortcuts` global keyboard shortcut system.
+- `useMobileDetect` detects mobile/tablet devices.
+- `useSwipeGesture` touch gesture detection.
+- `useIdleDetection` detects user inactivity.
+- `useFaviconFlash` notification system via favicon.
+- `useSessionActivity` tracks terminal session activity.
+- `useImageUpload` handles image paste and drag-drop.
 
 ## Key Data Flows
 
@@ -185,7 +293,8 @@ Key files:
 1. Terminal output is scanned for dev server URLs.
 2. Preview panel transforms URLs into a preview-safe URL:
    - Static files -> `/api/preview`.
-   - Local servers -> `preview-{port}.conordart.com`.
+   - Local servers -> subdomain `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}`
+     (or `.localhost` in local dev) when available; fallback to `/preview/{port}`.
    - External -> `/api/proxy-external`.
 3. Injected scripts send logs to `/api/preview/*/logs`.
 
@@ -200,11 +309,11 @@ Location: `backend/data/terminal.db` by default, overridden by
 
 ### File-Based Stores (JSON)
 Under `backend/data/users/<userId>/`:
-- `sessions/*.json` (terminal history)
+- `sessions/*.json` (terminal history with metadata)
 - `sessions-metadata.json` (lightweight session index for recovery)
-- `claude-code/*.json`
-- `bookmarks.json`
-- `notes.json`
+- `claude-code/*.json` (Claude Code session events)
+- `bookmarks.json` (command bookmarks with cwd)
+- `notes.json` (project notes)
 
 ### Preview Cookies
 Stored in `backend/data/preview-cookies.json` by default (overridable via

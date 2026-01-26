@@ -5,6 +5,7 @@ import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
 import { TerminalChat } from './TerminalChat';
 import { StyleEditor } from './StyleEditor';
+import { DevToolsPanel } from './devtools/DevToolsPanel';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -84,6 +85,10 @@ function Tooltip({ children, text, shortcut }) {
 
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
+  const getViewportHeight = useCallback(() => {
+    if (typeof window === 'undefined') return 0;
+    return window.visualViewport?.height || window.innerHeight;
+  }, []);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [inputUrl, setInputUrl] = useState(url || '');
@@ -145,9 +150,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const baseIframeSrc = useMemo(() => {
     // Prevent viewing Terminal V4 in its own preview panel (port 3020)
-    if (url && (url.includes(':3020') || url.includes('preview-3020'))) {
-      console.warn('[Preview] Cannot view Terminal V4 (port 3020) in its own preview panel');
-      return null;
+    if (url) {
+      try {
+        const parsed = new URL(url, window.location.origin);
+        const hostMatch = parsed.hostname.match(/preview-(\d+)\./);
+        const pathMatch = parsed.pathname.match(/^\/preview\/(\d+)(\/|$)/);
+        const hostPort = parsed.port ? parseInt(parsed.port, 10) : null;
+        const previewPort = hostMatch ? parseInt(hostMatch[1], 10) : (pathMatch ? parseInt(pathMatch[1], 10) : null);
+        const isLocalUiHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
+        if (previewPort === 3020 || (isLocalUiHost && hostPort === 3020 && !pathMatch && !hostMatch)) {
+          console.warn('[Preview] Cannot view Terminal V4 (port 3020) in its own preview panel');
+          return null;
+        }
+      } catch {
+        // Ignore parse failures, let toPreviewUrl handle
+      }
     }
     const result = toPreviewUrl(url);
     console.log('[Preview] URL conversion:', url, '->', result);
@@ -1149,11 +1166,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       const newHeight = mobileSplitStartHeight.current + deltaY;
 
       // Clamp height to 200px min, 70% of viewport max
-      const maxHeight = window.innerHeight * 0.7;
+      const maxHeight = getViewportHeight() * 0.7;
       const clampedHeight = Math.min(Math.max(newHeight, 200), maxHeight);
       setMobileSplitHeight(clampedHeight);
     });
-  }, [isDraggingMobileSplit]);
+  }, [getViewportHeight, isDraggingMobileSplit]);
 
   const handleMobileSplitTouchEnd = useCallback(() => {
     if (isDraggingMobileSplit) {
@@ -1300,6 +1317,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [errorLogs.length, showLogs]);
 
+  const mobileViewportHeight = getViewportHeight();
+
   // Mobile layout
   if (isMobile) {
     return (
@@ -1308,7 +1327,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         <div
           className="preview-content-mobile"
           style={mobileSplitEnabled && mobileSplitHeight > 0 ? {
-            height: `calc(100% - ${Math.min(mobileSplitHeight, window.innerHeight * 0.7)}px)`
+            height: `calc(100% - ${Math.min(mobileSplitHeight, mobileViewportHeight * 0.7)}px)`
           } : undefined}
         >
           {!iframeSrc ? (

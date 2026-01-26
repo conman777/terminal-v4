@@ -277,9 +277,9 @@ export function PerformanceTab({ port }) {
       </div>
 
       {/* Long Tasks */}
-      {latestRuntime.longTasks && latestRuntime.longTasks.length > 0 && (
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold mb-3">Long Tasks (>50ms)</h3>
+        {latestRuntime.longTasks && latestRuntime.longTasks.length > 0 && (
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-3">Long Tasks ({'>'}50ms)</h3>
           <div className="bg-white rounded-lg border border-gray-200">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 border-b">
