@@ -137,14 +137,14 @@ function AppContent() {
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
 
-  // Wrap scroll handler to prevent header collapse when keybar is open
+  // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
-    // Don't collapse header when keybar is open - user needs access to header controls
-    if (keybarOpen) {
+    // Don't collapse header when keybar is open or in preview mode - user needs access to header controls
+    if (keybarOpen || mobileView === 'preview') {
       return;
     }
     handleScrollDirection(direction);
-  }, [keybarOpen, handleScrollDirection]);
+  }, [keybarOpen, mobileView, handleScrollDirection]);
 
   // Toggle keybar and reset header collapse when opening
   const handleToggleKeybar = useCallback(() => {
@@ -177,6 +177,20 @@ function AppContent() {
   useEffect(() => {
     resetScrollDirection();
   }, [mobileView, resetScrollDirection]);
+
+  // Track focused session for recency ordering and unread state
+  useEffect(() => {
+    if (activeSessionId) {
+      setFocusedSession(activeSessionId);
+    }
+  }, [activeSessionId, setFocusedSession]);
+
+  // Auto-switch back to terminal if preview URL gets cleared while viewing preview
+  useEffect(() => {
+    if (mobileView === 'preview' && !previewUrl) {
+      setMobileView('terminal');
+    }
+  }, [mobileView, previewUrl]);
 
   // Settings loaded from server (with localStorage fallback)
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -624,6 +638,7 @@ function AppContent() {
             onViewChange={setMobileView}
             previewUrl={previewUrl}
             onNavigateToPath={handleNavigateToPath}
+            sessionActivity={sessionActivity}
           />
           <MobileKeybar
             sessionId={activeSessionId}

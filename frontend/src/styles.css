@@ -1101,6 +1101,10 @@ button {
   outline: none;
 }
 
+.terminal-chat.scroll-mode .mobile-keyboard-input {
+  pointer-events: none;
+}
+
 /* Mobile keyboard active - override xterm's inline styles (fallback) */
 .xterm-helper-textarea.mobile-keyboard-active {
   position: fixed !important;
@@ -4993,7 +4997,7 @@ button {
   --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.45);
   position: fixed;
-  top: 0;
+  top: var(--mobile-header-height, 0);
   left: 0;
   right: 0;
   bottom: 0;

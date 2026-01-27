@@ -14,7 +14,7 @@ export function useMobileDetect() {
     const width = window.innerWidth;
     const isTouchLike = isTouchLikeDevice();
     const threshold = isTouchLike ? MOBILE_MAX_WIDTH_TOUCH : MOBILE_MAX_WIDTH_NO_TOUCH;
-    return isTouchLike && width <= threshold;
+    return width <= threshold;
   };
 
   // Initialize from actual window traits to prevent layout flash

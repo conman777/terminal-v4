@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { MobileDrawer } from './MobileDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Dropdown } from './Dropdown';
 import { useLongPress } from '../hooks/useLongPress';
+import { MobileViewTabs } from './MobileViewTabs';
 
 // Separate component for mobile tab to use hooks properly
 function MobileTab({ session, isActive, onSelect, onLongPress, isRenaming, renameValue, onRenameChange, onRenameSubmit, onRenameKeyDown, inputRef }) {
@@ -63,13 +64,15 @@ export function MobileHeader({
   showFileManager,
   onToggleFileManager,
   onNavigateToPath,
-  isNavCollapsed = false
+  isNavCollapsed = false,
+  sessionActivity
 }) {
   const [showDrawer, setShowDrawer] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [renamingSessionId, setRenamingSessionId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [hasOverflow, setHasOverflow] = useState(false);
+  const [previewOpened, setPreviewOpened] = useState(false);
   const tabsRef = useRef(null);
   const headerRef = useRef(null);
   const renameInputRef = useRef(null);
@@ -182,6 +185,24 @@ export function MobileHeader({
     }
   }, [activeSessionId]);
 
+  // Track when preview is opened
+  useEffect(() => {
+    if (mobileView === 'preview' && previewUrl) {
+      setPreviewOpened(true);
+    }
+    // Reset when leaving preview mode
+    if (mobileView === 'terminal') {
+      setPreviewOpened(false);
+    }
+  }, [mobileView, previewUrl]);
+
+  // Reset preview opened state when preview URL is cleared
+  useEffect(() => {
+    if (!previewUrl) {
+      setPreviewOpened(false);
+    }
+  }, [previewUrl]);
+
   const toolsItems = [
     {
       label: 'Process Manager',
@@ -214,6 +235,16 @@ export function MobileHeader({
       onClick: onToggleFileManager
     }
   ];
+
+  // Sort sessions by most recent activity (left to right)
+  const sortedSessions = useMemo(() => {
+    return [...activeSessions].sort((a, b) => {
+      const aActivity = sessionActivity?.[a.id]?.lastActivity || new Date(a.updatedAt).getTime() || 0;
+      const bActivity = sessionActivity?.[b.id]?.lastActivity || new Date(b.updatedAt).getTime() || 0;
+      // Most recent first (descending order)
+      return bActivity - aActivity;
+    });
+  }, [activeSessions, sessionActivity]);
 
   return (
     <>
@@ -295,34 +326,42 @@ export function MobileHeader({
         {/* Second row for tabs - only in terminal mode */}
         {(mobileView === 'terminal' || mobileView === 'preview') && (
           <div className="mobile-header-tabs-row">
-            <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
-              {activeSessions.map((session) => (
-                <MobileTab
-                  key={session.id}
-                  session={session}
-                  isActive={session.id === activeSessionId}
-                  onSelect={onSelectSession}
-                  onLongPress={handleTabLongPress}
-                  isRenaming={renamingSessionId === session.id}
-                  renameValue={renameValue}
-                  onRenameChange={setRenameValue}
-                  onRenameSubmit={handleRenameSubmit}
-                  onRenameKeyDown={handleRenameKeyDown}
-                  inputRef={renameInputRef}
-                />
-              ))}
-              <button
-                type="button"
-                className="mobile-header-tab-add"
-                onClick={onCreateSession}
-                aria-label="New terminal"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
+            {previewUrl && previewOpened ? (
+              <MobileViewTabs
+                mobileView={mobileView}
+                onViewChange={onViewChange}
+                previewUrl={previewUrl}
+              />
+            ) : (
+              <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
+                {sortedSessions.map((session) => (
+                  <MobileTab
+                    key={session.id}
+                    session={session}
+                    isActive={session.id === activeSessionId}
+                    onSelect={onSelectSession}
+                    onLongPress={handleTabLongPress}
+                    isRenaming={renamingSessionId === session.id}
+                    renameValue={renameValue}
+                    onRenameChange={setRenameValue}
+                    onRenameSubmit={handleRenameSubmit}
+                    onRenameKeyDown={handleRenameKeyDown}
+                    inputRef={renameInputRef}
+                  />
+                ))}
+                <button
+                  type="button"
+                  className="mobile-header-tab-add"
+                  onClick={onCreateSession}
+                  aria-label="New terminal"
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -500,6 +539,10 @@ export function MobileHeader({
         previewUrl={previewUrl}
         inactiveSessions={inactiveSessions}
         onRestoreSession={onRestoreSession}
+        activeSessions={activeSessions}
+        activeSessionId={activeSessionId}
+        sessionActivity={sessionActivity}
+        onSelectSession={onSelectSession}
       />
 
       {tabContextMenu && (

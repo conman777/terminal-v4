@@ -106,8 +106,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   });
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState(null);
-  const [editDescription, setEditDescription] = useState('');
   const [showEditInput, setShowEditInput] = useState(false);
+  const [editDescription, setEditDescription] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
   const [showKeyboardHelp, setShowKeyboardHelp] = useState(false);
   const [hasCookies, setHasCookies] = useState(false);
@@ -586,64 +586,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, []);
 
   // Format element context for Claude and send
-  const handleEditWithClaude = useCallback((description) => {
-    if (!selectedElement || !onSendToClaudeCode) return;
-
-    // Build context string for Claude
-    const el = selectedElement;
-    const parentPath = el.parentChain
-      ? el.parentChain.map(p => p.selector).reverse().join(' > ')
-      : '';
-
-    let context = `I've selected an element in the preview that I'd like you to modify.\n\n`;
-    context += `**Selected Element:**\n`;
-    context += `- Selector: \`${el.fullSelector || el.selector}\`\n`;
-    context += `- Tag: \`<${el.tagName}>\`\n`;
-    if (el.id) context += `- ID: \`${el.id}\`\n`;
-    if (el.className) context += `- Classes: \`${el.className}\`\n`;
-    if (parentPath) context += `- Parent path: \`${parentPath}\`\n`;
-    context += `- Size: ${el.rect.width} x ${el.rect.height}px\n`;
-
-    // Add React component info if available
-    if (el.react?.componentName) {
-      context += `\n**React Component:**\n`;
-      context += `- Component: \`<${el.react.componentName}>\`\n`;
-      if (el.react.filePath) {
-        context += `- Source: \`${el.react.filePath}${el.react.lineNumber ? ':' + el.react.lineNumber : ''}\`\n`;
-      }
-      if (Object.keys(el.react.props || {}).length > 0) {
-        context += `- Props: \`${JSON.stringify(el.react.props)}\`\n`;
-      }
-    }
-
-    // Add HTML snippet
-    if (el.outerHTML) {
-      const htmlSnippet = el.outerHTML.length > 500
-        ? el.outerHTML.substring(0, 500) + '...'
-        : el.outerHTML;
-      context += `\n**HTML:**\n\`\`\`html\n${htmlSnippet}\n\`\`\`\n`;
-    }
-
-    // Add current styles
-    const styles = el.extendedStyles || el.computedStyle;
-    if (styles) {
-      const relevantStyles = Object.entries(styles)
-        .filter(([, v]) => v && v !== 'none' && v !== 'auto' && v !== 'normal')
-        .slice(0, 10)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join('; ');
-      if (relevantStyles) {
-        context += `\n**Current Styles:** \`${relevantStyles}\`\n`;
-      }
-    }
-
-    // Add user's requested change
-    context += `\n**Requested Change:**\n${description}\n`;
-    context += `\nPlease find and edit the relevant source file(s) to make this change.`;
-
-    onSendToClaudeCode(context);
-  }, [selectedElement, onSendToClaudeCode]);
-
   // Send element info to terminal for Claude to see
   const handleSendElementToTerminal = useCallback(() => {
     if (!selectedElement || !onSendToTerminal) return;
@@ -739,6 +681,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       onSendToTerminal(text);
     }
   }, [selectedElement, onSendToTerminal, browserSplitEnabled, mobileSplitEnabled, selectedTerminalSession]);
+
+  // Copy element info to clipboard
+  const handleCopyElementInfo = useCallback(async () => {
+    if (!selectedElement) return;
+
+    const el = selectedElement;
+    const parts = [`Element: ${el.selector}`];
+    if (el.rect) {
+      parts.push(`Size: ${el.rect.width}x${el.rect.height}px`);
+    }
+    if (el.className) {
+      parts.push(`Classes: ${el.className}`);
+    }
+    // HTML hint
+    let htmlHint = `<${el.tagName}`;
+    if (el.id) htmlHint += ` id="${el.id}"`;
+    if (el.className) htmlHint += ` class="${el.className}"`;
+    htmlHint += '>';
+    parts.push(`HTML: ${htmlHint}`);
+
+    const text = parts.join(' | ');
+
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      console.error('Failed to copy to clipboard', error);
+    }
+  }, [selectedElement]);
 
   // Apply styles via Claude
   const handleStyleApply = useCallback((styles) => {
@@ -1852,83 +1822,36 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               )}
             </div>
             {/* Actions - Mobile */}
-            {onSendToClaudeCode && (
-              <div className="preview-inspector-sheet-actions">
-                {showEditInput ? (
-                  <form
-                    className="preview-inspector-edit-form-mobile"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (editDescription.trim()) {
-                        handleEditWithClaude(editDescription.trim());
-                        setEditDescription('');
-                        setShowEditInput(false);
-                      }
-                    }}
+            <div className="preview-inspector-sheet-actions">
+              <div className="preview-inspector-btns-mobile">
+                <button
+                  type="button"
+                  className="preview-inspector-copy-btn-mobile"
+                  onClick={handleCopyElementInfo}
+                  title="Copy element info to clipboard"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                  Copy
+                </button>
+                {onSendToTerminal && (
+                  <button
+                    type="button"
+                    className="preview-inspector-terminal-btn-mobile"
+                    onClick={handleCopyToTerminal}
+                    title="Send element info to terminal"
                   >
-                    <input
-                      type="text"
-                      className="preview-inspector-edit-input"
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      placeholder="Describe the change..."
-                      autoFocus
-                    />
-                    <button type="submit" className="preview-inspector-edit-submit" disabled={!editDescription.trim()}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="22" y1="2" x2="11" y2="13"/>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                      </svg>
-                    </button>
-                  </form>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="preview-inspector-edit-btn-mobile"
-                      onClick={() => setShowEditInput(true)}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 20h9" />
-                        <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                      </svg>
-                      Edit
-                    </button>
-                    <div className="preview-inspector-btns-mobile">
-                      <button
-                        type="button"
-                        className={`preview-inspector-style-btn-mobile ${showStyleEditor ? 'active' : ''}`}
-                        onClick={() => setShowStyleEditor(!showStyleEditor)}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="13.5" cy="6.5" r="2.5"/>
-                          <circle cx="19" cy="17" r="2"/>
-                          <circle cx="6" cy="12" r="2.5"/>
-                          <path d="M9.5 10.5L14 6.5"/>
-                          <path d="M16 8.5l2 6"/>
-                          <path d="M8 14l5 2"/>
-                        </svg>
-                        Styles
-                      </button>
-                      {onSendToTerminal && (
-                        <button
-                          type="button"
-                          className="preview-inspector-terminal-btn-mobile"
-                          onClick={handleCopyToTerminal}
-                          title="Send element info to terminal"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="4 17 10 11 4 5" />
-                            <line x1="12" y1="19" x2="20" y2="19" />
-                          </svg>
-                          Send
-                        </button>
-                      )}
-                    </div>
-                  </>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="4 17 10 11 4 5" />
+                      <line x1="12" y1="19" x2="20" y2="19" />
+                    </svg>
+                    Send
+                  </button>
                 )}
               </div>
-            )}
+            </div>
             {/* Style Editor - Mobile */}
             {showStyleEditor && (
               <StyleEditor
@@ -2640,88 +2563,37 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </div>
             )}
           </div>
-          {/* Actions: Edit with Claude or Style Editor */}
-          {onSendToClaudeCode && (
-            <div className="preview-inspector-actions">
-              {showEditInput ? (
-                <form
-                  className="preview-inspector-edit-form"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (editDescription.trim()) {
-                      handleEditWithClaude(editDescription.trim());
-                      setEditDescription('');
-                      setShowEditInput(false);
-                    }
-                  }}
+          {/* Actions: Copy and Send to Terminal */}
+          <div className="preview-inspector-actions">
+            <div className="preview-inspector-btns">
+              <button
+                type="button"
+                className="preview-inspector-copy-btn"
+                onClick={handleCopyElementInfo}
+                title="Copy element info to clipboard"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Copy
+              </button>
+              {onSendToTerminal && (
+                <button
+                  type="button"
+                  className="preview-inspector-terminal-btn"
+                  onClick={handleCopyToTerminal}
+                  title="Send element info to terminal"
                 >
-                  <input
-                    type="text"
-                    className="preview-inspector-edit-input"
-                    value={editDescription}
-                    onChange={(e) => setEditDescription(e.target.value)}
-                    placeholder="Describe the change..."
-                    autoFocus
-                  />
-                  <button type="submit" className="preview-inspector-edit-submit" disabled={!editDescription.trim()}>
-                    Send
-                  </button>
-                  <button
-                    type="button"
-                    className="preview-inspector-edit-cancel"
-                    onClick={() => { setShowEditInput(false); setEditDescription(''); }}
-                  >
-                    {'\u00D7'}
-                  </button>
-                </form>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="preview-inspector-edit-btn"
-                    onClick={() => setShowEditInput(true)}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 20h9" />
-                      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
-                    </svg>
-                    Edit with Claude
-                  </button>
-                  <div className="preview-inspector-btns">
-                    <button
-                      type="button"
-                      className={`preview-inspector-style-btn ${showStyleEditor ? 'active' : ''}`}
-                      onClick={() => setShowStyleEditor(!showStyleEditor)}
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="13.5" cy="6.5" r="2.5"/>
-                        <circle cx="19" cy="17" r="2"/>
-                        <circle cx="6" cy="12" r="2.5"/>
-                        <path d="M9.5 10.5L14 6.5"/>
-                        <path d="M16 8.5l2 6"/>
-                        <path d="M8 14l5 2"/>
-                      </svg>
-                      Styles
-                    </button>
-                    {onSendToTerminal && (
-                      <button
-                        type="button"
-                        className="preview-inspector-terminal-btn"
-                        onClick={handleCopyToTerminal}
-                        title="Send element info to terminal"
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="4 17 10 11 4 5" />
-                          <line x1="12" y1="19" x2="20" y2="19" />
-                        </svg>
-                        Send to Terminal
-                      </button>
-                    )}
-                  </div>
-                </>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="4 17 10 11 4 5" />
+                    <line x1="12" y1="19" x2="20" y2="19" />
+                  </svg>
+                  Send to Terminal
+                </button>
               )}
             </div>
-          )}
+          </div>
           {/* Style Editor Panel */}
           {showStyleEditor && selectedElement && (
             <StyleEditor
