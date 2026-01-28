@@ -100,12 +100,104 @@ const PREVIEW_DEBUG_SCRIPT = `
   if (window.__previewDebugInjected) return;
   window.__previewDebugInjected = true;
 
+  var rawPathnameGetter = null;
+  var rawHrefGetter = null;
+  var rawOriginGetter = null;
+  var rawHostGetter = null;
+  var rawHostnameGetter = null;
+  var rawPortGetter = null;
+  try {
+    var rawLocationProto = Object.getPrototypeOf(window.location);
+    var rawPathnameDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'pathname');
+    if (rawPathnameDescriptor && rawPathnameDescriptor.get) {
+      rawPathnameGetter = rawPathnameDescriptor.get;
+    }
+    var rawHrefDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'href');
+    if (rawHrefDescriptor && rawHrefDescriptor.get) {
+      rawHrefGetter = rawHrefDescriptor.get;
+    }
+    var rawOriginDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'origin');
+    if (rawOriginDescriptor && rawOriginDescriptor.get) {
+      rawOriginGetter = rawOriginDescriptor.get;
+    }
+    var rawHostDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'host');
+    if (rawHostDescriptor && rawHostDescriptor.get) {
+      rawHostGetter = rawHostDescriptor.get;
+    }
+    var rawHostnameDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'hostname');
+    if (rawHostnameDescriptor && rawHostnameDescriptor.get) {
+      rawHostnameGetter = rawHostnameDescriptor.get;
+    }
+    var rawPortDescriptor = Object.getOwnPropertyDescriptor(rawLocationProto, 'port');
+    if (rawPortDescriptor && rawPortDescriptor.get) {
+      rawPortGetter = rawPortDescriptor.get;
+    }
+  } catch (e) {}
+
+  function getRawPathname() {
+    try {
+      if (rawPathnameGetter) {
+        return rawPathnameGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.pathname;
+  }
+
+  function getRawHref() {
+    try {
+      if (rawHrefGetter) {
+        return rawHrefGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.href;
+  }
+
+  function getRawOrigin() {
+    try {
+      if (rawOriginGetter) {
+        return rawOriginGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.origin;
+  }
+
+  function getRawHost() {
+    try {
+      if (rawHostGetter) {
+        return rawHostGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.host;
+  }
+
+  function getRawHostname() {
+    try {
+      if (rawHostnameGetter) {
+        return rawHostnameGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.hostname;
+  }
+
+  function getRawPort() {
+    try {
+      if (rawPortGetter) {
+        return rawPortGetter.call(window.location);
+      }
+    } catch (e) {}
+    return location.port;
+  }
+
+  try {
+    window.__previewGetRawPathname = getRawPathname;
+  } catch (e) {}
+
   function getPreviewContext() {
     const hostMatch = location.hostname.match(/^preview-(\\d+)\\.(.+)$/i);
     if (hostMatch) {
       return { port: hostMatch[1], mainDomain: hostMatch[2], basePath: '' };
     }
-    const pathMatch = location.pathname.match(/^\\/preview\\/(\\d+)(\\/|$)/);
+    const pathMatch = getRawPathname().match(/^\\/preview\\/(\\d+)(\\/|$)/);
     if (pathMatch) {
       return { port: pathMatch[1], mainDomain: location.host, basePath: '/preview/' + pathMatch[1] };
     }
@@ -118,8 +210,30 @@ const PREVIEW_DEBUG_SCRIPT = `
   const MAIN_DOMAIN = ctx.mainDomain;
   const PREVIEW_BASE_PATH = ctx.basePath;
   const PREVIEW_ORIGIN = location.origin;
+  const VIRTUAL_PROTOCOL = PREVIEW_ORIGIN.startsWith('https:') ? 'https:' : 'http:';
+  const VIRTUAL_ORIGIN = VIRTUAL_PROTOCOL + '//localhost:' + PORT;
   const SHOULD_NAMESPACE_STORAGE = !!PREVIEW_BASE_PATH;
   var lastReportedLocation = null;
+
+  function stripPreviewBasePath(path) {
+    if (!path) return '/';
+    if (PREVIEW_BASE_PATH && path.indexOf(PREVIEW_BASE_PATH) === 0) {
+      var stripped = path.slice(PREVIEW_BASE_PATH.length);
+      return stripped.startsWith('/') ? stripped : '/' + stripped;
+    }
+    return path;
+  }
+
+  function stripPreviewBaseFromHref(href) {
+    if (!href || !PREVIEW_BASE_PATH) return href;
+    try {
+      var parsed = new URL(href, PREVIEW_ORIGIN);
+      var rawPath = parsed.pathname || '/';
+      var strippedPath = stripPreviewBasePath(rawPath);
+      return VIRTUAL_ORIGIN + strippedPath + parsed.search + parsed.hash;
+    } catch (e) {}
+    return href;
+  }
 
   // Ensure relative links resolve under /preview/:port when path-based preview is active.
   if (PREVIEW_BASE_PATH && typeof document !== 'undefined') {
@@ -130,6 +244,70 @@ const PREVIEW_DEBUG_SCRIPT = `
         if (document.head) {
           document.head.prepend(base);
         }
+      }
+    } catch (e) {}
+  }
+
+  if (PREVIEW_BASE_PATH) {
+    try {
+      var locationProto = Object.getPrototypeOf(window.location);
+      var pathnameDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'pathname');
+      if (pathnameDescriptor && pathnameDescriptor.get && pathnameDescriptor.configurable) {
+        var originalPathnameGetter = pathnameDescriptor.get;
+        Object.defineProperty(locationProto, 'pathname', {
+          get: function() {
+            try {
+              return stripPreviewBasePath(originalPathnameGetter.call(this));
+            } catch (e) {}
+            return stripPreviewBasePath('');
+          },
+          configurable: true,
+          enumerable: pathnameDescriptor.enumerable
+        });
+      }
+
+      var originDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'origin');
+      if (originDescriptor && originDescriptor.configurable) {
+        Object.defineProperty(locationProto, 'origin', {
+          get: function() {
+            return VIRTUAL_ORIGIN;
+          },
+          configurable: true,
+          enumerable: originDescriptor.enumerable
+        });
+      }
+
+      var hostDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'host');
+      if (hostDescriptor && hostDescriptor.configurable) {
+        Object.defineProperty(locationProto, 'host', {
+          get: function() {
+            return 'localhost:' + PORT;
+          },
+          configurable: true,
+          enumerable: hostDescriptor.enumerable
+        });
+      }
+
+      var hostnameDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'hostname');
+      if (hostnameDescriptor && hostnameDescriptor.configurable) {
+        Object.defineProperty(locationProto, 'hostname', {
+          get: function() {
+            return 'localhost';
+          },
+          configurable: true,
+          enumerable: hostnameDescriptor.enumerable
+        });
+      }
+
+      var portDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'port');
+      if (portDescriptor && portDescriptor.configurable) {
+        Object.defineProperty(locationProto, 'port', {
+          get: function() {
+            return String(PORT);
+          },
+          configurable: true,
+          enumerable: portDescriptor.enumerable
+        });
       }
     } catch (e) {}
   }
@@ -228,16 +406,8 @@ const PREVIEW_DEBUG_SCRIPT = `
   }
 
   function getCanonicalLocation() {
-    var path = location.pathname;
-    if (PREVIEW_BASE_PATH && path.indexOf(PREVIEW_BASE_PATH) === 0) {
-      path = path.slice(PREVIEW_BASE_PATH.length);
-      if (!path.startsWith('/')) {
-        path = '/' + path;
-      }
-    }
-    if (!path) {
-      path = '/';
-    }
+    var path = stripPreviewBasePath(getRawPathname());
+    if (!path) path = '/';
     return 'http://localhost:' + PORT + path + location.search + location.hash;
   }
 
@@ -332,7 +502,19 @@ const PREVIEW_DEBUG_SCRIPT = `
     if (hrefDescriptor && hrefDescriptor.set && hrefDescriptor.configurable) {
       var originalHrefSetter = hrefDescriptor.set;
       Object.defineProperty(locationProto, 'href', {
-        get: hrefDescriptor.get,
+        get: function() {
+          try {
+            if (rawHrefGetter) {
+              return stripPreviewBaseFromHref(rawHrefGetter.call(this));
+            }
+          } catch (e) {}
+          try {
+            if (hrefDescriptor.get) {
+              return stripPreviewBaseFromHref(hrefDescriptor.get.call(this));
+            }
+          } catch (e) {}
+          return stripPreviewBaseFromHref('');
+        },
         set: function(url) {
           return originalHrefSetter.call(this, rewriteNavigationUrl(url));
         },
@@ -354,7 +536,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   // Path escape guard: if we're in path-based preview but URL doesn't have prefix, redirect
   if (PREVIEW_BASE_PATH) {
     try {
-      var currentPath = location.pathname + location.search + location.hash;
+      var currentPath = getRawPathname() + location.search + location.hash;
       var correctedPath = withPreviewBasePath(currentPath);
       if (correctedPath !== currentPath) {
         location.replace(PREVIEW_ORIGIN + correctedPath);
@@ -551,6 +733,9 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   function rewritePreviewUrl(rawUrl) {
     try {
+      if (typeof rawUrl === 'string' && rawUrl.startsWith('/api/preview')) {
+        return rawUrl;
+      }
       if (PREVIEW_BASE_PATH && isRootRelative(rawUrl)) {
         return PREVIEW_ORIGIN + withPreviewBasePath(rawUrl);
       }
@@ -558,6 +743,16 @@ const PREVIEW_DEBUG_SCRIPT = `
         return rawUrl;
       }
       var parsed = new URL(rawUrl, PREVIEW_ORIGIN);
+      if (parsed.pathname && parsed.pathname.startsWith('/api/preview')) {
+        return rawUrl;
+      }
+      if (PREVIEW_BASE_PATH && parsed.origin === PREVIEW_ORIGIN) {
+        var sameOriginPath = parsed.pathname || '/';
+        if (sameOriginPath.startsWith('/api/preview')) {
+          return rawUrl;
+        }
+        return PREVIEW_ORIGIN + withPreviewBasePath(sameOriginPath) + parsed.search + parsed.hash;
+      }
       var hostname = parsed.hostname.toLowerCase();
       if (!isLocalHost(hostname)) return rawUrl;
       if (parsed.port && parsed.port !== String(PORT)) return rawUrl;
@@ -948,7 +1143,8 @@ const PERFORMANCE_MONITOR_SCRIPT = `
   function getPreviewContext() {
     const hostMatch = location.hostname.match(/^preview-(\\d+)\\.(.+)$/i);
     if (hostMatch) return { port: hostMatch[1] };
-    const pathMatch = location.pathname.match(/^\\/preview\\/(\\d+)(\\/|$)/);
+    const rawPath = (window.__previewGetRawPathname && window.__previewGetRawPathname()) || location.pathname;
+    const pathMatch = rawPath.match(/^\\/preview\\/(\\d+)(\\/|$)/);
     if (pathMatch) return { port: pathMatch[1] };
     return null;
   }
