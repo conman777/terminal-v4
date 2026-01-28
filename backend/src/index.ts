@@ -74,7 +74,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   registerAuthRoutes(app);
 
   // Register preview subdomain routes early (before other routes)
-  // This handles requests to preview-{port}.conordart.com
+  // This handles requests to preview-{port}.{PREVIEW_SUBDOMAIN_BASE}
   await registerPreviewSubdomainRoutes(app);
 
   const terminalManager = options.terminalManager ?? new TerminalManager(options.terminalOptions);
@@ -122,8 +122,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // SPA fallback - serve index.html for non-API routes
   app.setNotFoundHandler((request, reply) => {
+    // API routes return proper 404 JSON
     if (request.url.startsWith('/api/')) {
       reply.code(404).send({ error: 'Not Found', message: 'API route not found' });
+      return;
+    }
+    // Static assets with hashes should NOT fallback to index.html
+    // They're immutable - if missing, they're truly missing (stale cache)
+    if (request.url.startsWith('/assets/')) {
+      reply.code(404).send({ error: 'Not Found', message: 'Asset not found - please refresh the page' });
       return;
     }
     // Set no-cache headers for SPA fallback

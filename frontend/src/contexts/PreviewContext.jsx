@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
+import { extractPortFromUrl, getActivePortsInfo } from '../utils/previewUrl';
 
 const PreviewContext = createContext(null);
 const PREVIEW_URL_KEY = 'terminal_preview_url';
@@ -41,18 +42,83 @@ export function PreviewProvider({ children }) {
   const initialFetchDoneRef = useRef(false);
   const previewUrlRef = useRef(previewUrl);
   const previewUrlSourceRef = useRef(initialPreviewUrl ? 'user' : 'auto');
+  const listeningPortsRef = useRef(new Set());
 
   useEffect(() => {
     previewUrlRef.current = previewUrl;
   }, [previewUrl]);
 
+  // Fetch active ports on mount and periodically to:
+  // 1. Validate the stored URL (clear if port is dead)
+  // 2. Keep listeningPortsRef updated for auto-detection blocking
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchAndValidate = async () => {
+      try {
+        const ports = await getActivePortsInfo();
+        if (!isMounted) return;
+
+        // Update the listening ports ref
+        const listeningSet = new Set(ports.filter(p => p.listening).map(p => p.port));
+        listeningPortsRef.current = listeningSet;
+
+        // On first load, validate the stored URL
+        const currentUrl = previewUrlRef.current;
+        if (currentUrl && previewUrlSourceRef.current === 'user') {
+          const currentPort = extractPortFromUrl(currentUrl);
+          if (currentPort && !listeningSet.has(currentPort)) {
+            // Current port is not listening - clear it to allow auto-detection
+            previewUrlSourceRef.current = 'auto';
+            setPreviewUrl(null);
+            try {
+              localStorage.removeItem(PREVIEW_URL_KEY);
+            } catch {}
+          }
+        }
+      } catch {
+        // Ignore fetch errors
+      }
+    };
+
+    fetchAndValidate();
+
+    // Refresh listening ports every 10 seconds
+    const interval = setInterval(fetchAndValidate, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
   const setPreviewUrlWithSource = useCallback((nextUrl, source) => {
     const normalized = sanitizePreviewUrl(nextUrl) || null;
     const current = previewUrlRef.current || null;
     if (normalized === current) return;
-    if (source === 'auto' && previewUrlSourceRef.current === 'user' && current) {
-      return;
+
+    // For auto-detected URLs, validate the new port is actually listening
+    if (source === 'auto' && normalized) {
+      const newPort = extractPortFromUrl(normalized);
+      const isNewPortListening = newPort && listeningPortsRef.current.has(newPort);
+      if (!isNewPortListening) {
+        return; // Don't accept auto-detected URLs for non-listening ports
+      }
     }
+
+    // Only block auto-detection if:
+    // 1. This is an auto-detected URL
+    // 2. User previously set a URL manually
+    // 3. Current URL exists
+    // 4. Current URL's port is actually listening
+    if (source === 'auto' && previewUrlSourceRef.current === 'user' && current) {
+      const currentPort = extractPortFromUrl(current);
+      const isCurrentPortListening = currentPort && listeningPortsRef.current.has(currentPort);
+      if (isCurrentPortListening) {
+        return; // Block auto-detection only if current port is alive
+      }
+      // Current port is not listening, allow auto-detection to override
+    }
+
     previewUrlSourceRef.current = normalized ? source : 'auto';
     setPreviewUrl(normalized);
   }, []);

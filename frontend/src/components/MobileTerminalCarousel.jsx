@@ -47,6 +47,12 @@ export function MobileTerminalCarousel({
     enabled: sessions.length > 1
   });
 
+  // Refresh token to force terminal reconnection
+  const [refreshToken, setRefreshToken] = useState(0);
+  const handleRefreshTerminal = useCallback(() => {
+    setRefreshToken((value) => value + 1);
+  }, []);
+
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
   const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
@@ -101,7 +107,7 @@ export function MobileTerminalCarousel({
       {/* Terminal content - swipe to change sessions */}
       <div className="carousel-content" ref={swipeRef}>
         <TerminalChat
-          key={currentSession.id}
+          key={`${currentSession.id}-${refreshToken}`}
           sessionId={currentSession.id}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}
@@ -126,6 +132,7 @@ export function MobileTerminalCarousel({
         viewMode={viewMode}
         onToggleViewMode={handleToggleViewMode}
         isConnected={isConnected}
+        onRefreshTerminal={handleRefreshTerminal}
       />
     </div>
   );

@@ -5,20 +5,30 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
 
 ## Quick Rules
 
-- If you access Terminal V4 at `http://localhost:3020`, you can preview
-  `http://localhost:<port>` directly (subdomain preview on `.localhost`).
+- If you access Terminal V4 at `http://localhost:3020`, previews use **path-based
+  routing** (`/preview/<port>/`). This is the most reliable method for local dev.
 - If you access Terminal V4 at `http://192.168.x.x:3020` or a hostname
   (`darthome.ddns.net`, `code.conordart.com`), **do not use localhost** in the
   preview URL. `localhost` would point at the browser machine, not the server.
-- For LAN/hostname access, subdomain previews must resolve back to the server.
-  Use `nip.io` so the iframe points to the same box.
+- For LAN/hostname access, subdomain previews resolve back to the server using
+  `nip.io` so the iframe points to the same box.
 
-## Recommended Preview URL (LAN/Hostname Access)
+## How Preview Routing Works
 
-If the app is running on the same machine as Terminal V4:
+### Localhost Access (Recommended for Local Dev)
+
+When accessing Terminal V4 at `http://localhost:3020`:
+
+- Enter: `http://localhost:3001` (or just select port from dropdown)
+- Terminal V4 uses path-based preview: `/preview/3001/`
+- This works reliably for all apps including SPAs
+
+### LAN/Remote Access
+
+When accessing Terminal V4 at `http://192.168.x.x:3020` or via hostname:
 
 - Enter: `http://localhost:8787`
-- Terminal V4 will rewrite to:
+- Terminal V4 rewrites to subdomain format:
   `http://preview-8787.<server-ip>.nip.io:3020/`
 
 Example (server IP `192.168.1.199`):
@@ -29,15 +39,11 @@ Example (server IP `192.168.1.199`):
 `nip.io` always resolves back to the embedded IP, so the iframe reaches the
 server no matter where the browser runs.
 
-## Path-Based Preview (Fallback)
+## Path-Based Preview
 
-You can also use:
-
-- `/preview/8787`
-- `http://192.168.1.199:3020/preview/8787`
-
-This works server-side but **SPAs may 404** if they assume `/` as the base
-path. If you see a 404 inside the iframe, prefer subdomain preview.
+Path-based preview (`/preview/<port>/`) is the default for localhost access and
+works reliably for SPAs. The proxy handles content rewriting to ensure resources
+load correctly.
 
 ## Environment Settings
 
@@ -53,22 +59,36 @@ localStorage, so the preview URL generator can pick the right host.
 
 ## Common Failure Modes
 
-1. **“Refused to connect” on preview-*.localhost**
+1. **"Refused to connect" on preview-*.localhost**
    - You are accessing the UI over a LAN IP/hostname.
    - Fix: use nip.io subdomains (see above).
 
-2. **White/blank iframe with SPA 404**
-   - Path-based preview changes the base path to `/preview/<port>/`.
-   - Fix: use subdomain preview instead of `/preview/<port>`.
+2. **White/blank iframe with ERR_CONTENT_DECODING_FAILED**
+   - Usually caused by content-encoding header mismatch in proxy.
+   - The proxy now strips `content-encoding` header since fetch() auto-decompresses.
+   - If this occurs, restart the backend: `~/terminal-v4/restart.sh`
 
 3. **React error #321 / duplicate bundle**
    - Caused by cache-busting JS module URLs.
    - Fix: do not add cache-busters to JS imports in preview rewrites.
 
+4. **Preview shows old/wrong app**
+   - The preview URL persists in localStorage.
+   - The port dropdown only shows ports that are actively listening.
+   - If a port stops listening, the preview URL is cleared on next load.
+   - Use the port dropdown (number badge) to select the correct port.
+
 ## Validation Checklist
 
+For localhost access:
+- Iframe `src` should be: `/preview/<port>/`
+
+For LAN/remote access:
 - Iframe `src` should be:
   `http://preview-<port>.<server-ip>.nip.io:3020/`
-- Iframe title/body should match the app.
+
+General:
+- Iframe content should match the running app.
+- Port dropdown should show only active/listening ports.
 - Console errors about `code.<ip>.nip.io` are log panel CORS issues and do not
   prevent rendering.

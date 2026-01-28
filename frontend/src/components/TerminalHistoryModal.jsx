@@ -3,7 +3,7 @@ import { apiGet } from '../utils/api';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 
 const HISTORY_CHARS_DESKTOP = 5_000_000;
-const HISTORY_CHARS_MOBILE = 1_000_000;
+const HISTORY_CHARS_MOBILE = 300_000;
 
 function stripAnsi(text) {
   // eslint-disable-next-line no-control-regex

@@ -2971,22 +2971,32 @@ button {
   pointer-events: none;
 }
 
+.preview-content-wrapper.terminal-left {
+  flex-direction: row-reverse;
+}
+
 .preview-iframe-section {
   display: flex;
   flex-direction: column;
   position: relative;
-  min-width: 300px;
+  min-width: 100px;
   flex: 1;
 }
 
 .preview-terminal-section {
   flex: 1;
-  min-width: 300px;
+  min-width: 100px;
   display: flex;
   flex-direction: column;
   background: #1e1e1e;
   border-left: 1px solid var(--preview-border);
   box-shadow: none;
+}
+
+/* When terminal is on the left, border should be on the right */
+.preview-content-wrapper.terminal-left .preview-terminal-section {
+  border-left: none;
+  border-right: 1px solid var(--preview-border);
 }
 
 .preview-terminal-header {
@@ -3132,24 +3142,22 @@ button {
   min-height: 0;
   position: relative;
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-/* Terminal container - let flexbox handle sizing */
-.preview-terminal-content {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 .preview-terminal-content .terminal-chat {
-  flex: 1;
-  min-height: 0;
-  /* Let terminal's built-in styles handle .xterm-container */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.preview-terminal-content .xterm-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
 }
 
 /* Mobile: disable split */
@@ -3751,6 +3759,55 @@ button {
 }
 .preview-log-debug .preview-log-level {
   color: #60a5fa;
+}
+
+/* Detailed error logs (like Chrome DevTools) */
+.preview-log-detailed {
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 8px 12px;
+}
+.preview-log-detailed .preview-log-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-top: 4px;
+}
+.preview-log-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.preview-log-location {
+  font-size: 10px;
+  color: #60a5fa;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s;
+}
+.preview-log-location:hover {
+  text-decoration-color: #60a5fa;
+}
+.preview-log-stack {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, 'Cascadia Mono', 'Segoe UI Mono', 'Roboto Mono', monospace;
+  font-size: 10px;
+  color: #9ca3af;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px;
+  border-radius: 4px;
+  margin: 4px 0 0 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.preview-log-error .preview-log-stack {
+  color: #fca5a5;
+  background: rgba(244, 63, 94, 0.1);
 }
 
 /* Logs filter dropdown */

@@ -106,6 +106,21 @@ Defaults:
 - Backend: http://localhost:3020
 - Frontend: http://localhost:5173 (proxying `/api/*` to backend)
 
+## Preview Troubleshooting (Local Dev Servers)
+
+If the preview only shows the background or a blank page:
+
+- Check the preview console/network for module scripts returning `text/html` or 404s.
+- For Vite apps, keep `base` as `/` in dev (only use `/preview/{port}/` for
+  production builds if needed).
+- Ensure the dev server runs with `NODE_ENV=development` (global `NODE_ENV=production`
+  can break React dev runtime in Vite).
+- If using `BrowserRouter`, set `basename` when `window.location.pathname`
+  starts with `/preview/{port}` so routing works inside the preview iframe.
+- The preview proxy rewrites HTML/CSS/JS and inline module scripts in
+  `backend/src/routes/preview-subdomain-routes.ts`; keep that logic in sync
+  with any framework-specific module paths (e.g., `@vite`, `@react-refresh`).
+
 ## Project Structure
 
 ```

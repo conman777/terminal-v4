@@ -237,6 +237,7 @@ export const TerminalPane = memo(function TerminalPane({
               webglEnabled={webglEnabled}
               usesTmux={currentSession?.usesTmux}
               viewMode={viewMode}
+              isPrimary={isActive}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
               onConnectionChange={handleConnectionChange}
               onCwdChange={handleCwdChange}

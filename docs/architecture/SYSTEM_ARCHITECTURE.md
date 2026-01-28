@@ -102,20 +102,21 @@ Key files:
 Supports preview modes:
 1. **File preview**: `/api/preview?path=...&file=...` serves static files
    inside the project root.
-2. **Local dev servers**: subdomain previews use
-   `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}` (or `.localhost` in local dev) when
-   available. If the UI is accessed over a LAN IP/hostname, prefer a resolvable
-   base such as `preview-{port}.{ip}.nip.io` to keep the iframe pointing at the
-   server. Path-based `/preview/{port}/*` is the fallback, but some SPAs may
-   404 if they assume `/` as the base path.
+2. **Local dev servers**: routing depends on how Terminal is accessed:
+   - **Localhost access** (`http://localhost:3020`): Uses path-based preview
+     `/preview/{port}/*` - reliable for all apps including SPAs.
+   - **LAN/remote access** (`http://192.168.x.x:3020` or hostname): Uses
+     subdomain previews `preview-{port}.{ip}.nip.io` to ensure the iframe
+     resolves back to the server.
 3. **External sites**: `/api/proxy-external?url=...` proxies external HTTP(S)
    content and injects a lightweight debug logger.
 
 Note: preview subdomain bases can be configured via `PREVIEW_SUBDOMAIN_BASES`
 (or `PREVIEW_SUBDOMAIN_BASE`) in the backend, and upstream loopback fallback
 hosts via `PREVIEW_PROXY_HOSTS`.
-Path-based previews do not require any DNS changes, but subdomain previews
-should use a resolvable base when the UI is accessed over the network.
+Path-based previews do not require any DNS changes and work reliably for SPAs.
+Subdomain previews should use a resolvable base when the UI is accessed over
+the network.
 
 Debug tooling:
 - Injected scripts capture console, errors, and network activity.
@@ -293,10 +294,12 @@ Key files:
 1. Terminal output is scanned for dev server URLs.
 2. Preview panel transforms URLs into a preview-safe URL:
    - Static files -> `/api/preview`.
-   - Local servers -> subdomain `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}`
-     (or `.localhost` in local dev) when available; fallback to `/preview/{port}`.
+   - Local servers (localhost access) -> `/preview/{port}` (path-based).
+   - Local servers (LAN/remote access) -> subdomain `preview-{port}.{ip}.nip.io`.
    - External -> `/api/proxy-external`.
 3. Injected scripts send logs to `/api/preview/*/logs`.
+4. Port dropdown only shows ports with active listeners (validated via `ss -tlnp`).
+5. Preview URL persists across sessions but clears if the port stops listening.
 
 ## Persistence and Data Storage
 

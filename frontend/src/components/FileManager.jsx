@@ -11,6 +11,8 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const [newFolderName, setNewFolderName] = useState('');
   const [uploadProgress, setUploadProgress] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [previewImage, setPreviewImage] = useState(null);
   const fileInputRef = useRef(null);
   const folderInputRef = useRef(null);
 
@@ -244,6 +246,18 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     }
   }, [buildItemPath, currentPath, loadDirectory]);
 
+  const isImage = useCallback((filename) => {
+    const ext = filename.toLowerCase().split('.').pop();
+    return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp'].includes(ext);
+  }, []);
+
+  const handlePreviewImage = useCallback((item) => {
+    const fullPath = buildItemPath(item.name);
+    const token = getAccessToken();
+    const imageUrl = `/api/files/download?path=${encodeURIComponent(fullPath)}&token=${token}`;
+    setPreviewImage({ name: item.name, url: imageUrl });
+  }, [buildItemPath]);
+
   const formatSize = (bytes) => {
     if (bytes === 0) return '-';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -294,6 +308,11 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
     }
   }, [currentPath, navigateTo]);
 
+  const filteredItems = items.filter(item => {
+    if (!searchQuery.trim()) return true;
+    return item.name.toLowerCase().includes(searchQuery.toLowerCase());
+  });
+
   if (!isOpen) return null;
 
   return (
@@ -336,6 +355,13 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
         <button onClick={handleGoToPath} title="Go to path">
           ↦
         </button>
+        <input
+          type="text"
+          placeholder="Search files..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{ marginLeft: 'auto', padding: '4px 8px', borderRadius: '4px', border: '1px solid #444', background: '#1a1a1a', color: 'white' }}
+        />
         <input
           ref={fileInputRef}
           type="file"
@@ -390,10 +416,10 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
       >
         {loading ? (
           <div className="file-manager-loading">Loading...</div>
-        ) : items.length === 0 ? (
-          <div className="file-manager-empty">Empty folder</div>
+        ) : filteredItems.length === 0 ? (
+          <div className="file-manager-empty">{searchQuery ? 'No matching files' : 'Empty folder'}</div>
         ) : (
-          items.map((item) => (
+          filteredItems.map((item) => (
             <div
               key={item.name}
               className={`file-item ${item.type}`}
@@ -406,6 +432,11 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
               <span className="file-name">{item.name}</span>
               <span className="file-size">{formatSize(item.size)}</span>
               <div className="file-actions">
+                {item.type === 'file' && isImage(item.name) && (
+                  <button onClick={(e) => { e.stopPropagation(); handlePreviewImage(item); }} title="Preview">
+                    👁
+                  </button>
+                )}
                 {item.type === 'file' && (
                   <button onClick={(e) => { e.stopPropagation(); handleDownload(item); }} title="Download">
                     ⬇
@@ -435,6 +466,84 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
           </div>
         )}
       </div>
+
+      {previewImage && (
+        <div
+          className="file-manager-image-preview-overlay"
+          onClick={() => setPreviewImage(null)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10000,
+            padding: '20px'
+          }}
+        >
+          <div style={{
+            position: 'absolute',
+            top: '20px',
+            right: '20px',
+            display: 'flex',
+            gap: '10px'
+          }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDownload({ name: previewImage.name }); }}
+              style={{
+                padding: '10px 20px',
+                fontSize: '16px',
+                background: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Download
+            </button>
+            <button
+              onClick={() => setPreviewImage(null)}
+              style={{
+                padding: '10px 20px',
+                fontSize: '16px',
+                background: '#333',
+                color: 'white',
+                border: '1px solid #555',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              Close
+            </button>
+          </div>
+          <div style={{
+            color: 'white',
+            marginBottom: '10px',
+            fontSize: '18px',
+            fontWeight: 'bold'
+          }}>
+            {previewImage.name}
+          </div>
+          <img
+            src={previewImage.url}
+            alt={previewImage.name}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '90%',
+              maxHeight: '80vh',
+              objectFit: 'contain',
+              border: '2px solid #555',
+              borderRadius: '8px'
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

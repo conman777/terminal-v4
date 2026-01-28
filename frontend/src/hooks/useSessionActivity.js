@@ -52,10 +52,20 @@ export function useSessionActivity() {
   // Set focus to a session (clears its unread state)
   const setFocusedSession = useCallback((sessionId) => {
     focusedSessionRef.current = sessionId;
-    if (sessionId) {
-      clearUnread(sessionId);
-    }
-  }, [clearUnread]);
+    if (!sessionId) return;
+
+    setActivity(prev => {
+      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0 };
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          hasUnread: false,
+          lastActivity: Date.now()
+        }
+      };
+    });
+  }, []);
 
   // Get activity state for a specific session
   const getActivity = useCallback((sessionId) => {

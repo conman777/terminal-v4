@@ -53,11 +53,13 @@ Stores per-user settings.
 | Column | Type | Notes |
 | --- | --- | --- |
 | `user_id` | TEXT | Primary key, FK -> users.id |
-| `groq_api_key` | TEXT | Stored in plaintext |
+| `groq_api_key` | TEXT | Groq API key for voice transcription |
 | `preview_url` | TEXT | Last-used preview URL |
-| `terminal_font_size` | INTEGER | Terminal font size (8-32) |
-| `sidebar_collapsed` | INTEGER | 0/1 boolean |
+| `terminal_font_size` | INTEGER | Terminal font size (8-32, default 14) |
+| `sidebar_collapsed` | INTEGER | 0/1 boolean (sidebar collapsed state) |
 | `updated_at` | TEXT | ISO timestamp |
+
+Note: Additional browser automation settings (idle timeout, max lifetime, cleanup intervals) are stored in a separate settings service file.
 
 ## File-Based Storage
 

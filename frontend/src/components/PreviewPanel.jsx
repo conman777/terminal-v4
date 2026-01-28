@@ -106,6 +106,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   });
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(false);
   const [showEditInput, setShowEditInput] = useState(false);
   const [editDescription, setEditDescription] = useState('');
   const [showStyleEditor, setShowStyleEditor] = useState(false);
@@ -127,18 +128,32 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [browserSplitPosition, setBrowserSplitPosition] = useState(() => {
     try {
       const stored = localStorage.getItem('browser_split_position_v1');
-      if (!stored) return 50;
+      if (!stored) return 60; // Default to 60% browser, 40% terminal
       const parsed = parseInt(stored, 10);
-      // Validate range (30-70%)
-      if (isNaN(parsed) || parsed < 30 || parsed > 70) return 50;
+      // Validate range (10-90%)
+      if (isNaN(parsed) || parsed < 10 || parsed > 90) return 60;
       return parsed;
     } catch {
-      return 50;
+      return 60;
+    }
+  });
+  const [terminalPosition, setTerminalPosition] = useState(() => {
+    try {
+      const stored = localStorage.getItem('browser_terminal_position_v1');
+      return stored === 'left' ? 'left' : 'right';
+    } catch {
+      return 'right';
     }
   });
   const [selectedTerminalSession, setSelectedTerminalSession] = useState(null);
+  const hasInitializedRef = useRef(false);
+  const [previewTerminalRefreshToken, setPreviewTerminalRefreshToken] = useState(0);
+  const handleRefreshPreviewTerminal = useCallback(() => {
+    setPreviewTerminalRefreshToken(v => v + 1);
+  }, []);
   const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
   const browserSplitRef = useRef(null);
+  const resizeRafRef = useRef(null);
 
   // Mobile split view state (bottom sheet overlay)
   const [mobileSplitEnabled, setMobileSplitEnabled] = useState(false);
@@ -149,10 +164,23 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileSplitRafRef = useRef(null);
 
   const baseIframeSrc = useMemo(() => {
-    // Prevent viewing Terminal V4 in its own preview panel (port 3020)
+    // Strip any existing _cb cache-buster params from the URL
+    let cleanUrl = url;
     if (url) {
       try {
         const parsed = new URL(url, window.location.origin);
+        // Remove all _cb params
+        parsed.searchParams.delete('_cb');
+        cleanUrl = parsed.toString();
+      } catch {
+        // If URL parsing fails, try regex fallback
+        cleanUrl = url.replace(/([?&])_cb=[^&]*/g, '').replace(/\?&/, '?').replace(/\?$/, '');
+      }
+    }
+    // Prevent viewing Terminal V4 in its own preview panel (port 3020)
+    if (cleanUrl) {
+      try {
+        const parsed = new URL(cleanUrl, window.location.origin);
         const hostMatch = parsed.hostname.match(/preview-(\d+)\./);
         const pathMatch = parsed.pathname.match(/^\/preview\/(\d+)(\/|$)/);
         const hostPort = parsed.port ? parseInt(parsed.port, 10) : null;
@@ -166,7 +194,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         // Ignore parse failures, let toPreviewUrl handle
       }
     }
-    const result = toPreviewUrl(url);
+    const result = toPreviewUrl(cleanUrl);
     console.log('[Preview] URL conversion:', url, '->', result);
     return result;
   }, [url]);
@@ -415,7 +443,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
       if (event.data?.type === 'preview-console') {
         const { level, message, timestamp } = event.data;
-        setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp }]);
+        setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp, type: 'console' }]);
+      } else if (event.data?.type === 'preview-error') {
+        // Capture runtime errors with full details like Chrome DevTools
+        const { message, filename, lineno, colno, stack, timestamp } = event.data;
+        setLogs(prev => [...prev.slice(-199), {
+          id: Date.now() + Math.random(),
+          level: 'error',
+          message,
+          timestamp,
+          type: 'error',
+          filename,
+          lineno,
+          colno,
+          stack
+        }]);
       } else if (event.data?.type === 'preview-element-selected') {
         setSelectedElement(event.data.element);
         setShowEditInput(true);
@@ -703,10 +745,29 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
     const text = parts.join(' | ');
 
+    let success = false;
     try {
       await navigator.clipboard.writeText(text);
+      success = true;
     } catch (error) {
-      console.error('Failed to copy to clipboard', error);
+      // Fallback for contexts where clipboard API fails
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        success = true;
+      } catch (fallbackError) {
+        console.error('Failed to copy to clipboard', error, fallbackError);
+      }
+    }
+    if (success) {
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 1500);
     }
   }, [selectedElement]);
 
@@ -1055,6 +1116,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setBrowserSplitEnabled(prev => !prev);
   }, []);
 
+  const handleToggleTerminalPosition = useCallback(() => {
+    setTerminalPosition(prev => {
+      const newPos = prev === 'right' ? 'left' : 'right';
+      try {
+        localStorage.setItem('browser_terminal_position_v1', newPos);
+      } catch {}
+      return newPos;
+    });
+  }, []);
+
   // Handle browser split drag
   useEffect(() => {
     if (!isDraggingBrowserSplit) return;
@@ -1070,8 +1141,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
         if (!browserSplitRef.current) return;
         const rect = browserSplitRef.current.getBoundingClientRect();
-        const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
-        const clamped = Math.min(Math.max(newPosition, 30), 70);
+        let newPosition = ((e.clientX - rect.left) / rect.width) * 100;
+        // If terminal is on the left, invert the position calculation
+        if (terminalPosition === 'left') {
+          newPosition = 100 - newPosition;
+        }
+        // Allow resize between 10% and 90%
+        const clamped = Math.min(Math.max(newPosition, 10), 90);
         setBrowserSplitPosition(clamped);
       });
     };
@@ -1102,7 +1178,26 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDraggingBrowserSplit]);
+  }, [isDraggingBrowserSplit, terminalPosition]);
+
+  // Nudge xterm fit when browser split changes (xterm doesn't always observe flex-basis changes)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (!browserSplitEnabled || isMobile) return;
+    if (resizeRafRef.current !== null) {
+      cancelAnimationFrame(resizeRafRef.current);
+    }
+    resizeRafRef.current = requestAnimationFrame(() => {
+      resizeRafRef.current = null;
+      window.dispatchEvent(new Event('resize'));
+    });
+    return () => {
+      if (resizeRafRef.current !== null) {
+        cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
+    };
+  }, [browserSplitEnabled, browserSplitPosition, terminalPosition, isMobile]);
 
   // Mobile split view handlers
   const handleToggleMobileSplit = useCallback(() => {
@@ -1170,29 +1265,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [isDraggingMobileSplit, handleMobileSplitTouchMove, handleMobileSplitTouchEnd]);
 
 
-  // Auto-select default terminal session
+  // Auto-select terminal session on initial load
   useEffect(() => {
+    // Wait for sessions to load
     if (!activeSessions || activeSessions.length === 0) {
-      if (selectedTerminalSession) {
-        setSelectedTerminalSession(null);
+      return;
+    }
+
+    // Initial selection - runs once when sessions first become available
+    if (!hasInitializedRef.current) {
+      const targetId = activeSessionId || activeSessions[0]?.id;
+      if (targetId) {
+        hasInitializedRef.current = true;
+        setSelectedTerminalSession(targetId);
       }
       return;
     }
 
-    // Reset if selected session no longer exists
+    // If selected session no longer exists, switch to first available
     if (selectedTerminalSession) {
       const sessionExists = activeSessions.some(s => s.id === selectedTerminalSession);
       if (!sessionExists) {
-        setSelectedTerminalSession(activeSessionId || activeSessions[0].id);
-        return;
+        const targetId = activeSessions[0]?.id;
+        if (targetId) {
+          setSelectedTerminalSession(targetId);
+        }
       }
     }
-
-    // Auto-select default if none selected
-    if (!selectedTerminalSession) {
-      setSelectedTerminalSession(activeSessionId || activeSessions[0].id);
-    }
-  }, [activeSessionId, activeSessions, selectedTerminalSession]);
+  }, [activeSessions, selectedTerminalSession]);
 
   // Keyboard shortcuts (consolidated for both mobile and desktop)
   useEffect(() => {
@@ -1415,6 +1515,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               )}
               <button
                 className="preview-mobile-terminal-close"
+                onClick={handleRefreshPreviewTerminal}
+                type="button"
+                aria-label="Reconnect terminal"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="23 4 23 10 17 10" />
+                  <path d="M20.49 15a9 9 0 1 1 2.13-9" />
+                </svg>
+              </button>
+              <button
+                className="preview-mobile-terminal-close"
                 onClick={handleToggleMobileSplit}
                 type="button"
                 aria-label="Close terminal"
@@ -1427,7 +1538,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             <div className="preview-mobile-terminal-content">
               {selectedTerminalSession ? (
                 <TerminalChat
-                  key={selectedTerminalSession}
+                  key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
                   sessionId={selectedTerminalSession}
                   keybarOpen={false}
                   viewportHeight={null}
@@ -1545,11 +1656,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {'\u00D7'}
               </button>
             </div>
-            {activePorts.length === 0 ? (
+            {activePorts.filter(p => p.listening).length === 0 ? (
               <div className="preview-port-sheet-empty">No active ports found</div>
             ) : (
               <div className="preview-port-sheet-list">
-                {activePorts.map(({ port, listening, previewed, process, cwd }) => (
+                {activePorts.filter(p => p.listening).map(({ port, process, cwd }) => (
                   <button
                     key={port}
                     type="button"
@@ -1559,8 +1670,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <span className="preview-port-sheet-number">:{port}</span>
                     {(cwd || process) && <span className="preview-port-sheet-process">{cwd || process}</span>}
                     <span className="preview-port-sheet-status">
-                      {listening && <span className="preview-port-dot listening" title="Listening" />}
-                      {previewed && <span className="preview-port-dot previewed" title="Previously viewed" />}
+                      <span className="preview-port-dot listening" title="Listening" />
                     </span>
                   </button>
                 ))}
@@ -1660,10 +1770,22 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             ) : (
               filteredLogs.map((log) => {
                 if (log.source === 'client') {
+                  // Check if this is an error with detailed info (like Chrome DevTools)
+                  const hasErrorDetails = log.type === 'error' && (log.filename || log.stack);
                   return (
-                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}`}>
+                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}${hasErrorDetails ? ' preview-log-detailed' : ''}`}>
                       <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                      <span className="preview-log-message">{log.message}</span>
+                      <div className="preview-log-content">
+                        <span className="preview-log-message">{log.message}</span>
+                        {log.filename && (
+                          <span className="preview-log-location">
+                            {log.filename}{log.lineno ? `:${log.lineno}` : ''}{log.colno ? `:${log.colno}` : ''}
+                          </span>
+                        )}
+                        {log.stack && (
+                          <pre className="preview-log-stack">{log.stack}</pre>
+                        )}
+                      </div>
                     </div>
                   );
                 } else if (log.source === 'server') {
@@ -1826,15 +1948,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <div className="preview-inspector-btns-mobile">
                 <button
                   type="button"
-                  className="preview-inspector-copy-btn-mobile"
+                  className={`preview-inspector-copy-btn-mobile${copyFeedback ? ' copied' : ''}`}
                   onClick={handleCopyElementInfo}
                   title="Copy element info to clipboard"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                  </svg>
-                  Copy
+                  {copyFeedback ? (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  )}
+                  {copyFeedback ? 'Copied!' : 'Copy'}
                 </button>
                 {onSendToTerminal && (
                   <button
@@ -1949,11 +2077,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           {showPortDropdown && (
             <div className="preview-port-dropdown">
               <div className="preview-port-dropdown-header">Active Ports</div>
-              {activePorts.length === 0 ? (
+              {activePorts.filter(p => p.listening).length === 0 ? (
                 <div className="preview-port-dropdown-empty">No active ports found</div>
               ) : (
                 <div className="preview-port-dropdown-list">
-                  {activePorts.map(({ port, listening, previewed, process, cwd }) => (
+                  {activePorts.filter(p => p.listening).map(({ port, process, cwd }) => (
                     <button
                       key={port}
                       type="button"
@@ -1966,7 +2094,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                             <span className="preview-port-status-dot" />
                             {port}
                           </span>
-                          {listening && <span className="preview-port-listening-badge">Active</span>}
+                          <span className="preview-port-listening-badge">Active</span>
                         </div>
                         {(process || cwd) && (
                           <div className="preview-port-details">
@@ -2155,7 +2283,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
       <div
         ref={browserSplitRef}
-        className={`preview-content-wrapper${isDraggingBrowserSplit ? ' dragging' : ''}`}
+        className={`preview-content-wrapper${isDraggingBrowserSplit ? ' dragging' : ''}${terminalPosition === 'left' ? ' terminal-left' : ''}`}
       >
         <div
           className="preview-iframe-section"
@@ -2277,6 +2405,29 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 )}
                 <button
                   className="preview-terminal-toggle"
+                  onClick={handleToggleTerminalPosition}
+                  title={`Move terminal to ${terminalPosition === 'right' ? 'left' : 'right'}`}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    {terminalPosition === 'right' ? (
+                      <path d="M11 19l-7-7 7-7M18 19V5" />
+                    ) : (
+                      <path d="M13 5l7 7-7 7M6 5v14" />
+                    )}
+                  </svg>
+                </button>
+                <button
+                  className="preview-terminal-toggle"
+                  onClick={handleRefreshPreviewTerminal}
+                  title="Reconnect terminal"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="23 4 23 10 17 10" />
+                    <path d="M20.49 15a9 9 0 1 1 2.13-9" />
+                  </svg>
+                </button>
+                <button
+                  className="preview-terminal-toggle"
                   onClick={handleToggleTerminalSplit}
                   title="Close terminal"
                 >
@@ -2286,7 +2437,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <div className="preview-terminal-content">
                 {selectedTerminalSession ? (
                   <TerminalChat
-                    key={selectedTerminalSession}
+                    key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
                     sessionId={selectedTerminalSession}
                     keybarOpen={false}
                     viewportHeight={null}
@@ -2388,11 +2539,23 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             ) : (
               filteredLogs.map((log) => {
                 if (log.source === 'client') {
+                  // Check if this is an error with detailed info (like Chrome DevTools)
+                  const hasErrorDetails = log.type === 'error' && (log.filename || log.stack);
                   return (
-                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}`}>
+                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}${hasErrorDetails ? ' preview-log-detailed' : ''}`}>
                       <span className="preview-log-time">{formatTime(log.timestamp)}</span>
                       <span className="preview-log-level">{log.level}</span>
-                      <span className="preview-log-message">{log.message}</span>
+                      <div className="preview-log-content">
+                        <span className="preview-log-message">{log.message}</span>
+                        {log.filename && (
+                          <span className="preview-log-location">
+                            {log.filename}{log.lineno ? `:${log.lineno}` : ''}{log.colno ? `:${log.colno}` : ''}
+                          </span>
+                        )}
+                        {log.stack && (
+                          <pre className="preview-log-stack">{log.stack}</pre>
+                        )}
+                      </div>
                     </div>
                   );
                 } else if (log.source === 'server') {
@@ -2568,15 +2731,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             <div className="preview-inspector-btns">
               <button
                 type="button"
-                className="preview-inspector-copy-btn"
+                className={`preview-inspector-copy-btn${copyFeedback ? ' copied' : ''}`}
                 onClick={handleCopyElementInfo}
                 title="Copy element info to clipboard"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                </svg>
-                Copy
+                {copyFeedback ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                )}
+                {copyFeedback ? 'Copied!' : 'Copy'}
               </button>
               {onSendToTerminal && (
                 <button

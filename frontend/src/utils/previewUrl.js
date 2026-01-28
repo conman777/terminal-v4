@@ -1,7 +1,70 @@
 import { getAccessToken } from './auth';
+import { apiFetch } from './api';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
+
+/**
+ * Extract port number from a URL string.
+ * Handles localhost URLs, preview paths, and subdomain patterns.
+ * Priority order: preview path > subdomain > URL port > localhost pattern
+ * @param {string} url - The URL to extract port from
+ * @returns {number|null} - The port number (1-65535) or null if not found/invalid
+ */
+export function extractPortFromUrl(url) {
+  if (!url) return null;
+
+  const validatePort = (port) => {
+    const num = parseInt(port, 10);
+    return num >= 1 && num <= 65535 ? num : null;
+  };
+
+  try {
+    // Handle /preview/PORT/ path format (highest priority - internal routes)
+    const previewPathMatch = url.match(/\/preview\/(\d+)/);
+    if (previewPathMatch) {
+      return validatePort(previewPathMatch[1]);
+    }
+
+    // Handle preview-PORT.domain subdomain format
+    const subdomainMatch = url.match(/preview-(\d+)\./);
+    if (subdomainMatch) {
+      return validatePort(subdomainMatch[1]);
+    }
+
+    // Handle standard URL with port
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.port) {
+      return validatePort(parsed.port);
+    }
+
+    // Check for localhost:PORT in the URL string directly
+    const localhostMatch = url.match(/localhost:(\d+)/);
+    if (localhostMatch) {
+      return validatePort(localhostMatch[1]);
+    }
+  } catch {
+    // Invalid URL
+  }
+
+  return null;
+}
+
+/**
+ * Fetch all active ports with their listening status.
+ * @returns {Promise<Array<{port: number, listening: boolean}>>} - Array of port info
+ */
+export async function getActivePortsInfo() {
+  try {
+    const response = await apiFetch('/api/preview/active-ports');
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.ports || [];
+  } catch {
+    return [];
+  }
+}
 
 function getPreviewSubdomainBase() {
   if (typeof window === 'undefined') return 'localhost';
@@ -113,7 +176,11 @@ export function toPreviewUrl(inputUrl) {
 
     if ((isLoopback || isPrivateIP) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
-      if (isLoopback && canUseLocalSubdomain && (uiIsLoopback || uiIsIp)) {
+      const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
+      // Use subdomain only when NOT on localhost - localhost subdomains don't resolve
+      // without extra DNS config. Path-based preview works reliably everywhere.
+      const canUseSubdomain = canUseLocalSubdomain && !uiIsLoopback && (uiIsIp || hasConfiguredSubdomainBase);
+      if (canUseSubdomain) {
         return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
       }
       return `/preview/${parsed.port}${path}`;

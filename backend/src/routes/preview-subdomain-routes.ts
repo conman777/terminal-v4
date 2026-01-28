@@ -118,7 +118,114 @@ const PREVIEW_DEBUG_SCRIPT = `
   const MAIN_DOMAIN = ctx.mainDomain;
   const PREVIEW_BASE_PATH = ctx.basePath;
   const PREVIEW_ORIGIN = location.origin;
+  const SHOULD_NAMESPACE_STORAGE = !!PREVIEW_BASE_PATH;
   var lastReportedLocation = null;
+
+  // Ensure relative links resolve under /preview/:port when path-based preview is active.
+  if (PREVIEW_BASE_PATH && typeof document !== 'undefined') {
+    try {
+      if (!document.querySelector('base')) {
+        var base = document.createElement('base');
+        base.href = PREVIEW_BASE_PATH + '/';
+        if (document.head) {
+          document.head.prepend(base);
+        }
+      }
+    } catch (e) {}
+  }
+
+  // Prevent preview apps from registering service workers with scope "/"
+  // which can hijack the Terminal UI origin and wipe auth storage.
+  if (SHOULD_NAMESPACE_STORAGE && navigator && navigator.serviceWorker) {
+    try {
+      var originalRegister = navigator.serviceWorker.register.bind(navigator.serviceWorker);
+      navigator.serviceWorker.register = function(scriptURL, options) {
+        var opts = options || {};
+        if (!opts.scope || opts.scope === '/') {
+          opts = Object.assign({}, opts, { scope: PREVIEW_BASE_PATH + '/' });
+        }
+        return originalRegister(scriptURL, opts);
+      };
+
+      if (navigator.serviceWorker.getRegistrations) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          regs.forEach(function(reg) {
+            var scope = reg && reg.scope ? reg.scope : '';
+            var scriptUrl = reg && reg.active && reg.active.scriptURL ? reg.active.scriptURL : '';
+            if (scope === PREVIEW_ORIGIN + '/' && scriptUrl.indexOf(PREVIEW_BASE_PATH) !== -1) {
+              reg.unregister();
+            }
+          });
+        }).catch(function() {});
+      }
+    } catch (e) {}
+  }
+
+  // In path-based preview (/preview/:port), localStorage shares the same origin
+  // as the Terminal UI. Namespace storage keys to avoid clobbering auth tokens.
+  if (SHOULD_NAMESPACE_STORAGE && typeof Storage !== 'undefined') {
+    (function() {
+      var STORAGE_PREFIX = '__preview_' + PORT + '__';
+      var originalGetItem = Storage.prototype.getItem;
+      var originalSetItem = Storage.prototype.setItem;
+      var originalRemoveItem = Storage.prototype.removeItem;
+      var originalClear = Storage.prototype.clear;
+      var originalKey = Storage.prototype.key;
+
+      function getPrefixedKeys(storage) {
+        var keys = [];
+        try {
+          for (var i = 0; i < storage.length; i++) {
+            var rawKey = originalKey.call(storage, i);
+            if (rawKey && rawKey.indexOf(STORAGE_PREFIX) === 0) {
+              keys.push(rawKey.slice(STORAGE_PREFIX.length));
+            }
+          }
+        } catch (e) {}
+        return keys;
+      }
+
+      Storage.prototype.getItem = function(key) {
+        if (this === localStorage) {
+          return originalGetItem.call(this, STORAGE_PREFIX + key);
+        }
+        return originalGetItem.call(this, key);
+      };
+
+      Storage.prototype.setItem = function(key, value) {
+        if (this === localStorage) {
+          return originalSetItem.call(this, STORAGE_PREFIX + key, value);
+        }
+        return originalSetItem.call(this, key, value);
+      };
+
+      Storage.prototype.removeItem = function(key) {
+        if (this === localStorage) {
+          return originalRemoveItem.call(this, STORAGE_PREFIX + key);
+        }
+        return originalRemoveItem.call(this, key);
+      };
+
+      Storage.prototype.clear = function() {
+        if (this === localStorage) {
+          var keys = getPrefixedKeys(this);
+          for (var i = 0; i < keys.length; i++) {
+            originalRemoveItem.call(this, STORAGE_PREFIX + keys[i]);
+          }
+          return;
+        }
+        return originalClear.call(this);
+      };
+
+      Storage.prototype.key = function(index) {
+        if (this === localStorage) {
+          var keys = getPrefixedKeys(this);
+          return keys[index] || null;
+        }
+        return originalKey.call(this, index);
+      };
+    })();
+  }
 
   function getCanonicalLocation() {
     var path = location.pathname;
@@ -146,15 +253,69 @@ const PREVIEW_DEBUG_SCRIPT = `
     } catch (e) {}
   }
 
+  function rewriteNavigationUrl(rawUrl) {
+    if (!rawUrl) return rawUrl;
+    var urlStr = '';
+    try { urlStr = String(rawUrl); } catch (e) { return rawUrl; }
+    if (!urlStr) return urlStr;
+
+    // Absolute URL
+    if (/^https?:\\/\\//i.test(urlStr)) {
+      try {
+        var parsed = new URL(urlStr);
+        if (isLocalHost(parsed.hostname) && String(parsed.port || '') === String(PORT)) {
+          var path = parsed.pathname + parsed.search + parsed.hash;
+          return PREVIEW_ORIGIN + withPreviewBasePath(path);
+        }
+      } catch (e) {}
+      return urlStr;
+    }
+
+    // Root-relative
+    if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
+      return withPreviewBasePath(urlStr);
+    }
+
+    return urlStr;
+  }
+
   function hookHistoryMethod(methodName) {
     var original = history[methodName];
     if (typeof original !== 'function') return;
     history[methodName] = function() {
-      var result = original.apply(this, arguments);
+      var args = Array.prototype.slice.call(arguments);
+      if (args.length > 2 && args[2]) {
+        var rawUrl = args[2];
+        try {
+          if (typeof rawUrl !== 'string' && rawUrl.toString) {
+            rawUrl = rawUrl.toString();
+          }
+        } catch (e) {}
+        if (typeof rawUrl === 'string') {
+          var rewritten = rewriteNavigationUrl(rawUrl);
+          if (rewritten && rewritten !== rawUrl) {
+            args[2] = rewritten;
+          }
+        }
+      }
+      var result = original.apply(this, args);
       reportLocationChange();
       return result;
     };
   }
+
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      var originalAssign = window.location.assign.bind(window.location);
+      var originalReplace = window.location.replace.bind(window.location);
+      window.location.assign = function(url) {
+        return originalAssign(rewriteNavigationUrl(url));
+      };
+      window.location.replace = function(url) {
+        return originalReplace(rewriteNavigationUrl(url));
+      };
+    }
+  } catch (e) {}
 
   hookHistoryMethod('pushState');
   hookHistoryMethod('replaceState');
@@ -410,7 +571,7 @@ const PREVIEW_DEBUG_SCRIPT = `
     pendingLogs.push(entry);
     // Also send to parent via postMessage for browser UI
     try {
-      window.parent.postMessage({ type: 'preview-' + entry.type, ...entry }, '*');
+      window.parent.postMessage({ ...entry, type: 'preview-' + entry.type }, '*');
     } catch {}
     // Debounce flush
     if (flushTimeout) clearTimeout(flushTimeout);
@@ -1634,6 +1795,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         const lowerKey = key.toLowerCase();
         if (lowerKey === 'transfer-encoding' || lowerKey === 'connection') continue;
         if (lowerKey === 'content-length') continue;
+        // Skip content-encoding since fetch() automatically decompresses the response
+        if (lowerKey === 'content-encoding') continue;
 
         // Remove X-Frame-Options to allow iframe embedding
         if (lowerKey === 'x-frame-options') continue;
@@ -1660,12 +1823,14 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           : (response.headers as any).raw?.()['set-cookie'] ??
             (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
       if (setCookieHeaders.length > 0) {
+        const secureRequest = isSecureRequest(request);
         const rewrittenCookies = previewHost
           ? rewriteSetCookieHeaders(setCookieHeaders, {
             previewHost,
-            isSecureRequest: isSecureRequest(request),
-            defaultSameSite: 'none',
-            forceSameSite: 'none'
+            isSecureRequest: secureRequest,
+            // Only force SameSite=None in secure contexts to avoid invalid Secure cookies on http.
+            defaultSameSite: secureRequest ? 'none' : undefined,
+            forceSameSite: secureRequest ? 'none' : undefined
           })
           : setCookieHeaders;
         // Store cookies server-side for browser-like behavior in iframe
@@ -2019,7 +2184,77 @@ html, body { isolation: isolate; }
   will-change: backdrop-filter !important;
 }
 </style>`;
-          const injectedScripts = backdropFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+
+          // CSS fix for animation libraries (Framer Motion, GSAP, AOS, ScrollReveal, WOW.js, etc.)
+          // Scoped to html[data-preview-force-anim] to avoid breaking modals/dropdowns/tooltips
+          // In iframe previews, animations may not trigger properly, leaving content invisible
+          const animationFixCSS = `<script>document.documentElement.setAttribute('data-preview-force-anim','1');</script>
+<style>
+/* Animation library data attributes and classes */
+html[data-preview-force-anim="1"] :is(
+  [data-aos],
+  .aos-init:not(.aos-animate),
+  .gsap-hidden,
+  [data-gsap],
+  [data-sr-id],
+  .wow,
+  .reveal,
+  [data-animate],
+  [data-anim],
+  [data-motion],
+  [data-scroll],
+  [data-locomotive]
+) {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: none !important;
+  filter: none !important;
+}
+
+/* Fallback: inline opacity blockers (Framer Motion, React Spring, etc.) */
+html[data-preview-force-anim="1"] :is(
+  [style*="opacity:0"],
+  [style*="opacity: 0"],
+  [style*="filter:opacity(0"],
+  [style*="filter: opacity(0"]
+) {
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+/* Fallback: inline transform + opacity combos */
+html[data-preview-force-anim="1"] :is(
+  [style*="translate"],
+  [style*="scale("],
+  [style*="scale3d("],
+  [style*="rotate("]
+)[style*="opacity"] {
+  transform: none !important;
+}
+
+/* Clip/mask hiding patterns */
+html[data-preview-force-anim="1"] :is(
+  [style*="clip-path"],
+  [style*="clip:"],
+  [style*="mask"]
+) {
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+  mask: none !important;
+}
+
+/* Height-based collapse animations */
+html[data-preview-force-anim="1"] :is(
+  [style*="max-height:0"],
+  [style*="max-height: 0"],
+  [style*="height:0"],
+  [style*="height: 0"]
+) {
+  max-height: none !important;
+  height: auto !important;
+}
+</style>`;
+          const injectedScripts = backdropFixCSS + animationFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
           // Use function replacement to avoid $' special pattern issues in injected scripts
           if (html.includes('<head>')) {
             html = html.replace('<head>', () => '<head>' + injectedScripts);

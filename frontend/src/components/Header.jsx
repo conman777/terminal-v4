@@ -33,6 +33,8 @@ export function Header({
   setShowProcessManager,
   showFileManager,
   onToggleFileManager,
+  showSystemResources,
+  onToggleSystemResources,
   user,
   logout,
   // Mobile specific props
@@ -47,7 +49,8 @@ export function Header({
   mobileView,
   onViewChange,
   previewUrl,
-  onNavigateToPath
+  onNavigateToPath,
+  sessionActivity
 }) {
   if (isMobile) {
     return (
@@ -78,6 +81,7 @@ export function Header({
         onToggleFileManager={onToggleFileManager}
         onNavigateToPath={onNavigateToPath}
         isNavCollapsed={isNavCollapsed}
+        sessionActivity={sessionActivity}
       />
     );
   }
@@ -244,6 +248,19 @@ export function Header({
           }
           items={toolsItems}
         />
+
+        <button
+          className={`header-btn-modern system-resources-btn${showSystemResources ? ' active' : ''}`}
+          onClick={onToggleSystemResources}
+          title="System Resources"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+          </svg>
+        </button>
 
         <Dropdown
           trigger={

@@ -320,9 +320,21 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
             }
           );
 
+          // CSS fix for animation libraries - scoped to avoid breaking modals/dropdowns
+          const animationFixCSS = `<script>document.documentElement.setAttribute('data-preview-force-anim','1');</script>
+<style>
+html[data-preview-force-anim="1"] :is([data-aos],.aos-init:not(.aos-animate),.gsap-hidden,[data-gsap],[data-sr-id],.wow,.reveal,[data-animate],[data-anim],[data-motion],[data-scroll]) {
+  opacity: 1 !important; visibility: visible !important; transform: none !important; filter: none !important;
+}
+html[data-preview-force-anim="1"] :is([style*="opacity:0"],[style*="opacity: 0"]) { opacity: 1 !important; filter: none !important; }
+html[data-preview-force-anim="1"] :is([style*="translate"],[style*="scale("])[style*="opacity"] { transform: none !important; }
+html[data-preview-force-anim="1"] :is([style*="clip-path"],[style*="mask"]) { clip-path: none !important; mask: none !important; }
+html[data-preview-force-anim="1"] :is([style*="max-height:0"],[style*="height:0"]) { max-height: none !important; height: auto !important; }
+</style>`;
+
           // Inject dev proxy script (URL rewriting + console capture)
           // Must inject at START of <head> to run before framework code
-          const script = DEV_PROXY_SCRIPT
+          const script = animationFixCSS + DEV_PROXY_SCRIPT
             .replace(/PORT_PLACEHOLDER/g, String(port))
             .replace(/TOKEN_PLACEHOLDER/g, token || '');
 

@@ -15,10 +15,12 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     const historyChars = Number.parseInt(String(query.historyChars || ''), 10);
     const historyEvents = Number.parseInt(String(query.historyEvents || ''), 10);
     const beforeTs = Number.parseInt(String(query.beforeTs || ''), 10);
+    const afterTs = Number.parseInt(String(query.afterTs || ''), 10);
 
     const hasQueryChars = Number.isFinite(historyChars) && historyChars > 0;
     const hasQueryEvents = Number.isFinite(historyEvents) && historyEvents > 0;
     const hasBeforeTs = Number.isFinite(beforeTs) && beforeTs > 0;
+    const hasAfterTs = Number.isFinite(afterTs) && afterTs > 0;
     let maxHistoryChars = hasQueryChars ? historyChars : undefined;
     let maxHistoryEvents = hasQueryEvents ? historyEvents : undefined;
 
@@ -36,7 +38,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     return {
       maxHistoryChars,
       maxHistoryEvents,
-      beforeTs: hasBeforeTs ? beforeTs : undefined
+      beforeTs: hasBeforeTs ? beforeTs : undefined,
+      afterTs: hasAfterTs ? afterTs : undefined
     };
   };
 
@@ -136,7 +139,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       reply.code(404).send({ error: 'Terminal session not found' });
       return;
     }
-    reply.send(snapshot);
+    const history = snapshot.history || [];
+    const nextCursor = history.length > 0 ? history[history.length - 1].ts : null;
+    reply.send({ ...snapshot, nextCursor });
   });
 
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/project-info', async (request, reply) => {
@@ -196,8 +201,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     // Extract optional clientId from body for multi-client dimension tracking
-    const body = request.body as { cols: number; rows: number; clientId?: string };
+    const body = request.body as { cols: number; rows: number; clientId?: string; priority?: boolean };
     let clientId = body.clientId;
+    const priority = body.priority === true;
 
     // Validate clientId format if provided (defense-in-depth)
     if (clientId && !isValidIdentifier(clientId, 64)) {
@@ -206,7 +212,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     try {
-      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows, clientId);
+      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows, clientId, { priority });
     } catch (error) {
       reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
       return;
@@ -367,6 +373,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     const sendHistory = shouldSendHistory(request);
+    const useFramedProtocol = (() => {
+      const query = (request.query || {}) as Record<string, string | undefined>;
+      const raw = String(query.framed || '').toLowerCase();
+      return raw === '1' || raw === 'true' || raw === 'yes';
+    })();
     const historyLimits = parseHistoryLimit(request);
     const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
       ...historyLimits,
@@ -380,9 +391,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     // Generate unique client ID for this WebSocket connection
     const clientId = randomUUID();
 
-    // Send binary frames for 30-40% bandwidth reduction
     const encoder = new TextEncoder();
-    const send = (text: string): boolean => {
+    const sendBinary = (text: string): boolean => {
       try {
         const buffer = encoder.encode(text);
         socket.send(buffer);
@@ -391,14 +401,32 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         return false;
       }
     };
+    const sendFrame = (frameType: number, payload: string): boolean => {
+      try {
+        const body = encoder.encode(payload);
+        const framed = new Uint8Array(body.length + 1);
+        framed[0] = frameType;
+        framed.set(body, 1);
+        socket.send(framed);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const sendOutput = (text: string): boolean => (
+      useFramedProtocol ? sendFrame(1, text) : sendBinary(text)
+    );
+    const sendMeta = (data: Record<string, unknown>): boolean => (
+      useFramedProtocol ? sendFrame(2, JSON.stringify(data)) : sendBinary(JSON.stringify(data))
+    );
 
     // Send clientId to frontend so it can include it in resize requests
-    send(JSON.stringify({ type: 'clientId', clientId }));
+    sendMeta({ type: 'clientId', clientId });
 
     if (!deps.terminalManager.isActive(snapshot.id)) {
       if (sendHistory) {
         snapshot.history.forEach((entry) => {
-          send(entry.text);
+          sendOutput(entry.text);
         });
       }
       socket.close(1000, 'Session ended');
@@ -406,7 +434,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     const heartbeatTimer = setInterval(() => {
-      send(JSON.stringify({ type: 'serverPing', ts: Date.now() }));
+      sendMeta({ type: 'serverPing', ts: Date.now() });
     }, 15000);
 
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
@@ -421,12 +449,23 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         socket.close(1000, 'Session ended');
         return;
       }
-      send(event.text);
+      if (useFramedProtocol && event.text.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(event.text);
+          if (parsed && parsed.__terminal_meta) {
+            sendMeta(parsed);
+            return;
+          }
+        } catch {
+          // Treat as output
+        }
+      }
+      sendOutput(event.text);
     });
 
     if (sendHistory) {
       snapshot.history.forEach((entry) => {
-        send(entry.text);
+        sendOutput(entry.text);
       });
     }
 
@@ -436,7 +475,18 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         socket.close(1000, 'Session ended');
         return;
       }
-      send(event.text);
+      if (useFramedProtocol && event.text.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(event.text);
+          if (parsed && parsed.__terminal_meta) {
+            sendMeta(parsed);
+            continue;
+          }
+        } catch {
+          // Treat as output
+        }
+      }
+      sendOutput(event.text);
     }
 
     const decoder = new TextDecoder();

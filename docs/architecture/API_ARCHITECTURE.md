@@ -84,8 +84,11 @@ WebSocket notes:
 | GET | `/api/dev-proxy-ws/:port` | Yes | WebSocket proxy for dev server |
 
 Preview subdomain routing:
-- `preview-{port}.conordart.com` is handled by host-based proxy routes.
-- Requests and websockets are forwarded to `localhost:{port}`.
+- `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}` (or `.localhost` in local dev) is handled by host-based proxy routes.
+- Requests and websockets are forwarded to loopback hosts (e.g. `localhost:{port}`).
+Path-based preview routing:
+- `/preview/:port/*` is handled by the same proxy logic (HTTP + WebSocket).
+- Used when the UI is accessed from localhost or a private IP.
 
 ## Files + Projects
 
@@ -156,10 +159,22 @@ Preview subdomain routing:
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
 | GET | `/api/health` | Public | Health check |
-| POST | `/api/system/rebuild` | Yes | Run `rebuild.sh` |
-| GET | `/api/system/stats` | Yes | CPU and RAM stats |
-| GET | `/api/system/stats/history` | Yes | Stats history (range: `1h`, `6h`, `24h`, `7d`, `30d`) |
+| POST | `/api/system/rebuild` | Yes | Run `rebuild.sh` with output capture |
+| GET | `/api/system/stats` | Yes | CPU, RAM, disk I/O, event loop, and top processes |
+| GET | `/api/system/stats/history` | Yes | Historical stats (range: `1h`, `6h`, `24h`, `7d`, `30d`) |
 | GET | `/api/latency/ws` | Yes | WebSocket ping/pong for RTT diagnostics |
+
+## Screenshots & Recording
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| POST | `/api/preview/:port/screenshot` | Yes | Take full page or viewport screenshot |
+| POST | `/api/preview/:port/screenshot/element` | Yes | Screenshot specific element by selector |
+| POST | `/api/preview/:port/recording/start` | Yes | Start video recording of preview |
+| POST | `/api/preview/recording/:recordingId/stop` | Yes | Stop recording and save video |
+| GET | `/api/preview/screenshots` | Yes | List all screenshots |
+| GET | `/api/preview/screenshots/:filename` | Yes | Retrieve screenshot image |
+| DELETE | `/api/preview/screenshots/:filename` | Yes | Delete screenshot |
 
 ## Bookmarks
 

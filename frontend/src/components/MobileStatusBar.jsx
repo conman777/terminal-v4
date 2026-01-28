@@ -2,19 +2,23 @@ import { useState, useRef, useCallback } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
 import { apiFetch } from '../utils/api';
 
-export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true }) {
+export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true, onRefreshTerminal }) {
   const [inputText, setInputText] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const inputRef = useRef(null);
 
   const sendToTerminal = useCallback(async (text) => {
     if (!sessionId || !text.trim()) return;
+    const payload = text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`;
 
     try {
-      await apiFetch(`/api/terminal/${sessionId}/input`, {
+      const response = await apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
-        body: { command: text }
+        body: { command: payload }
       });
+      if (!response.ok) {
+        throw new Error(`Failed to send input (${response.status})`);
+      }
       setInputText('');
       setIsExpanded(false);
     } catch (error) {
@@ -94,6 +98,21 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
           </div>
 
           <div className="mobile-status-right">
+            {/* Refresh/reconnect button */}
+            <button
+              type="button"
+              className="status-bar-btn"
+              onClick={onRefreshTerminal}
+              disabled={!onRefreshTerminal}
+              aria-label="Reconnect terminal"
+              title="Reconnect terminal"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 4 23 10 17 10" />
+                <path d="M20.49 15a9 9 0 1 1 2.13-9" />
+              </svg>
+            </button>
+
             {/* Type button */}
             <button
               type="button"

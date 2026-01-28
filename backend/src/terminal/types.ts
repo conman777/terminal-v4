@@ -23,6 +23,7 @@ export interface ProjectInfo {
 export interface ClientDimensions {
   cols: number;
   rows: number;
+  updatedAt: number;
 }
 
 // Managed terminal session
@@ -45,6 +46,7 @@ export interface ManagedTerminal {
   dataHandler?: (data: string) => void;
   exitHandler?: (code: number | null, signal: NodeJS.Signals | null) => void;
   clientDimensions: Map<string, ClientDimensions>;
+  primaryClientId?: string | null;
   currentCols: number;
   currentRows: number;
   usesTmux: boolean;

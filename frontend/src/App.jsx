@@ -29,6 +29,7 @@ const NotesModal = lazy(() => import('./components/NotesModal').then((module) =>
 const ApiSettingsModal = lazy(() => import('./components/ApiSettingsModal'));
 const BrowserSettingsModal = lazy(() => import('./components/BrowserSettingsModal').then((module) => ({ default: module.BrowserSettingsModal })));
 const ProcessManagerModal = lazy(() => import('./components/ProcessManagerModal').then((module) => ({ default: module.ProcessManagerModal })));
+const SystemResourcesView = lazy(() => import('./components/SystemResourcesView').then((module) => ({ default: module.SystemResourcesView })));
 
 function AppContent() {
   const { logout, user } = useAuth();
@@ -119,6 +120,7 @@ function AppContent() {
   const [showNotes, setShowNotes] = useState(false);
   const [showProcessManager, setShowProcessManager] = useState(false);
   const [showFileManager, setShowFileManager] = useState(false);
+  const [showSystemResources, setShowSystemResources] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
@@ -131,11 +133,35 @@ function AppContent() {
     }
   });
 
+  // Automatically minimize main terminal when browser opens
+  useEffect(() => {
+    if (showPreview && !mainTerminalMinimized) {
+      setMainTerminalMinimized(true);
+      try {
+        localStorage.setItem('mainTerminalMinimized', 'true');
+      } catch {
+        // Ignore localStorage errors
+      }
+    }
+  }, [showPreview]); // Only trigger when showPreview changes
+
   const mainContentRef = useRef(null);
   const focusTerminalRef = useRef(null);
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
+
+  // Handle mobile view change - when switching to terminal, jump to active terminal
+  const handleMobileViewChange = useCallback((view) => {
+    if (view === 'terminal' && activeSessionId) {
+      // When switching to terminal view, jump to the currently active terminal
+      const index = activeSessions.findIndex(s => s.id === activeSessionId);
+      if (index !== -1) {
+        setMobileTerminalIndex(index);
+      }
+    }
+    setMobileView(view);
+  }, [activeSessionId, activeSessions]);
 
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
@@ -188,9 +214,9 @@ function AppContent() {
   // Auto-switch back to terminal if preview URL gets cleared while viewing preview
   useEffect(() => {
     if (mobileView === 'preview' && !previewUrl) {
-      setMobileView('terminal');
+      handleMobileViewChange('terminal');
     }
-  }, [mobileView, previewUrl]);
+  }, [mobileView, previewUrl, handleMobileViewChange]);
 
   // Settings loaded from server (with localStorage fallback)
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -623,6 +649,8 @@ function AppContent() {
             setShowProcessManager={setShowProcessManager}
             showFileManager={showFileManager}
             onToggleFileManager={() => setShowFileManager(!showFileManager)}
+            showSystemResources={showSystemResources}
+            onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
             user={user}
             logout={logout}
             // Mobile specific props
@@ -635,7 +663,7 @@ function AppContent() {
             currentPath={projectInfo?.cwd}
             onAddScanFolder={handleAddScanFolder}
             mobileView={mobileView}
-            onViewChange={setMobileView}
+            onViewChange={handleMobileViewChange}
             previewUrl={previewUrl}
             onNavigateToPath={handleNavigateToPath}
             sessionActivity={sessionActivity}
@@ -694,6 +722,8 @@ function AppContent() {
               setShowProcessManager={setShowProcessManager}
               showFileManager={showFileManager}
               onToggleFileManager={() => setShowFileManager(!showFileManager)}
+              showSystemResources={showSystemResources}
+              onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
               user={user}
               logout={logout}
             />
@@ -713,97 +743,106 @@ function AppContent() {
 
           <main
             ref={mainContentRef}
-            className={`main-content${showPreview ? ' with-preview' : ''}${isDragging ? ' dragging' : ''}`}
+            className={`main-content${showPreview && !showSystemResources ? ' with-preview' : ''}${isDragging ? ' dragging' : ''}`}
           >
-            {/* Left pane - switches between Terminal and Claude Code */}
-            <div
-              className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
-              style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
-            >
-              {leftPanelMode === 'terminal' ? (
-                activeSessions.length === 0 ? (
-                  <div className="empty-state">
-                    <h2>Welcome to Terminal</h2>
-                    <p>Create a new terminal session to get started.</p>
-                    <button className="btn-primary" onClick={createSession}>
-                      + New Terminal
-                    </button>
-                  </div>
-                ) : (
-                  <SplitPaneContainer
-                    layout={legacyLayout}
-                    paneLayout={paneLayout}
-                    sessions={activeSessions}
-                    onPaneSessionSelect={handlePaneSessionSelect}
-                    onPaneSplit={splitPane}
-                    onPaneClose={closePane}
-                    onPaneFocus={handlePaneFocus}
-                    onPaneFullscreen={toggleFullscreen}
-                    fullscreenPaneId={fullscreenPaneId}
-                    showPreview={showPreview && !fullscreenPaneId}
-                    onMinimizeMainTerminal={handleToggleMainTerminal}
-                    keybarOpen={keybarOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={handleUrlDetected}
-                    fontSize={terminalFontSize}
-                    webglEnabled={terminalWebglEnabled}
-                    sessionActivity={sessionActivity}
-                    projectInfo={projectInfo}
-                  />
-                )
-              ) : (
-                !activeClaudeCodeId ? (
-                  <div className="empty-state">
-                    <h2>Claude Code</h2>
-                    <p>Start a Claude Code session to open the interactive CLI.</p>
-                    <p className="empty-hint">Use /model inside the CLI to change models.</p>
-                    <button className="btn-primary" onClick={startClaudeCode}>
-                      + New Session
-                    </button>
-                  </div>
-                ) : (
-                  <Suspense fallback={<div className="empty-state"><p>Loading Claude Code...</p></div>}>
-                    <ClaudeCodePanel
-                      sessionId={activeClaudeCodeId}
-                      keybarOpen={keybarOpen}
-                      viewportHeight={viewportHeight}
-                      onUrlDetected={handleUrlDetected}
-                      fontSize={terminalFontSize}
-                      webglEnabled={terminalWebglEnabled}
-                      usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
-                    />
-                  </Suspense>
-                )
-              )}
-            </div>
-
-            {/* Preview pane - hidden during fullscreen */}
-            {showPreview && !fullscreenPaneId && (
+            {/* System Resources View - full width when active */}
+            {showSystemResources ? (
+              <Suspense fallback={<div className="empty-state"><p>Loading System Resources...</p></div>}>
+                <SystemResourcesView />
+              </Suspense>
+            ) : (
               <>
-                {!mainTerminalMinimized && (
-                  <div
-                    className={`split-handle${isDragging ? ' active' : ''}`}
-                    onMouseDown={handleSplitMouseDown}
-                  />
+                {/* Left pane - switches between Terminal and Claude Code */}
+                <div
+                  className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
+                  style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
+                >
+                  {leftPanelMode === 'terminal' ? (
+                    activeSessions.length === 0 ? (
+                      <div className="empty-state">
+                        <h2>Welcome to Terminal</h2>
+                        <p>Create a new terminal session to get started.</p>
+                        <button className="btn-primary" onClick={createSession}>
+                          + New Terminal
+                        </button>
+                      </div>
+                    ) : (
+                      <SplitPaneContainer
+                        layout={legacyLayout}
+                        paneLayout={paneLayout}
+                        sessions={activeSessions}
+                        onPaneSessionSelect={handlePaneSessionSelect}
+                        onPaneSplit={splitPane}
+                        onPaneClose={closePane}
+                        onPaneFocus={handlePaneFocus}
+                        onPaneFullscreen={toggleFullscreen}
+                        fullscreenPaneId={fullscreenPaneId}
+                        showPreview={showPreview && !fullscreenPaneId}
+                        onMinimizeMainTerminal={handleToggleMainTerminal}
+                        keybarOpen={keybarOpen}
+                        viewportHeight={viewportHeight}
+                        onUrlDetected={handleUrlDetected}
+                        fontSize={terminalFontSize}
+                        webglEnabled={terminalWebglEnabled}
+                        sessionActivity={sessionActivity}
+                        projectInfo={projectInfo}
+                      />
+                    )
+                  ) : (
+                    !activeClaudeCodeId ? (
+                      <div className="empty-state">
+                        <h2>Claude Code</h2>
+                        <p>Start a Claude Code session to open the interactive CLI.</p>
+                        <p className="empty-hint">Use /model inside the CLI to change models.</p>
+                        <button className="btn-primary" onClick={startClaudeCode}>
+                          + New Session
+                        </button>
+                      </div>
+                    ) : (
+                      <Suspense fallback={<div className="empty-state"><p>Loading Claude Code...</p></div>}>
+                        <ClaudeCodePanel
+                          sessionId={activeClaudeCodeId}
+                          keybarOpen={keybarOpen}
+                          viewportHeight={viewportHeight}
+                          onUrlDetected={handleUrlDetected}
+                          fontSize={terminalFontSize}
+                          webglEnabled={terminalWebglEnabled}
+                          usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
+                        />
+                      </Suspense>
+                    )
+                  )}
+                </div>
+
+                {/* Preview pane - hidden during fullscreen */}
+                {showPreview && !fullscreenPaneId && (
+                  <>
+                    {!mainTerminalMinimized && (
+                      <div
+                        className={`split-handle${isDragging ? ' active' : ''}`}
+                        onMouseDown={handleSplitMouseDown}
+                      />
+                    )}
+                    <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
+                      <PreviewPanel
+                        url={previewUrl}
+                        onClose={handlePreviewClose}
+                        onUrlChange={handlePreviewUrlChange}
+                        projectInfo={projectInfo}
+                        onStartProject={handleStartProject}
+                        onSendToTerminal={handleSendToTerminal}
+                        onSendToClaudeCode={handleSendToClaudeCode}
+                        activeSessions={activeSessions}
+                        activeSessionId={activeSessionId}
+                        fontSize={terminalFontSize}
+                        webglEnabled={terminalWebglEnabled}
+                        onUrlDetected={handlePreviewUrlChange}
+                        mainTerminalMinimized={mainTerminalMinimized}
+                        onToggleMainTerminal={handleToggleMainTerminal}
+                      />
+                    </Suspense>
+                  </>
                 )}
-                <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
-                  <PreviewPanel
-                    url={previewUrl}
-                    onClose={handlePreviewClose}
-                    onUrlChange={handlePreviewUrlChange}
-                    projectInfo={projectInfo}
-                    onStartProject={handleStartProject}
-                    onSendToTerminal={handleSendToTerminal}
-                    onSendToClaudeCode={handleSendToClaudeCode}
-                    activeSessions={activeSessions}
-                    activeSessionId={activeSessionId}
-                    fontSize={terminalFontSize}
-                    webglEnabled={terminalWebglEnabled}
-                    onUrlDetected={handlePreviewUrlChange}
-                    mainTerminalMinimized={mainTerminalMinimized}
-                    onToggleMainTerminal={handleToggleMainTerminal}
-                  />
-                </Suspense>
               </>
             )}
           </main>
@@ -871,7 +910,7 @@ function AppContent() {
               <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
                 <PreviewPanel
                   url={previewUrl}
-                  onClose={() => setMobileView('terminal')}
+                  onClose={() => handleMobileViewChange('terminal')}
                   onUrlChange={handlePreviewUrlChange}
                   projectInfo={projectInfo}
                   onStartProject={handleStartProject}
