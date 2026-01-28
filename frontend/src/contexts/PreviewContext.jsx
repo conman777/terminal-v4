@@ -185,6 +185,11 @@ export function PreviewProvider({ children }) {
             localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(data.subdomainBases));
           } catch {}
         }
+        if (typeof data?.preferPathBased === 'boolean') {
+          try {
+            localStorage.setItem('terminal_preview_prefer_path_based', data.preferPathBased ? 'true' : 'false');
+          } catch {}
+        }
       } catch {
         // Ignore config fetch errors; default behavior applies
       }

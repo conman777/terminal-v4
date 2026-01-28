@@ -3,6 +3,7 @@ import { apiFetch } from './api';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
+const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 
 /**
  * Extract port number from a URL string.
@@ -91,6 +92,18 @@ function getEffectiveSubdomainBase() {
   return getPreviewSubdomainBase();
 }
 
+function shouldPreferPathBased() {
+  if (typeof window === 'undefined') return false;
+  if (window.crossOriginIsolated) return true;
+  try {
+    const stored = localStorage.getItem(PREVIEW_PREFER_PATH_BASED_KEY);
+    if (!stored) return false;
+    return stored === 'true' || stored === '1' || stored === 'yes';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Add auth token to URL as query parameter
  */
@@ -173,13 +186,14 @@ export function toPreviewUrl(inputUrl) {
     const canUseLocalSubdomain = uiProtocol === 'http:';
     const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
     const subdomainBase = getEffectiveSubdomainBase();
+    const preferPathBased = shouldPreferPathBased();
 
     if ((isLoopback || isPrivateIP) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
       const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
       // Use subdomain only when NOT on localhost - localhost subdomains don't resolve
       // without extra DNS config. Path-based preview works reliably everywhere.
-      const canUseSubdomain = canUseLocalSubdomain && !uiIsLoopback && (uiIsIp || hasConfiguredSubdomainBase);
+      const canUseSubdomain = !preferPathBased && canUseLocalSubdomain && !uiIsLoopback && (uiIsIp || hasConfiguredSubdomainBase);
       if (canUseSubdomain) {
         return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
       }

@@ -3,9 +3,11 @@ import { useMobileDetect } from '../hooks/useMobileDetect';
 import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
 import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
+import { isWebContainerSupported } from '../utils/webcontainer';
 import { TerminalChat } from './TerminalChat';
 import { StyleEditor } from './StyleEditor';
 import { DevToolsPanel } from './devtools/DevToolsPanel';
+import { WebContainerPreview } from './WebContainerPreview';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -114,6 +116,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
+  // WebContainer mode state
+  const [useWebContainer, setUseWebContainer] = useState(false);
+  const [webContainerSupported, setWebContainerSupported] = useState(null);
+  const [webContainerStatus, setWebContainerStatus] = useState(null);
   const iframeRef = useRef(null);
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
@@ -211,6 +217,12 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
+
+  // Check WebContainer support on mount
+  useEffect(() => {
+    const support = isWebContainerSupported();
+    setWebContainerSupported(support);
   }, []);
 
   // Extract port from preview URL for cookie management
@@ -2183,12 +2195,35 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               type="button"
               className={`preview-action-btn ${browserSplitEnabled ? 'active' : ''}`}
               onClick={handleToggleTerminalSplit}
-              disabled={!iframeSrc}
+              disabled={!iframeSrc && !useWebContainer}
               aria-label="Toggle terminal split"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="3" y="3" width="7" height="18" rx="1" />
                 <rect x="14" y="3" width="7" height="18" rx="1" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip text={useWebContainer ? 'Switch to Proxy Mode' : 'Switch to WebContainer Mode'}>
+            <button
+              type="button"
+              className={`preview-action-btn ${useWebContainer ? 'active' : ''}`}
+              onClick={() => setUseWebContainer(!useWebContainer)}
+              disabled={!webContainerSupported?.supported && !useWebContainer}
+              title={!webContainerSupported?.supported ? webContainerSupported?.reason : undefined}
+              aria-label="Toggle WebContainer mode"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+                <rect x="9" y="9" width="6" height="6" />
+                <line x1="9" y1="1" x2="9" y2="4" />
+                <line x1="15" y1="1" x2="15" y2="4" />
+                <line x1="9" y1="20" x2="9" y2="23" />
+                <line x1="15" y1="20" x2="15" y2="23" />
+                <line x1="20" y1="9" x2="23" y2="9" />
+                <line x1="20" y1="14" x2="23" y2="14" />
+                <line x1="1" y1="9" x2="4" y2="9" />
+                <line x1="1" y1="14" x2="4" y2="14" />
               </svg>
             </button>
           </Tooltip>
@@ -2352,6 +2387,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   Try Again
                 </button>
               </div>
+            ) : useWebContainer ? (
+              <WebContainerPreview
+                projectPath={projectInfo?.cwd}
+                startCommand={projectInfo?.startCommand || 'npm run dev'}
+                onStatusChange={(status, message) => setWebContainerStatus({ status, message })}
+                onServerReady={(url, port) => {
+                  console.log('[WebContainer] Server ready:', url, port);
+                }}
+                onError={(error, phase) => {
+                  console.error('[WebContainer] Error:', phase, error);
+                }}
+                onFallbackToProxy={() => setUseWebContainer(false)}
+              />
             ) : (
               <>
                 {isLoading && (

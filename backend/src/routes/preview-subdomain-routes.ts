@@ -263,6 +263,14 @@ const PREVIEW_DEBUG_SCRIPT = `
     if (/^https?:\\/\\//i.test(urlStr)) {
       try {
         var parsed = new URL(urlStr);
+
+        // Same-origin URL (Terminal V4 origin) - keep preview base path in place
+        if (PREVIEW_BASE_PATH && parsed.origin === PREVIEW_ORIGIN) {
+          var path = parsed.pathname + parsed.search + parsed.hash;
+          return PREVIEW_ORIGIN + withPreviewBasePath(path);
+        }
+
+        // Localhost URL matching preview port
         if (isLocalHost(parsed.hostname) && String(parsed.port || '') === String(PORT)) {
           var path = parsed.pathname + parsed.search + parsed.hash;
           return PREVIEW_ORIGIN + withPreviewBasePath(path);
@@ -317,12 +325,42 @@ const PREVIEW_DEBUG_SCRIPT = `
     }
   } catch (e) {}
 
+  // Intercept location.href setter (best-effort)
+  try {
+    var locationProto = Object.getPrototypeOf(window.location);
+    var hrefDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'href');
+    if (hrefDescriptor && hrefDescriptor.set && hrefDescriptor.configurable) {
+      var originalHrefSetter = hrefDescriptor.set;
+      Object.defineProperty(locationProto, 'href', {
+        get: hrefDescriptor.get,
+        set: function(url) {
+          return originalHrefSetter.call(this, rewriteNavigationUrl(url));
+        },
+        configurable: true,
+        enumerable: hrefDescriptor.enumerable
+      });
+    }
+  } catch (e) {
+    // Some browsers block modifying location prototype
+  }
+
   hookHistoryMethod('pushState');
   hookHistoryMethod('replaceState');
   window.addEventListener('popstate', reportLocationChange);
   window.addEventListener('hashchange', reportLocationChange);
   window.addEventListener('load', reportLocationChange);
   reportLocationChange();
+
+  // Path escape guard: if we're in path-based preview but URL doesn't have prefix, redirect
+  if (PREVIEW_BASE_PATH) {
+    try {
+      var currentPath = location.pathname + location.search + location.hash;
+      var correctedPath = withPreviewBasePath(currentPath);
+      if (correctedPath !== currentPath) {
+        location.replace(PREVIEW_ORIGIN + correctedPath);
+      }
+    } catch (e) {}
+  }
 
   var SESSION_STORAGE_KEY = '__preview_session_storage__' + PORT;
   var sessionSaveTimeout = null;

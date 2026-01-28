@@ -20,6 +20,7 @@ import { registerSystemRoutes } from './routes/system-routes';
 import { registerClaudeCodeRoutes } from './claude-code/claude-code-routes';
 import { registerFileRoutes } from './routes/file-routes';
 import { registerScreenshotRoutes } from './routes/screenshot-routes';
+import { registerWebContainerRoutes } from './routes/webcontainer-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 import { getDatabase, closeDatabase } from './database/db';
@@ -57,6 +58,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       fileSize: 100 * 1024 * 1024 // 100MB max for file uploads
     }
   });
+
+  // Note: COEP/COOP headers removed - they break cross-origin preview iframe
+  // WebContainers now use `coep: 'none'` boot option which relies on Chrome's Origin Trial
+  // This means WebContainers only work in Chromium browsers, but proxy preview works everywhere
 
   // Initialize database
   getDatabase();
@@ -99,6 +104,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerSystemRoutes(app);
   await registerExternalProxyRoutes(app);
   await registerScreenshotRoutes(app);
+  await registerWebContainerRoutes(app);
 
   // Serve static frontend files
   const frontendPath = join(dirname(fileURLToPath(import.meta.url)), '../../frontend/dist');
