@@ -60,11 +60,36 @@ Logs are written to `/tmp/backend.log`.
 
 ### Preview System
 
-The preview panel (`frontend/src/components/PreviewPanel.jsx`) displays apps running on the VM via an iframe. It uses a proxy subdomain pattern: `preview-{port}.conordart.com`.
+The preview panel (`frontend/src/components/PreviewPanel.jsx`) displays apps running on the VM via an iframe.
+
+**Subdomain Proxy Architecture:**
+
+When accessing from LAN (e.g., `192.168.1.199:3020`), the preview uses a subdomain proxy pattern:
+- User enters `localhost:3000` in the preview panel
+- URL transforms to `http://preview-3000.192.168.1.199.nip.io:3020/`
+- nip.io DNS resolves to `192.168.1.199`, request hits Terminal V4 backend
+- Backend extracts port from subdomain and proxies to `localhost:3000`
+
+This allows previewing localhost apps from any device on the LAN.
+
+**Key Preview Files:**
+- `frontend/src/components/PreviewPanel.jsx` - Preview panel UI
+- `backend/src/routes/preview-subdomain-routes.ts` - Subdomain proxy logic
+- `backend/src/inspector/inspector-script.ts` - DOM inspector injected into previews
+
+**Lazy Inspector Injection:**
+
+The DOM inspector script is NOT injected by default. It uses lazy injection:
+- Normal preview loads: No inspector script (cleaner, fewer failure points)
+- When user clicks "Inspect": Page reloads with `?__inspect=1` parameter
+- Backend only injects inspector script when `__inspect=1` is present
+- Script auto-enables inspect mode when loaded with this parameter
+
+This prevents CSP conflicts and module loading issues that could cause infinite "Loading..." states.
 
 **Cache-Busting Architecture:**
 
-The preview proxy (`backend/src/routes/preview-subdomain-routes.ts`) implements deep cache-busting to ensure hard refresh works correctly:
+The preview proxy implements deep cache-busting to ensure hard refresh works correctly:
 
 1. **HTML**: Rewrites all `src` and `href` attributes to include `?_cb=timestamp`
 2. **JavaScript**: Rewrites ES module `import` statements to include cache-buster
@@ -80,6 +105,7 @@ HTML → JS/CSS → imported JS → imported CSS → images/fonts
 - Never directly mutate DOM elements that React controls (e.g., don't do `iframeRef.current.src = x` when React renders `<iframe src={state} />`)
 - When cache-busting, remember that entry-point busting alone doesn't bust downstream resources
 - The cache-buster is extracted from `?_cb=` param or generated fresh, then propagated to all resources
+- The 5-second loading timeout prevents infinite "Loading..." if iframe onLoad never fires
 
 ---
 
