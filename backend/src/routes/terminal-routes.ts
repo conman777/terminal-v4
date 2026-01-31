@@ -497,11 +497,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         : message.toString();
       if (!data) return;
       if (data.includes('__terminal_ping__')) {
-        send('__terminal_pong__');
+        sendOutput('__terminal_pong__');
         return;
       }
       if (data.includes('"type":"ping"') && data.includes('"source":"terminal-client"')) {
-        send(JSON.stringify({ type: 'pong', source: 'terminal-client', ts: Date.now() }));
+        sendMeta({ type: 'pong', source: 'terminal-client', ts: Date.now() });
         return;
       }
       try {
