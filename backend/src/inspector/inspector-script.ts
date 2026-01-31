@@ -882,6 +882,16 @@ export const INSPECTOR_SCRIPT = `
     if (hoveredElement) updateOverlay(hoveredElement);
   });
 
+  // Auto-enable inspect mode if page was loaded with __inspect=1 parameter (lazy injection)
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('__inspect') === '1') {
+      setInspectMode(true);
+    }
+  } catch (e) {
+    // Ignore URL parsing errors
+  }
+
   // Notify parent that inspector is ready
   window.parent.postMessage({ type: 'preview-inspector-ready' }, '*');
 })();

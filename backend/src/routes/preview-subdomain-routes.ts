@@ -2107,13 +2107,16 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Stream response body
       let responseBodyBuffer: Buffer | null = null;
       if (response.body) {
-        // Extract cache-buster from request URL, or generate one
+        // Extract cache-buster and inspect mode from request URL
         let cacheBuster: string;
+        let inspectModeEnabled = false;
         try {
           const url = new URL(requestPath, `http://localhost:${port}`);
           const cbParam = url.searchParams.get('_cb');
           // Validate cache buster is numeric to prevent XSS
           cacheBuster = (cbParam && /^\d+$/.test(cbParam)) ? cbParam : Date.now().toString();
+          // Check if inspect mode is requested (lazy injection)
+          inspectModeEnabled = url.searchParams.get('__inspect') === '1';
         } catch {
           // If URL parsing fails, generate fresh cache buster
           cacheBuster = Date.now().toString();
@@ -2488,7 +2491,9 @@ html[data-preview-force-anim="1"] :is(
   height: auto !important;
 }
 </style>`;
-          const injectedScripts = backdropFixCSS + animationFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + '<script>' + INSPECTOR_SCRIPT + '</script>';
+          // Only inject inspector script when explicitly requested via __inspect=1 parameter (lazy injection)
+          const inspectorScriptTag = inspectModeEnabled ? '<script>' + INSPECTOR_SCRIPT + '</script>' : '';
+          const injectedScripts = backdropFixCSS + animationFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + inspectorScriptTag;
           // Use function replacement to avoid $' special pattern issues in injected scripts
           if (html.includes('<head>')) {
             html = html.replace('<head>', () => '<head>' + injectedScripts);

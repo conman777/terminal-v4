@@ -623,11 +623,36 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setShowStyleEditor(false);
       setEditDescription('');
     }
-    // Send message to iframe
+
+    // Lazy injection: reload iframe with/without __inspect parameter
+    // This ensures the inspector script is only loaded when needed
+    if (baseIframeSrc) {
+      setIsLoading(true);
+      setError(null);
+      const cacheBuster = `_cb=${Date.now()}`;
+      try {
+        const url = new URL(baseIframeSrc, window.location.origin);
+        if (newMode) {
+          url.searchParams.set('__inspect', '1');
+        } else {
+          url.searchParams.delete('__inspect');
+        }
+        // Always add cache buster for fresh load
+        url.searchParams.set('_cb', Date.now().toString());
+        setIframeSrc(url.toString());
+      } catch {
+        // Fallback if URL parsing fails
+        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        const inspectParam = newMode ? '__inspect=1&' : '';
+        setIframeSrc(`${baseIframeSrc}${separator}${inspectParam}${cacheBuster}`);
+      }
+    }
+
+    // Send message to iframe (will be received after reload if inspector is injected)
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: newMode }, '*');
     }
-  }, [inspectMode]);
+  }, [inspectMode, baseIframeSrc]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedElement(null);
