@@ -883,13 +883,23 @@ export const INSPECTOR_SCRIPT = `
   });
 
   // Auto-enable inspect mode if page was loaded with __inspect=1 parameter (lazy injection)
-  try {
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('__inspect') === '1') {
-      setInspectMode(true);
+  // Deferred until DOMContentLoaded to ensure document.body exists (setInspectMode touches body.style.cursor)
+  function autoEnableIfRequested() {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('__inspect') === '1') {
+        setInspectMode(true);
+      }
+    } catch (e) {
+      // Ignore URL parsing errors
     }
-  } catch (e) {
-    // Ignore URL parsing errors
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autoEnableIfRequested, { once: true });
+  } else {
+    // DOM already ready (script ran after DOMContentLoaded)
+    autoEnableIfRequested();
   }
 
   // Notify parent that inspector is ready

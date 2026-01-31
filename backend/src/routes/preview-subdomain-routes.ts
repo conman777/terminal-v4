@@ -2081,46 +2081,63 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       reply.header('Pragma', 'no-cache');
       reply.header('Expires', '0');
 
-      // Handle redirects - rewrite Location header
+      // Check if inspect mode was requested (for preserving on redirects)
+      let inspectModeRequested = false;
+      try {
+        const reqUrl = new URL(requestPath, `http://localhost:${port}`);
+        inspectModeRequested = reqUrl.searchParams.get('__inspect') === '1';
+      } catch {
+        // Ignore parse errors
+      }
+
+      // Handle redirects - rewrite Location header and preserve __inspect param
       const location = response.headers.get('location');
       if (location) {
+        let finalLocation = location;
         const rewrittenLocation = rewriteLocalAbsoluteUrl(location, port, previewOrigin, previewBasePath);
         if (rewrittenLocation !== location) {
-          reply.header('location', rewrittenLocation);
+          finalLocation = rewrittenLocation;
         } else if (previewBasePath) {
           try {
             const resolved = new URL(location, `${previewOrigin}${previewBasePath}${requestPath}`);
             if (resolved.origin === previewOrigin) {
-              reply.header('location', `${resolved.pathname}${resolved.search}${resolved.hash}`);
-            } else {
-              reply.header('location', location);
+              finalLocation = `${resolved.pathname}${resolved.search}${resolved.hash}`;
             }
           } catch {
-            reply.header('location', location);
+            // Keep original location
           }
-        } else if (location.startsWith('/')) {
-          // Relative redirect - keep as is
-          reply.header('location', location);
         }
+        // Preserve __inspect=1 on same-origin redirects to maintain inspect mode
+        if (inspectModeRequested && !finalLocation.includes('__inspect=')) {
+          try {
+            // Only for relative URLs or same-origin
+            if (finalLocation.startsWith('/') || finalLocation.startsWith(previewOrigin)) {
+              const separator = finalLocation.includes('?') ? '&' : '?';
+              finalLocation = `${finalLocation}${separator}__inspect=1`;
+            }
+          } catch {
+            // Ignore errors, don't break redirect
+          }
+        }
+        reply.header('location', finalLocation);
       }
 
       // Stream response body
       let responseBodyBuffer: Buffer | null = null;
       if (response.body) {
-        // Extract cache-buster and inspect mode from request URL
+        // Extract cache-buster from request URL (inspect mode already extracted above)
         let cacheBuster: string;
-        let inspectModeEnabled = false;
         try {
           const url = new URL(requestPath, `http://localhost:${port}`);
           const cbParam = url.searchParams.get('_cb');
           // Validate cache buster is numeric to prevent XSS
           cacheBuster = (cbParam && /^\d+$/.test(cbParam)) ? cbParam : Date.now().toString();
-          // Check if inspect mode is requested (lazy injection)
-          inspectModeEnabled = url.searchParams.get('__inspect') === '1';
         } catch {
           // If URL parsing fails, generate fresh cache buster
           cacheBuster = Date.now().toString();
         }
+        // Use inspectModeRequested (extracted earlier for redirect handling)
+        const inspectModeEnabled = inspectModeRequested;
         const contentType = response.headers.get('content-type') || '';
         const isHtml = contentType.includes('text/html');
         const isScriptPath = requestPath.startsWith('/@');
