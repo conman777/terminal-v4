@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiGet } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
+import { useSystemStatsPolling } from '../hooks/useSystemStatsPolling';
 
 // Format bytes to human-readable GB
 function formatBytes(bytes) {
@@ -121,7 +122,7 @@ function MetricCard({ title, value, subtitle, icon, color, trend, trendData, chi
 }
 
 export function SystemResourcesView() {
-  const [systemStats, setSystemStats] = useState(null);
+  const systemStats = useSystemStatsPolling(true);
   const [statsHistory, setStatsHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState('24h');
   const [latencyMs, setLatencyMs] = useState(null);
@@ -133,22 +134,6 @@ export function SystemResourcesView() {
   const [clientFrameHistory, setClientFrameHistory] = useState([]);
   const wsRef = useRef(null);
   const frameRef = useRef(null);
-
-  // Fetch system stats
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const data = await apiGet('/api/system/stats');
-        setSystemStats(data);
-      } catch (err) {
-        console.error('Failed to fetch system stats:', err);
-      }
-    };
-
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Fetch history
   useEffect(() => {

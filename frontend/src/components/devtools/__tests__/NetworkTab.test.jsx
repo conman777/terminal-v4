@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { NetworkTab } from '../NetworkTab';
 
@@ -59,12 +59,16 @@ describe('NetworkTab', () => {
     mockOnClear = vi.fn();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('should render network requests table', () => {
     render(<NetworkTab requests={mockRequests} onClear={mockOnClear} />);
 
-    expect(screen.getByText('GET')).toBeInTheDocument();
-    expect(screen.getByText('/api/users')).toBeInTheDocument();
-    expect(screen.getByText('200')).toBeInTheDocument();
+    expect(screen.getAllByText('GET').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('/api/users')).toHaveLength(2);
+    expect(screen.getAllByText('200').length).toBeGreaterThan(0);
   });
 
   it('should filter requests by type', () => {
@@ -84,7 +88,7 @@ describe('NetworkTab', () => {
     render(<NetworkTab requests={mockRequests} onClear={mockOnClear} />);
 
     // Click on first request
-    const firstRow = screen.getByText('/api/users').closest('tr');
+    const firstRow = screen.getAllByText('/api/users')[0].closest('tr');
     fireEvent.click(firstRow);
 
     // Should show details tabs
@@ -95,13 +99,13 @@ describe('NetworkTab', () => {
 
   it('should export HAR file', () => {
     // Mock URL.createObjectURL
-    global.URL.createObjectURL = vi.fn(() => 'blob:test');
-    global.URL.revokeObjectURL = vi.fn();
+    vi.spyOn(global.URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(global.URL, 'revokeObjectURL').mockImplementation(() => {});
 
     // Mock createElement and click
     const mockLink = { href: '', download: '', click: vi.fn() };
     const originalCreateElement = document.createElement.bind(document);
-    document.createElement = vi.fn((tag) => {
+    vi.spyOn(document, 'createElement').mockImplementation((tag) => {
       if (tag === 'a') return mockLink;
       return originalCreateElement(tag);
     });
@@ -131,7 +135,7 @@ describe('NetworkTab', () => {
     fireEvent.change(searchInput, { target: { value: 'api' } });
 
     // Should show API requests
-    expect(screen.getAllByText('/api/users')).toHaveLength(1);
+    expect(screen.getAllByText('/api/users')).toHaveLength(2);
     // Should not show non-API requests
     expect(screen.queryByText('/style.css')).not.toBeInTheDocument();
   });

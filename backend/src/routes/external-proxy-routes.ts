@@ -1,13 +1,18 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 
-// Headers to skip when forwarding
-const SKIP_HEADERS = new Set([
-  'host',
-  'connection',
-  'keep-alive',
-  'transfer-encoding',
-  'upgrade',
-  'http2-settings'
+// Only forward a strict set of safe request headers to external targets.
+const ALLOWED_FORWARD_HEADERS = new Set([
+  'accept',
+  'accept-language',
+  'accept-encoding',
+  'cache-control',
+  'pragma',
+  'if-none-match',
+  'if-modified-since',
+  'user-agent',
+  'range'
 ]);
 
 // Max response size: 10MB
@@ -26,9 +31,12 @@ const EXTERNAL_DEBUG_SCRIPT = `
   // Get the session ID from the URL if present
   const urlParams = new URLSearchParams(window.location.search);
   const SESSION = urlParams.get('_session') || 'default';
+  const TOKEN = urlParams.get('token');
 
   // Send logs to main API endpoint
-  const API_URL = '/api/preview/external/logs';
+  const API_URL = TOKEN
+    ? '/api/preview/external/logs?token=' + encodeURIComponent(TOKEN)
+    : '/api/preview/external/logs';
   const pendingLogs = [];
   let flushTimeout = null;
 
@@ -124,19 +132,76 @@ const EXTERNAL_DEBUG_SCRIPT = `
 </script>
 `;
 
-function isValidExternalUrl(url: string): boolean {
+function isPrivateIpAddress(ip: string): boolean {
+  const version = isIP(ip);
+  if (version === 4) {
+    const parts = ip.split('.').map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+      return true;
+    }
+
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  if (version === 6) {
+    const normalized = ip.toLowerCase().split('%')[0];
+    if (normalized === '::1' || normalized === '::') return true;
+    if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true; // ULA fc00::/7
+    if (/^fe[89ab]/.test(normalized)) return true; // Link-local fe80::/10
+
+    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
+    const mappedMatch = normalized.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mappedMatch && mappedMatch[1]) {
+      return isPrivateIpAddress(mappedMatch[1]);
+    }
+    return false;
+  }
+
+  return true;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1'
+  );
+}
+
+async function isValidExternalUrl(url: string): Promise<boolean> {
   try {
     const parsed = new URL(url);
     // Only allow http and https
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       return false;
     }
-    // Block localhost and private IPs (those should use the preview subdomain)
-    const hostname = parsed.hostname.toLowerCase();
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0') {
+    if (parsed.username || parsed.password) {
       return false;
     }
-    if (/^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname)) {
+
+    // Block localhost and private/reserved IPs (those should use preview routes)
+    const hostname = parsed.hostname;
+    if (isBlockedHostname(hostname)) {
+      return false;
+    }
+
+    if (isIP(hostname) && isPrivateIpAddress(hostname)) {
+      return false;
+    }
+
+    // Resolve hostnames and reject if they resolve to private/reserved ranges.
+    const records = await lookup(hostname, { all: true, verbatim: true }).catch(() => []);
+    if (records.some((record) => isPrivateIpAddress(record.address))) {
       return false;
     }
     return true;
@@ -145,21 +210,43 @@ function isValidExternalUrl(url: string): boolean {
   }
 }
 
+function getRequestToken(request: FastifyRequest): string | null {
+  const query = request.query as Record<string, unknown>;
+  if (typeof query.token === 'string' && query.token.length > 0) {
+    return query.token;
+  }
+  const authHeader = request.headers.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7);
+  }
+  return null;
+}
+
+function buildProxyExternalUrl(targetUrl: string, token: string | null): string {
+  const params = new URLSearchParams({ url: targetUrl });
+  if (token) {
+    params.set('token', token);
+  }
+  return `/api/proxy-external?${params.toString()}`;
+}
+
 export async function registerExternalProxyRoutes(app: FastifyInstance): Promise<void> {
   // Store logs from external sites
-  const externalLogs: Array<{ session: string; log: any }> = [];
+  const externalLogs: Array<{ userId: string; session: string; log: any }> = [];
   const MAX_LOGS = 500;
 
   // Receive logs from external sites
-  app.post('/api/preview/external/logs', {
-    config: { skipAuth: true }
-  }, async (request: FastifyRequest, reply: FastifyReply) => {
+  app.post('/api/preview/external/logs', async (request: FastifyRequest, reply: FastifyReply) => {
+    const userId = request.userId;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
     const body = request.body as { logs?: any[]; session?: string };
     const session = body.session || 'default';
     const logs = Array.isArray(body.logs) ? body.logs : (body.logs ? [body.logs] : []);
 
     for (const log of logs) {
-      externalLogs.push({ session, log });
+      externalLogs.push({ userId, session, log });
       if (externalLogs.length > MAX_LOGS) {
         externalLogs.shift();
       }
@@ -170,12 +257,16 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
 
   // Get logs from external sites
   app.get('/api/preview/external/logs', async (request: FastifyRequest, reply: FastifyReply) => {
+    const userId = request.userId;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
     const query = request.query as { session?: string; limit?: string; since?: string };
     const session = query.session;
     const limit = Math.min(parseInt(query.limit || '100', 10) || 100, 500);
     const since = parseInt(query.since || '0', 10) || 0;
 
-    let logs = externalLogs;
+    let logs = externalLogs.filter((entry) => entry.userId === userId);
     if (session) {
       logs = logs.filter(l => l.session === session);
     }
@@ -192,15 +283,30 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
 
   // Clear logs
   app.delete('/api/preview/external/logs', async (request: FastifyRequest, reply: FastifyReply) => {
-    const cleared = externalLogs.length;
+    const userId = request.userId;
+    if (!userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+
+    const kept: Array<{ userId: string; session: string; log: any }> = [];
+    let cleared = 0;
+    for (const entry of externalLogs) {
+      if (entry.userId === userId) {
+        cleared += 1;
+      } else {
+        kept.push(entry);
+      }
+    }
     externalLogs.length = 0;
+    externalLogs.push(...kept);
     return { success: true, cleared };
   });
 
   // Proxy external websites
   app.get('/api/proxy-external', async (request: FastifyRequest, reply: FastifyReply) => {
-    const query = request.query as { url?: string };
+    const query = request.query as { url?: string; token?: string };
     const targetUrl = query.url;
+    const requestToken = getRequestToken(request);
 
     if (!targetUrl) {
       return reply.code(400).send({
@@ -209,10 +315,10 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
       });
     }
 
-    if (!isValidExternalUrl(targetUrl)) {
+    if (!(await isValidExternalUrl(targetUrl))) {
       return reply.code(400).send({
         error: 'Invalid URL',
-        message: 'URL must be a valid http:// or https:// URL. For localhost URLs, use the preview subdomain.'
+        message: 'URL must be a valid public http:// or https:// URL. For local/private network URLs, use the preview route.'
       });
     }
 
@@ -222,7 +328,8 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
       // Build headers to forward
       const forwardHeaders: Record<string, string> = {};
       for (const [key, value] of Object.entries(request.headers)) {
-        if (!SKIP_HEADERS.has(key.toLowerCase()) && typeof value === 'string') {
+        const headerName = key.toLowerCase();
+        if (ALLOWED_FORWARD_HEADERS.has(headerName) && typeof value === 'string') {
           forwardHeaders[key] = value;
         }
       }
@@ -288,7 +395,7 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
             redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${basePath}${location}`;
           }
           // Redirect through our proxy
-          const proxyRedirect = `/api/proxy-external?url=${encodeURIComponent(redirectUrl)}`;
+          const proxyRedirect = buildProxyExternalUrl(redirectUrl, requestToken);
           reply.header('location', proxyRedirect);
           return reply.send();
         }
@@ -340,7 +447,7 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
               /(<a[^>]*\s)href=(["'])(\/[^"']*)\2/gi,
               (match, prefix, quote, path) => {
                 const fullUrl = `${baseOrigin}${path}`;
-                return `${prefix}href=${quote}/api/proxy-external?url=${encodeURIComponent(fullUrl)}${quote}`;
+                return `${prefix}href=${quote}${buildProxyExternalUrl(fullUrl, requestToken)}${quote}`;
               }
             );
 
@@ -349,7 +456,7 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
               /(<form[^>]*\s)action=(["'])(\/[^"']*)\2/gi,
               (match, prefix, quote, path) => {
                 const fullUrl = `${baseOrigin}${path}`;
-                return `${prefix}action=${quote}/api/proxy-external?url=${encodeURIComponent(fullUrl)}${quote}`;
+                return `${prefix}action=${quote}${buildProxyExternalUrl(fullUrl, requestToken)}${quote}`;
               }
             );
 

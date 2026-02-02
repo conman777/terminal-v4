@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { StorageTab } from '../StorageTab';
 
@@ -24,6 +24,11 @@ describe('StorageTab', () => {
     mockOnUpdateStorage = vi.fn().mockResolvedValue(undefined);
     // Mock window.confirm
     global.confirm = vi.fn(() => true);
+    global.alert = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('should render storage tree', () => {
@@ -157,13 +162,13 @@ describe('StorageTab', () => {
 
   it('should export storage data', () => {
     // Mock URL.createObjectURL
-    global.URL.createObjectURL = vi.fn(() => 'blob:test');
-    global.URL.revokeObjectURL = vi.fn();
+    vi.spyOn(global.URL, 'createObjectURL').mockReturnValue('blob:test');
+    vi.spyOn(global.URL, 'revokeObjectURL').mockImplementation(() => {});
 
     // Mock createElement and click
     const mockLink = { href: '', download: '', click: vi.fn() };
     const originalCreateElement = document.createElement.bind(document);
-    document.createElement = vi.fn((tag) => {
+    vi.spyOn(document, 'createElement').mockImplementation((tag) => {
       if (tag === 'a') return mockLink;
       return originalCreateElement(tag);
     });
@@ -178,11 +183,12 @@ describe('StorageTab', () => {
   });
 
   it('should import storage data', async () => {
-    const mockFile = new File(
-      [JSON.stringify({ type: 'localStorage', data: { imported_key: 'imported_value' } })],
-      'storage.json',
-      { type: 'application/json' }
-    );
+    const mockFile = {
+      size: 128,
+      text: vi.fn().mockResolvedValue(
+        JSON.stringify({ type: 'localStorage', data: { imported_key: 'imported_value' } })
+      )
+    };
 
     render(<StorageTab storage={mockStorage} onUpdateStorage={mockOnUpdateStorage} />);
 

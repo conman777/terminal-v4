@@ -70,11 +70,21 @@ const MAX_PERSIST_HISTORY_EVENTS = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_PERSIST_HISTORY_EVENTS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PERSIST_HISTORY_EVENTS;
 })();
+const DEFAULT_IDLE_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_IDLE_TIMEOUT_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+})();
+const DEFAULT_MAX_ACTIVE_SESSIONS = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_MAX_ACTIVE_SESSIONS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+})();
 
 export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
   defaultShell?: string;
   useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
+  idleTimeoutMs?: number; // 0 disables idle timeout
+  maxActiveSessions?: number; // 0 disables limit
 }
 
 /**
@@ -90,26 +100,31 @@ class OutputBatcher {
   private buffer: string[] = [];
   private bufferSize = 0;
   private timer: NodeJS.Timeout | null = null;
-  private readonly maxDelay: number;
-  private readonly maxSize: number;
+  private readonly baseMaxDelay: number;
+  private readonly baseMaxSize: number;
+  private adaptiveDelay: number;
+  private adaptiveSize: number;
+  private burstModeUntil = 0;
   private readonly sendCallback: (data: string) => void;
 
   constructor(sendCallback: (data: string) => void, maxDelay = 16, maxSize = 4096) {
     this.sendCallback = sendCallback;
-    this.maxDelay = maxDelay;
-    this.maxSize = maxSize;
+    this.baseMaxDelay = maxDelay;
+    this.baseMaxSize = maxSize;
+    this.adaptiveDelay = Math.min(maxDelay, 8);
+    this.adaptiveSize = Math.min(maxSize, 4096);
   }
 
   append(data: string): void {
     this.buffer.push(data);
     this.bufferSize += data.length;
 
-    if (this.bufferSize >= this.maxSize) {
+    if (this.bufferSize >= this.adaptiveSize) {
       // Buffer full - flush immediately
       this.flush();
     } else if (!this.timer) {
       // Start timer for delayed flush
-      this.timer = setTimeout(() => this.flush(), this.maxDelay);
+      this.timer = setTimeout(() => this.flush(), this.adaptiveDelay);
     }
   }
 
@@ -122,8 +137,29 @@ class OutputBatcher {
       const combined = this.buffer.join('');
       this.buffer = [];
       this.bufferSize = 0;
+      this.#updateProfile(combined.length);
       this.sendCallback(combined);
     }
+  }
+
+  #updateProfile(flushSize: number): void {
+    const now = Date.now();
+
+    if (flushSize >= 32_768) {
+      this.burstModeUntil = now + 1000;
+      this.adaptiveDelay = Math.max(this.baseMaxDelay, 24);
+      this.adaptiveSize = Math.max(this.baseMaxSize, 16_384);
+      return;
+    }
+
+    if (flushSize >= 8_192 || now < this.burstModeUntil) {
+      this.adaptiveDelay = Math.max(this.baseMaxDelay, 16);
+      this.adaptiveSize = Math.max(this.baseMaxSize, 8_192);
+      return;
+    }
+
+    this.adaptiveDelay = Math.min(this.baseMaxDelay, 8);
+    this.adaptiveSize = Math.min(this.baseMaxSize, 4096);
   }
 
   destroy(): void {
@@ -177,6 +213,8 @@ export class TerminalManager {
   #defaultShell: string;
   #counter = 0;
   #useTmux: boolean;
+  #idleTimeoutMs: number;
+  #maxActiveSessions: number;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.#spawnTerminal = options.spawnTerminal ?? ptySpawner;
@@ -188,6 +226,8 @@ export class TerminalManager {
     } else {
       this.#useTmux = isTmuxAvailable();
     }
+    this.#idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.#maxActiveSessions = options.maxActiveSessions ?? DEFAULT_MAX_ACTIVE_SESSIONS;
   }
 
   async initialize(): Promise<void> {
@@ -295,6 +335,61 @@ export class TerminalManager {
         console.error(`Failed to persist terminal session ${session.id}:`, error);
       });
     }, SAVE_DEBOUNCE_MS);
+  }
+
+  #resetIdleTimer(session: ManagedTerminal): void {
+    if (this.#idleTimeoutMs <= 0) return;
+    if (session.idleTimer) {
+      clearTimeout(session.idleTimer);
+    }
+    session.idleTimer = setTimeout(() => {
+      this.#expireIdleSession(session);
+    }, this.#idleTimeoutMs);
+  }
+
+  #recordSessionActivity(session: ManagedTerminal): void {
+    session.lastActivityAt = Date.now();
+    this.#resetIdleTimer(session);
+  }
+
+  #expireIdleSession(session: ManagedTerminal): void {
+    if (!this.#sessions.has(session.id)) {
+      return;
+    }
+
+    if (session.saveTimer) {
+      clearTimeout(session.saveTimer);
+      session.saveTimer = undefined;
+    }
+    if (session.idleTimer) {
+      clearTimeout(session.idleTimer);
+      session.idleTimer = undefined;
+    }
+
+    session.updatedAt = new Date().toISOString();
+    void this.#saveSessionToDisk(session).catch((error) => {
+      console.error(`Failed to persist idle terminal session ${session.id}:`, error);
+    });
+
+    session.subscribers.forEach((subscriber) => subscriber(null));
+    session.subscribers.clear();
+
+    if (session.dataHandler) {
+      session.process.off('data', session.dataHandler);
+    }
+    if (session.exitHandler) {
+      session.process.off('exit', session.exitHandler);
+    }
+
+    session.outputBatcher?.destroy();
+
+    try {
+      session.process.kill();
+    } catch (error) {
+      console.error(`Failed to terminate idle terminal session ${session.id}:`, error);
+    }
+
+    this.#sessions.delete(session.id);
   }
 
   async #saveSessionToDisk(session: ManagedTerminal): Promise<void> {
@@ -584,7 +679,7 @@ export class TerminalManager {
       for (let i = endIndex - 1; i >= startIndex; i -= 1) {
         charCount += history[i]?.text?.length ?? 0;
         if (charCount > maxHistoryChars) {
-          startIndex = i;
+          startIndex = i + 1;
           break;
         }
       }
@@ -665,6 +760,7 @@ export class TerminalManager {
   }
 
   #handleData(session: ManagedTerminal, chunk: string) {
+    this.#recordSessionActivity(session);
     this.#applyOsc7Cwd(session, chunk);
     const event: TerminalStreamEvent = {
       text: chunk,
@@ -703,6 +799,10 @@ export class TerminalManager {
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
       }
+      if (session.idleTimer) {
+        clearTimeout(session.idleTimer);
+        session.idleTimer = undefined;
+      }
       // Destroy output batcher
       session.outputBatcher?.destroy();
 
@@ -717,6 +817,13 @@ export class TerminalManager {
   }
 
   createSession(userId: string, options: TerminalCreateOptions = {}): TerminalSessionSnapshot {
+    if (this.#maxActiveSessions > 0) {
+      const activeForUser = Array.from(this.#sessions.values()).filter((session) => session.userId === userId).length;
+      if (activeForUser >= this.#maxActiveSessions) {
+        throw new Error(`Maximum active terminal sessions reached (${this.#maxActiveSessions})`);
+      }
+    }
+
     const id = options.id ?? randomUUID();
     const createdAt = new Date().toISOString();
     const title = options.title ?? `Terminal ${++this.#counter}`;
@@ -784,7 +891,8 @@ export class TerminalManager {
       currentCols: cols,
       currentRows: rows,
       usesTmux,
-      outputBatcher: undefined // Will be initialized below
+      outputBatcher: undefined, // Will be initialized below
+      lastActivityAt: Date.now()
     };
 
     // Create output batcher for this session
@@ -802,6 +910,7 @@ export class TerminalManager {
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
+    this.#resetIdleTimer(session);
 
     // Save metadata index entry (survives session file corruption)
     updateSessionMetadata(userId, id, { title, shell, cwd, createdAt }).catch((error) => {
@@ -848,6 +957,7 @@ export class TerminalManager {
 
     this.#processInputForCwd(session, input);
     session.process.write(normaliseNewlines(input));
+    this.#recordSessionActivity(session);
   }
 
   resize(
@@ -1062,6 +1172,10 @@ export class TerminalManager {
       if (session.saveTimer) {
         clearTimeout(session.saveTimer);
       }
+      if (session.idleTimer) {
+        clearTimeout(session.idleTimer);
+        session.idleTimer = undefined;
+      }
       // Destroy output batcher
       session.outputBatcher?.destroy();
       // Notify subscribers that session is ending before cleanup
@@ -1123,6 +1237,10 @@ export class TerminalManager {
             if (session.saveTimer) {
               clearTimeout(session.saveTimer);
             }
+            if (session.idleTimer) {
+              clearTimeout(session.idleTimer);
+              session.idleTimer = undefined;
+            }
             session.updatedAt = new Date().toISOString();
             await this.#saveSessionToDisk(session);
           } catch (error) {
@@ -1136,6 +1254,10 @@ export class TerminalManager {
       try {
         // Destroy output batcher
         session.outputBatcher?.destroy();
+        if (session.idleTimer) {
+          clearTimeout(session.idleTimer);
+          session.idleTimer = undefined;
+        }
         session.subscribers.forEach((subscriber) => subscriber(null));
         session.subscribers.clear();
         // Remove event listeners to prevent memory leaks
@@ -1172,6 +1294,13 @@ export class TerminalManager {
     // Check if already active
     if (this.#sessions.has(id)) {
       return this.getSession(userId, id);
+    }
+
+    if (this.#maxActiveSessions > 0) {
+      const activeForUser = Array.from(this.#sessions.values()).filter((session) => session.userId === userId).length;
+      if (activeForUser >= this.#maxActiveSessions) {
+        throw new Error(`Maximum active terminal sessions reached (${this.#maxActiveSessions})`);
+      }
     }
 
     const cols = options.cols ?? DEFAULT_COLS;
@@ -1259,7 +1388,8 @@ export class TerminalManager {
       currentCols: cols,
       currentRows: rows,
       usesTmux,
-      outputBatcher: undefined // Will be initialized below
+      outputBatcher: undefined, // Will be initialized below
+      lastActivityAt: Date.now()
     };
 
     // Create output batcher for this session
@@ -1277,6 +1407,7 @@ export class TerminalManager {
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
+    this.#resetIdleTimer(session);
 
     return this.getSession(userId, id);
   }

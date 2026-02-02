@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { apiGet } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
+import { useSystemStatsPolling } from '../hooks/useSystemStatsPolling';
 
 // Format bytes to human-readable GB
 function formatBytes(bytes) {
@@ -76,7 +77,6 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const resolvedWebglEnabled = terminalWebglEnabled !== false;
-  const [systemStats, setSystemStats] = useState(null);
   const [statsHistory, setStatsHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState('24h');
   const [latencyMs, setLatencyMs] = useState(null);
@@ -87,6 +87,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
   const [clientFrameMs, setClientFrameMs] = useState(null);
   const [clientFrameHistory, setClientFrameHistory] = useState([]);
   const dropdownRef = useRef(null);
+  const systemStats = useSystemStatsPolling(isOpen);
 
   // Update local state when modal opens
   useEffect(() => {
@@ -105,29 +106,6 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  // Poll system stats while modal is open
-  useEffect(() => {
-    if (!isOpen) {
-      setSystemStats(null);
-      return;
-    }
-
-    const fetchStats = async () => {
-      try {
-        const stats = await apiGet('/api/system/stats');
-        if (stats.memory) {
-          setSystemStats(stats);
-        }
-      } catch (err) {
-        // Silently fail - stats are optional
-      }
-    };
-
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000); // 5s is sufficient for system stats
-    return () => clearInterval(interval);
-  }, [isOpen]);
 
   // Poll API latency while modal is open
   useEffect(() => {

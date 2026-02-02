@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TerminalManager } from '../src/terminal/terminal-manager';
+import { MAX_BUFFER_CHARS } from '../src/terminal/types';
 import type {
   TerminalProcess,
   TerminalSpawnOptions
@@ -31,24 +32,52 @@ class FakeTerminalProcess extends EventEmitter implements TerminalProcess {
 
 describe('TerminalManager', () => {
   it('creates sessions and streams output to subscribers', () => {
-    const fakeProcess = new FakeTerminalProcess();
-    const spawnMock = vi.fn((_options: TerminalSpawnOptions) => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    vi.useFakeTimers();
+    try {
+      const fakeProcess = new FakeTerminalProcess();
+      const spawnMock = vi.fn((_options: TerminalSpawnOptions) => fakeProcess);
+      const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession(TEST_USER_ID, { title: 'Demo Terminal', cols: 80, rows: 24 });
-    expect(snapshot.title).toBe('Demo Terminal');
-    expect(spawnMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cols: 80, rows: 24 })
-    );
+      const snapshot = manager.createSession(TEST_USER_ID, { title: 'Demo Terminal', cols: 80, rows: 24 });
+      expect(snapshot.title).toBe('Demo Terminal');
+      expect(spawnMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cols: 80, rows: 24 })
+      );
 
-    const subscriber = vi.fn();
-    manager.subscribe(TEST_USER_ID, snapshot.id, subscriber);
+      const subscriber = vi.fn();
+      manager.subscribe(TEST_USER_ID, snapshot.id, subscriber);
 
-    fakeProcess.emit('data', 'hello\n');
-    expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello\n' }));
+      fakeProcess.emit('data', 'hello\n');
+      vi.advanceTimersByTime(20);
+      expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello\n' }));
 
-    const history = manager.getSession(TEST_USER_ID, snapshot.id);
-    expect(history?.history).toHaveLength(1);
+      const history = manager.getSession(TEST_USER_ID, snapshot.id);
+      expect(history?.history).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('batches rapid PTY output into one subscriber event', () => {
+    vi.useFakeTimers();
+    try {
+      const fakeProcess = new FakeTerminalProcess();
+      const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess) });
+      const snapshot = manager.createSession(TEST_USER_ID);
+      const subscriber = vi.fn();
+
+      manager.subscribe(TEST_USER_ID, snapshot.id, subscriber);
+      fakeProcess.emit('data', 'hello ');
+      fakeProcess.emit('data', 'world');
+
+      expect(subscriber).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(20);
+
+      expect(subscriber).toHaveBeenCalledTimes(1);
+      expect(subscriber).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello world' }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('writes input with newline normalisation and supports resize/close', () => {
@@ -72,7 +101,7 @@ describe('TerminalManager', () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn((options: TerminalSpawnOptions) => {
       // Assert from inside to keep expectations close to the behaviour.
-      expect(options.cwd).toBe(process.cwd());
+      expect(options.cwd).toBe(process.env.HOME || process.cwd());
       return fakeProcess;
     });
     const manager = new TerminalManager({ spawnTerminal: spawnMock });
@@ -121,20 +150,29 @@ describe('TerminalManager', () => {
   });
 
   it('caps buffered output to avoid unbounded memory growth', () => {
-    const fakeProcess = new FakeTerminalProcess();
-    const spawnMock = vi.fn(() => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    vi.useFakeTimers();
+    try {
+      const fakeProcess = new FakeTerminalProcess();
+      const spawnMock = vi.fn(() => fakeProcess);
+      const manager = new TerminalManager({ spawnTerminal: spawnMock });
 
-    const snapshot = manager.createSession(TEST_USER_ID);
+      const snapshot = manager.createSession(TEST_USER_ID);
 
-    const chunkA = 'A'.repeat(1_100_000);
-    const chunkB = 'B'.repeat(1_100_000);
-    fakeProcess.emit('data', chunkA);
-    fakeProcess.emit('data', chunkB);
+      const chunkA = 'A'.repeat(8_000_000);
+      const chunkB = 'B'.repeat(8_000_000);
+      const chunkC = 'C'.repeat(8_000_000);
+      fakeProcess.emit('data', chunkA);
+      fakeProcess.emit('data', chunkB);
+      fakeProcess.emit('data', chunkC);
+      vi.advanceTimersByTime(20);
 
-    const history = manager.getSession(TEST_USER_ID, snapshot.id);
-    expect(history?.history).toHaveLength(1);
-    expect(history?.history[0].text[0]).toBe('B');
+      const history = manager.getSession(TEST_USER_ID, snapshot.id);
+      const totalChars = history?.history.reduce((sum, entry) => sum + entry.text.length, 0) ?? 0;
+      expect(totalChars).toBeLessThanOrEqual(MAX_BUFFER_CHARS);
+      expect(history?.history[0].text[0]).toBe('B');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renames an active session', async () => {
@@ -147,5 +185,33 @@ describe('TerminalManager', () => {
 
     expect(updated?.title).toBe('New Name');
     expect(manager.getSession(TEST_USER_ID, snapshot.id)?.title).toBe('New Name');
+  });
+
+  it('enforces maximum active sessions per user when configured', () => {
+    const manager = new TerminalManager({
+      spawnTerminal: vi.fn(() => new FakeTerminalProcess()),
+      maxActiveSessions: 1
+    });
+
+    manager.createSession(TEST_USER_ID);
+    expect(() => manager.createSession(TEST_USER_ID)).toThrow('Maximum active terminal sessions reached');
+  });
+
+  it('expires idle sessions when idle timeout is configured', () => {
+    vi.useFakeTimers();
+    try {
+      const fakeProcess = new FakeTerminalProcess();
+      const manager = new TerminalManager({
+        spawnTerminal: vi.fn(() => fakeProcess),
+        idleTimeoutMs: 50
+      });
+      const snapshot = manager.createSession(TEST_USER_ID);
+
+      expect(manager.isActive(snapshot.id)).toBe(true);
+      vi.advanceTimersByTime(60);
+      expect(manager.isActive(snapshot.id)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

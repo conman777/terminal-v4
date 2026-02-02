@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { exec } from 'node:child_process';
 import { clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
 import { getProxyLogs, clearProxyLogs, getActivePreviewPorts } from '../preview/request-log-store';
+import { getProcessLogsByPort } from '../preview/process-log-store';
 
 // Rate limiter for eval endpoint
 interface RateLimitEntry {
@@ -9,6 +10,31 @@ interface RateLimitEntry {
   resetTime: number;
 }
 const evalRateLimiter = new Map<string, RateLimitEntry>();
+const ACTIVE_PORTS_CACHE_TTL_MS = (() => {
+  const parsed = Number.parseInt(process.env.PREVIEW_ACTIVE_PORTS_CACHE_TTL_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5000;
+})();
+const PREVIEW_LOG_STREAM_POLL_MS = (() => {
+  const parsed = Number.parseInt(process.env.PREVIEW_LOG_STREAM_POLL_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
+})();
+
+interface ActivePortInfo {
+  process: string;
+  cwd: string | null;
+}
+
+interface ActivePortResponse {
+  port: number;
+  listening: boolean;
+  previewed: boolean;
+  common: boolean;
+  process: string | null;
+  cwd: string | null;
+}
+
+let activePortsCache: { expiresAt: number; ports: ActivePortResponse[] } | null = null;
+let activePortsInFlight: Promise<ActivePortResponse[]> | null = null;
 
 // Clean up old rate limit entries every 5 minutes
 setInterval(() => {
@@ -19,6 +45,119 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+
+async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
+  if (process.platform === 'darwin') {
+    return new Promise((resolve) => {
+      exec('lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null', (error, stdout) => {
+        const portMap = new Map<number, ActivePortInfo>();
+        if (error) {
+          resolve(portMap);
+          return;
+        }
+        const lines = stdout.trim().split('\n').slice(1);
+        for (const line of lines) {
+          const match = line.match(/^(\S+)\s+(\d+)\s+\S+.*TCP\s+\S+:(\d+)\s+\(LISTEN\)\s*$/);
+          if (!match) continue;
+          const processName = match[1];
+          const port = Number.parseInt(match[3], 10);
+          if (!Number.isFinite(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
+          if (!portMap.has(port)) {
+            portMap.set(port, { process: processName, cwd: null });
+          }
+        }
+        resolve(portMap);
+      });
+    });
+  }
+
+  return new Promise((resolve) => {
+    exec('ss -tlnp 2>/dev/null | grep LISTEN', async (error, stdout) => {
+      const portMap = new Map<number, ActivePortInfo>();
+      if (error) {
+        resolve(portMap);
+        return;
+      }
+      const lines = stdout.trim().split('\n');
+      const cwdPromises: Promise<void>[] = [];
+
+      for (const line of lines) {
+        const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
+        if (!portMatch) continue;
+        const port = Number.parseInt(portMatch[1], 10);
+        if (!Number.isFinite(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
+
+        const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+        const processName = processMatch ? processMatch[1] : '';
+        const pid = processMatch ? processMatch[2] : null;
+        portMap.set(port, { process: processName, cwd: null });
+
+        if (pid && /^\d+$/.test(pid)) {
+          const cwdPromise = (async () => {
+            try {
+              const { readlink } = await import('fs/promises');
+              const cwd = await readlink(`/proc/${pid}/cwd`);
+              if (!cwd) return;
+              const dirName = cwd.split('/').filter(Boolean).pop() || cwd;
+              const existing = portMap.get(port);
+              if (existing) {
+                existing.cwd = dirName;
+              }
+            } catch {
+              // Process may exit while scanning.
+            }
+          })();
+          cwdPromises.push(cwdPromise);
+        }
+      }
+
+      await Promise.all(cwdPromises);
+      resolve(portMap);
+    });
+  });
+}
+
+async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
+  const now = Date.now();
+  if (activePortsCache && activePortsCache.expiresAt > now) {
+    return activePortsCache.ports;
+  }
+  if (activePortsInFlight) {
+    return activePortsInFlight;
+  }
+
+  activePortsInFlight = (async () => {
+    const previewedPorts = getActivePreviewPorts();
+    const portInfo = await scanListeningPorts();
+    const listeningPorts = Array.from(portInfo.keys());
+    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8888];
+    const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
+
+    const ports = allPorts.map((port) => {
+      const info = portInfo.get(port);
+      return {
+        port,
+        listening: listeningPorts.includes(port),
+        previewed: previewedPorts.includes(port),
+        common: commonDevPorts.includes(port),
+        process: info?.process || null,
+        cwd: info?.cwd || null
+      };
+    });
+
+    activePortsCache = {
+      expiresAt: Date.now() + ACTIVE_PORTS_CACHE_TTL_MS,
+      ports
+    };
+    return ports;
+  })();
+
+  try {
+    return await activePortsInFlight;
+  } finally {
+    activePortsInFlight = null;
+  }
+}
 
 export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<void> {
   // Preview: Get stored cookies for a port
@@ -87,87 +226,96 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       return;
     }
 
-    // Get ports that have been previewed (from log store)
-    const previewedPorts = getActivePreviewPorts();
-
-    // Scan for listening ports with process names and working directories
-    const portInfo = await new Promise<Map<number, { process: string; cwd: string | null }>>((resolve) => {
-      // ss -tlnp output format: LISTEN  0  128  *:3000  *:*  users:(("node",pid=1234,fd=12))
-      exec('ss -tlnp 2>/dev/null | grep LISTEN', async (error, stdout) => {
-        const portMap = new Map<number, { process: string; cwd: string | null }>();
-        if (error) {
-          resolve(portMap);
-          return;
-        }
-        const lines = stdout.trim().split('\n');
-        const cwdPromises: Promise<void>[] = [];
-
-        for (const line of lines) {
-          // Extract port from 4th column (e.g., *:3000 or 0.0.0.0:3000 or [::]:3000)
-          const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
-          if (!portMatch) continue;
-          const port = parseInt(portMatch[1], 10);
-          if (isNaN(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
-
-          // Extract process name and PID from users:(("name",pid=1234,...)) format
-          const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
-          const processName = processMatch ? processMatch[1] : '';
-          const pid = processMatch ? processMatch[2] : null;
-
-          portMap.set(port, { process: processName, cwd: null });
-
-          // Try to get the working directory for more context
-          // Validate PID is purely numeric to prevent command injection
-          if (pid && /^\d+$/.test(pid)) {
-            const cwdPromise = (async () => {
-              try {
-                // Use fs.readlink instead of exec for safety
-                const { readlink } = await import('fs/promises');
-                const cwd = await readlink(`/proc/${pid}/cwd`);
-                if (cwd) {
-                  // Get just the last directory name
-                  const dirName = cwd.split('/').filter(Boolean).pop() || cwd;
-                  const existing = portMap.get(port);
-                  if (existing) {
-                    existing.cwd = dirName;
-                  }
-                }
-              } catch {
-                // Process may have exited, ignore
-              }
-            })();
-            cwdPromises.push(cwdPromise);
-          }
-        }
-
-        await Promise.all(cwdPromises);
-        resolve(portMap);
-      });
-    });
-
-    const listeningPorts = Array.from(portInfo.keys());
-
-    // Common dev ports to highlight
-    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8888];
-
-    // Combine and dedupe
-    const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
-
-    // Build response with metadata
-    const ports = allPorts.map(port => {
-      const info = portInfo.get(port);
-      return {
-        port,
-        listening: listeningPorts.includes(port),
-        previewed: previewedPorts.includes(port),
-        common: commonDevPorts.includes(port),
-        process: info?.process || null,
-        cwd: info?.cwd || null
-      };
-    });
-
+    const ports = await listActivePortsSnapshot();
     reply.send({ ports });
   });
+
+  app.get<{ Params: { port: string }; Querystring: { since?: string; types?: string } }>(
+    '/api/preview/:port/log-stream',
+    async (request, reply) => {
+      const userId = request.userId;
+      if (!userId) {
+        reply.code(401).send({ error: 'Unauthorized' });
+        return;
+      }
+
+      const port = Number.parseInt(request.params.port, 10);
+      if (!Number.isFinite(port) || port < 1 || port > 65535) {
+        reply.code(400).send({ error: 'Invalid port number' });
+        return;
+      }
+
+      const parsedSince = request.query.since ? Number.parseInt(request.query.since, 10) : 0;
+      const since = Number.isFinite(parsedSince) && parsedSince > 0 ? parsedSince : 0;
+      const requestedTypes = (request.query.types || 'proxy,server')
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+      const includeProxy = requestedTypes.length === 0 || requestedTypes.includes('proxy');
+      const includeServer = requestedTypes.length === 0 || requestedTypes.includes('server');
+
+      reply.hijack();
+      const stream = reply.raw;
+      stream.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      if (typeof (stream as { flushHeaders?: () => void }).flushHeaders === 'function') {
+        (stream as { flushHeaders: () => void }).flushHeaders();
+      }
+
+      let closed = false;
+      let proxyCursor = since;
+      let processCursor = since;
+      const sendEvent = (eventName: string, payload: unknown): void => {
+        if (closed) return;
+        try {
+          stream.write(`event: ${eventName}\n`);
+          stream.write(`data: ${JSON.stringify(payload)}\n\n`);
+        } catch {
+          closed = true;
+        }
+      };
+
+      const flushLogs = () => {
+        if (closed) return;
+        if (includeProxy) {
+          const proxyLogs = getProxyLogs(port, proxyCursor);
+          for (const entry of proxyLogs) {
+            sendEvent('proxy', entry);
+            proxyCursor = Math.max(proxyCursor, entry.timestamp);
+          }
+        }
+        if (includeServer) {
+          const processLogs = getProcessLogsByPort(port, processCursor);
+          for (const entry of processLogs) {
+            sendEvent('server', entry);
+            processCursor = Math.max(processCursor, entry.timestamp);
+          }
+        }
+      };
+
+      flushLogs();
+      const pollTimer = setInterval(flushLogs, PREVIEW_LOG_STREAM_POLL_MS);
+      const keepAlive = setInterval(() => {
+        if (closed) return;
+        sendEvent('ping', { ts: Date.now() });
+      }, 15000);
+
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        clearInterval(pollTimer);
+        clearInterval(keepAlive);
+      };
+
+      stream.on('close', cleanup);
+      stream.on('error', cleanup);
+      request.raw.on('close', cleanup);
+    }
+  );
 
   // Preview: Evaluate JavaScript in preview context (REPL)
   app.post<{ Params: { port: string }; Body: { expression: string } }>('/api/preview/:port/evaluate', async (request, reply) => {

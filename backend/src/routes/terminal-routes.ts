@@ -9,6 +9,11 @@ import {
 import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
 
+const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_WS_MAX_BUFFERED_BYTES || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1_000_000;
+})();
+
 export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
   const parseHistoryLimit = (request: { query?: unknown }) => {
     const query = (request.query || {}) as Record<string, string | undefined>;
@@ -111,7 +116,15 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
-    const session = deps.terminalManager.createSession(userId, result.data);
+    const session = (() => {
+      try {
+        return deps.terminalManager.createSession(userId, result.data);
+      } catch (error) {
+        reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+        return null;
+      }
+    })();
+    if (!session) return;
     reply.code(201).send({
       session: {
         id: session.id,
@@ -392,7 +405,20 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     const clientId = randomUUID();
 
     const encoder = new TextEncoder();
+    const canSend = (): boolean => {
+      if (socket.readyState !== 1) {
+        return false;
+      }
+      if (socket.bufferedAmount > TERMINAL_WS_MAX_BUFFERED_BYTES) {
+        socket.close(1013, 'Client is too slow to receive terminal output');
+        return false;
+      }
+      return true;
+    };
     const sendBinary = (text: string): boolean => {
+      if (!canSend()) {
+        return false;
+      }
       try {
         const buffer = encoder.encode(text);
         socket.send(buffer);
@@ -402,6 +428,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       }
     };
     const sendFrame = (frameType: number, payload: string): boolean => {
+      if (!canSend()) {
+        return false;
+      }
       try {
         const body = encoder.encode(payload);
         const framed = new Uint8Array(body.length + 1);
@@ -421,13 +450,17 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     );
 
     // Send clientId to frontend so it can include it in resize requests
-    sendMeta({ type: 'clientId', clientId });
+    if (!sendMeta({ type: 'clientId', clientId })) {
+      return;
+    }
 
     if (!deps.terminalManager.isActive(snapshot.id)) {
       if (sendHistory) {
-        snapshot.history.forEach((entry) => {
-          sendOutput(entry.text);
-        });
+        for (const entry of snapshot.history) {
+          if (!sendOutput(entry.text)) {
+            return;
+          }
+        }
       }
       socket.close(1000, 'Session ended');
       return;
@@ -464,9 +497,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     });
 
     if (sendHistory) {
-      snapshot.history.forEach((entry) => {
-        sendOutput(entry.text);
-      });
+      for (const entry of snapshot.history) {
+        if (!sendOutput(entry.text)) {
+          return;
+        }
+      }
     }
 
     isBuffering = false;
@@ -479,14 +514,18 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         try {
           const parsed = JSON.parse(event.text);
           if (parsed && parsed.__terminal_meta) {
-            sendMeta(parsed);
+            if (!sendMeta(parsed)) {
+              return;
+            }
             continue;
           }
         } catch {
           // Treat as output
         }
       }
-      sendOutput(event.text);
+      if (!sendOutput(event.text)) {
+        return;
+      }
     }
 
     const decoder = new TextDecoder();

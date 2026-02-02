@@ -51,6 +51,8 @@ export interface ManagedTerminal {
   currentRows: number;
   usesTmux: boolean;
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
+  lastActivityAt: number;
+  idleTimer?: NodeJS.Timeout;
 }
 
 // Re-export session store type

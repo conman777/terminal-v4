@@ -1,8 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { LazySyntaxHighlighter } from './LazySyntaxHighlighter';
 
 // Code block renderer for markdown
 const CodeBlock = memo(function CodeBlock({ node, inline, className, children, ...props }) {
@@ -18,10 +17,8 @@ const CodeBlock = memo(function CodeBlock({ node, inline, className, children, .
   }
 
   return (
-    <SyntaxHighlighter
-      style={oneDark}
+    <LazySyntaxHighlighter
       language={language || 'text'}
-      PreTag="div"
       customStyle={{
         margin: '12px 0',
         borderRadius: '6px',
@@ -30,7 +27,7 @@ const CodeBlock = memo(function CodeBlock({ node, inline, className, children, .
       {...props}
     >
       {String(children).replace(/\n$/, '')}
-    </SyntaxHighlighter>
+    </LazySyntaxHighlighter>
   );
 });
 

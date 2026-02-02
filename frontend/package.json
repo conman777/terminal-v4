@@ -7,9 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "../backend/node_modules/.bin/vitest run",
-    "test:watch": "../backend/node_modules/.bin/vitest",
-    "test:coverage": "../backend/node_modules/.bin/vitest run --coverage"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@webcontainer/api": "^1.6.1",

@@ -8,7 +8,7 @@ This document describes how to run and extend the project’s automated tests.
 | --- | --- | --- | --- |
 | Backend unit/integration | `backend/` | `npm test` | Vitest + Supertest |
 | Backend type checks/build | `backend/` | `npm run build` | `tsup` compile (type errors fail) |
-| Frontend unit tests | `frontend/` | *(not implemented)* | No Vitest/RTL yet |
+| Frontend unit tests | `frontend/` | `npm test` | Vitest + React Testing Library |
 | E2E (legacy) | project root | `npm run test:e2e` | Runs Playwright tests in `tests/` |
 | E2E (frontend) | `frontend/` | `npx playwright test` | Uses `frontend/playwright.config.ts` |
 

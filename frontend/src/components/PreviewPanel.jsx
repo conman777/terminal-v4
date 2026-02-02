@@ -338,99 +338,98 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [onUrlChange]);
 
-  // Poll for proxy logs (server-side network requests)
+  // Stream proxy/process logs with SSE (falls back to reconnect polling loop)
   const lastProxyLogTimestamp = useRef(0);
+  const lastProcessLogTimestamp = useRef(0);
   useEffect(() => {
     if (!previewPort) {
       setProxyLogs([]);
+      lastProcessLogTimestamp.current = 0;
+      setProcessLogs([]);
       lastProxyLogTimestamp.current = 0;
       return;
     }
     if (!showLogs || !isDocumentVisible || logFilter === 'client') {
       return;
     }
+    const types = logFilter === 'proxy'
+      ? 'proxy'
+      : (logFilter === 'server' ? 'server' : 'proxy,server');
     let disposed = false;
-    const fetchProxyLogs = async () => {
-      if (disposed) return;
-      try {
-        const token = getAccessToken();
-        const since = lastProxyLogTimestamp.current;
-        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch(`/api/preview/${previewPort}/proxy-logs?since=${since}`, { headers });
-        if (disposed || !res.ok) return;
-        const data = await res.json();
-        if (disposed) return;
-        if (data.logs && data.logs.length > 0) {
-          setProxyLogs(prev => {
-            const newLogs = [...prev, ...data.logs];
-            // Keep max 200 logs
-            return newLogs.slice(-200);
-          });
-          // Update last timestamp
-          const lastLog = data.logs[data.logs.length - 1];
-          if (lastLog) {
-            lastProxyLogTimestamp.current = lastLog.timestamp;
-          }
-        }
-      } catch {
-        // Ignore fetch errors
-      }
-    };
-    // Initial fetch (get all logs)
-    fetchProxyLogs();
-    // Poll every 2 seconds while logs are visible
-    const interval = setInterval(fetchProxyLogs, 2000);
-    return () => {
-      disposed = true;
-      clearInterval(interval);
-    };
-  }, [previewPort, showLogs, isDocumentVisible, logFilter]);
+    let eventSource = null;
+    let reconnectTimer = null;
+    let retryDelayMs = 1000;
 
-  // Poll for process logs (stdout/stderr from dev server)
-  const lastProcessLogTimestamp = useRef(0);
-  useEffect(() => {
-    if (!previewPort) {
-      setProcessLogs([]);
-      lastProcessLogTimestamp.current = 0;
-      return;
-    }
-    if (!showLogs || !isDocumentVisible || logFilter === 'client' || logFilter === 'proxy') {
-      return;
-    }
-    let disposed = false;
-    const fetchProcessLogs = async () => {
+    const connect = () => {
       if (disposed) return;
-      try {
-        const token = getAccessToken();
-        const since = lastProcessLogTimestamp.current;
-        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch(`/api/preview/${previewPort}/process-logs?since=${since}`, { headers });
-        if (disposed || !res.ok) return;
-        const data = await res.json();
+      const token = getAccessToken();
+      if (!token) return;
+      const since = types === 'proxy'
+        ? lastProxyLogTimestamp.current
+        : (types === 'server'
+            ? lastProcessLogTimestamp.current
+            : Math.min(lastProxyLogTimestamp.current || 0, lastProcessLogTimestamp.current || 0));
+      const params = new URLSearchParams({
+        token,
+        types,
+        since: String(Math.max(0, since))
+      });
+      eventSource = new EventSource(`/api/preview/${previewPort}/log-stream?${params.toString()}`);
+
+      eventSource.addEventListener('proxy', (event) => {
         if (disposed) return;
-        if (data.logs && data.logs.length > 0) {
-          setProcessLogs(prev => {
-            const newLogs = [...prev, ...data.logs];
-            // Keep max 200 logs
-            return newLogs.slice(-200);
+        try {
+          const log = JSON.parse(event.data);
+          if (!log || typeof log.timestamp !== 'number') return;
+          setProxyLogs((prev) => {
+            const next = [...prev, log];
+            return next.slice(-200);
           });
-          // Update last timestamp
-          const lastLog = data.logs[data.logs.length - 1];
-          if (lastLog) {
-            lastProcessLogTimestamp.current = lastLog.timestamp;
-          }
+          lastProxyLogTimestamp.current = Math.max(lastProxyLogTimestamp.current, log.timestamp);
+        } catch {
+          // Ignore malformed logs.
         }
-      } catch {
-        // Ignore fetch errors
-      }
+      });
+
+      eventSource.addEventListener('server', (event) => {
+        if (disposed) return;
+        try {
+          const log = JSON.parse(event.data);
+          if (!log || typeof log.timestamp !== 'number') return;
+          setProcessLogs((prev) => {
+            const next = [...prev, log];
+            return next.slice(-200);
+          });
+          lastProcessLogTimestamp.current = Math.max(lastProcessLogTimestamp.current, log.timestamp);
+        } catch {
+          // Ignore malformed logs.
+        }
+      });
+
+      eventSource.onerror = () => {
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        if (disposed) return;
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+        reconnectTimer = setTimeout(connect, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, 10000);
+      };
     };
-    // Initial fetch (get all logs)
-    fetchProcessLogs();
-    // Poll every 2 seconds while logs are visible
-    const interval = setInterval(fetchProcessLogs, 2000);
+
+    connect();
+
     return () => {
       disposed = true;
-      clearInterval(interval);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      if (eventSource) {
+        eventSource.close();
+      }
     };
   }, [previewPort, showLogs, isDocumentVisible, logFilter]);
 

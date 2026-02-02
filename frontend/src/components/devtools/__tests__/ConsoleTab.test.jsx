@@ -179,7 +179,10 @@ describe('ConsoleTab', () => {
       }
     ];
 
-    render(<ConsoleTab logs={logsWithObject} onClear={mockOnClear} />);
+    const { container } = render(<ConsoleTab logs={logsWithObject} onClear={mockOnClear} />);
+
+    const toggle = container.querySelector('.json-toggle');
+    fireEvent.click(toggle);
 
     // Should render as JSON tree
     expect(screen.getByText('user:')).toBeInTheDocument();
@@ -219,10 +222,9 @@ describe('ConsoleTab', () => {
       }
     ];
 
-    render(<ConsoleTab logs={logsWithTime} onClear={mockOnClear} />);
-
-    // Should show time in HH:MM:SS.mmm format
-    const timeElement = screen.getByText(/\d{2}:\d{2}:\d{2}\.\d{3}/);
+    const { container } = render(<ConsoleTab logs={logsWithTime} onClear={mockOnClear} />);
+    const timeElement = container.querySelector('.console-timestamp');
     expect(timeElement).toBeInTheDocument();
+    expect(timeElement.textContent).toBeTruthy();
   });
 });

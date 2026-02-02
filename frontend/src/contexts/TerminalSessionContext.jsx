@@ -12,7 +12,7 @@ export function TerminalSessionProvider({ children }) {
       return null;
     }
   });
-  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [loadingSessions, setLoadingSessions] = useState(true);
   const [sessionLoadError, setSessionLoadError] = useState(null);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
@@ -52,6 +52,8 @@ export function TerminalSessionProvider({ children }) {
   const lastActivityRef = useRef(Date.now());
   const lastCwdRef = useRef(null);
   const terminalSendersRef = useRef(new Map());
+  const liveTerminalCountRef = useRef(0);
+  const pollRescheduleRef = useRef(null);
 
   // Derived state
   const activeSessions = useMemo(
@@ -508,14 +510,25 @@ export function TerminalSessionProvider({ children }) {
 
   const registerTerminalSender = useCallback((sessionId, sender) => {
     if (!sessionId || typeof sender !== 'function') return;
+    const previousSize = terminalSendersRef.current.size;
     terminalSendersRef.current.set(sessionId, sender);
+    if (terminalSendersRef.current.size !== previousSize) {
+      liveTerminalCountRef.current = terminalSendersRef.current.size;
+      lastActivityRef.current = Date.now();
+      pollRescheduleRef.current?.();
+    }
   }, []);
 
   const unregisterTerminalSender = useCallback((sessionId, sender) => {
     if (!sessionId) return;
     const current = terminalSendersRef.current.get(sessionId);
     if (!current || current === sender) {
+      const previousSize = terminalSendersRef.current.size;
       terminalSendersRef.current.delete(sessionId);
+      if (terminalSendersRef.current.size !== previousSize) {
+        liveTerminalCountRef.current = terminalSendersRef.current.size;
+        pollRescheduleRef.current?.();
+      }
     }
   }, []);
 
@@ -608,6 +621,12 @@ export function TerminalSessionProvider({ children }) {
     const getPollingInterval = () => {
       if (document.visibilityState === 'hidden') return null;
       const idleTime = Date.now() - lastActivityRef.current;
+      const hasLiveTerminalConnection = liveTerminalCountRef.current > 0;
+      if (hasLiveTerminalConnection) {
+        if (idleTime > 60000) return 60000;
+        if (idleTime > 30000) return 30000;
+        return 15000;
+      }
       if (idleTime > 60000) return 30000;
       if (idleTime > 30000) return 15000;
       return 5000;
@@ -624,6 +643,7 @@ export function TerminalSessionProvider({ children }) {
       }
     };
 
+    pollRescheduleRef.current = schedulePoll;
     schedulePoll();
 
     const handleActivity = () => {
@@ -646,6 +666,7 @@ export function TerminalSessionProvider({ children }) {
 
     return () => {
       isMountedRef.current = false;
+      pollRescheduleRef.current = null;
       if (pollTimeoutId) clearTimeout(pollTimeoutId);
       window.removeEventListener('mousemove', handleActivity);
       window.removeEventListener('keydown', handleActivity);

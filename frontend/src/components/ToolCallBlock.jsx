@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { createTwoFilesPatch } from 'diff';
+import { LazySyntaxHighlighter } from './LazySyntaxHighlighter';
 
 // Tool icons (emoji-based for simplicity, could use SVG icons)
 const TOOL_ICONS = {
@@ -297,10 +296,8 @@ const CodeBlock = memo(function CodeBlock({ node, inline, className, children, .
     return (
       <div className="code-block-wrapper">
         <CopyButton text={codeString} />
-        <SyntaxHighlighter
-          style={oneDark}
+        <LazySyntaxHighlighter
           language={language}
-          PreTag="div"
           customStyle={{
             margin: 0,
             borderRadius: '6px',
@@ -309,7 +306,7 @@ const CodeBlock = memo(function CodeBlock({ node, inline, className, children, .
           {...props}
         >
           {codeString}
-        </SyntaxHighlighter>
+        </LazySyntaxHighlighter>
       </div>
     );
   }
