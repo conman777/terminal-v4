@@ -1036,6 +1036,10 @@ button {
   .reader-view {
     padding: 6px 10px 4px;
   }
+
+  .reader-view-content {
+    line-height: 1.4;
+  }
 }
 
 .layout.mobile .reader-view {
@@ -1278,6 +1282,14 @@ button {
   white-space: pre-wrap;
   line-height: 1.6;
   border: none;
+}
+
+@media (max-width: 768px) {
+  .terminal-log {
+    font-size: 15px;
+    line-height: 1.7;
+    padding: 18px 16px;
+  }
 }
 
 .terminal-line {
