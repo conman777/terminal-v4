@@ -250,21 +250,48 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (!isDocumentVisible) {
       return;
     }
+    let disposed = false;
+    let pollTimer = null;
+
     const checkCookies = async () => {
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         const res = await fetch(`/api/preview/${previewPort}/cookies`, { headers });
         const data = await res.json();
+        if (disposed) return false;
         setHasCookies(data.hasCookies);
+        return true;
       } catch {
+        if (disposed) return false;
         setHasCookies(false);
+        return false;
       }
     };
-    checkCookies();
-    // Re-check periodically while preview is active
-    const interval = setInterval(checkCookies, 10000);
-    return () => clearInterval(interval);
+
+    const schedule = (succeeded = true) => {
+      if (disposed) return;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+      pollTimer = setTimeout(async () => {
+        const ok = await checkCookies();
+        schedule(ok);
+      }, succeeded ? 10000 : 20000);
+    };
+
+    const runNow = async () => {
+      const ok = await checkCookies();
+      schedule(ok);
+    };
+
+    void runNow();
+    return () => {
+      disposed = true;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+    };
   }, [previewPort, isDocumentVisible]);
 
   const handleClearCookies = useCallback(async () => {
@@ -298,6 +325,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   // Fetch active ports for the dropdown
   useEffect(() => {
     if (!isDocumentVisible) return;
+    let disposed = false;
+    let pollTimer = null;
+
     const fetchActivePorts = async () => {
       try {
         const token = getAccessToken();
@@ -305,16 +335,39 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const res = await fetch('/api/preview/active-ports', { headers });
         if (res.ok) {
           const data = await res.json();
+          if (disposed) return false;
           setActivePorts(data.ports || []);
         }
+        return true;
       } catch {
         // Ignore fetch errors
+        return false;
       }
     };
-    fetchActivePorts();
-    // Refresh every 5 seconds
-    const interval = setInterval(fetchActivePorts, 5000);
-    return () => clearInterval(interval);
+
+    const schedule = (succeeded = true) => {
+      if (disposed) return;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+      pollTimer = setTimeout(async () => {
+        const ok = await fetchActivePorts();
+        schedule(ok);
+      }, succeeded ? 5000 : 10000);
+    };
+
+    const runNow = async () => {
+      const ok = await fetchActivePorts();
+      schedule(ok);
+    };
+
+    void runNow();
+    return () => {
+      disposed = true;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+    };
   }, [isDocumentVisible]);
 
   // Close dropdown when clicking outside

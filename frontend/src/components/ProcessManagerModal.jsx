@@ -7,13 +7,16 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
   const [actionLoading, setActionLoading] = useState(null); // path or pid being acted on
   const [error, setError] = useState(null);
 
-  const fetchProcesses = useCallback(async () => {
+  const fetchProcesses = useCallback(async (options = {}) => {
+    const { silent = false } = options;
     if (!projects || projects.length === 0) {
       setRepos([]);
       return;
     }
 
-    setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const paths = projects.map((p) => p.path).join(',');
@@ -23,20 +26,64 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
       }
       const data = await response.json();
       setRepos(data.repos || []);
+      return true;
     } catch (err) {
       setError(err.message);
+      return false;
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, [projects]);
 
-  // Fetch on open and every 5 seconds while open
+  // Fetch on open and poll while visible with backoff on errors
   useEffect(() => {
     if (!isOpen) return;
+    let isActive = true;
+    let pollTimer = null;
 
-    fetchProcesses();
-    const interval = setInterval(fetchProcesses, 5000); // 5s is sufficient
-    return () => clearInterval(interval);
+    const FAST_POLL_MS = 5000;
+    const HIDDEN_POLL_MS = 15000;
+    const ERROR_POLL_MS = 10000;
+
+    const schedule = (succeeded = true) => {
+      if (!isActive) return;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+      const visible = document.visibilityState === 'visible';
+      const nextDelay = succeeded ? (visible ? FAST_POLL_MS : HIDDEN_POLL_MS) : ERROR_POLL_MS;
+      pollTimer = setTimeout(async () => {
+        const ok = await fetchProcesses({ silent: true });
+        schedule(ok);
+      }, nextDelay);
+    };
+
+    const runNow = async () => {
+      const ok = await fetchProcesses();
+      schedule(ok);
+    };
+
+    const onVisibilityChange = () => {
+      if (!isActive) return;
+      if (document.visibilityState === 'visible') {
+        void runNow();
+      } else {
+        schedule(true);
+      }
+    };
+
+    void runNow();
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      isActive = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+    };
   }, [isOpen, fetchProcesses]);
 
   const handleStart = async (path) => {
@@ -53,7 +100,9 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
         throw new Error(data.error || 'Failed to start');
       }
       // Refresh after a short delay to let process start
-      setTimeout(fetchProcesses, 1500);
+      setTimeout(() => {
+        void fetchProcesses({ silent: true });
+      }, 1500);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -75,7 +124,7 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
         throw new Error(data.error || 'Failed to stop');
       }
       // Refresh immediately
-      fetchProcesses();
+      void fetchProcesses({ silent: true });
     } catch (err) {
       setError(err.message);
     } finally {
@@ -173,7 +222,7 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
         </div>
 
         <div className="process-modal-footer">
-          <button className="btn-secondary" onClick={fetchProcesses} disabled={loading}>
+          <button className="btn-secondary" onClick={() => void fetchProcesses()} disabled={loading}>
             {loading ? 'Refreshing...' : 'Refresh'}
           </button>
           <button className="btn-primary" onClick={onClose}>

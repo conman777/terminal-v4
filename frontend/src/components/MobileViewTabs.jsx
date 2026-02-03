@@ -32,14 +32,14 @@ export function MobileViewTabs({ mobileView, onViewChange, previewUrl }) {
 
         .view-tab {
           flex: 1;
-          height: 36px;
-          min-height: 36px;
+          height: 38px;
+          min-height: 38px;
           padding: 0 16px;
           background: var(--bg-surface, #18181b);
           border: 1px solid var(--border-subtle, #27272a);
           border-radius: 18px;
           color: var(--text-secondary, #a1a1aa);
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 600;
           white-space: nowrap;
           transition: all 0.2s ease;

@@ -53,6 +53,11 @@ export function PreviewProvider({ children }) {
   // 2. Keep listeningPortsRef updated for auto-detection blocking
   useEffect(() => {
     let isMounted = true;
+    let pollTimer = null;
+
+    const VISIBLE_INTERVAL_MS = 10000;
+    const HIDDEN_INTERVAL_MS = 30000;
+    const ERROR_INTERVAL_MS = 20000;
 
     const fetchAndValidate = async () => {
       try {
@@ -78,16 +83,47 @@ export function PreviewProvider({ children }) {
         }
       } catch {
         // Ignore fetch errors
+        return false;
+      }
+      return true;
+    };
+
+    const scheduleNextPoll = (succeeded = true) => {
+      if (!isMounted) return;
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
+      const baseDelay = document.visibilityState === 'visible' ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS;
+      const delay = succeeded ? baseDelay : ERROR_INTERVAL_MS;
+      pollTimer = setTimeout(async () => {
+        const ok = await fetchAndValidate();
+        scheduleNextPoll(ok);
+      }, delay);
+    };
+
+    const runNow = async () => {
+      const ok = await fetchAndValidate();
+      scheduleNextPoll(ok);
+    };
+
+    const handleVisibilityChange = () => {
+      if (!isMounted) return;
+      if (document.visibilityState === 'visible') {
+        void runNow();
+      } else {
+        scheduleNextPoll(true);
       }
     };
 
-    fetchAndValidate();
+    void runNow();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // Refresh listening ports every 10 seconds
-    const interval = setInterval(fetchAndValidate, 10000);
     return () => {
       isMounted = false;
-      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (pollTimer) {
+        clearTimeout(pollTimer);
+      }
     };
   }, []);
 

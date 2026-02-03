@@ -443,11 +443,11 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-section-title-modern {
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 700;
           color: var(--text-muted, #71717a);
           text-transform: uppercase;
-          letter-spacing: 1px;
+          letter-spacing: 0.8px;
           margin-bottom: 12px;
           padding-left: 4px;
         }
@@ -468,7 +468,8 @@ export function MobileDrawer({
           border: 1px solid var(--border-subtle, #27272a);
           border-radius: 12px;
           color: var(--text-secondary, #a1a1aa);
-          font-size: 11px;
+          font-size: 12px;
+          line-height: 1.25;
           font-weight: 600;
           transition: all 0.2s ease;
         }
@@ -533,7 +534,7 @@ export function MobileDrawer({
         }
 
         .list-item-time-modern {
-          font-size: 11px;
+          font-size: 12px;
           color: var(--text-muted, #71717a);
           white-space: nowrap;
           flex-shrink: 0;
@@ -619,13 +620,13 @@ export function MobileDrawer({
 
         .mobile-drawer-search-input-modern {
           width: 100%;
-          height: 36px;
+          height: 40px;
           background: var(--bg-surface, #18181b);
           border: 1px solid var(--border-subtle, #27272a);
           border-radius: 10px;
           padding: 0 12px 0 36px;
           color: var(--text-primary, #fafafa);
-          font-size: 13px;
+          font-size: 16px;
           outline: none;
         }
 
@@ -664,7 +665,7 @@ export function MobileDrawer({
         }
 
         .project-path-modern {
-          font-size: 11px;
+          font-size: 12px;
           color: var(--text-muted, #71717a);
           white-space: nowrap;
           overflow: hidden;
@@ -676,7 +677,7 @@ export function MobileDrawer({
           display: flex;
           align-items: center;
           gap: 4px;
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 600;
           background: var(--bg-elevated, #27272a);
           color: var(--text-secondary, #a1a1aa);
@@ -688,7 +689,7 @@ export function MobileDrawer({
         .empty-state-modern {
           padding: 20px;
           text-align: center;
-          font-size: 13px;
+          font-size: 14px;
           color: var(--text-muted, #71717a);
           font-style: italic;
         }

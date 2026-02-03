@@ -407,7 +407,7 @@ export function MobileHeader({
             border: none;
             background: transparent;
             color: var(--text-secondary, #a1a1aa);
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -474,7 +474,7 @@ export function MobileHeader({
             border: 1px solid var(--border-subtle, #27272a);
             border-radius: 18px;
             color: var(--text-secondary, #a1a1aa);
-            font-size: 12px;
+            font-size: 13px;
             font-weight: 600;
             white-space: nowrap;
             max-width: 100px;
@@ -513,7 +513,7 @@ export function MobileHeader({
             border-radius: 18px;
             color: var(--text-primary, #fafafa);
             padding: 0 12px;
-            font-size: 12px;
+            font-size: 16px;
             width: 90px;
             outline: none;
           }

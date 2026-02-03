@@ -9,11 +9,25 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('@xterm')) return 'vendor-xterm';
-          if (id.includes('react-markdown') || id.includes('remark-') || id.includes('react-syntax-highlighter')) {
+          if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
+          if (id.includes('@webcontainer') || id.includes('comlink')) return 'vendor-webcontainer';
+          if (id.includes('react-syntax-highlighter') || id.includes('refractor') || id.includes('prism')) {
+            return 'vendor-highlight';
+          }
+          if (
+            id.includes('react-markdown') ||
+            id.includes('remark-') ||
+            id.includes('rehype-') ||
+            id.includes('/micromark') ||
+            id.includes('/mdast-') ||
+            id.includes('/hast-') ||
+            id.includes('/unist-') ||
+            id.includes('/unified')
+          ) {
             return 'vendor-markdown';
           }
-          if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
-          return 'vendor';
+          if (id.includes('/diff/')) return 'vendor-diff';
+          return 'vendor-misc';
         }
       }
     }
