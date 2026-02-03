@@ -17,7 +17,7 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, viewMode = 'terminal', isPrimary = false, skipHistory = false }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -1953,6 +1953,27 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     }, debounceTime);
   }, [keybarOpen, viewportHeight, isMobile]);
+
+  // External fit signal (e.g., preview split resize)
+  useEffect(() => {
+    if (fitSignal === undefined || fitSignal === null) return;
+    if (!fitAddonRef.current || !xtermRef.current) return;
+    const rafId = requestAnimationFrame(() => {
+      if (!fitAddonRef.current || !xtermRef.current) return;
+      try {
+        const term = xtermRef.current;
+        const buffer = term.buffer?.active;
+        const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+        fitAddonRef.current.fit();
+        if (wasAtBottom) {
+          term.scrollToBottom();
+        }
+      } catch (error) {
+        console.error('[Terminal Fit] Failed to apply fit signal:', error);
+      }
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [fitSignal]);
 
   // On mobile, control keyboard by moving textarea on/off screen
   useEffect(() => {

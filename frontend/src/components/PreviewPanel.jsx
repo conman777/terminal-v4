@@ -116,6 +116,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
+  const [previewTerminalFitToken, setPreviewTerminalFitToken] = useState(0);
   // WebContainer mode state
   const [useWebContainer, setUseWebContainer] = useState(false);
   const [webContainerSupported, setWebContainerSupported] = useState(null);
@@ -1203,6 +1204,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handleToggleTerminalSplit = useCallback(() => {
     setBrowserSplitEnabled(prev => !prev);
+    setPreviewTerminalFitToken(token => token + 1);
   }, []);
 
   const handleToggleTerminalPosition = useCallback(() => {
@@ -1213,6 +1215,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       } catch {}
       return newPos;
     });
+    setPreviewTerminalFitToken(token => token + 1);
   }, []);
 
   // Handle browser split drag
@@ -1255,6 +1258,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         } catch {}
         return pos;
       });
+      setPreviewTerminalFitToken(token => token + 1);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -2568,6 +2572,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     viewportHeight={null}
                     fontSize={fontSize}
                     webglEnabled={webglEnabled}
+                    fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                     onRegisterImageUpload={() => {}}
