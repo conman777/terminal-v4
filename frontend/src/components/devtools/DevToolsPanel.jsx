@@ -4,6 +4,7 @@ import { ConsoleTab } from './ConsoleTab';
 import { StorageTab } from './StorageTab';
 import { PerformanceTab } from './PerformanceTab';
 import { WebSocketTab } from './WebSocketTab';
+import '../../devtools.css';
 
 /**
  * DevToolsPanel - Main container for DevTools tabs
