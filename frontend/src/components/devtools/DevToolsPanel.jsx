@@ -22,11 +22,11 @@ export function DevToolsPanel({
   const [activeTab, setActiveTab] = useState('network');
 
   const tabs = [
-    { id: 'network', label: 'Network', icon: '🌐', count: networkRequests.length },
-    { id: 'console', label: 'Console', icon: '💬', count: consoleLogs.length },
-    { id: 'storage', label: 'Storage', icon: '📦', count: Object.keys(storage.localStorage || {}).length },
-    { id: 'performance', label: 'Performance', icon: '⚡', count: null },
-    { id: 'websocket', label: 'WebSocket', icon: '🔌', count: null }
+    { id: 'network', label: 'Network', count: networkRequests.length },
+    { id: 'console', label: 'Console', count: consoleLogs.length },
+    { id: 'storage', label: 'Storage', count: Object.keys(storage.localStorage || {}).length },
+    { id: 'performance', label: 'Performance', count: null },
+    { id: 'websocket', label: 'WebSocket', count: null }
   ];
 
   return (
@@ -38,7 +38,6 @@ export function DevToolsPanel({
             className={`devtools-tab ${activeTab === tab.id ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.id)}
           >
-            <span className="tab-icon">{tab.icon}</span>
             <span className="tab-label">{tab.label}</span>
             {tab.count > 0 && (
               <span className="tab-badge">{tab.count}</span>

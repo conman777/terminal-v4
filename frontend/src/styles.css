@@ -3311,6 +3311,7 @@ button {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  align-items: center;
 }
 
 .preview-action-btn {
@@ -3329,6 +3330,19 @@ button {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   box-shadow: none;
   overflow: hidden;
+}
+
+.preview-action-btn.with-label {
+  width: auto;
+  min-width: 32px;
+  padding: 0 8px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preview-action-label {
+  line-height: 1;
 }
 
 .preview-action-btn::before {
@@ -3353,6 +3367,69 @@ button {
 .preview-action-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.preview-tools-menu-wrap {
+  position: relative;
+}
+
+.preview-tools-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 250;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preview-tools-menu-item {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.preview-tools-menu-item:hover:not(:disabled) {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.preview-tools-menu-item.active {
+  background: rgba(59, 130, 246, 0.18);
+  color: #bfdbfe;
+  border-color: rgba(59, 130, 246, 0.5);
+}
+
+.preview-tools-menu-item.has-cookies {
+  color: #22c55e;
+}
+
+.preview-tools-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 1400px) {
+  .preview-action-btn.with-label {
+    padding: 0 6px;
+  }
+
+  .preview-action-label {
+    display: none;
+  }
 }
 
 .preview-close-btn:hover:not(:disabled) {

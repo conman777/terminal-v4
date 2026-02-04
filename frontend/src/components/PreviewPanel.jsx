@@ -98,7 +98,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [proxyLogs, setProxyLogs] = useState([]);  // Server-side proxy logs
   const [processLogs, setProcessLogs] = useState([]);  // Process stdout/stderr logs
   const [showLogs, setShowLogs] = useState(false);
-  const [showDevTools, setShowDevTools] = useState(false);
+  const [showDevTools, setShowDevTools] = useState(() => !isMobile);
+  const [showToolsMenu, setShowToolsMenu] = useState(false);
   const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy', 'server'
   const [logSearch, setLogSearch] = useState('');
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -127,6 +128,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const isLogsNearBottomRef = useRef(true);
   const urlInputRef = useRef(null);
   const portDropdownRef = useRef(null);
+  const toolsMenuRef = useRef(null);
   const skipUrlSyncRef = useRef(false);
   const lastSyncedUrlRef = useRef(normalizePreviewUrl(url || ''));
 
@@ -382,6 +384,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showPortDropdown]);
+
+  useEffect(() => {
+    if (!showToolsMenu) return;
+    const handleClickOutside = (e) => {
+      if (toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) {
+        setShowToolsMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showToolsMenu]);
 
   const handleSelectPort = useCallback((port) => {
     const newUrl = `http://localhost:${port}`;
@@ -2257,24 +2270,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             </button>
           </Tooltip>
 
-          <Tooltip text={inspectMode ? 'Exit inspect mode' : 'Inspect elements'} shortcut="⌘I">
-            <button
-              type="button"
-              className={`preview-action-btn ${inspectMode ? 'active' : ''}`}
-              onClick={handleToggleInspect}
-              disabled={!iframeSrc}
-              aria-label="Inspect elements"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
-                <path d="M13 13l6 6" />
-              </svg>
-            </button>
-          </Tooltip>
           <Tooltip text={browserSplitEnabled ? 'Hide Terminal' : 'Show Terminal'} shortcut="⌘K">
             <button
               type="button"
-              className={`preview-action-btn ${browserSplitEnabled ? 'active' : ''}`}
+              className={`preview-action-btn with-label ${browserSplitEnabled ? 'active' : ''}`}
               onClick={handleToggleTerminalSplit}
               disabled={!iframeSrc && !useWebContainer}
               aria-label="Toggle terminal split"
@@ -2283,35 +2282,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <rect x="3" y="3" width="7" height="18" rx="1" />
                 <rect x="14" y="3" width="7" height="18" rx="1" />
               </svg>
-            </button>
-          </Tooltip>
-          <Tooltip text={useWebContainer ? 'Switch to Proxy Mode' : 'Switch to WebContainer Mode'}>
-            <button
-              type="button"
-              className={`preview-action-btn ${useWebContainer ? 'active' : ''}`}
-              onClick={() => setUseWebContainer(!useWebContainer)}
-              disabled={!webContainerSupported?.supported && !useWebContainer}
-              title={!webContainerSupported?.supported ? webContainerSupported?.reason : undefined}
-              aria-label="Toggle WebContainer mode"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="4" y="4" width="16" height="16" rx="2" />
-                <rect x="9" y="9" width="6" height="6" />
-                <line x1="9" y1="1" x2="9" y2="4" />
-                <line x1="15" y1="1" x2="15" y2="4" />
-                <line x1="9" y1="20" x2="9" y2="23" />
-                <line x1="15" y1="20" x2="15" y2="23" />
-                <line x1="20" y1="9" x2="23" y2="9" />
-                <line x1="20" y1="14" x2="23" y2="14" />
-                <line x1="1" y1="9" x2="4" y2="9" />
-                <line x1="1" y1="14" x2="4" y2="14" />
-              </svg>
+              <span className="preview-action-label">Split</span>
             </button>
           </Tooltip>
           <Tooltip text={showDevTools ? 'Hide DevTools' : 'Show DevTools'} shortcut="⌘⇧D">
             <button
               type="button"
-              className={`preview-action-btn ${showDevTools ? 'active' : ''}`}
+              className={`preview-action-btn with-label ${showDevTools ? 'active' : ''}`}
               onClick={() => setShowDevTools(!showDevTools)}
               disabled={!iframeSrc}
               aria-label="Toggle DevTools"
@@ -2320,71 +2297,88 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <polyline points="4 17 10 11 4 5" />
                 <line x1="12" y1="19" x2="20" y2="19" />
               </svg>
+              <span className="preview-action-label">DevTools</span>
               {(logs.length + proxyLogs.length) > 0 && <span className="preview-log-badge-sm">{logs.length + proxyLogs.length}</span>}
             </button>
           </Tooltip>
-          {previewPort && (
+          <div className="preview-tools-menu-wrap" ref={toolsMenuRef}>
             <button
               type="button"
-              className={`preview-action-btn ${hasCookies ? 'has-cookies' : ''}`}
-              onClick={handleClearCookies}
-              title={hasCookies ? 'Clear stored cookies (logged in)' : 'No cookies stored'}
-              disabled={!hasCookies}
-              aria-label="Clear cookies"
+              className={`preview-action-btn ${showToolsMenu ? 'active' : ''}`}
+              onClick={() => setShowToolsMenu((prev) => !prev)}
+              aria-label="More browser tools"
+              title="More browser tools"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <path d="M8 12h8" />
-                {hasCookies && <circle cx="12" cy="12" r="3" fill="currentColor" />}
+                <circle cx="12" cy="12" r="1.5" />
+                <circle cx="6" cy="12" r="1.5" />
+                <circle cx="18" cy="12" r="1.5" />
               </svg>
             </button>
-          )}
-          <Tooltip text="Refresh preview" shortcut="⌘R">
-            <button
-              type="button"
-              className="preview-action-btn"
-              onClick={handleRefresh}
-              disabled={!iframeSrc}
-              aria-label="Refresh"
-            >
-              {'\u21BB'}
-            </button>
-          </Tooltip>
-          <button
-            type="button"
-            className="preview-action-btn"
-            onClick={handleOpenExternal}
-            title="Open in new tab"
-            disabled={!iframeSrc}
-            aria-label="Open in new tab"
-          >
-            {'\u2197'}
-          </button>
-          {onToggleMainTerminal && (
-            <Tooltip text={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}>
-              <button
-                type="button"
-                className={`preview-action-btn ${mainTerminalMinimized ? 'active' : ''}`}
-                onClick={onToggleMainTerminal}
-                aria-label={mainTerminalMinimized ? 'Show main terminal' : 'Maximize browser'}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {mainTerminalMinimized ? (
-                    <>
-                      {/* Restore icon - two panes */}
-                      <rect x="3" y="3" width="8" height="18" rx="1" />
-                      <rect x="13" y="3" width="8" height="18" rx="1" />
-                    </>
-                  ) : (
-                    <>
-                      {/* Maximize icon - single full pane */}
-                      <rect x="3" y="3" width="18" height="18" rx="1" />
-                    </>
-                  )}
-                </svg>
-              </button>
-            </Tooltip>
-          )}
+            {showToolsMenu && (
+              <div className="preview-tools-menu">
+                <button
+                  type="button"
+                  className={`preview-tools-menu-item ${inspectMode ? 'active' : ''}`}
+                  onClick={() => {
+                    handleToggleInspect();
+                    setShowToolsMenu(false);
+                  }}
+                  disabled={!iframeSrc}
+                >
+                  {inspectMode ? 'Exit Inspect' : 'Inspect Element'}
+                </button>
+                <button
+                  type="button"
+                  className={`preview-tools-menu-item ${useWebContainer ? 'active' : ''}`}
+                  onClick={() => {
+                    setUseWebContainer(!useWebContainer);
+                    setShowToolsMenu(false);
+                  }}
+                  disabled={!webContainerSupported?.supported && !useWebContainer}
+                  title={!webContainerSupported?.supported ? webContainerSupported?.reason : undefined}
+                >
+                  {useWebContainer ? 'Use Proxy Mode' : 'Use WebContainer'}
+                </button>
+                <button
+                  type="button"
+                  className="preview-tools-menu-item"
+                  onClick={() => {
+                    handleOpenExternal();
+                    setShowToolsMenu(false);
+                  }}
+                  disabled={!iframeSrc}
+                >
+                  Open in New Tab
+                </button>
+                {previewPort && (
+                  <button
+                    type="button"
+                    className={`preview-tools-menu-item ${hasCookies ? 'has-cookies' : ''}`}
+                    onClick={() => {
+                      handleClearCookies();
+                      setShowToolsMenu(false);
+                    }}
+                    disabled={!hasCookies}
+                  >
+                    {hasCookies ? 'Clear Cookies' : 'No Cookies'}
+                  </button>
+                )}
+                {onToggleMainTerminal && (
+                  <button
+                    type="button"
+                    className={`preview-tools-menu-item ${mainTerminalMinimized ? 'active' : ''}`}
+                    onClick={() => {
+                      onToggleMainTerminal();
+                      setShowToolsMenu(false);
+                    }}
+                  >
+                    {mainTerminalMinimized ? 'Show Main Terminal' : 'Maximize Browser'}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="preview-action-btn preview-close-btn"
@@ -2593,8 +2587,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         )}
       </div>
 
-      {/* DevTools or Legacy Logs Panel */}
-      {showDevTools ? (
+      {/* Desktop DevTools Panel */}
+      {showDevTools && (
         <div className={`preview-logs ${showDevTools ? 'expanded' : 'collapsed'}`}>
           <DevToolsPanel
             networkRequests={proxyLogs}
@@ -2606,121 +2600,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             onUpdateStorage={handleUpdateStorage}
             onEvaluate={handleEvaluate}
           />
-        </div>
-      ) : (
-        <div className={`preview-logs ${showLogs ? 'expanded' : 'collapsed'}`}>
-        <div className="preview-logs-header" onClick={() => setShowLogs(!showLogs)}>
-          <span className="preview-logs-title">
-            <span className="preview-logs-icon">{'\u{1F4CB}'}</span>
-            Logs
-            {errorLogs.length > 0 && (
-              <span className="preview-logs-error-badge">{errorLogs.length}</span>
-            )}
-            {(logs.length + proxyLogs.length + processLogs.length) > 0 && (
-              <span className="preview-logs-count">{logs.length + proxyLogs.length + processLogs.length}</span>
-            )}
-          </span>
-          <div className="preview-logs-actions">
-            {showLogs && (
-              <>
-                <select
-                  className="preview-logs-filter"
-                  value={logFilter}
-                  onChange={(e) => { e.stopPropagation(); setLogFilter(e.target.value); }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <option value="all">All</option>
-                  <option value="server">Server ({processLogs.length})</option>
-                  <option value="proxy">Network ({proxyLogs.length})</option>
-                  <option value="client">Console ({logs.length})</option>
-                </select>
-                <button
-                  type="button"
-                  className="preview-logs-btn"
-                  onClick={(e) => { e.stopPropagation(); handleClearLogs(); }}
-                  title="Clear logs"
-                >
-                  Clear
-                </button>
-                {onSendToTerminal && (
-                  <button
-                    type="button"
-                    className="preview-logs-btn"
-                    onClick={(e) => { e.stopPropagation(); handleSendLogsToTerminal(); }}
-                    title="Send errors to terminal"
-                    disabled={errorLogs.length === 0}
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: '4px', verticalAlign: 'middle' }}>
-                      <polyline points="4 17 10 11 4 5" />
-                      <line x1="12" y1="19" x2="20" y2="19" />
-                    </svg>
-                    Send Errors
-                  </button>
-                )}
-              </>
-            )}
-            <span className="preview-logs-toggle">{showLogs ? '\u25BC' : '\u25B2'}</span>
-          </div>
-        </div>
-        {showLogs && (
-          <div className="preview-logs-content" ref={logsContainerRef} onScroll={handleLogsScroll}>
-            {filteredLogs.length === 0 ? (
-              <div className="preview-logs-empty">No logs yet</div>
-            ) : (
-              filteredLogs.map((log) => {
-                if (log.source === 'client') {
-                  // Check if this is an error with detailed info (like Chrome DevTools)
-                  const hasErrorDetails = log.type === 'error' && (log.filename || log.stack);
-                  return (
-                    <div key={`c-${log.id}`} className={`preview-log-entry preview-log-${log.level}${hasErrorDetails ? ' preview-log-detailed' : ''}`}>
-                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                      <span className="preview-log-level">{log.level}</span>
-                      <div className="preview-log-content">
-                        <span className="preview-log-message">{log.message}</span>
-                        {log.filename && (
-                          <span className="preview-log-location">
-                            {log.filename}{log.lineno ? `:${log.lineno}` : ''}{log.colno ? `:${log.colno}` : ''}
-                          </span>
-                        )}
-                        {log.stack && (
-                          <pre className="preview-log-stack">{log.stack}</pre>
-                        )}
-                      </div>
-                    </div>
-                  );
-                } else if (log.source === 'server') {
-                  // Process log (stdout/stderr)
-                  const isError = log.stream === 'stderr';
-                  return (
-                    <div key={`s-${log.id}`} className={`preview-log-entry preview-log-server ${isError ? 'preview-log-stderr' : 'preview-log-stdout'}`}>
-                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                      <span className={`preview-log-stream ${isError ? 'stderr' : 'stdout'}`}>{log.stream}</span>
-                      <span className="preview-log-data">{log.data}</span>
-                    </div>
-                  );
-                } else {
-                  // Proxy log
-                  const statusClass = log.error ? 'error' : (log.status >= 400 ? 'warn' : 'info');
-                  const statusText = log.error ? 'ERR' : log.status;
-                  const sizeText = log.responseSize ? `${(log.responseSize / 1024).toFixed(1)}KB` : '';
-                  return (
-                    <div key={`p-${log.id}`} className={`preview-log-entry preview-log-${statusClass} preview-log-network`}>
-                      <span className="preview-log-time">{formatTime(log.timestamp)}</span>
-                      <span className={`preview-log-status preview-log-status-${statusClass}`}>{statusText}</span>
-                      <span className="preview-log-method">{log.method}</span>
-                      <span className="preview-log-url" title={log.url}>{log.url}</span>
-                      <span className="preview-log-meta">
-                        {log.duration}ms {sizeText}
-                      </span>
-                      {log.error && <span className="preview-log-error">{log.error}</span>}
-                    </div>
-                  );
-                }
-              })
-            )}
-            <div ref={logsEndRef} />
-          </div>
-        )}
         </div>
       )}
 
