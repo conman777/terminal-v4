@@ -2450,6 +2450,23 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <p className="preview-hint">
                       <code>C:\path\to\project\index.html</code>
                     </p>
+                    {activePorts.some((p) => p.listening) && (
+                      <div className="preview-empty-actions">
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={() => {
+                            const firstPort = activePorts.find((p) => p.listening)?.port;
+                            if (!firstPort) return;
+                            const detectedUrl = `http://localhost:${firstPort}`;
+                            setInputUrl(detectedUrl);
+                            onUrlChange?.(detectedUrl);
+                          }}
+                        >
+                          Open Active Port
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>

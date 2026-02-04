@@ -3369,6 +3369,11 @@ button {
   cursor: not-allowed;
 }
 
+.preview-close-btn {
+  margin-left: 4px;
+  border-color: rgba(244, 63, 94, 0.25);
+}
+
 .preview-tools-menu-wrap {
   position: relative;
 }
@@ -3550,6 +3555,14 @@ button {
   margin: 0 0 10px 0;
   font-size: 14px;
   line-height: 1.6;
+}
+
+.preview-empty-actions {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
 }
 
 .preview-hint {
