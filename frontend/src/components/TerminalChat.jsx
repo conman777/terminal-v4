@@ -926,6 +926,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       hasOpened = true;
       term.open(container);
 
+      const requestPostOpenFit = () => {
+        if (disposed || !fitAddonRef.current || !xtermRef.current) return;
+        try {
+          fitAddonRef.current.fit();
+          const rows = xtermRef.current.rows || 0;
+          if (rows > 0) {
+            xtermRef.current.refresh(0, rows - 1);
+          }
+        } catch {}
+      };
+
+      if (typeof document !== 'undefined' && document.fonts?.ready) {
+        document.fonts.ready.then(() => {
+          if (!disposed) {
+            requestPostOpenFit();
+          }
+        }).catch(() => {});
+      }
+      setTimeout(() => {
+        if (!disposed) {
+          requestPostOpenFit();
+        }
+      }, 200);
+
       const initWebglAddon = () => {
         if (!webglEnabledRef.current || isMobile || webglAddonRef.current) {
           return;

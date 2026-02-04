@@ -97,6 +97,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [logs, setLogs] = useState([]);  // Client-side logs from injected script
   const [proxyLogs, setProxyLogs] = useState([]);  // Server-side proxy logs
   const [processLogs, setProcessLogs] = useState([]);  // Process stdout/stderr logs
+  const [storageData, setStorageData] = useState({ localStorage: {}, sessionStorage: {}, cookies: {} });
   const [showLogs, setShowLogs] = useState(false);
   const [showDevTools, setShowDevTools] = useState(() => !isMobile);
   const [showToolsMenu, setShowToolsMenu] = useState(false);
@@ -583,6 +584,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         if (!syncPort || syncPort !== previewPort) return;
         const localSnapshot = normalizeStorageSnapshot(event.data.local);
         const sessionSnapshot = normalizeStorageSnapshot(event.data.session);
+        setStorageData(prev => ({
+          ...prev,
+          localStorage: localSnapshot,
+          sessionStorage: sessionSnapshot
+        }));
         const allStorage = readPreviewStorage();
         allStorage[syncPort] = { local: localSnapshot, session: sessionSnapshot };
         writePreviewStorage(allStorage);
@@ -677,6 +683,65 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       } catch {
         // Ignore
       }
+    }
+  }, [previewPort]);
+
+  const handleClearProxyLogs = useCallback(async () => {
+    setProxyLogs([]);
+    lastProxyLogTimestamp.current = 0;
+    if (previewPort) {
+      try {
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        await fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers });
+      } catch {
+        // Ignore
+      }
+    }
+  }, [previewPort]);
+
+  const handleUpdateStorage = useCallback(async (storageType, operation, key, value) => {
+    if (!previewPort) return;
+
+    try {
+      await apiFetch(`/api/preview/${previewPort}/storage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: storageType, operation, key, value })
+      });
+
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.postMessage({
+          type: 'preview-storage-operation',
+          storageType,
+          operation,
+          key,
+          value
+        }, '*');
+      }
+    } catch (error) {
+      console.error('Storage operation failed:', error);
+    }
+  }, [previewPort]);
+
+  const handleEvaluate = useCallback(async (expression) => {
+    if (!previewPort) return;
+
+    try {
+      if (iframeRef.current?.contentWindow) {
+        iframeRef.current.contentWindow.postMessage({
+          type: 'preview-evaluate',
+          expression
+        }, '*');
+      }
+
+      await apiFetch(`/api/preview/${previewPort}/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expression })
+      });
+    } catch (error) {
+      console.error('Evaluation failed:', error);
     }
   }, [previewPort]);
 
@@ -2289,7 +2354,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             <button
               type="button"
               className={`preview-action-btn with-label ${showDevTools ? 'active' : ''}`}
-              onClick={() => setShowDevTools(!showDevTools)}
+              onClick={() => {
+                setShowDevTools(prev => !prev);
+              }}
               disabled={!iframeSrc}
               aria-label="Toggle DevTools"
             >
