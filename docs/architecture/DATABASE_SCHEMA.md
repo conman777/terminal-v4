@@ -59,7 +59,7 @@ Stores per-user settings.
 | `sidebar_collapsed` | INTEGER | 0/1 boolean (sidebar collapsed state) |
 | `updated_at` | TEXT | ISO timestamp |
 
-Note: Additional browser automation settings (idle timeout, max lifetime, cleanup intervals) are stored in a separate settings service file.
+Note: Browser-related preferences are stored in the existing user settings flow and API.
 
 ## File-Based Storage
 

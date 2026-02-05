@@ -8,9 +8,7 @@ The Phase 6 Automation UI provides a complete browser automation testing workflo
 
 - The automation UI described here is not wired in the current frontend.
 - The backend does not implement the recorder/test/cookie endpoints listed below.
-- Only the basic browser automation API under `/api/browser/*` exists today
-  (see `docs/architecture/API_ARCHITECTURE.md` and
-  `backend/src/routes/browser-routes.ts`).
+- Public `/api/browser/*` endpoints are not currently registered.
 
 ## Components
 
@@ -457,9 +455,9 @@ frontend/src/components/browser/automation/
 
 For issues or questions:
 1. Check this guide first
-2. Review API documentation in `backend/src/routes/browser-routes.ts`
+2. Review current API routes in `docs/architecture/API_ARCHITECTURE.md`
 3. Check browser console for errors
-4. Verify backend is running (`/api/browser/status`)
+4. Verify backend is running (`/api/health`)
 5. Check backend logs (`/tmp/backend.log`)
 
 ## Version

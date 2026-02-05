@@ -150,12 +150,13 @@ Key files:
 - `backend/src/preview/process-log-store.ts`
 
 ### Browser Automation
-- Playwright-backed browser control API (public endpoints).
-- Supports navigation, interaction, screenshots, and DOM queries.
+- Browser automation services exist under `backend/src/browser/*`.
+- Public `/api/browser/*` routes are not currently registered in `backend/src/index.ts`.
+- Preview screenshots/recording are available via screenshot routes instead.
 
 Key files:
-- `backend/src/routes/browser-routes.ts`
 - `backend/src/browser/*`
+- `backend/src/routes/screenshot-routes.ts`
 
 ### Settings + Transcribe
 - User settings stored in SQLite (`user_settings`):
@@ -164,12 +165,11 @@ Key files:
   - Terminal font size (8-32)
   - Sidebar collapse state
 - `/api/transcribe` uses Groq Whisper for voice input with support for multiple audio formats.
-- Browser automation settings (idle timeout, max lifetime, cleanup intervals).
+- Browser settings are persisted in the user settings table.
 
 Key files:
 - `backend/src/routes/settings-routes.ts`
 - `backend/src/routes/transcribe-routes.ts`
-- `backend/src/settings/browser-settings-service.ts`
 
 ### System Monitoring & Statistics
 - Real-time system stats: CPU usage, memory, disk I/O (read/write MB/s), event loop delay.

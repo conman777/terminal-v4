@@ -121,29 +121,11 @@ Path-based preview routing:
 | GET | `/api/process-logs` | Public | List tracked processes |
 | DELETE | `/api/process-logs/:pid` | Public | Clear logs |
 
-## Browser Automation (Public)
+## Browser Automation (Status)
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| POST | `/api/browser/start` | Public | Start Playwright session |
-| DELETE | `/api/browser/stop` | Public | Stop session |
-| GET | `/api/browser/status` | Public | Session status |
-| POST | `/api/browser/goto` | Public | Navigate to URL |
-| POST | `/api/browser/back` | Public | Go back |
-| POST | `/api/browser/forward` | Public | Go forward |
-| POST | `/api/browser/reload` | Public | Reload |
-| POST | `/api/browser/click` | Public | Click selector |
-| POST | `/api/browser/type` | Public | Type text |
-| POST | `/api/browser/fill` | Public | Fill input |
-| POST | `/api/browser/select` | Public | Select option |
-| POST | `/api/browser/scroll` | Public | Scroll |
-| POST | `/api/browser/hover` | Public | Hover |
-| GET | `/api/browser/screenshot` | Public | Screenshot |
-| GET | `/api/browser/logs` | Public | Console/network logs |
-| GET | `/api/browser/html` | Public | Page HTML |
-| POST | `/api/browser/evaluate` | Public | Evaluate JS |
-| POST | `/api/browser/query` | Public | Query selector |
-| POST | `/api/browser/wait` | Public | Wait for selector/timeout |
+| N/A | `/api/browser/*` | N/A | Not currently exposed by registered backend routes |
 
 ## Settings + Transcribe
 
