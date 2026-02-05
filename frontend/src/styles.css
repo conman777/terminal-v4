@@ -1374,8 +1374,9 @@ button {
 }
 
 .terminal-scroll-buttons.mobile {
-  bottom: 60px;
-  right: 10px;
+  bottom: 64px;
+  right: 6px;
+  opacity: 0.88;
 }
 
 .scroll-btn {
@@ -7412,10 +7413,10 @@ button {
 
   .xterm-container {
     position: absolute;
-    top: 4px;
-    left: calc(env(safe-area-inset-left, 0px) + 4px);
-    right: calc(env(safe-area-inset-right, 0px) + 4px);
-    bottom: 4px;
+    top: 2px;
+    left: env(safe-area-inset-left, 0px);
+    right: env(safe-area-inset-right, 0px);
+    bottom: 2px;
     overflow: hidden;
   }
 

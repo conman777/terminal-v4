@@ -2111,7 +2111,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           <span>Loading more history...</span>
         </div>
       )}
-      <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
+      {(!isMobile || isScrollMode || isCopyMode) && (
+        <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); scrollUp(); triggerLoadMoreIfAtTop(); }}
@@ -2152,7 +2153,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               <polyline points="7 6 12 11 17 6" />
             </svg>
           </button>
-      </div>
+        </div>
+      )}
       <TerminalHistoryModal
         isOpen={historyModalOpen}
         sessionId={sessionId}
