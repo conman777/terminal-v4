@@ -65,7 +65,8 @@ export function MobileHeader({
   onToggleFileManager,
   onNavigateToPath,
   isNavCollapsed = false,
-  sessionActivity
+  sessionActivity,
+  sessionsGroupedByProject
 }) {
   const [showDrawer, setShowDrawer] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState(null);
@@ -543,6 +544,7 @@ export function MobileHeader({
         activeSessionId={activeSessionId}
         sessionActivity={sessionActivity}
         onSelectSession={onSelectSession}
+        sessionsGroupedByProject={sessionsGroupedByProject}
       />
 
       {tabContextMenu && (

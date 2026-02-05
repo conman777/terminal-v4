@@ -1,5 +1,5 @@
 import type { TerminalProcess, TerminalStreamEvent } from './terminal-types';
-import type { PersistedSession } from './session-store';
+import type { PersistedSession, ThreadMetadata } from './session-store';
 
 // Terminal dimension constants
 export const DEFAULT_COLS = 120;
@@ -53,6 +53,7 @@ export interface ManagedTerminal {
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
   lastActivityAt: number;
   idleTimer?: NodeJS.Timeout;
+  thread?: ThreadMetadata;   // Thread metadata for grouping/organizing sessions
 }
 
 // Re-export session store type

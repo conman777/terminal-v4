@@ -4,9 +4,11 @@ import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileKeybar } from './components/MobileKeybar';
 import { SessionTabBar } from './components/SessionTabBar';
+import { FolderBrowserModal } from './components/FolderBrowserModal';
 const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
 import { Header } from './components/Header';
 import Sidebar from './components/Sidebar';
+import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -67,7 +69,16 @@ function AppContent() {
     notes,
     addNote,
     updateNote,
-    deleteNote
+    deleteNote,
+    // Thread-related
+    sessionsGroupedByProject,
+    pinnedSessions,
+    archivedSessions,
+    pinSession,
+    unpinSession,
+    archiveSession,
+    unarchiveSession,
+    updateSessionTopic
   } = useTerminalSession();
 
   const {
@@ -121,6 +132,7 @@ function AppContent() {
   const [showProcessManager, setShowProcessManager] = useState(false);
   const [showFileManager, setShowFileManager] = useState(false);
   const [showSystemResources, setShowSystemResources] = useState(false);
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
@@ -229,6 +241,27 @@ function AppContent() {
       return false;
     }
   });
+
+  // Sidebar mode: 'explorer' or 'threads'
+  const [sidebarMode, setSidebarMode] = useState(() => {
+    try {
+      return localStorage.getItem('sidebarMode') || 'threads';
+    } catch {
+      return 'threads';
+    }
+  });
+
+  const toggleSidebarMode = useCallback(() => {
+    setSidebarMode((prev) => {
+      const newMode = prev === 'explorer' ? 'threads' : 'explorer';
+      try {
+        localStorage.setItem('sidebarMode', newMode);
+      } catch {
+        // Ignore localStorage errors
+      }
+      return newMode;
+    });
+  }, []);
 
   // Terminal font size (synced with server)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
@@ -395,6 +428,20 @@ function AppContent() {
     setKeybarHeight(Math.max(0, Math.round(height)));
   }, []);
 
+  const handleRequestNewSession = useCallback(() => {
+    setShowNewSessionModal(true);
+  }, []);
+
+  const handleCloseNewSessionModal = useCallback(() => {
+    setShowNewSessionModal(false);
+  }, []);
+
+  const handleCreateSessionFromFolder = useCallback((path) => {
+    setShowNewSessionModal(false);
+    if (!path) return;
+    createSession({ cwd: path });
+  }, [createSession]);
+
   // Keyboard shortcuts (desktop only)
   useKeyboardShortcuts({
     onToggleSidebar: toggleSidebar,
@@ -410,7 +457,7 @@ function AppContent() {
         handlePaneFocus(legacyLayout.panes[index].id);
       }
     },
-    onNewTerminal: createSession,
+    onNewTerminal: handleRequestNewSession,
     onCloseTerminal: () => {
       if (activeSessionId) {
         closeSession(activeSessionId);
@@ -618,6 +665,14 @@ function AppContent() {
         />
       </Suspense>
 
+      <FolderBrowserModal
+        isOpen={showNewSessionModal}
+        onClose={handleCloseNewSessionModal}
+        currentPath={projectInfo?.cwd || recentFolders[0] || ''}
+        recentFolders={recentFolders}
+        onSelect={handleCreateSessionFromFolder}
+      />
+
       {isMobile && (
         <>
           <Header
@@ -629,7 +684,7 @@ function AppContent() {
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
             onRestoreSession={handleRestoreSession}
-            onCreateSession={createSession}
+            onCreateSession={handleRequestNewSession}
             onCloseSession={closeSession}
             onRenameSession={renameSession}
             loadingSessions={loadingSessions}
@@ -667,6 +722,7 @@ function AppContent() {
             previewUrl={previewUrl}
             onNavigateToPath={handleNavigateToPath}
             sessionActivity={sessionActivity}
+            sessionsGroupedByProject={sessionsGroupedByProject}
           />
           <MobileKeybar
             sessionId={activeSessionId}
@@ -679,19 +735,39 @@ function AppContent() {
       {/* Desktop layout with sidebar */}
       {!isMobile && (
         <>
-          <Sidebar
-            isCollapsed={sidebarCollapsed}
-            onToggle={toggleSidebar}
-            recentFolders={recentFolders}
-            pinnedFolders={pinnedFolders}
-            projects={projects}
-            projectsLoading={projectsLoading}
-            onFolderSelect={handleSidebarFolderSelect}
-            onPinFolder={pinFolder}
-            onUnpinFolder={unpinFolder}
-            currentPath={projectInfo?.cwd}
-            onAddScanFolder={handleAddScanFolder}
-          />
+          {sidebarMode === 'threads' ? (
+            <ThreadsSidebar
+              isCollapsed={sidebarCollapsed}
+              onToggle={toggleSidebar}
+              sessionsGroupedByProject={sessionsGroupedByProject}
+              pinnedSessions={pinnedSessions}
+              archivedSessions={archivedSessions}
+              activeSessionId={activeSessionId}
+              sessionActivity={sessionActivity}
+              onSelectSession={handleSelectSession}
+              onPinSession={pinSession}
+              onUnpinSession={unpinSession}
+              onArchiveSession={archiveSession}
+              onUnarchiveSession={unarchiveSession}
+              onTopicChange={updateSessionTopic}
+              onCloseSession={closeSession}
+              onCreateSession={handleRequestNewSession}
+            />
+          ) : (
+            <Sidebar
+              isCollapsed={sidebarCollapsed}
+              onToggle={toggleSidebar}
+              recentFolders={recentFolders}
+              pinnedFolders={pinnedFolders}
+              projects={projects}
+              projectsLoading={projectsLoading}
+              onFolderSelect={handleSidebarFolderSelect}
+              onPinFolder={pinFolder}
+              onUnpinFolder={unpinFolder}
+              currentPath={projectInfo?.cwd}
+              onAddScanFolder={handleAddScanFolder}
+            />
+          )}
           <div className="main-container">
             <Header
               isMobile={false}
@@ -702,7 +778,7 @@ function AppContent() {
               activeSessionId={activeSessionId}
               onSelectSession={handleSelectSession}
               onRestoreSession={handleRestoreSession}
-              onCreateSession={createSession}
+              onCreateSession={handleRequestNewSession}
               onCloseSession={closeSession}
               onRenameSession={renameSession}
               loadingSessions={loadingSessions}
@@ -726,6 +802,8 @@ function AppContent() {
               onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
               user={user}
               logout={logout}
+              sidebarMode={sidebarMode}
+              onToggleSidebarMode={toggleSidebarMode}
             />
 
           {/* Session tab bar - only show in terminal mode */}
@@ -735,7 +813,7 @@ function AppContent() {
               activeSessionId={activeSessionId}
               sessionActivity={sessionActivity}
               onSelectSession={handleSelectSession}
-              onCreateSession={createSession}
+              onCreateSession={handleRequestNewSession}
               onCloseSession={closeSession}
               onRenameSession={renameSession}
             />
@@ -762,7 +840,7 @@ function AppContent() {
                       <div className="empty-state">
                         <h2>Welcome to Terminal</h2>
                         <p>Create a new terminal session to get started.</p>
-                        <button className="btn-primary" onClick={createSession}>
+                        <button className="btn-primary" onClick={handleRequestNewSession}>
                           + New Terminal
                         </button>
                       </div>

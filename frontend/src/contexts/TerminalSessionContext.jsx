@@ -54,6 +54,8 @@ export function TerminalSessionProvider({ children }) {
   const terminalSendersRef = useRef(new Map());
   const liveTerminalCountRef = useRef(0);
   const pollRescheduleRef = useRef(null);
+  const projectDetectInFlightRef = useRef(new Set());
+  const projectDetectAttemptedRef = useRef(new Set());
 
   // Derived state
   const activeSessions = useMemo(
@@ -63,6 +65,82 @@ export function TerminalSessionProvider({ children }) {
   const inactiveSessions = useMemo(
     () => sessions.filter((session) => !session.isActive),
     [sessions]
+  );
+
+  const activeSessionsForThreads = useMemo(
+    () => sessions.filter((session) => session.isActive),
+    [sessions]
+  );
+
+  // Group sessions by project path for Threads sidebar
+  const sessionsGroupedByProject = useMemo(() => {
+    const groups = new Map();
+
+    // Helper to get project name from path
+    const getProjectName = (path) => {
+      if (!path) return 'Unknown';
+      const parts = path.replace(/\/$/, '').split('/');
+      return parts[parts.length - 1] || 'Unknown';
+    };
+
+    // Process all sessions (both active and inactive)
+    activeSessionsForThreads.forEach((session) => {
+      const projectPath = session.thread?.projectPath || session.groupPath || session.cwd || null;
+      const projectName = getProjectName(projectPath);
+
+      if (!groups.has(projectPath)) {
+        groups.set(projectPath, {
+          projectPath,
+          projectName,
+          sessions: []
+        });
+      }
+
+      groups.get(projectPath).sessions.push(session);
+    });
+
+    // Convert to array and sort groups by most recent activity
+    const groupArray = Array.from(groups.values());
+    groupArray.sort((a, b) => {
+      const aLatest = Math.max(...a.sessions.map(s => {
+        const threadTime = s.thread?.lastActivityAt ? new Date(s.thread.lastActivityAt).getTime() : 0;
+        const updateTime = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+        return Math.max(threadTime, updateTime);
+      }));
+      const bLatest = Math.max(...b.sessions.map(s => {
+        const threadTime = s.thread?.lastActivityAt ? new Date(s.thread.lastActivityAt).getTime() : 0;
+        const updateTime = s.updatedAt ? new Date(s.updatedAt).getTime() : 0;
+        return Math.max(threadTime, updateTime);
+      }));
+      return bLatest - aLatest;
+    });
+
+    // Sort sessions within each group by pinned first, then by lastActivityAt
+    groupArray.forEach((group) => {
+      group.sessions.sort((a, b) => {
+        // Pinned sessions first
+        if (a.thread?.pinned && !b.thread?.pinned) return -1;
+        if (!a.thread?.pinned && b.thread?.pinned) return 1;
+        // Then by activity time
+        const aTime = a.thread?.lastActivityAt ? new Date(a.thread.lastActivityAt).getTime() : new Date(a.updatedAt).getTime();
+        const bTime = b.thread?.lastActivityAt ? new Date(b.thread.lastActivityAt).getTime() : new Date(b.updatedAt).getTime();
+        return bTime - aTime;
+      });
+    });
+
+    return groupArray;
+  }, [activeSessionsForThreads]);
+
+  // Get pinned sessions across all projects
+  const pinnedSessions = useMemo(
+    () => activeSessionsForThreads.filter((session) => session.thread?.pinned),
+    [activeSessionsForThreads]
+  );
+
+  // Get archived sessions
+  const archivedSessions = useMemo(
+    () => activeSessionsForThreads.filter((session) => session.thread?.archived),
+    [activeSessionsForThreads]
   );
 
   // Add a folder to recent list (max 10, no duplicates)
@@ -246,10 +324,12 @@ export function TerminalSessionProvider({ children }) {
   }, [activeSessionId, addRecentFolder]);
 
   // Session CRUD operations
-  const createSession = useCallback(async () => {
+  const createSession = useCallback(async (options = {}) => {
     try {
       const requestBody = {};
-      if (recentFolders.length > 0) {
+      if (options.cwd) {
+        requestBody.cwd = options.cwd;
+      } else if (recentFolders.length > 0) {
         requestBody.cwd = recentFolders[0];
       }
 
@@ -508,6 +588,150 @@ export function TerminalSessionProvider({ children }) {
     lastActivityRef.current = Date.now();
   }, []);
 
+  // Thread metadata actions
+  const updateThreadMetadata = useCallback(async (sessionId, updates) => {
+    if (!sessionId) return;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/thread`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to update thread metadata (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      // Update local state
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === sessionId
+            ? { ...session, thread: data.thread }
+            : session
+        )
+      );
+
+      return data.thread;
+    } catch (error) {
+      console.error('Failed to update thread metadata', error);
+      throw error;
+    }
+  }, []);
+
+  const pinSession = useCallback(async (sessionId) => {
+    return updateThreadMetadata(sessionId, { pinned: true });
+  }, [updateThreadMetadata]);
+
+  const unpinSession = useCallback(async (sessionId) => {
+    return updateThreadMetadata(sessionId, { pinned: false });
+  }, [updateThreadMetadata]);
+
+  const archiveSession = useCallback(async (sessionId) => {
+    return updateThreadMetadata(sessionId, { archived: true });
+  }, [updateThreadMetadata]);
+
+  const unarchiveSession = useCallback(async (sessionId) => {
+    return updateThreadMetadata(sessionId, { archived: false });
+  }, [updateThreadMetadata]);
+
+  const updateSessionTopic = useCallback(async (sessionId, topic, autoGenerated = false) => {
+    return updateThreadMetadata(sessionId, {
+      topic,
+      topicAutoGenerated: autoGenerated
+    });
+  }, [updateThreadMetadata]);
+
+  const detectSessionProject = useCallback(async (sessionId) => {
+    if (!sessionId) return null;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/detect-project`, {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to detect project (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      // Update local state
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                thread: {
+                  ...(session.thread || {}),
+                  projectPath: data.projectPath
+                }
+              }
+            : session
+        )
+      );
+
+      return data.projectPath;
+    } catch (error) {
+      console.error('Failed to detect project', error);
+      return null;
+    }
+  }, []);
+
+  const refreshSessionGitStats = useCallback(async (sessionId) => {
+    if (!sessionId) return null;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/git-stats`);
+
+      if (!response.ok) {
+        throw new Error(`Failed to get git stats (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      // Update local state
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                thread: {
+                  ...(session.thread || {}),
+                  gitStats: data.gitStats,
+                  projectPath: data.projectPath
+                }
+              }
+            : session
+        )
+      );
+
+      return data;
+    } catch (error) {
+      console.error('Failed to refresh git stats', error);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    sessions.forEach((session) => {
+      if (session.thread?.projectPath) return;
+      if (!session.cwd) return;
+
+      const attemptKey = `${session.id}:${session.cwd}`;
+      if (projectDetectAttemptedRef.current.has(attemptKey)) return;
+      if (projectDetectInFlightRef.current.has(attemptKey)) return;
+
+      projectDetectAttemptedRef.current.add(attemptKey);
+      projectDetectInFlightRef.current.add(attemptKey);
+      detectSessionProject(session.id).finally(() => {
+        projectDetectInFlightRef.current.delete(attemptKey);
+      });
+    });
+  }, [sessions, detectSessionProject]);
+
   const registerTerminalSender = useCallback((sessionId, sender) => {
     if (!sessionId || typeof sender !== 'function') return;
     const previousSize = terminalSendersRef.current.size;
@@ -721,6 +945,11 @@ export function TerminalSessionProvider({ children }) {
     restoringSessionId,
     projectInfo,
 
+    // Thread/grouped session state
+    sessionsGroupedByProject,
+    pinnedSessions,
+    archivedSessions,
+
     // Session actions
     createSession,
     selectSession,
@@ -732,6 +961,16 @@ export function TerminalSessionProvider({ children }) {
     registerTerminalSender,
     unregisterTerminalSender,
     sendToSession,
+
+    // Thread actions
+    updateThreadMetadata,
+    pinSession,
+    unpinSession,
+    archiveSession,
+    unarchiveSession,
+    updateSessionTopic,
+    detectSessionProject,
+    refreshSessionGitStats,
 
     // Folder state
     recentFolders,

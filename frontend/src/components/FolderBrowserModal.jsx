@@ -7,6 +7,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
   const [parent, setParent] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [query, setQuery] = useState('');
 
   const loadDirectory = useCallback(async (dirPath) => {
     setLoading(true);
@@ -34,6 +35,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
   useEffect(() => {
     if (isOpen) {
       loadDirectory(currentPath);
+      setQuery('');
     }
   }, [isOpen, currentPath, loadDirectory]);
 
@@ -61,6 +63,11 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
 
   if (!isOpen) return null;
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleFolders = normalizedQuery
+    ? folders.filter((folder) => folder.toLowerCase().includes(normalizedQuery))
+    : folders;
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="folder-browser-modal" onClick={(e) => e.stopPropagation()}>
@@ -78,6 +85,16 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
             <span className="path-text">{path}</span>
           </div>
 
+          <div className="folder-browser-search">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search folders"
+              aria-label="Search folders"
+            />
+          </div>
+
           {/* Go up button */}
           {parent && (
             <button
@@ -93,10 +110,10 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
           <div className="folder-browser-list">
             {loading && <div className="folder-browser-loading">Loading...</div>}
             {error && <div className="folder-browser-error">{error}</div>}
-            {!loading && !error && folders.length === 0 && (
+            {!loading && !error && visibleFolders.length === 0 && (
               <div className="folder-browser-empty">No subfolders</div>
             )}
-            {!loading && !error && folders.map((folder) => (
+            {!loading && !error && visibleFolders.map((folder) => (
               <button
                 key={folder}
                 className="folder-browser-item"
@@ -140,6 +157,38 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
           </button>
         </div>
       </div>
+      <style jsx>{`
+        .folder-browser-search {
+          padding: 8px 16px 10px;
+        }
+
+        .folder-browser-search input {
+          width: 100%;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-default, #3f3f46);
+          color: var(--text-primary, #fafafa);
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          outline: none;
+        }
+
+        .folder-browser-search input:focus {
+          border-color: var(--accent-primary, #f59e0b);
+          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+        }
+
+        @media (max-width: 768px) {
+          .folder-browser-search {
+            padding: 10px 14px 12px;
+          }
+
+          .folder-browser-search input {
+            font-size: 14px;
+            padding: 10px 12px;
+          }
+        }
+      `}</style>
     </div>
   );
 }

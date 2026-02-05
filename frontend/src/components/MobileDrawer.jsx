@@ -51,20 +51,15 @@ export function MobileDrawer({
   activeSessions = [],
   activeSessionId,
   sessionActivity,
-  onSelectSession
+  onSelectSession,
+  sessionsGroupedByProject = []
 }) {
-  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Sort active sessions by last activity (most recent first)
-  const sortedActiveSessions = useMemo(() => {
-    if (!activeSessions.length) return [];
-    return [...activeSessions].sort((a, b) => {
-      const aTime = sessionActivity?.[a.id]?.lastActivity || new Date(a.updatedAt).getTime() || 0;
-      const bTime = sessionActivity?.[b.id]?.lastActivity || new Date(b.updatedAt).getTime() || 0;
-      return bTime - aTime; // Most recent first
-    });
-  }, [activeSessions, sessionActivity]);
+  const visibleThreadGroups = useMemo(() => {
+    return (sessionsGroupedByProject || []).filter((group) => group.sessions && group.sessions.length > 0);
+  }, [sessionsGroupedByProject]);
 
   useBodyScrollLock(isOpen);
 
@@ -123,35 +118,39 @@ export function MobileDrawer({
           </button>
         </div>
         <div className="mobile-drawer-content-modern">
-          {/* Recent Terminals Section */}
-          {sortedActiveSessions.length > 0 && (
+          {/* Threads Section */}
+          {visibleThreadGroups.length > 0 && (
             <div className="mobile-drawer-section-modern">
-              <div className="mobile-drawer-section-title-modern">Recent Terminals</div>
-              <div className="mobile-drawer-list-modern">
-                {sortedActiveSessions.map((session) => {
-                  const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
-                  const relativeTime = formatRelativeTime(lastActivity);
-                  const isActive = session.id === activeSessionId;
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className={`mobile-drawer-list-item-modern${isActive ? ' active' : ''}`}
-                      onClick={() => handleSelectSession(session.id)}
-                    >
-                      <div className={`list-item-icon-modern${isActive ? ' active' : ''}`}>
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="4 17 10 11 4 5" />
-                          <line x1="12" y1="19" x2="20" y2="19" />
-                        </svg>
-                      </div>
-                      <span className="list-item-title-modern">{session.title || 'Terminal'}</span>
-                      {relativeTime && (
-                        <span className="list-item-time-modern">{relativeTime}</span>
-                      )}
-                    </button>
-                  );
-                })}
+              <div className="mobile-drawer-section-title-modern">Threads</div>
+              <div className="mobile-drawer-threads-modern">
+                {visibleThreadGroups.map((group) => (
+                  <div key={group.projectPath || group.projectName} className="mobile-drawer-project-modern">
+                    <div className="mobile-drawer-project-header-modern">
+                      <span className="mobile-drawer-project-icon-modern">📁</span>
+                      <span className="mobile-drawer-project-name-modern">{group.projectName}</span>
+                    </div>
+                    <div className="mobile-drawer-project-sessions-modern">
+                      {group.sessions.map((session) => {
+                        const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
+                        const relativeTime = formatRelativeTime(lastActivity);
+                        const isActive = session.id === activeSessionId;
+                        return (
+                          <button
+                            key={session.id}
+                            type="button"
+                            className={`mobile-drawer-thread-item-modern${isActive ? ' active' : ''}`}
+                            onClick={() => handleSelectSession(session.id)}
+                          >
+                            <span className="thread-item-title-modern">{session.thread?.topic || session.title || 'Terminal'}</span>
+                            {relativeTime && (
+                              <span className="thread-item-time-modern">{relativeTime}</span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -256,31 +255,6 @@ export function MobileDrawer({
               </button>
             </div>
           </div>
-
-          {/* Inactive Sessions Section */}
-          {inactiveSessions.length > 0 && (
-            <div className="mobile-drawer-section-modern">
-              <div className="mobile-drawer-section-title-modern">Restore Terminals</div>
-              <div className="mobile-drawer-list-modern">
-                {inactiveSessions.map((session) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className="mobile-drawer-list-item-modern"
-                    onClick={() => handleRestoreSession(session.id)}
-                  >
-                    <div className="list-item-icon-modern">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <circle cx="12" cy="12" r="10" />
-                        <polyline points="12 6 12 12 16 14" />
-                      </svg>
-                    </div>
-                    <span>{session.title || 'Terminal'}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Projects Section */}
           <div className="mobile-drawer-section-modern">
@@ -402,8 +376,8 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-header-modern {
-          height: 60px;
-          padding: 0 20px;
+          height: 52px;
+          padding: 0 16px;
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -411,7 +385,7 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-header-modern h2 {
-          font-size: 18px;
+          font-size: 16px;
           font-weight: 700;
           margin: 0;
           color: var(--accent-primary, #f59e0b);
@@ -434,28 +408,28 @@ export function MobileDrawer({
         .mobile-drawer-content-modern {
           flex: 1;
           overflow-y: auto;
-          padding: 20px 0;
+          padding: 14px 0 18px;
         }
 
         .mobile-drawer-section-modern {
-          margin-bottom: 24px;
-          padding: 0 16px;
+          margin-bottom: 16px;
+          padding: 0 14px;
         }
 
         .mobile-drawer-section-title-modern {
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 700;
           color: var(--text-muted, #71717a);
           text-transform: uppercase;
           letter-spacing: 0.8px;
-          margin-bottom: 12px;
+          margin-bottom: 8px;
           padding-left: 4px;
         }
 
         .mobile-drawer-grid-modern {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
-          gap: 10px;
+          gap: 8px;
         }
 
         .mobile-drawer-grid-btn-modern {
@@ -463,7 +437,7 @@ export function MobileDrawer({
           flex-direction: column;
           align-items: center;
           gap: 8px;
-          padding: 12px 4px;
+          padding: 10px 4px;
           background: var(--bg-surface, #18181b);
           border: 1px solid var(--border-subtle, #27272a);
           border-radius: 12px;
@@ -481,8 +455,8 @@ export function MobileDrawer({
         }
 
         .grid-btn-icon-modern {
-          width: 40px;
-          height: 40px;
+          width: 34px;
+          height: 34px;
           border-radius: 10px;
           background: var(--bg-elevated, #27272a);
           display: flex;
@@ -499,18 +473,18 @@ export function MobileDrawer({
         .mobile-drawer-list-modern {
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          gap: 2px;
         }
 
         .mobile-drawer-list-item-modern {
           display: flex;
           align-items: center;
           gap: 12px;
-          padding: 10px 12px;
+          padding: 8px 10px;
           background: transparent;
           border: none;
           color: var(--text-primary, #fafafa);
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 500;
           text-align: left;
           border-radius: 8px;
@@ -546,8 +520,8 @@ export function MobileDrawer({
         }
 
         .list-item-icon-modern {
-          width: 32px;
-          height: 32px;
+          width: 28px;
+          height: 28px;
           border-radius: 8px;
           background: var(--bg-surface, #18181b);
           color: var(--text-muted, #71717a);
@@ -567,7 +541,7 @@ export function MobileDrawer({
           display: flex;
           align-items: center;
           gap: 12px;
-          padding: 12px 0;
+          padding: 10px 0;
           background: transparent;
           border: none;
           color: var(--text-primary, #fafafa);
@@ -575,8 +549,8 @@ export function MobileDrawer({
         }
 
         .collapsible-icon-modern {
-          width: 32px;
-          height: 32px;
+          width: 28px;
+          height: 28px;
           border-radius: 8px;
           background: var(--accent-primary-dim);
           color: var(--accent-primary, #f59e0b);
@@ -587,7 +561,7 @@ export function MobileDrawer({
 
         .collapsible-title-modern {
           flex: 1;
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 600;
           text-align: left;
         }
@@ -599,6 +573,78 @@ export function MobileDrawer({
 
         .collapsible-chevron-modern.expanded {
           transform: rotate(180deg);
+        }
+
+        .mobile-drawer-threads-modern {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .mobile-drawer-project-modern {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .mobile-drawer-project-header-modern {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 0 4px;
+          color: var(--text-secondary, #a1a1aa);
+          font-size: 12px;
+          font-weight: 600;
+        }
+
+        .mobile-drawer-project-icon-modern {
+          font-size: 14px;
+        }
+
+        .mobile-drawer-project-name-modern {
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .mobile-drawer-project-sessions-modern {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .mobile-drawer-thread-item-modern {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 7px 9px;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-subtle, #27272a);
+          border-radius: 10px;
+          color: var(--text-primary, #fafafa);
+          font-size: 12.5px;
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .mobile-drawer-thread-item-modern.active {
+          background: var(--bg-elevated, #27272a);
+          border-color: var(--accent-primary, #f59e0b);
+        }
+
+        .thread-item-title-modern {
+          flex: 1;
+          min-width: 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .thread-item-time-modern {
+          font-size: 11px;
+          color: var(--text-muted, #71717a);
+          white-space: nowrap;
         }
 
         .mobile-drawer-projects-modern {
@@ -692,6 +738,46 @@ export function MobileDrawer({
           font-size: 14px;
           color: var(--text-muted, #71717a);
           font-style: italic;
+        }
+
+        @media (max-width: 480px) {
+          .mobile-drawer-header-modern {
+            height: 48px;
+            padding: 0 14px;
+          }
+
+          .mobile-drawer-header-modern h2 {
+            font-size: 15px;
+          }
+
+          .mobile-drawer-content-modern {
+            padding: 12px 0 14px;
+          }
+
+          .mobile-drawer-section-modern {
+            padding: 0 12px;
+            margin-bottom: 12px;
+          }
+
+          .mobile-drawer-grid-btn-modern {
+            padding: 8px 4px;
+            font-size: 11px;
+          }
+
+          .grid-btn-icon-modern {
+            width: 30px;
+            height: 30px;
+          }
+
+          .mobile-drawer-list-item-modern {
+            padding: 7px 8px;
+            font-size: 12.5px;
+          }
+
+          .mobile-drawer-thread-item-modern {
+            padding: 6px 8px;
+            font-size: 12px;
+          }
         }
       `}</style>
     </>

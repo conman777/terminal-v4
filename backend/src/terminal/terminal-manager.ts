@@ -20,8 +20,10 @@ import {
   updateSessionMetadata,
   getSessionMetadata,
   listSessionMetadata,
-  deleteSessionMetadata
+  deleteSessionMetadata,
+  type SessionMetadataIndex
 } from './session-store';
+import { resolveSessionPaths } from './session-resolver';
 import {
   isTmuxAvailable,
   tmuxSessionExists,
@@ -208,6 +210,7 @@ function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
 export class TerminalManager {
   #sessions = new Map<string, ManagedTerminal>();
   #persistedSessions = new Map<string, Map<string, PersistedSession>>(); // userId -> sessionId -> session
+  #metadataIndexByUser = new Map<string, SessionMetadataIndex>();
   #recoveredUsers = new Set<string>(); // Track which users have had recovery run
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
@@ -261,6 +264,7 @@ export class TerminalManager {
       userSessions.set(session.id, session);
     }
     this.#persistedSessions.set(userId, userSessions);
+    this.#metadataIndexByUser.set(userId, metadataIndex);
     console.log(`Loaded ${persisted.length} persisted terminal sessions for user ${userId}`);
 
     // Auto-restore sessions that have surviving tmux processes
@@ -416,7 +420,8 @@ export class TerminalManager {
         cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        history
+        history,
+        thread: session.thread
       };
       await saveSession(session.userId, persisted);
 
@@ -504,35 +509,65 @@ export class TerminalManager {
   }
 
   listSessions(userId: string): TerminalSessionSummary[] {
+    const metadataIndex = this.#metadataIndexByUser.get(userId) || {};
+    const defaultCwd = process.env.HOME || process.cwd();
+    const homeDir = process.env.HOME || null;
+
     // Get active sessions for this user
     const activeSessions = Array.from(this.#sessions.values())
       .filter((session) => session.userId === userId)
-      .map((session) => ({
-        id: session.id,
-        title: session.title,
-        shell: session.shell,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        messageCount: session.buffer.length,
-        isActive: true,
-        usesTmux: session.usesTmux
-      }));
+      .map((session) => {
+        const resolved = resolveSessionPaths({
+          cwd: session.cwd,
+          metadataCwd: metadataIndex[session.id]?.cwd || null,
+          defaultCwd,
+          homeDir,
+          threadProjectPath: session.thread?.projectPath
+        });
+        return {
+          id: session.id,
+          title: session.title,
+          shell: session.shell,
+          cwd: resolved.cwd || session.cwd,
+          cwdSource: resolved.cwdSource,
+          groupPath: resolved.groupPath,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: session.buffer.length,
+          isActive: true,
+          usesTmux: session.usesTmux,
+          thread: session.thread
+        };
+      });
 
     // Get persisted sessions for this user that aren't currently active
     const activeIds = new Set(activeSessions.map((s) => s.id));
     const userPersistedSessions = this.#persistedSessions.get(userId) || new Map();
     const persistedSessions = Array.from(userPersistedSessions.values())
       .filter((s) => !activeIds.has(s.id))
-      .map((session) => ({
-        id: session.id,
-        title: session.title,
-        shell: session.shell,
-        createdAt: session.createdAt,
-        updatedAt: session.updatedAt,
-        messageCount: session.history.length,
-        isActive: false,
-        usesTmux: false
-      }));
+      .map((session) => {
+        const resolved = resolveSessionPaths({
+          cwd: session.cwd,
+          metadataCwd: metadataIndex[session.id]?.cwd || null,
+          defaultCwd,
+          homeDir,
+          threadProjectPath: session.thread?.projectPath
+        });
+        return {
+          id: session.id,
+          title: session.title,
+          shell: session.shell,
+          cwd: resolved.cwd || session.cwd,
+          cwdSource: resolved.cwdSource,
+          groupPath: resolved.groupPath,
+          createdAt: session.createdAt,
+          updatedAt: session.updatedAt,
+          messageCount: session.history.length,
+          isActive: false,
+          usesTmux: false,
+          thread: session.thread
+        };
+      });
 
     // Return active sessions first, then persisted
     return [...activeSessions, ...persistedSessions];
@@ -564,11 +599,13 @@ export class TerminalManager {
         id: session.id,
         title: session.title,
         shell: session.shell,
+        cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         messageCount: session.buffer.length,
         isActive: true,
-        usesTmux: session.usesTmux
+        usesTmux: session.usesTmux,
+        thread: session.thread
       };
     }
 
@@ -599,11 +636,13 @@ export class TerminalManager {
       id: updated.id,
       title: updated.title,
       shell: updated.shell,
+      cwd: updated.cwd,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
       messageCount: updated.history.length,
       isActive: false,
-      usesTmux: false
+      usesTmux: false,
+      thread: updated.thread
     };
   }
 
@@ -1389,7 +1428,8 @@ export class TerminalManager {
       currentRows: rows,
       usesTmux,
       outputBatcher: undefined, // Will be initialized below
-      lastActivityAt: Date.now()
+      lastActivityAt: Date.now(),
+      thread: persisted.thread
     };
 
     // Create output batcher for this session

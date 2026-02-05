@@ -1,4 +1,6 @@
 import type { EventEmitter } from 'node:events';
+import type { ThreadMetadata } from './session-store';
+import type { CwdSource } from './session-resolver';
 
 export interface TerminalStreamEvent {
   text: string;
@@ -9,11 +11,15 @@ export interface TerminalSessionSummary {
   id: string;
   title: string;
   shell: string;
+  cwd: string;
+  cwdSource?: CwdSource;
+  groupPath?: string | null;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
   isActive: boolean;
   usesTmux: boolean;
+  thread?: ThreadMetadata;
 }
 
 export interface TerminalSessionSnapshot {

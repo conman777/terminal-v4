@@ -37,6 +37,9 @@ export function Header({
   onToggleSystemResources,
   user,
   logout,
+  // Sidebar mode props
+  sidebarMode,
+  onToggleSidebarMode,
   // Mobile specific props
   isNavCollapsed,
   onToggleKeybar,
@@ -50,7 +53,8 @@ export function Header({
   onViewChange,
   previewUrl,
   onNavigateToPath,
-  sessionActivity
+  sessionActivity,
+  sessionsGroupedByProject
 }) {
   if (isMobile) {
     return (
@@ -82,6 +86,7 @@ export function Header({
         onNavigateToPath={onNavigateToPath}
         isNavCollapsed={isNavCollapsed}
         sessionActivity={sessionActivity}
+        sessionsGroupedByProject={sessionsGroupedByProject}
       />
     );
   }
@@ -170,7 +175,26 @@ export function Header({
     <header className="app-header redesign">
       <div className="header-left">
         <h1 className="app-title">Terminal</h1>
-        
+
+        {onToggleSidebarMode && (
+          <button
+            className={`sidebar-mode-toggle ${sidebarMode === 'threads' ? 'threads' : 'explorer'}`}
+            onClick={onToggleSidebarMode}
+            title={sidebarMode === 'threads' ? 'Switch to Explorer' : 'Switch to Threads'}
+            type="button"
+          >
+            {sidebarMode === 'threads' ? (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+              </svg>
+            )}
+          </button>
+        )}
+
         <div className="segmented-control">
           <button
             className={`segmented-btn ${leftPanelMode === 'terminal' ? 'active' : ''}`}
@@ -304,6 +328,30 @@ export function Header({
           color: var(--accent-primary, #f59e0b);
           letter-spacing: -0.5px;
           text-transform: uppercase;
+        }
+
+        .sidebar-mode-toggle {
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: var(--bg-surface, #18181b);
+          border: 1px solid var(--border-default, #3f3f46);
+          border-radius: 6px;
+          color: var(--text-muted, #71717a);
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .sidebar-mode-toggle:hover {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+          border-color: var(--border-hover, #52525b);
+        }
+
+        .sidebar-mode-toggle.threads {
+          color: var(--accent-primary, #f59e0b);
         }
 
         .segmented-control {
