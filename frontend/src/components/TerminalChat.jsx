@@ -753,7 +753,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       : (isMobile ? SCROLLBACK_MOBILE * 2 : SCROLLBACK_DESKTOP * 3);
     const term = new Terminal({
       cursorBlink: false,
-      fontSize: fontSize || (isMobile ? 22 : 14),
+      fontSize: fontSize || (isMobile ? 18 : 14),
       fontFamily: '"JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace',
       fontWeight: '400',
       fontWeightBold: '600',
@@ -1949,7 +1949,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (!xtermRef.current || !fitAddonRef.current) return;
     const term = xtermRef.current;
-    const newSize = fontSize || (isMobile ? 22 : 14);
+    const newSize = fontSize || (isMobile ? 18 : 14);
     if (term.options.fontSize !== newSize) {
       term.options.fontSize = newSize;
       fitAddonRef.current.fit();
@@ -2048,7 +2048,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           lines={readerLines}
           lineHeight={readerLineHeight}
           scrollToken={readerScrollToken}
-          fontSize={fontSize || (isMobile ? 22 : 14)}
+          fontSize={fontSize || (isMobile ? 18 : 14)}
           onScrollDirection={onScrollDirection}
           onLoadMore={handleReaderLoadMore}
           onInput={handleReaderInput}

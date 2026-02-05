@@ -1003,7 +1003,7 @@ button {
 .reader-view {
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   background: #1e1e1e;
   color: #d4d4d4;
   padding: 8px 12px 4px;
@@ -1022,9 +1022,11 @@ button {
 .reader-view-content {
   margin: 0;
   white-space: pre;
-  word-wrap: break-word;
-  word-break: break-word;
-  line-height: 1.0;
+  word-wrap: normal;
+  word-break: normal;
+  line-height: 1.2;
+  min-width: 100%;
+  width: max-content;
   user-select: text;
   font-kerning: none;
   font-variant-ligatures: none;
@@ -1038,7 +1040,7 @@ button {
   }
 
   .reader-view-content {
-    line-height: 1.4;
+    line-height: 1.25;
   }
 }
 
@@ -7411,8 +7413,8 @@ button {
   .xterm-container {
     position: absolute;
     top: 4px;
-    left: calc(env(safe-area-inset-left, 0px) + 8px);
-    right: calc(env(safe-area-inset-right, 0px) + 8px);
+    left: calc(env(safe-area-inset-left, 0px) + 4px);
+    right: calc(env(safe-area-inset-right, 0px) + 4px);
     bottom: 4px;
     overflow: hidden;
   }
@@ -10786,7 +10788,7 @@ textarea:focus-visible {
   gap: 4px;
 }
 
-.status-bar-btn {
+.desktop-status-bar .status-bar-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10801,22 +10803,22 @@ textarea:focus-visible {
   transition: all var(--transition-fast);
 }
 
-.status-bar-btn:hover:not(:disabled) {
+.desktop-status-bar .status-bar-btn:hover:not(:disabled) {
   background: var(--bg-elevated);
   color: var(--text-primary);
 }
 
-.status-bar-btn.active {
+.desktop-status-bar .status-bar-btn.active {
   background: var(--accent-primary-dim);
   color: var(--accent-primary);
 }
 
-.status-bar-btn.active:hover:not(:disabled) {
+.desktop-status-bar .status-bar-btn.active:hover:not(:disabled) {
   background: var(--accent-primary-dim);
   color: var(--accent-primary-light);
 }
 
-.status-bar-btn:disabled {
+.desktop-status-bar .status-bar-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

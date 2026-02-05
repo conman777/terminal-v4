@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { MobileDrawer } from './MobileDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Dropdown } from './Dropdown';
@@ -51,6 +51,8 @@ export function MobileHeader({
   onOpenApiSettings,
   onOpenBrowserSettings,
   onOpenBookmarks,
+  onOpenNotes,
+  onOpenProcessManager,
   keybarOpen,
   onToggleKeybar,
   projects = [],
@@ -214,7 +216,7 @@ export function MobileHeader({
           <line x1="12" y1="17" x2="12" y2="21" />
         </svg>
       ),
-      onClick: () => { /* Logic to open Process Manager - typically handled in App */ }
+      onClick: onOpenProcessManager
     },
     {
       label: 'Bookmarks',
@@ -224,6 +226,18 @@ export function MobileHeader({
         </svg>
       ),
       onClick: onOpenBookmarks
+    },
+    {
+      label: 'Notes',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+        </svg>
+      ),
+      onClick: onOpenNotes
     },
     {
       label: 'File Manager',
@@ -236,16 +250,6 @@ export function MobileHeader({
       onClick: onToggleFileManager
     }
   ];
-
-  // Sort sessions by most recent activity (left to right)
-  const sortedSessions = useMemo(() => {
-    return [...activeSessions].sort((a, b) => {
-      const aActivity = sessionActivity?.[a.id]?.lastActivity || new Date(a.updatedAt).getTime() || 0;
-      const bActivity = sessionActivity?.[b.id]?.lastActivity || new Date(b.updatedAt).getTime() || 0;
-      // Most recent first (descending order)
-      return bActivity - aActivity;
-    });
-  }, [activeSessions, sessionActivity]);
 
   return (
     <>
@@ -335,7 +339,7 @@ export function MobileHeader({
               />
             ) : (
               <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
-                {sortedSessions.map((session) => (
+                {activeSessions.map((session) => (
                   <MobileTab
                     key={session.id}
                     session={session}
@@ -529,6 +533,8 @@ export function MobileHeader({
         onOpenApiSettings={onOpenApiSettings}
         onOpenBrowserSettings={onOpenBrowserSettings}
         onOpenBookmarks={onOpenBookmarks}
+        onOpenNotes={onOpenNotes}
+        onOpenProcessManager={onOpenProcessManager}
         projects={projects}
         projectsLoading={projectsLoading}
         onFolderSelect={onFolderSelect}

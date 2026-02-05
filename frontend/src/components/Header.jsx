@@ -71,6 +71,8 @@ export function Header({
         onOpenApiSettings={() => setShowApiSettings(true)}
         onOpenBrowserSettings={() => {}} // Handle if needed
         onOpenBookmarks={() => setShowBookmarks(true)}
+        onOpenNotes={() => setShowNotes(true)}
+        onOpenProcessManager={() => setShowProcessManager(true)}
         keybarOpen={keybarOpen}
         onToggleKeybar={onToggleKeybar}
         projects={projects}

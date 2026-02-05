@@ -162,6 +162,7 @@ function AppContent() {
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
+  const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
 
   // Handle mobile view change - when switching to terminal, jump to active terminal
   const handleMobileViewChange = useCallback((view) => {
@@ -266,11 +267,13 @@ function AppContent() {
   // Terminal font size (synced with server)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
     try {
+      const deviceStored = localStorage.getItem(terminalFontSizeStorageKey);
+      if (deviceStored) return parseInt(deviceStored, 10);
       const stored = localStorage.getItem('terminalFontSize');
       if (stored) return parseInt(stored, 10);
-      return isMobile ? 20 : 14;
+      return isMobile ? 18 : 14;
     } catch {
-      return isMobile ? 20 : 14;
+      return isMobile ? 18 : 14;
     }
   });
 
@@ -293,10 +296,20 @@ function AppContent() {
           const data = await response.json();
           // Apply server settings if they exist
           if (data.terminalFontSize !== null) {
-            setTerminalFontSize(data.terminalFontSize);
+            let hasDeviceOverride = false;
             try {
-              localStorage.setItem('terminalFontSize', String(data.terminalFontSize));
-            } catch { /* ignore */ }
+              hasDeviceOverride = localStorage.getItem(terminalFontSizeStorageKey) !== null;
+            } catch {
+              hasDeviceOverride = false;
+            }
+
+            if (!hasDeviceOverride) {
+              setTerminalFontSize(data.terminalFontSize);
+              try {
+                localStorage.setItem('terminalFontSize', String(data.terminalFontSize));
+                localStorage.setItem(terminalFontSizeStorageKey, String(data.terminalFontSize));
+              } catch { /* ignore */ }
+            }
           }
           if (data.terminalWebglEnabled !== null && data.terminalWebglEnabled !== undefined) {
             setTerminalWebglEnabled(data.terminalWebglEnabled);
@@ -318,13 +331,14 @@ function AppContent() {
       }
     };
     fetchSettings();
-  }, []);
+  }, [terminalFontSizeStorageKey]);
 
   const updateTerminalFontSize = useCallback((size) => {
     setTerminalFontSize(size);
     // Save to localStorage for immediate use
     try {
       localStorage.setItem('terminalFontSize', String(size));
+      localStorage.setItem(terminalFontSizeStorageKey, String(size));
     } catch (e) {
       console.error('Failed to save terminal font size to localStorage', e);
     }
@@ -334,7 +348,7 @@ function AppContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalFontSize: size })
     }).catch(e => console.error('Failed to save terminal font size to server', e));
-  }, []);
+  }, [terminalFontSizeStorageKey]);
 
   const updateTerminalWebglEnabled = useCallback((enabled) => {
     setTerminalWebglEnabled(enabled);

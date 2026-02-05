@@ -111,16 +111,24 @@ export function useSwipeGesture({ onSwipeLeft, onSwipeRight, enabled = true }) {
       }
     };
 
+    const handleTouchCancel = () => {
+      touchStartRef.current = null;
+      touchStartTimeRef.current = null;
+      swipeLockRef.current = null;
+    };
+
     // Use capture phase to get events before children can stop propagation
     container.addEventListener('touchstart', handleTouchStart, { capture: true, passive: true });
     container.addEventListener('touchmove', handleTouchMove, { capture: true, passive: false });
     container.addEventListener('touchend', handleTouchEnd, { capture: true, passive: true });
+    container.addEventListener('touchcancel', handleTouchCancel, { capture: true, passive: true });
 
     return () => {
       // Clean up event listeners
       container.removeEventListener('touchstart', handleTouchStart, { capture: true });
       container.removeEventListener('touchmove', handleTouchMove, { capture: true });
       container.removeEventListener('touchend', handleTouchEnd, { capture: true });
+      container.removeEventListener('touchcancel', handleTouchCancel, { capture: true });
 
       // Clean up refs to prevent memory leaks and stale state
       touchStartRef.current = null;
