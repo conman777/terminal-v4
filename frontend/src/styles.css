@@ -5215,6 +5215,13 @@ button {
   padding: 4px 4px 4px 12px;
   box-shadow: var(--shadow-md);
   z-index: 100; /* Above mobile terminal overlay (z-index: 99) */
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.preview-floating-url.hidden {
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
 }
 
 .preview-url-display {
@@ -5307,10 +5314,17 @@ button {
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
     position: fixed;
-    bottom: 0;
+    bottom: var(--mobile-keyboard-inset, 0px);
     left: 0;
     right: 0;
     z-index: 100;
+    transition: opacity 0.2s ease, transform 0.2s ease, bottom 0.2s ease;
+  }
+
+  .preview-mobile-footer.hidden {
+    opacity: 0;
+    transform: translateY(12px);
+    pointer-events: none;
   }
 
   .preview-footer-btn {
@@ -5361,13 +5375,13 @@ button {
 
   /* Adjust content to not be hidden behind footer */
   .preview-content-mobile {
-    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(var(--mobile-footer-height, 68px) + var(--mobile-keyboard-inset, 0px) + env(safe-area-inset-bottom, 0px));
   }
 
   /* Mobile terminal overlay (bottom sheet) */
   .preview-mobile-terminal {
     position: fixed;
-    bottom: 68px;
+    bottom: calc(var(--mobile-footer-height, 68px) + var(--mobile-keyboard-inset, 0px));
     left: 0;
     right: 0;
     background: #1e1e1e;
@@ -5377,7 +5391,18 @@ button {
     box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
     z-index: 99;
     overflow: hidden;
-    transition: height 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: height 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s ease, opacity 0.2s ease, bottom 0.2s ease;
+  }
+
+  .preview-mobile-terminal.hidden {
+    transform: translateY(calc(var(--mobile-terminal-sheet-height, 0px) + 16px));
+    pointer-events: none;
+    opacity: 0;
+  }
+
+  .preview-mobile-terminal.open {
+    transform: translateY(0);
+    opacity: 1;
   }
 
   .preview-mobile-terminal.dragging {
@@ -5468,7 +5493,7 @@ button {
     font-size: 13px;
   }
 
-  .preview-mobile-terminal-close {
+  .preview-mobile-terminal-btn {
     padding: 4px 8px;
     background: transparent;
     border: none;
@@ -5481,8 +5506,20 @@ button {
     flex-shrink: 0;
   }
 
-  .preview-mobile-terminal-close:active {
+  .preview-mobile-terminal-btn:active {
     background: rgba(255, 255, 255, 0.1);
+  }
+
+  .preview-mobile-terminal-btn-reconnect {
+    color: var(--accent-primary-light);
+  }
+
+  .preview-mobile-terminal-btn-focus {
+    color: var(--text-primary);
+  }
+
+  .preview-mobile-terminal-btn-close {
+    color: #fca5a5;
   }
 
   .preview-mobile-terminal-content {
@@ -5525,7 +5562,7 @@ button {
   box-shadow: var(--shadow-lg);
   transform: translateY(100%);
   transition: transform 0.3s ease;
-  z-index: 20;
+  z-index: 120;
   display: flex;
   flex-direction: column;
 }

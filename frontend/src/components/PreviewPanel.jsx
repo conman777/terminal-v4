@@ -17,6 +17,9 @@ function formatTime(timestamp) {
 
 const PREVIEW_STORAGE_KEY = 'terminal_preview_storage_v1';
 const PREVIEW_STORAGE_MAX_BYTES = 200 * 1024;
+const MOBILE_SPLIT_ENABLED_KEY = 'preview_mobile_split_enabled_v1';
+const MOBILE_SPLIT_HEIGHT_KEY = 'preview_mobile_split_height_v1';
+const MOBILE_SPLIT_SESSION_KEY = 'preview_mobile_split_session_v1';
 
 function normalizePreviewUrl(value) {
   if (!value || typeof value !== 'string') return '';
@@ -155,7 +158,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return 'right';
     }
   });
-  const [selectedTerminalSession, setSelectedTerminalSession] = useState(null);
+  const [selectedTerminalSession, setSelectedTerminalSession] = useState(() => {
+    try {
+      return localStorage.getItem(MOBILE_SPLIT_SESSION_KEY);
+    } catch {
+      return null;
+    }
+  });
   const hasInitializedRef = useRef(false);
   const [previewTerminalRefreshToken, setPreviewTerminalRefreshToken] = useState(0);
   const handleRefreshPreviewTerminal = useCallback(() => {
@@ -164,14 +173,32 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
   const browserSplitRef = useRef(null);
   const resizeRafRef = useRef(null);
+  const focusPreviewTerminalRef = useRef(null);
+  const mobileChromeTimerRef = useRef(null);
+  const mobileSplitModeRef = useRef(null);
 
   // Mobile split view state (bottom sheet overlay)
-  const [mobileSplitEnabled, setMobileSplitEnabled] = useState(false);
-  const [mobileSplitHeight, setMobileSplitHeight] = useState(300);
+  const [mobileSplitEnabled, setMobileSplitEnabled] = useState(() => {
+    try {
+      return localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [mobileSplitHeight, setMobileSplitHeight] = useState(() => {
+    try {
+      const stored = Number.parseFloat(localStorage.getItem(MOBILE_SPLIT_HEIGHT_KEY) || '');
+      return Number.isFinite(stored) ? stored : 320;
+    } catch {
+      return 320;
+    }
+  });
   const [isDraggingMobileSplit, setIsDraggingMobileSplit] = useState(false);
   const mobileSplitStartY = useRef(0);
   const mobileSplitStartHeight = useRef(0);
   const mobileSplitRafRef = useRef(null);
+  const [mobileKeyboardInset, setMobileKeyboardInset] = useState(0);
+  const [mobileChromeHidden, setMobileChromeHidden] = useState(false);
 
   const baseIframeSrc = useMemo(() => {
     // Strip any existing _cb cache-buster params from the URL
@@ -1370,70 +1397,136 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
   }, [browserSplitEnabled, browserSplitPosition, terminalPosition, isMobile]);
 
+  const getMobileSplitBounds = useCallback(() => {
+    const viewportHeight = getViewportHeight();
+    const minHeight = 180;
+    const maxHeight = Math.max(minHeight, viewportHeight * 0.75);
+    return { minHeight, maxHeight, viewportHeight };
+  }, [getViewportHeight]);
+
+  const clampMobileSplitHeight = useCallback((nextHeight) => {
+    const { minHeight, maxHeight } = getMobileSplitBounds();
+    return Math.min(Math.max(nextHeight, minHeight), maxHeight);
+  }, [getMobileSplitBounds]);
+
+  const getMobileSplitSnapPoints = useCallback(() => {
+    const { viewportHeight } = getMobileSplitBounds();
+    const peek = clampMobileSplitHeight(Math.max(200, viewportHeight * 0.28));
+    const half = clampMobileSplitHeight(viewportHeight * 0.45);
+    const expanded = clampMobileSplitHeight(viewportHeight * 0.65);
+    return [peek, half, expanded];
+  }, [clampMobileSplitHeight, getMobileSplitBounds]);
+
+  const snapMobileSplitHeight = useCallback((height) => {
+    const clamped = clampMobileSplitHeight(height);
+    const snapPoints = getMobileSplitSnapPoints();
+    return snapPoints.reduce((closest, point) => (
+      Math.abs(point - clamped) < Math.abs(closest - clamped) ? point : closest
+    ), snapPoints[0]);
+  }, [clampMobileSplitHeight, getMobileSplitSnapPoints]);
+
+  const scheduleMobileChromeHide = useCallback((delayMs = 1800) => {
+    if (!isMobile) return;
+    if (mobileChromeTimerRef.current) {
+      clearTimeout(mobileChromeTimerRef.current);
+      mobileChromeTimerRef.current = null;
+    }
+    mobileChromeTimerRef.current = setTimeout(() => {
+      setMobileChromeHidden(true);
+      mobileChromeTimerRef.current = null;
+    }, delayMs);
+  }, [isMobile]);
+
+  const revealMobileChrome = useCallback((delayMs = 2400) => {
+    setMobileChromeHidden(false);
+    scheduleMobileChromeHide(delayMs);
+  }, [scheduleMobileChromeHide]);
+
   // Mobile split view handlers
   const handleToggleMobileSplit = useCallback(() => {
-    setMobileSplitEnabled(prev => !prev);
-  }, []);
+    setMobileSplitEnabled((prev) => {
+      const next = !prev;
+      if (next) {
+        revealMobileChrome();
+      }
+      return next;
+    });
+  }, [revealMobileChrome]);
+
+  const beginMobileSplitDrag = useCallback((clientY, mode) => {
+    mobileSplitModeRef.current = mode;
+    mobileSplitStartY.current = clientY;
+    mobileSplitStartHeight.current = mobileSplitHeight;
+    setIsDraggingMobileSplit(true);
+    revealMobileChrome();
+  }, [mobileSplitHeight, revealMobileChrome]);
 
   const handleMobileSplitTouchStart = useCallback((e) => {
     if (!e.touches || e.touches.length === 0) return;
     e.preventDefault();
-    mobileSplitStartY.current = e.touches[0].clientY;
-    mobileSplitStartHeight.current = mobileSplitHeight;
-    setIsDraggingMobileSplit(true);
-  }, [mobileSplitHeight]);
+    beginMobileSplitDrag(e.touches[0].clientY, 'touch');
+  }, [beginMobileSplitDrag]);
 
-  const handleMobileSplitTouchMove = useCallback((e) => {
-    if (!isDraggingMobileSplit) return;
-    if (!e.touches || e.touches.length === 0) return;
-
+  const handleMobileSplitPointerDown = useCallback((e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
+    beginMobileSplitDrag(e.clientY, 'pointer');
+  }, [beginMobileSplitDrag]);
 
-    // Capture touch coordinates before rAF (touch events can't be accessed async)
-    const touchY = e.touches[0].clientY;
-
-    // Throttle with requestAnimationFrame
+  const handleMobileSplitDragMove = useCallback((clientY) => {
+    if (!isDraggingMobileSplit) return;
     if (mobileSplitRafRef.current !== null) return;
-
     mobileSplitRafRef.current = requestAnimationFrame(() => {
       mobileSplitRafRef.current = null;
-
-      const deltaY = mobileSplitStartY.current - touchY;
-      const newHeight = mobileSplitStartHeight.current + deltaY;
-
-      // Clamp height to 200px min, 70% of viewport max
-      const maxHeight = getViewportHeight() * 0.7;
-      const clampedHeight = Math.min(Math.max(newHeight, 200), maxHeight);
-      setMobileSplitHeight(clampedHeight);
+      const deltaY = mobileSplitStartY.current - clientY;
+      const nextHeight = mobileSplitStartHeight.current + deltaY;
+      setMobileSplitHeight(clampMobileSplitHeight(nextHeight));
     });
-  }, [getViewportHeight, isDraggingMobileSplit]);
+  }, [clampMobileSplitHeight, isDraggingMobileSplit]);
 
-  const handleMobileSplitTouchEnd = useCallback(() => {
-    if (isDraggingMobileSplit) {
-      // Cancel any pending rAF
-      if (mobileSplitRafRef.current !== null) {
-        cancelAnimationFrame(mobileSplitRafRef.current);
-        mobileSplitRafRef.current = null;
-      }
+  const handleMobileSplitTouchMove = useCallback((e) => {
+    if (!isDraggingMobileSplit || mobileSplitModeRef.current !== 'touch') return;
+    if (!e.touches || e.touches.length === 0) return;
+    e.preventDefault();
+    handleMobileSplitDragMove(e.touches[0].clientY);
+  }, [handleMobileSplitDragMove, isDraggingMobileSplit]);
 
-      setIsDraggingMobileSplit(false);
+  const handleMobileSplitPointerMove = useCallback((e) => {
+    if (!isDraggingMobileSplit || mobileSplitModeRef.current !== 'pointer') return;
+    e.preventDefault();
+    handleMobileSplitDragMove(e.clientY);
+  }, [handleMobileSplitDragMove, isDraggingMobileSplit]);
+
+  const endMobileSplitDrag = useCallback(() => {
+    if (!isDraggingMobileSplit) return;
+    if (mobileSplitRafRef.current !== null) {
+      cancelAnimationFrame(mobileSplitRafRef.current);
+      mobileSplitRafRef.current = null;
     }
-  }, [isDraggingMobileSplit]);
+    setMobileSplitHeight((height) => snapMobileSplitHeight(height));
+    mobileSplitModeRef.current = null;
+    setIsDraggingMobileSplit(false);
+    scheduleMobileChromeHide();
+  }, [isDraggingMobileSplit, scheduleMobileChromeHide, snapMobileSplitHeight]);
 
-  // Add touch event listeners for mobile split drag
+  // Add drag event listeners for mobile split drag
   useEffect(() => {
     if (!isDraggingMobileSplit) return;
-
     document.addEventListener('touchmove', handleMobileSplitTouchMove, { passive: false });
-    document.addEventListener('touchend', handleMobileSplitTouchEnd);
-    document.addEventListener('touchcancel', handleMobileSplitTouchEnd);
-
+    document.addEventListener('touchend', endMobileSplitDrag);
+    document.addEventListener('touchcancel', endMobileSplitDrag);
+    document.addEventListener('pointermove', handleMobileSplitPointerMove, { passive: false });
+    document.addEventListener('pointerup', endMobileSplitDrag);
+    document.addEventListener('pointercancel', endMobileSplitDrag);
     return () => {
       document.removeEventListener('touchmove', handleMobileSplitTouchMove);
-      document.removeEventListener('touchend', handleMobileSplitTouchEnd);
-      document.removeEventListener('touchcancel', handleMobileSplitTouchEnd);
+      document.removeEventListener('touchend', endMobileSplitDrag);
+      document.removeEventListener('touchcancel', endMobileSplitDrag);
+      document.removeEventListener('pointermove', handleMobileSplitPointerMove);
+      document.removeEventListener('pointerup', endMobileSplitDrag);
+      document.removeEventListener('pointercancel', endMobileSplitDrag);
     };
-  }, [isDraggingMobileSplit, handleMobileSplitTouchMove, handleMobileSplitTouchEnd]);
+  }, [endMobileSplitDrag, handleMobileSplitPointerMove, handleMobileSplitTouchMove, isDraggingMobileSplit]);
 
 
   // Auto-select terminal session on initial load
@@ -1463,7 +1556,68 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         }
       }
     }
-  }, [activeSessions, selectedTerminalSession]);
+  }, [activeSessionId, activeSessions, selectedTerminalSession]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!activeSessions || activeSessions.length === 0) {
+      setMobileSplitEnabled(false);
+      return;
+    }
+    setMobileSplitHeight((height) => clampMobileSplitHeight(height));
+  }, [activeSessions, clampMobileSplitHeight, isMobile]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    try {
+      localStorage.setItem(MOBILE_SPLIT_ENABLED_KEY, String(mobileSplitEnabled));
+      localStorage.setItem(MOBILE_SPLIT_HEIGHT_KEY, String(Math.round(clampMobileSplitHeight(mobileSplitHeight))));
+      if (selectedTerminalSession) {
+        localStorage.setItem(MOBILE_SPLIT_SESSION_KEY, selectedTerminalSession);
+      }
+    } catch {
+      // Ignore localStorage persistence failures on restricted browsers
+    }
+  }, [clampMobileSplitHeight, isMobile, mobileSplitEnabled, mobileSplitHeight, selectedTerminalSession]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const updateKeyboardInset = () => {
+      const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      setMobileKeyboardInset(Math.round(inset));
+    };
+    updateKeyboardInset();
+    viewport.addEventListener('resize', updateKeyboardInset);
+    viewport.addEventListener('scroll', updateKeyboardInset);
+    return () => {
+      viewport.removeEventListener('resize', updateKeyboardInset);
+      viewport.removeEventListener('scroll', updateKeyboardInset);
+    };
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    if (!mobileSplitEnabled || showUrlInput || showPortDropdown || showLogs || inspectMode || selectedElement) {
+      setMobileChromeHidden(false);
+      if (mobileChromeTimerRef.current) {
+        clearTimeout(mobileChromeTimerRef.current);
+        mobileChromeTimerRef.current = null;
+      }
+      return;
+    }
+    scheduleMobileChromeHide();
+  }, [inspectMode, isMobile, mobileSplitEnabled, scheduleMobileChromeHide, selectedElement, showLogs, showPortDropdown, showUrlInput]);
+
+  useEffect(() => {
+    return () => {
+      if (mobileChromeTimerRef.current) {
+        clearTimeout(mobileChromeTimerRef.current);
+        mobileChromeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Keyboard shortcuts (consolidated for both mobile and desktop)
   useEffect(() => {
@@ -1559,16 +1713,29 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [errorLogs.length, showLogs]);
 
   const mobileViewportHeight = getViewportHeight();
+  const mobileSplitMaxHeight = Math.max(180, mobileViewportHeight * 0.75);
+  const mobileTerminalVisible = Boolean(mobileSplitEnabled && activeSessions && activeSessions.length > 0);
+  const mobileOverlayHeight = Math.min(mobileSplitHeight, mobileSplitMaxHeight);
+  const mobilePanelStyle = {
+    '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
+    '--mobile-footer-height': '68px',
+    '--mobile-terminal-sheet-height': `${Math.round(mobileOverlayHeight)}px`
+  };
 
   // Mobile layout
   if (isMobile) {
     return (
-      <div className="preview-panel preview-panel-mobile">
+      <div
+        className={`preview-panel preview-panel-mobile${mobileChromeHidden ? ' chrome-hidden' : ''}`}
+        style={mobilePanelStyle}
+      >
         {/* Full-screen iframe */}
         <div
           className="preview-content-mobile"
-          style={mobileSplitEnabled && mobileSplitHeight > 0 ? {
-            height: `calc(100% - ${Math.min(mobileSplitHeight, mobileViewportHeight * 0.7)}px)`
+          onPointerDown={() => revealMobileChrome()}
+          onTouchStart={() => revealMobileChrome()}
+          style={mobileTerminalVisible ? {
+            height: `calc(100% - ${mobileOverlayHeight}px)`
           } : undefined}
         >
           {!iframeSrc ? (
@@ -1650,15 +1817,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         </div>
 
         {/* Mobile terminal overlay (bottom sheet) */}
-        {mobileSplitEnabled && activeSessions && activeSessions.length > 0 && (
+        {activeSessions && activeSessions.length > 0 && (
           <div
-            className={`preview-mobile-terminal${isDraggingMobileSplit ? ' dragging' : ''}`}
-            style={{ height: `${mobileSplitHeight}px` }}
+            className={`preview-mobile-terminal${isDraggingMobileSplit ? ' dragging' : ''}${mobileTerminalVisible ? ' open' : ' hidden'}`}
+            style={{ height: `${mobileOverlayHeight}px` }}
+            aria-hidden={!mobileTerminalVisible}
           >
             {/* Drag handle */}
             <div
               className="preview-mobile-terminal-handle"
               onTouchStart={handleMobileSplitTouchStart}
+              onPointerDown={handleMobileSplitPointerDown}
             >
               <div className="preview-mobile-terminal-handle-bar" />
             </div>
@@ -1685,7 +1854,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <span className="preview-mobile-terminal-empty">No terminal sessions</span>
               )}
               <button
-                className="preview-mobile-terminal-close"
+                className="preview-mobile-terminal-btn preview-mobile-terminal-btn-reconnect"
                 onClick={handleRefreshPreviewTerminal}
                 type="button"
                 aria-label="Reconnect terminal"
@@ -1696,7 +1865,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 </svg>
               </button>
               <button
-                className="preview-mobile-terminal-close"
+                className="preview-mobile-terminal-btn preview-mobile-terminal-btn-focus"
+                onClick={() => focusPreviewTerminalRef.current?.()}
+                type="button"
+                aria-label="Focus terminal input"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
+                </svg>
+              </button>
+              <button
+                className="preview-mobile-terminal-btn preview-mobile-terminal-btn-close"
                 onClick={handleToggleMobileSplit}
                 type="button"
                 aria-label="Close terminal"
@@ -1719,7 +1899,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                   onRegisterImageUpload={() => {}}
                   onRegisterHistoryPanel={() => {}}
-                  onRegisterFocusTerminal={() => {}}
+                  onRegisterFocusTerminal={(focusFn) => { focusPreviewTerminalRef.current = focusFn; }}
                   onActivityChange={() => {}}
                   onConnectionChange={() => {}}
                   onCwdChange={() => {}}
@@ -1735,7 +1915,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         )}
 
         {/* Floating URL bar at top */}
-        <div className="preview-floating-url">
+        <div className={`preview-floating-url${mobileChromeHidden ? ' hidden' : ''}`}>
           {/* Port selector button */}
           <button
             type="button"
@@ -2165,7 +2345,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         )}
 
         {/* Footer with action buttons */}
-        <div className="preview-mobile-footer">
+        <div className={`preview-mobile-footer${mobileChromeHidden ? ' hidden' : ''}`}>
           <button
             type="button"
             className={`preview-footer-btn ${inspectMode ? 'active' : ''}`}
