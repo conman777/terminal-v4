@@ -120,7 +120,8 @@ describe('preview subdomain proxy', () => {
 
       const responseLength = Number(res.headers['content-length']);
       expect(responseLength).toBe(Buffer.byteLength(res.text));
-      expect(res.text).toContain('_cb=');
+      expect(res.text).toContain('__previewDebugInjected');
+      expect(res.text).toContain('<script src="/app.js"></script>');
     });
   });
 });

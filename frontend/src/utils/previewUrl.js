@@ -4,6 +4,18 @@ import { apiFetch } from './api';
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
+const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
+
+function getPreviewDefaultMode() {
+  if (typeof window === 'undefined') return 'subdomain-first';
+  try {
+    const stored = localStorage.getItem(PREVIEW_DEFAULT_MODE_KEY);
+    if (stored === 'adaptive' || stored === 'path-first' || stored === 'subdomain-first') {
+      return stored;
+    }
+  } catch {}
+  return 'subdomain-first';
+}
 
 /**
  * Extract port number from a URL string.
@@ -95,6 +107,9 @@ function getEffectiveSubdomainBase() {
 function shouldPreferPathBased() {
   if (typeof window === 'undefined') return false;
   if (window.crossOriginIsolated) return true;
+  const defaultMode = getPreviewDefaultMode();
+  if (defaultMode === 'path-first') return true;
+  if (defaultMode === 'subdomain-first') return false;
   try {
     const stored = localStorage.getItem(PREVIEW_PREFER_PATH_BASED_KEY);
     if (!stored) return false;
@@ -102,6 +117,19 @@ function shouldPreferPathBased() {
   } catch {
     return false;
   }
+}
+
+function isResolvableLoopbackSubdomainBase(base) {
+  if (!base) return false;
+  const normalized = base.toLowerCase();
+  return (
+    normalized === 'localhost' ||
+    normalized.endsWith('.localhost') ||
+    normalized === 'lvh.me' ||
+    normalized.endsWith('.lvh.me') ||
+    normalized.includes('.nip.io') ||
+    normalized.includes('.sslip.io')
+  );
 }
 
 /**
@@ -187,14 +215,17 @@ export function toPreviewUrl(inputUrl) {
     const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
     const subdomainBase = getEffectiveSubdomainBase();
     const preferPathBased = shouldPreferPathBased();
+    const defaultMode = getPreviewDefaultMode();
 
     if ((isLoopback || isPrivateIP) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
       const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
-      // Use subdomain only when NOT on localhost - localhost subdomains don't resolve
-      // without extra DNS config. Path-based preview works reliably everywhere.
-      const canUseSubdomain = !preferPathBased && canUseLocalSubdomain && !uiIsLoopback && (uiIsIp || hasConfiguredSubdomainBase);
-      if (canUseSubdomain) {
+      const loopbackSubdomainCapable = !uiIsLoopback || isResolvableLoopbackSubdomainBase(subdomainBase);
+      const canUseSubdomain = canUseLocalSubdomain && loopbackSubdomainCapable && (uiIsIp || hasConfiguredSubdomainBase);
+      const shouldUseSubdomain = defaultMode === 'subdomain-first'
+        ? canUseSubdomain
+        : (!preferPathBased && canUseSubdomain);
+      if (shouldUseSubdomain) {
         return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
       }
       return `/preview/${parsed.port}${path}`;
@@ -214,4 +245,22 @@ export function toPreviewUrl(inputUrl) {
   }
 
   return normalizedInput;
+}
+
+/**
+ * Convert preview subdomain URL back to path-based preview URL.
+ * Returns null when URL is not a preview subdomain URL.
+ */
+export function toPathPreviewFallbackUrl(inputUrl) {
+  if (!inputUrl) return null;
+  try {
+    const parsed = new URL(inputUrl, window.location.origin);
+    const hostMatch = parsed.hostname.match(/^preview-(\d+)\./i);
+    if (!hostMatch) return null;
+    const port = hostMatch[1];
+    const path = parsed.pathname || '/';
+    return `/preview/${port}${path}${parsed.search}${parsed.hash}`;
+  } catch {
+    return null;
+  }
 }

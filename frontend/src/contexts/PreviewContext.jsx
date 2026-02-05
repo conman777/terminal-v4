@@ -6,6 +6,10 @@ const PreviewContext = createContext(null);
 const PREVIEW_URL_KEY = 'terminal_preview_url';
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
+const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
+const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
+const PREVIEW_COOKIE_POLICY_KEY = 'terminal_preview_cookie_policy';
+const PREVIEW_REWRITE_SCOPE_KEY = 'terminal_preview_rewrite_scope';
 
 export function PreviewProvider({ children }) {
   function sanitizePreviewUrl(value) {
@@ -223,7 +227,22 @@ export function PreviewProvider({ children }) {
         }
         if (typeof data?.preferPathBased === 'boolean') {
           try {
-            localStorage.setItem('terminal_preview_prefer_path_based', data.preferPathBased ? 'true' : 'false');
+            localStorage.setItem(PREVIEW_PREFER_PATH_BASED_KEY, data.preferPathBased ? 'true' : 'false');
+          } catch {}
+        }
+        if (typeof data?.defaultMode === 'string') {
+          try {
+            localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, data.defaultMode);
+          } catch {}
+        }
+        if (typeof data?.cookiePolicy === 'string') {
+          try {
+            localStorage.setItem(PREVIEW_COOKIE_POLICY_KEY, data.cookiePolicy);
+          } catch {}
+        }
+        if (typeof data?.rewriteScope === 'string') {
+          try {
+            localStorage.setItem(PREVIEW_REWRITE_SCOPE_KEY, data.rewriteScope);
           } catch {}
         }
       } catch {

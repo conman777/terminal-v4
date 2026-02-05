@@ -18,6 +18,28 @@ const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
+type PreviewDefaultMode = 'subdomain-first' | 'adaptive' | 'path-first';
+type PreviewCookiePolicy = 'preserve-upstream' | 'compat-rewrite' | 'force-none';
+type PreviewRewriteScope = 'minimal' | 'hybrid' | 'legacy';
+
+function parsePreviewDefaultMode(value: string | undefined): PreviewDefaultMode {
+  if (value === 'adaptive' || value === 'path-first') return value;
+  return 'subdomain-first';
+}
+
+function parsePreviewCookiePolicy(value: string | undefined): PreviewCookiePolicy {
+  if (value === 'compat-rewrite' || value === 'force-none') return value;
+  return 'preserve-upstream';
+}
+
+function parsePreviewRewriteScope(value: string | undefined): PreviewRewriteScope {
+  if (value === 'hybrid' || value === 'legacy') return value;
+  return 'minimal';
+}
+
+const PREVIEW_DEFAULT_MODE = parsePreviewDefaultMode(process.env.PREVIEW_DEFAULT_MODE);
+const PREVIEW_COOKIE_POLICY = parsePreviewCookiePolicy(process.env.PREVIEW_COOKIE_POLICY);
+const PREVIEW_REWRITE_SCOPE = parsePreviewRewriteScope(process.env.PREVIEW_REWRITE_SCOPE);
 
 interface StatsHistoryPoint {
   timestamp: number;
@@ -321,7 +343,10 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       subdomainBase: PREVIEW_SUBDOMAIN_BASE,
       subdomainBases: PREVIEW_SUBDOMAIN_BASES,
       proxyHosts: PREVIEW_PROXY_HOSTS,
-      preferPathBased: true
+      preferPathBased: PREVIEW_DEFAULT_MODE === 'path-first',
+      defaultMode: PREVIEW_DEFAULT_MODE,
+      cookiePolicy: PREVIEW_COOKIE_POLICY,
+      rewriteScope: PREVIEW_REWRITE_SCOPE
     });
   });
 

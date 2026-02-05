@@ -16,6 +16,21 @@ const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
+type PreviewCookiePolicy = 'preserve-upstream' | 'compat-rewrite' | 'force-none';
+type PreviewRewriteScope = 'minimal' | 'hybrid' | 'legacy';
+
+function parsePreviewCookiePolicy(value: string | undefined): PreviewCookiePolicy {
+  if (value === 'compat-rewrite' || value === 'force-none') return value;
+  return 'preserve-upstream';
+}
+
+function parsePreviewRewriteScope(value: string | undefined): PreviewRewriteScope {
+  if (value === 'hybrid' || value === 'legacy') return value;
+  return 'minimal';
+}
+
+const PREVIEW_COOKIE_POLICY = parsePreviewCookiePolicy(process.env.PREVIEW_COOKIE_POLICY);
+const PREVIEW_REWRITE_SCOPE = parsePreviewRewriteScope(process.env.PREVIEW_REWRITE_SCOPE);
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -2058,15 +2073,22 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             (response.headers.get('set-cookie') ? [response.headers.get('set-cookie') as string] : []);
       if (setCookieHeaders.length > 0) {
         const secureRequest = isSecureRequest(request);
-        const rewrittenCookies = previewHost
-          ? rewriteSetCookieHeaders(setCookieHeaders, {
+        let rewrittenCookies = setCookieHeaders;
+        if (previewHost) {
+          const rewriteOptions = {
             previewHost,
-            isSecureRequest: secureRequest,
-            // Only force SameSite=None in secure contexts to avoid invalid Secure cookies on http.
-            defaultSameSite: secureRequest ? 'none' : undefined,
-            forceSameSite: secureRequest ? 'none' : undefined
-          })
-          : setCookieHeaders;
+            isSecureRequest: secureRequest
+          } as Parameters<typeof rewriteSetCookieHeaders>[1];
+
+          if (PREVIEW_COOKIE_POLICY === 'compat-rewrite') {
+            rewriteOptions.defaultSameSite = secureRequest ? 'none' : undefined;
+          } else if (PREVIEW_COOKIE_POLICY === 'force-none') {
+            rewriteOptions.defaultSameSite = secureRequest ? 'none' : undefined;
+            rewriteOptions.forceSameSite = secureRequest ? 'none' : undefined;
+          }
+
+          rewrittenCookies = rewriteSetCookieHeaders(setCookieHeaders, rewriteOptions);
+        }
         // Store cookies server-side for browser-like behavior in iframe
         storeCookies(port, rewrittenCookies);
         // Forward rewritten cookies to browser for client-side access
@@ -2413,6 +2435,9 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
+          const useLegacyPreviewFixes = isPathPreview || PREVIEW_REWRITE_SCOPE === 'legacy';
+          const includePerformanceMonitor = useLegacyPreviewFixes || PREVIEW_REWRITE_SCOPE === 'hybrid';
+
           // Inject debug script and inspector script at start of <head> to run before app code
           // CSS fix for backdrop-filter in iframes - forces proper stacking context
           const backdropFixCSS = `<style>
@@ -2510,7 +2535,11 @@ html[data-preview-force-anim="1"] :is(
 </style>`;
           // Only inject inspector script when explicitly requested via __inspect=1 parameter (lazy injection)
           const inspectorScriptTag = inspectModeEnabled ? '<script>' + INSPECTOR_SCRIPT + '</script>' : '';
-          const injectedScripts = backdropFixCSS + animationFixCSS + PREVIEW_DEBUG_SCRIPT + PERFORMANCE_MONITOR_SCRIPT + inspectorScriptTag;
+          const injectedScripts =
+            (useLegacyPreviewFixes ? backdropFixCSS + animationFixCSS : '') +
+            PREVIEW_DEBUG_SCRIPT +
+            (includePerformanceMonitor ? PERFORMANCE_MONITOR_SCRIPT : '') +
+            inspectorScriptTag;
           // Use function replacement to avoid $' special pattern issues in injected scripts
           if (html.includes('<head>')) {
             html = html.replace('<head>', () => '<head>' + injectedScripts);

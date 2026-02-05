@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useMobileDetect } from '../hooks/useMobileDetect';
-import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
+import { toPreviewUrl, toPathPreviewFallbackUrl, withAuthToken } from '../utils/previewUrl';
 import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
 import { isWebContainerSupported } from '../utils/webcontainer';
@@ -108,6 +108,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [webContainerSupported, setWebContainerSupported] = useState(null);
   const [webContainerStatus, setWebContainerStatus] = useState(null);
   const iframeRef = useRef(null);
+  const subdomainFallbackAttemptedRef = useRef(new Set());
   const logsEndRef = useRef(null);
   const logsContainerRef = useRef(null);
   const isLogsNearBottomRef = useRef(true);
@@ -219,6 +220,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
   const baseIframeSrcRef = useRef(baseIframeSrc);
   useEffect(() => { baseIframeSrcRef.current = baseIframeSrc; }, [baseIframeSrc]);
+  useEffect(() => {
+    subdomainFallbackAttemptedRef.current.clear();
+  }, [baseIframeSrc]);
 
   // Browser history navigation state
   const [historyStack, setHistoryStack] = useState([]);
@@ -1002,9 +1006,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [isLoading, iframeSrc]);
 
   const handleError = useCallback(() => {
+    const sourceUrl = baseIframeSrcRef.current || iframeSrc;
+    const fallbackUrl = toPathPreviewFallbackUrl(sourceUrl);
+    if (fallbackUrl && fallbackUrl !== iframeSrc) {
+      const attempted = subdomainFallbackAttemptedRef.current;
+      if (!attempted.has(sourceUrl)) {
+        attempted.add(sourceUrl);
+        setIsLoading(true);
+        setError(null);
+        setIframeSrc(fallbackUrl);
+        return;
+      }
+    }
     setIsLoading(false);
     setError('Failed to load page. The server may not be running or CORS may be blocking the request.');
-  }, []);
+  }, [iframeSrc]);
 
   const handleRefresh = useCallback(() => {
     if (baseIframeSrc) {
