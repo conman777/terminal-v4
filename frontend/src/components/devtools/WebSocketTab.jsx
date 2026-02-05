@@ -12,19 +12,20 @@ export function WebSocketTab({ port }) {
   const [directionFilter, setDirectionFilter] = useState('all'); // 'all', 'sent', 'received'
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [refreshInterval, setRefreshInterval] = useState(null);
+  const [notAvailable, setNotAvailable] = useState(false);
 
   useEffect(() => {
     fetchData();
   }, [port, selectedConnectionId, directionFilter]);
 
   useEffect(() => {
-    if (refreshInterval) {
+    if (refreshInterval && !notAvailable) {
       const id = setInterval(() => {
         fetchData();
       }, refreshInterval);
       return () => clearInterval(id);
     }
-  }, [refreshInterval, port, selectedConnectionId, directionFilter]);
+  }, [refreshInterval, port, selectedConnectionId, directionFilter, notAvailable]);
 
   const fetchData = async () => {
     try {
@@ -33,13 +34,17 @@ export function WebSocketTab({ port }) {
       if (directionFilter !== 'all') params.set('direction', directionFilter);
 
       const response = await fetch(`/api/preview/${port}/websockets?${params}`);
+      if (response.status === 404) {
+        setNotAvailable(true);
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
         setConnections(data.connections);
         setMessages(data.messages);
       }
     } catch (err) {
-      console.error('Error fetching WebSocket data:', err);
+      setNotAvailable(true);
     }
   };
 
@@ -95,6 +100,20 @@ export function WebSocketTab({ port }) {
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
   };
+
+  if (notAvailable) {
+    return (
+      <div className="p-4 h-full flex flex-col overflow-hidden">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">WebSocket Debugger</h2>
+        </div>
+        <div className="text-center py-12 text-gray-500">
+          <p className="text-lg font-medium mb-2">WebSocket debugging not available</p>
+          <p>The backend endpoints for WebSocket inspection have not been implemented yet.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 h-full flex flex-col overflow-hidden">

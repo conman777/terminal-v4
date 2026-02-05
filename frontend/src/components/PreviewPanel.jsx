@@ -236,6 +236,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     return result;
   }, [url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
+  const baseIframeSrcRef = useRef(baseIframeSrc);
+  useEffect(() => { baseIframeSrcRef.current = baseIframeSrc; }, [baseIframeSrc]);
 
   // Browser history navigation state
   const [historyStack, setHistoryStack] = useState([]);
@@ -335,7 +337,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
 
       // Only update state if iframe src hasn't changed during the async operation
-      if (currentIframeSrc === baseIframeSrc) {
+      if (currentIframeSrc === baseIframeSrcRef.current) {
         setHasCookies(false);
         // Refresh the preview to apply cleared cookies
         if (baseIframeSrc) {
@@ -704,7 +706,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         // Clear client-side logs and proxy logs (process logs are not clearable)
         await Promise.all([
-          fetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE' }),
+          fetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE', headers }),
           fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers })
         ]);
       } catch {
@@ -1073,23 +1075,22 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handleForward = useCallback(() => {
     // Use functional setState to avoid stale closures
-    setHistoryIndex(currentIndex => {
-      setHistoryStack(currentStack => {
+    // setHistoryStack is outer to access stack length, setHistoryIndex is inner to return new index
+    setHistoryStack(currentStack => {
+      setHistoryIndex(currentIndex => {
         if (currentIndex < currentStack.length - 1) {
           const nextIndex = currentIndex + 1;
           const nextUrl = currentStack[nextIndex];
           if (onUrlChange && nextUrl) {
-            // Batch with requestAnimationFrame to prevent race conditions
             requestAnimationFrame(() => {
               onUrlChange(nextUrl);
             });
           }
-          // Update index in outer scope
-          setHistoryIndex(nextIndex);
+          return nextIndex;
         }
-        return currentStack;
+        return currentIndex;
       });
-      return currentIndex;
+      return currentStack;
     });
   }, [onUrlChange]);
 

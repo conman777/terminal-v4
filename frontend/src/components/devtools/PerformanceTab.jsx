@@ -23,6 +23,7 @@ export function PerformanceTab({ port }) {
     runtimeMetrics: []
   });
   const [isLive, setIsLive] = useState(false);
+  const [notAvailable, setNotAvailable] = useState(false);
   const wsRef = useRef(null);
 
   // Fetch initial metrics
@@ -32,7 +33,7 @@ export function PerformanceTab({ port }) {
 
   // WebSocket for live updates
   useEffect(() => {
-    if (!isLive) return;
+    if (!isLive || notAvailable) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream`;
@@ -67,17 +68,21 @@ export function PerformanceTab({ port }) {
     return () => {
       ws.close();
     };
-  }, [isLive, port]);
+  }, [isLive, port, notAvailable]);
 
   const fetchMetrics = async () => {
     try {
       const response = await fetch(`/api/preview/${port}/performance`);
+      if (response.status === 404) {
+        setNotAvailable(true);
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
         setMetrics(data.metrics);
       }
     } catch (err) {
-      console.error('Error fetching metrics:', err);
+      setNotAvailable(true);
     }
   };
 
@@ -141,6 +146,20 @@ export function PerformanceTab({ port }) {
     .filter((m) => m.data.fps !== null)
     .slice(-60)
     .map((m) => m.data.fps);
+
+  if (notAvailable) {
+    return (
+      <div className="p-4 h-full overflow-auto">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-xl font-semibold">Performance Monitor</h2>
+        </div>
+        <div className="text-center py-12 text-gray-500">
+          <p className="text-lg font-medium mb-2">Performance monitoring not available</p>
+          <p>The backend endpoints for performance metrics have not been implemented yet.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 h-full overflow-auto">
