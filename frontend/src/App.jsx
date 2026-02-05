@@ -13,6 +13,9 @@ import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
+import { FolderProvider, useFolders } from './contexts/FolderContext';
+import { BookmarkProvider, useBookmarks } from './contexts/BookmarkContext';
+import { NotesProvider, useNotes } from './contexts/NotesContext';
 import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
 import { ClaudeCodeProvider, useClaudeCode } from './contexts/ClaudeCodeContext';
 import { PreviewProvider, usePreview } from './contexts/PreviewContext';
@@ -21,6 +24,8 @@ import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useModalState } from './hooks/useModalState';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 
 const PreviewPanel = lazy(() => import('./components/PreviewPanel').then((module) => ({ default: module.PreviewPanel })));
@@ -53,23 +58,6 @@ function AppContent() {
     closeSession,
     navigateSession,
     retryLoadSessions,
-    recentFolders,
-    pinnedFolders,
-    addRecentFolder,
-    pinFolder,
-    unpinFolder,
-    projects,
-    projectsLoading,
-    handleAddScanFolder,
-    bookmarks,
-    addBookmark,
-    updateBookmark,
-    deleteBookmark,
-    executeBookmark,
-    notes,
-    addNote,
-    updateNote,
-    deleteNote,
     // Thread-related
     sessionsGroupedByProject,
     pinnedSessions,
@@ -80,6 +68,19 @@ function AppContent() {
     unarchiveSession,
     updateSessionTopic
   } = useTerminalSession();
+
+  const {
+    recentFolders, pinnedFolders, addRecentFolder, pinFolder, unpinFolder,
+    projects, projectsLoading, handleAddScanFolder,
+  } = useFolders();
+
+  const {
+    bookmarks, addBookmark, updateBookmark, deleteBookmark, executeBookmark,
+  } = useBookmarks();
+
+  const {
+    notes, addNote, updateNote, deleteNote,
+  } = useNotes();
 
   const {
     paneLayout,
@@ -123,16 +124,18 @@ function AppContent() {
     setShowPreview
   } = usePreview();
 
-  // Local UI state (not shared across components)
-  const [showSettings, setShowSettings] = useState(false);
-  const [showApiSettings, setShowApiSettings] = useState(false);
-  const [showBrowserSettings, setShowBrowserSettings] = useState(false);
-  const [showBookmarks, setShowBookmarks] = useState(false);
-  const [showNotes, setShowNotes] = useState(false);
-  const [showProcessManager, setShowProcessManager] = useState(false);
-  const [showFileManager, setShowFileManager] = useState(false);
-  const [showSystemResources, setShowSystemResources] = useState(false);
-  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  // Modal visibility state
+  const {
+    showSettings, setShowSettings,
+    showApiSettings, setShowApiSettings,
+    showBrowserSettings, setShowBrowserSettings,
+    showBookmarks, setShowBookmarks,
+    showNotes, setShowNotes,
+    showProcessManager, setShowProcessManager,
+    showFileManager, setShowFileManager,
+    showSystemResources, setShowSystemResources,
+    showNewSessionModal, setShowNewSessionModal,
+  } = useModalState();
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
@@ -630,54 +633,75 @@ function AppContent() {
         }
       : undefined;
 
+  // Grouped props for Header
+  const headerSessionProps = {
+    activeSessions, inactiveSessions, activeSessionId,
+    onSelectSession: handleSelectSession, onRestoreSession: handleRestoreSession,
+    onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
+    loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
+    sessionActivity, sessionsGroupedByProject,
+  };
+
+  const headerClaudeCodeProps = {
+    claudeCodeSessions, activeClaudeCodeId,
+    onSelectClaudeCode: selectClaudeCode, onNewClaudeCode: startClaudeCode, onDeleteClaudeCode: deleteClaudeCode,
+  };
+
+  const headerModalProps = {
+    setShowApiSettings, onOpenSettings: handleOpenSettings,
+    setShowBookmarks, setShowNotes, setShowProcessManager,
+  };
+
   return (
     <div className={`layout${isMobile ? ' mobile' : ''}${isNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
-      <Suspense fallback={null}>
-        <SettingsModal
-          isOpen={showSettings}
-          onClose={() => setShowSettings(false)}
-          sessionId={activeSessionId}
-          sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
-          currentCwd={projectInfo?.cwd}
-          recentFolders={recentFolders}
-          onSave={navigateSession}
-          onAddRecentFolder={addRecentFolder}
-          terminalFontSize={terminalFontSize}
-          onFontSizeChange={updateTerminalFontSize}
-          terminalWebglEnabled={terminalWebglEnabled}
-          onWebglChange={updateTerminalWebglEnabled}
-        />
-        <BookmarkModal
-          isOpen={showBookmarks}
-          onClose={() => setShowBookmarks(false)}
-          bookmarks={bookmarks}
-          onAdd={addBookmark}
-          onUpdate={updateBookmark}
-          onDelete={deleteBookmark}
-          onExecute={executeBookmark}
-        />
-        <NotesModal
-          isOpen={showNotes}
-          onClose={() => setShowNotes(false)}
-          notes={notes}
-          onAdd={addNote}
-          onUpdate={updateNote}
-          onDelete={deleteNote}
-        />
-        <ApiSettingsModal
-          isOpen={showApiSettings}
-          onClose={() => setShowApiSettings(false)}
-        />
-        <BrowserSettingsModal
-          isOpen={showBrowserSettings}
-          onClose={() => setShowBrowserSettings(false)}
-        />
-        <ProcessManagerModal
-          isOpen={showProcessManager}
-          onClose={() => setShowProcessManager(false)}
-          projects={projects}
-        />
-      </Suspense>
+      <ErrorBoundary name="modals">
+        <Suspense fallback={null}>
+          <SettingsModal
+            isOpen={showSettings}
+            onClose={() => setShowSettings(false)}
+            sessionId={activeSessionId}
+            sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
+            currentCwd={projectInfo?.cwd}
+            recentFolders={recentFolders}
+            onSave={navigateSession}
+            onAddRecentFolder={addRecentFolder}
+            terminalFontSize={terminalFontSize}
+            onFontSizeChange={updateTerminalFontSize}
+            terminalWebglEnabled={terminalWebglEnabled}
+            onWebglChange={updateTerminalWebglEnabled}
+          />
+          <BookmarkModal
+            isOpen={showBookmarks}
+            onClose={() => setShowBookmarks(false)}
+            bookmarks={bookmarks}
+            onAdd={addBookmark}
+            onUpdate={updateBookmark}
+            onDelete={deleteBookmark}
+            onExecute={executeBookmark}
+          />
+          <NotesModal
+            isOpen={showNotes}
+            onClose={() => setShowNotes(false)}
+            notes={notes}
+            onAdd={addNote}
+            onUpdate={updateNote}
+            onDelete={deleteNote}
+          />
+          <ApiSettingsModal
+            isOpen={showApiSettings}
+            onClose={() => setShowApiSettings(false)}
+          />
+          <BrowserSettingsModal
+            isOpen={showBrowserSettings}
+            onClose={() => setShowBrowserSettings(false)}
+          />
+          <ProcessManagerModal
+            isOpen={showProcessManager}
+            onClose={() => setShowProcessManager(false)}
+            projects={projects}
+          />
+        </Suspense>
+      </ErrorBoundary>
 
       <FolderBrowserModal
         isOpen={showNewSessionModal}
@@ -693,50 +717,31 @@ function AppContent() {
             isMobile={true}
             leftPanelMode={leftPanelMode}
             setLeftPanelMode={setLeftPanelMode}
-            activeSessions={activeSessions}
-            inactiveSessions={inactiveSessions}
-            activeSessionId={activeSessionId}
-            onSelectSession={handleSelectSession}
-            onRestoreSession={handleRestoreSession}
-            onCreateSession={handleRequestNewSession}
-            onCloseSession={closeSession}
-            onRenameSession={renameSession}
-            loadingSessions={loadingSessions}
-            sessionLoadError={sessionLoadError}
-            onRetryLoad={retryLoadSessions}
-            claudeCodeSessions={claudeCodeSessions}
-            activeClaudeCodeId={activeClaudeCodeId}
-            onSelectClaudeCode={selectClaudeCode}
-            onNewClaudeCode={startClaudeCode}
-            onDeleteClaudeCode={deleteClaudeCode}
-            setShowApiSettings={setShowApiSettings}
-            onOpenSettings={handleOpenSettings}
+            sessionProps={headerSessionProps}
+            claudeCodeProps={headerClaudeCodeProps}
+            modalProps={headerModalProps}
             showPreview={showPreview}
             onTogglePreview={togglePreview}
-            setShowBookmarks={setShowBookmarks}
-            setShowNotes={setShowNotes}
-            setShowProcessManager={setShowProcessManager}
             showFileManager={showFileManager}
             onToggleFileManager={() => setShowFileManager(!showFileManager)}
             showSystemResources={showSystemResources}
             onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
             user={user}
             logout={logout}
-            // Mobile specific props
-            isNavCollapsed={isNavCollapsed}
-            onToggleKeybar={handleToggleKeybar}
-            keybarOpen={keybarOpen}
-            projects={projects}
-            projectsLoading={projectsLoading}
-            onFolderSelect={handleSidebarFolderSelect}
-            currentPath={projectInfo?.cwd}
-            onAddScanFolder={handleAddScanFolder}
-            mobileView={mobileView}
-            onViewChange={handleMobileViewChange}
-            previewUrl={previewUrl}
-            onNavigateToPath={handleNavigateToPath}
-            sessionActivity={sessionActivity}
-            sessionsGroupedByProject={sessionsGroupedByProject}
+            mobileProps={{
+              isNavCollapsed,
+              onToggleKeybar: handleToggleKeybar,
+              keybarOpen,
+              projects,
+              projectsLoading,
+              onFolderSelect: handleSidebarFolderSelect,
+              currentPath: projectInfo?.cwd,
+              onAddScanFolder: handleAddScanFolder,
+              mobileView,
+              onViewChange: handleMobileViewChange,
+              previewUrl,
+              onNavigateToPath: handleNavigateToPath,
+            }}
           />
           <MobileKeybar
             sessionId={activeSessionId}
@@ -787,29 +792,11 @@ function AppContent() {
               isMobile={false}
               leftPanelMode={leftPanelMode}
               setLeftPanelMode={setLeftPanelMode}
-              activeSessions={activeSessions}
-              inactiveSessions={inactiveSessions}
-              activeSessionId={activeSessionId}
-              onSelectSession={handleSelectSession}
-              onRestoreSession={handleRestoreSession}
-              onCreateSession={handleRequestNewSession}
-              onCloseSession={closeSession}
-              onRenameSession={renameSession}
-              loadingSessions={loadingSessions}
-              sessionLoadError={sessionLoadError}
-              onRetryLoad={retryLoadSessions}
-              claudeCodeSessions={claudeCodeSessions}
-              activeClaudeCodeId={activeClaudeCodeId}
-              onSelectClaudeCode={selectClaudeCode}
-              onNewClaudeCode={startClaudeCode}
-              onDeleteClaudeCode={deleteClaudeCode}
-              setShowApiSettings={setShowApiSettings}
-              onOpenSettings={handleOpenSettings}
+              sessionProps={headerSessionProps}
+              claudeCodeProps={headerClaudeCodeProps}
+              modalProps={headerModalProps}
               showPreview={showPreview}
               onTogglePreview={togglePreview}
-              setShowBookmarks={setShowBookmarks}
-              setShowNotes={setShowNotes}
-              setShowProcessManager={setShowProcessManager}
               showFileManager={showFileManager}
               onToggleFileManager={() => setShowFileManager(!showFileManager)}
               showSystemResources={showSystemResources}
@@ -859,26 +846,28 @@ function AppContent() {
                         </button>
                       </div>
                     ) : (
-                      <SplitPaneContainer
-                        layout={legacyLayout}
-                        paneLayout={paneLayout}
-                        sessions={activeSessions}
-                        onPaneSessionSelect={handlePaneSessionSelect}
-                        onPaneSplit={splitPane}
-                        onPaneClose={closePane}
-                        onPaneFocus={handlePaneFocus}
-                        onPaneFullscreen={toggleFullscreen}
-                        fullscreenPaneId={fullscreenPaneId}
-                        showPreview={showPreview && !fullscreenPaneId}
-                        onMinimizeMainTerminal={handleToggleMainTerminal}
-                        keybarOpen={keybarOpen}
-                        viewportHeight={viewportHeight}
-                        onUrlDetected={handleUrlDetected}
-                        fontSize={terminalFontSize}
-                        webglEnabled={terminalWebglEnabled}
-                        sessionActivity={sessionActivity}
-                        projectInfo={projectInfo}
-                      />
+                      <ErrorBoundary name="terminal" resetKey={activeSessionId}>
+                        <SplitPaneContainer
+                          layout={legacyLayout}
+                          paneLayout={paneLayout}
+                          sessions={activeSessions}
+                          onPaneSessionSelect={handlePaneSessionSelect}
+                          onPaneSplit={splitPane}
+                          onPaneClose={closePane}
+                          onPaneFocus={handlePaneFocus}
+                          onPaneFullscreen={toggleFullscreen}
+                          fullscreenPaneId={fullscreenPaneId}
+                          showPreview={showPreview && !fullscreenPaneId}
+                          onMinimizeMainTerminal={handleToggleMainTerminal}
+                          keybarOpen={keybarOpen}
+                          viewportHeight={viewportHeight}
+                          onUrlDetected={handleUrlDetected}
+                          fontSize={terminalFontSize}
+                          webglEnabled={terminalWebglEnabled}
+                          sessionActivity={sessionActivity}
+                          projectInfo={projectInfo}
+                        />
+                      </ErrorBoundary>
                     )
                   ) : (
                     !activeClaudeCodeId ? (
@@ -915,24 +904,26 @@ function AppContent() {
                         onMouseDown={handleSplitMouseDown}
                       />
                     )}
-                    <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
-                      <PreviewPanel
-                        url={previewUrl}
-                        onClose={handlePreviewClose}
-                        onUrlChange={handlePreviewUrlChange}
-                        projectInfo={projectInfo}
-                        onStartProject={handleStartProject}
-                        onSendToTerminal={handleSendToTerminal}
-                        onSendToClaudeCode={handleSendToClaudeCode}
-                        activeSessions={activeSessions}
-                        activeSessionId={activeSessionId}
-                        fontSize={terminalFontSize}
-                        webglEnabled={terminalWebglEnabled}
-                        onUrlDetected={handlePreviewUrlChange}
-                        mainTerminalMinimized={mainTerminalMinimized}
-                        onToggleMainTerminal={handleToggleMainTerminal}
-                      />
-                    </Suspense>
+                    <ErrorBoundary name="preview" resetKey={previewUrl}>
+                      <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
+                        <PreviewPanel
+                          url={previewUrl}
+                          onClose={handlePreviewClose}
+                          onUrlChange={handlePreviewUrlChange}
+                          projectInfo={projectInfo}
+                          onStartProject={handleStartProject}
+                          onSendToTerminal={handleSendToTerminal}
+                          onSendToClaudeCode={handleSendToClaudeCode}
+                          activeSessions={activeSessions}
+                          activeSessionId={activeSessionId}
+                          fontSize={terminalFontSize}
+                          webglEnabled={terminalWebglEnabled}
+                          onUrlDetected={handlePreviewUrlChange}
+                          mainTerminalMinimized={mainTerminalMinimized}
+                          onToggleMainTerminal={handleToggleMainTerminal}
+                        />
+                      </Suspense>
+                    </ErrorBoundary>
                   </>
                 )}
               </>
@@ -1073,14 +1064,20 @@ function AuthenticatedApp() {
   }
 
   return (
-    <TerminalSessionProvider>
-      <PaneLayoutProvider>
-        <ClaudeCodeProvider>
-          <PreviewProvider>
-            <AppContent />
-          </PreviewProvider>
-        </ClaudeCodeProvider>
-      </PaneLayoutProvider>
-    </TerminalSessionProvider>
+    <NotesProvider>
+      <FolderProvider>
+        <TerminalSessionProvider>
+          <BookmarkProvider>
+            <PaneLayoutProvider>
+              <ClaudeCodeProvider>
+                <PreviewProvider>
+                  <AppContent />
+                </PreviewProvider>
+              </ClaudeCodeProvider>
+            </PaneLayoutProvider>
+          </BookmarkProvider>
+        </TerminalSessionProvider>
+      </FolderProvider>
+    </NotesProvider>
   );
 }

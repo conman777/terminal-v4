@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { apiFetch, apiGet } from '../utils/api';
+import { useFolders } from './FolderContext';
 
 const TerminalSessionContext = createContext(null);
 
@@ -17,34 +18,8 @@ export function TerminalSessionProvider({ children }) {
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
 
-  // Folder state
-  const [recentFolders, setRecentFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('recentFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [pinnedFolders, setPinnedFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('pinnedFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Projects state
-  const [projects, setProjects] = useState([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
-
-  // Bookmarks state
-  const [bookmarks, setBookmarks] = useState([]);
-
-  // Notes state
-  const [notes, setNotes] = useState([]);
+  // Get folder state from FolderContext
+  const { recentFolders, addRecentFolder } = useFolders();
 
   // Refs
   const isMountedRef = useRef(true);
@@ -143,51 +118,6 @@ export function TerminalSessionProvider({ children }) {
     [activeSessionsForThreads]
   );
 
-  // Add a folder to recent list (max 10, no duplicates)
-  const addRecentFolder = useCallback((folder) => {
-    if (!folder) return;
-    setRecentFolders(prev => {
-      const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      const updated = [folder, ...filtered].slice(0, 10);
-      try {
-        localStorage.setItem('recentFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save recent folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Pin a folder (max 20)
-  const pinFolder = useCallback((folder) => {
-    if (!folder) return;
-    setPinnedFolders(prev => {
-      if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
-        return prev;
-      }
-      const updated = [...prev, folder].slice(0, 20);
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
-  // Unpin a folder
-  const unpinFolder = useCallback((folder) => {
-    setPinnedFolders(prev => {
-      const updated = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
-      return updated;
-    });
-  }, []);
-
   // Load sessions
   const loadSessions = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -211,80 +141,6 @@ export function TerminalSessionProvider({ children }) {
       if (isMountedRef.current) {
         setLoadingSessions(false);
       }
-    }
-  }, []);
-
-  // Load bookmarks
-  const loadBookmarks = useCallback(async () => {
-    if (!isMountedRef.current) return;
-    try {
-      const response = await apiFetch('/api/bookmarks');
-      if (!response.ok) {
-        throw new Error(`Failed to load bookmarks (${response.status})`);
-      }
-      const data = await response.json();
-      if (isMountedRef.current) {
-        setBookmarks(Array.isArray(data.bookmarks) ? data.bookmarks : []);
-      }
-    } catch (error) {
-      console.error('Failed to load bookmarks', error);
-    }
-  }, []);
-
-  // Load notes
-  const loadNotes = useCallback(async () => {
-    if (!isMountedRef.current) return;
-    try {
-      const response = await apiFetch('/api/notes');
-      if (!response.ok) {
-        throw new Error(`Failed to load notes (${response.status})`);
-      }
-      const data = await response.json();
-      if (isMountedRef.current) {
-        setNotes(Array.isArray(data.notes) ? data.notes : []);
-      }
-    } catch (error) {
-      console.error('Failed to load notes', error);
-    }
-  }, []);
-
-  // Load projects
-  const loadProjects = useCallback(async () => {
-    setProjectsLoading(true);
-    try {
-      const response = await apiFetch('/api/projects/scan');
-      if (response.ok) {
-        const data = await response.json();
-        setProjects(data.projects || []);
-      }
-    } catch (error) {
-      console.error('Failed to load projects', error);
-    } finally {
-      setProjectsLoading(false);
-    }
-  }, []);
-
-  // Add scan folder
-  const handleAddScanFolder = useCallback(async () => {
-    const folderPath = prompt('Enter folder path to scan for git repositories:');
-    if (!folderPath || !folderPath.trim()) return;
-
-    setProjectsLoading(true);
-    try {
-      const response = await apiFetch('/api/projects/scan-dirs', {
-        method: 'POST',
-        body: { path: folderPath.trim() }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.projects) {
-          setProjects(data.projects);
-        }
-      }
-    } catch (error) {
-      console.error('Failed to add scan folder', error);
-    } finally {
-      setProjectsLoading(false);
     }
   }, []);
 
@@ -458,130 +314,6 @@ export function TerminalSessionProvider({ children }) {
       console.error('Failed to navigate session', error);
     }
   }, [addRecentFolder]);
-
-  // Bookmark handlers
-  const addBookmark = useCallback(async (name, command, category) => {
-    try {
-      const response = await apiFetch('/api/bookmarks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, command, category })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to create bookmark (${response.status})`);
-      }
-
-      await loadBookmarks();
-    } catch (error) {
-      console.error('Failed to create bookmark', error);
-    }
-  }, [loadBookmarks]);
-
-  const updateBookmark = useCallback(async (id, updates) => {
-    try {
-      const response = await apiFetch(`/api/bookmarks/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to update bookmark (${response.status})`);
-      }
-
-      await loadBookmarks();
-    } catch (error) {
-      console.error('Failed to update bookmark', error);
-    }
-  }, [loadBookmarks]);
-
-  const deleteBookmark = useCallback(async (id) => {
-    try {
-      const response = await apiFetch(`/api/bookmarks/${id}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete bookmark (${response.status})`);
-      }
-
-      await loadBookmarks();
-    } catch (error) {
-      console.error('Failed to delete bookmark', error);
-    }
-  }, [loadBookmarks]);
-
-  const executeBookmark = useCallback(async (command) => {
-    if (!activeSessionId) {
-      alert('Please select a terminal session first');
-      return;
-    }
-
-    try {
-      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: command + '\r' })
-      });
-    } catch (error) {
-      console.error('Failed to execute bookmark command', error);
-      alert('Failed to execute command');
-    }
-  }, [activeSessionId]);
-
-  // Note handlers
-  const addNote = useCallback(async (title, content, category) => {
-    try {
-      const response = await apiFetch('/api/notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, content, category })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to create note (${response.status})`);
-      }
-
-      await loadNotes();
-    } catch (error) {
-      console.error('Failed to create note', error);
-    }
-  }, [loadNotes]);
-
-  const updateNote = useCallback(async (id, updates) => {
-    try {
-      const response = await apiFetch(`/api/notes/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to update note (${response.status})`);
-      }
-
-      await loadNotes();
-    } catch (error) {
-      console.error('Failed to update note', error);
-    }
-  }, [loadNotes]);
-
-  const deleteNote = useCallback(async (id) => {
-    try {
-      const response = await apiFetch(`/api/notes/${id}`, {
-        method: 'DELETE'
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to delete note (${response.status})`);
-      }
-
-      await loadNotes();
-    } catch (error) {
-      console.error('Failed to delete note', error);
-    }
-  }, [loadNotes]);
 
   // Track activity for polling
   const trackActivity = useCallback(() => {
@@ -781,8 +513,6 @@ export function TerminalSessionProvider({ children }) {
 
     const initializeSessions = async () => {
       await loadSessions();
-      await loadBookmarks();
-      await loadNotes();
 
       const lastSessionId = localStorage.getItem('lastActiveSession');
       if (lastSessionId) {
@@ -837,7 +567,6 @@ export function TerminalSessionProvider({ children }) {
     };
 
     initializeSessions();
-    loadProjects();
 
     // Visibility-aware polling
     let pollTimeoutId = null;
@@ -896,7 +625,7 @@ export function TerminalSessionProvider({ children }) {
       window.removeEventListener('keydown', handleActivity);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [loadSessions, loadBookmarks, loadNotes, loadProjects, fetchAppState]);
+  }, [loadSessions, fetchAppState]);
 
   // Auto-restore inactive sessions
   useEffect(() => {
@@ -971,32 +700,6 @@ export function TerminalSessionProvider({ children }) {
     updateSessionTopic,
     detectSessionProject,
     refreshSessionGitStats,
-
-    // Folder state
-    recentFolders,
-    pinnedFolders,
-    addRecentFolder,
-    pinFolder,
-    unpinFolder,
-
-    // Projects state
-    projects,
-    projectsLoading,
-    loadProjects,
-    handleAddScanFolder,
-
-    // Bookmarks
-    bookmarks,
-    addBookmark,
-    updateBookmark,
-    deleteBookmark,
-    executeBookmark,
-
-    // Notes
-    notes,
-    addNote,
-    updateNote,
-    deleteNote,
 
     // Activity tracking
     trackActivity

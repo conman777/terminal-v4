@@ -8,54 +8,46 @@ export function Header({
   isMobile,
   leftPanelMode,
   setLeftPanelMode,
-  activeSessions,
-  inactiveSessions,
-  activeSessionId,
-  onSelectSession,
-  onRestoreSession,
-  onCreateSession,
-  onCloseSession,
-  onRenameSession,
-  loadingSessions,
-  sessionLoadError,
-  onRetryLoad,
-  claudeCodeSessions,
-  activeClaudeCodeId,
-  onSelectClaudeCode,
-  onNewClaudeCode,
-  onDeleteClaudeCode,
-  setShowApiSettings,
-  onOpenSettings,
+  sessionProps,
+  claudeCodeProps,
+  modalProps,
   showPreview,
   onTogglePreview,
-  setShowBookmarks,
-  setShowNotes,
-  setShowProcessManager,
   showFileManager,
   onToggleFileManager,
   showSystemResources,
   onToggleSystemResources,
   user,
   logout,
-  // Sidebar mode props
   sidebarMode,
   onToggleSidebarMode,
   // Mobile specific props
-  isNavCollapsed,
-  onToggleKeybar,
-  keybarOpen,
-  projects,
-  projectsLoading,
-  onFolderSelect,
-  currentPath,
-  onAddScanFolder,
-  mobileView,
-  onViewChange,
-  previewUrl,
-  onNavigateToPath,
-  sessionActivity,
-  sessionsGroupedByProject
+  mobileProps,
 }) {
+  // Destructure grouped props
+  const {
+    activeSessions, inactiveSessions, activeSessionId,
+    onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession,
+    loadingSessions, sessionLoadError, onRetryLoad,
+    sessionActivity, sessionsGroupedByProject,
+  } = sessionProps;
+
+  const {
+    claudeCodeSessions, activeClaudeCodeId,
+    onSelectClaudeCode, onNewClaudeCode, onDeleteClaudeCode,
+  } = claudeCodeProps;
+
+  const {
+    setShowApiSettings, onOpenSettings,
+    setShowBookmarks, setShowNotes, setShowProcessManager,
+  } = modalProps;
+
+  // Mobile-only props (may be undefined on desktop)
+  const {
+    isNavCollapsed, onToggleKeybar, keybarOpen,
+    projects, projectsLoading, onFolderSelect, currentPath, onAddScanFolder,
+    mobileView, onViewChange, previewUrl, onNavigateToPath,
+  } = mobileProps || {};
   if (isMobile) {
     return (
       <MobileHeader

@@ -67,6 +67,17 @@
   --amber-glow-medium: 0 0 30px rgba(245, 158, 11, 0.4);
   --amber-glow-strong: 0 0 40px rgba(245, 158, 11, 0.5), 0 0 80px rgba(245, 158, 11, 0.25);
 
+  /* Font stacks */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+  /* Interactive state colors */
+  --bg-hover: #1f1f23;
+  --bg-active: #2a2a2e;
+  --bg-tertiary: #131316;
+  --border-dim: #1e1e22;
+  --accent-primary-hover: #d97706;
+  --accent: var(--accent-primary);
+
   color-scheme: dark;
 }
 
@@ -95,6 +106,12 @@ body, html, #root {
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
+  }
+
+  /* Modals must scroll independently since body is fixed */
+  .modal-overlay {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 }
 
@@ -2920,6 +2937,14 @@ button {
 
   .notes-v2-viewer-title {
     font-size: 24px;
+  }
+
+  .notes-v2-editor {
+    overflow-y: auto;
+  }
+
+  .notes-v2-content-input {
+    min-height: 200px;
   }
 
   .notes-v2-editor-hint {
@@ -11095,6 +11120,19 @@ textarea:focus-visible {
   text-align: center;
 }
 
+/* Error boundary fallback */
+.error-boundary-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  height: 100%;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
 /* Pane drag-over visual feedback */
 .split-terminal-pane.drag-over {
   outline: 2px dashed var(--accent-primary);
@@ -11109,4 +11147,14 @@ textarea:focus-visible {
 /* Hide floating image button on desktop when using status bar */
 .layout:not(.mobile) .terminal-image-btn {
   display: none !important;
+}
+
+/* Accessibility: respect user's reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
