@@ -166,7 +166,7 @@ export function Header({
   ];
 
   return (
-    <header className="app-header redesign">
+    <header className={`app-header redesign${showPreview ? ' preview-active' : ''}`}>
       <div className="header-left">
         <h1 className="app-title">Terminal</h1>
 
@@ -456,6 +456,31 @@ export function Header({
 
         .chevron {
           opacity: 0.5;
+        }
+
+        .app-header.redesign.preview-active {
+          height: 36px;
+          padding: 0 12px;
+        }
+
+        .app-header.redesign.preview-active .app-title {
+          font-size: 14px;
+        }
+
+        .app-header.redesign.preview-active .segmented-btn {
+          padding: 2px 10px;
+          font-size: 11px;
+        }
+
+        .app-header.redesign.preview-active .header-btn-modern {
+          padding: 4px 8px;
+          font-size: 12px;
+        }
+
+        .app-header.redesign.preview-active .user-avatar {
+          width: 22px;
+          height: 22px;
+          font-size: 10px;
         }
       `}</style>
     </header>

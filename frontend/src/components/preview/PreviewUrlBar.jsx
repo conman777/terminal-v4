@@ -83,6 +83,8 @@ export function PreviewUrlBar({
   iframeSrc,
   desktopLayoutMode,
   onSetDesktopLayout,
+  mobileViewportEnabled,
+  onToggleMobileViewport,
   useWebContainer,
   showDevTools,
   onToggleDevTools,
@@ -280,6 +282,20 @@ export function PreviewUrlBar({
             aria-label="Reload preview"
           >
             {isLoading ? '\u22EF' : '\u21BB'}
+          </button>
+        </Tooltip>
+        <Tooltip text={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}>
+          <button
+            type="button"
+            className={`preview-action-btn ${mobileViewportEnabled ? 'active' : ''}`}
+            onClick={() => onToggleMobileViewport?.()}
+            aria-label={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}
+            title={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="7" y="2" width="10" height="20" rx="2" />
+              <line x1="11" y1="18" x2="13" y2="18" />
+            </svg>
           </button>
         </Tooltip>
       </div>

@@ -2993,6 +2993,36 @@ button {
   overflow: hidden;
 }
 
+/* Compact chrome: tighter preview URL bar */
+.preview-panel.compact-chrome .preview-header {
+  padding: 3px 6px;
+  gap: 4px;
+}
+
+.preview-panel.compact-chrome .preview-url-input {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.preview-panel.compact-chrome .preview-action-btn {
+  width: 24px;
+  height: 24px;
+}
+
+.preview-panel.compact-chrome .preview-layout-chip {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+
+.preview-panel.compact-chrome .preview-layout-presets {
+  padding: 1px;
+  gap: 2px;
+}
+
+.preview-panel.compact-chrome .preview-nav-group {
+  gap: 1px;
+}
+
 /* Browser Split View (Desktop Only) */
 .preview-content-wrapper {
   flex: 1;
@@ -3595,11 +3625,25 @@ button {
   background: #ffffff;
 }
 
+.preview-content.mobile-emulation {
+  background: radial-gradient(circle at top, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+}
+
 .preview-iframe {
   width: 100%;
   height: 100%;
   border: none;
   background: #fff;
+}
+
+.preview-content.mobile-emulation .preview-iframe {
+  display: block;
+  width: min(420px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
+  margin: 12px auto;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 16px 40px rgba(2, 6, 23, 0.45), 0 0 0 1px rgba(15, 23, 42, 0.85);
 }
 
 /* Preview Empty State */

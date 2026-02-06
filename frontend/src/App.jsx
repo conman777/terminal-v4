@@ -808,7 +808,7 @@ function AppContent() {
             />
 
           {/* Session tab bar - only show in terminal mode */}
-          {leftPanelMode === 'terminal' && activeSessions.length > 0 && (
+          {leftPanelMode === 'terminal' && activeSessions.length > 0 && !showPreview && (
             <SessionTabBar
               sessions={activeSessions}
               activeSessionId={activeSessionId}

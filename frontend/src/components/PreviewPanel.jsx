@@ -26,6 +26,7 @@ const MOBILE_SPLIT_SESSION_KEY = 'preview_mobile_split_session_v1';
 const DEVTOOLS_HEIGHT_KEY = 'preview_devtools_height_v1';
 const DEVTOOLS_VISIBLE_KEY = 'preview_devtools_visible_v1';
 const PREVIEW_CHROME_COMPACT_KEY = 'preview_compact_chrome_v1';
+const PREVIEW_DESKTOP_MOBILE_VIEW_KEY = 'preview_desktop_mobile_view_v1';
 const DESKTOP_BROWSER_SPLIT_DEFAULT = 68;
 const GENERIC_RUNTIME_PROCESSES = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'python', 'python3', 'deno']);
 
@@ -136,6 +137,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return stored === 'true';
     } catch {
       return true;
+    }
+  });
+  const [desktopMobileView, setDesktopMobileView] = useState(() => {
+    if (isMobile) return false;
+    try {
+      const stored = localStorage.getItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY);
+      if (stored === null) return false;
+      return stored === 'true';
+    } catch {
+      return false;
     }
   });
   const [showToolsMenu, setShowToolsMenu] = useState(false);
@@ -1683,10 +1694,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     try {
       localStorage.setItem(DEVTOOLS_VISIBLE_KEY, String(showDevTools));
       localStorage.setItem(PREVIEW_CHROME_COMPACT_KEY, String(compactChrome));
+      localStorage.setItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY, String(desktopMobileView));
     } catch {
       // Ignore localStorage persistence failures
     }
-  }, [compactChrome, isMobile, showDevTools]);
+  }, [compactChrome, desktopMobileView, isMobile, showDevTools]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2201,6 +2213,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     });
   }, [mobileListeningPorts, mobilePortSearch]);
   const desktopLayoutMode = showDevTools ? 'debug' : (browserSplitEnabled ? 'split' : 'preview');
+  const desktopMobileViewportActive = desktopMobileView && Boolean(iframeSrc) && !useWebContainer;
   const totalLogCount = logs.length + proxyLogs.length + processLogs.length;
   const previewTerminalFontSize = useMemo(() => {
     const base = Number.isFinite(fontSize) ? fontSize : 14;
@@ -3014,6 +3027,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         onToggleTerminalSplit={handleToggleTerminalSplit}
         desktopLayoutMode={desktopLayoutMode}
         onSetDesktopLayout={handleSetDesktopLayout}
+        mobileViewportEnabled={desktopMobileView}
+        onToggleMobileViewport={() => setDesktopMobileView((prev) => !prev)}
         useWebContainer={useWebContainer}
         showDevTools={showDevTools}
         onToggleDevTools={handleToggleDevTools}
@@ -3043,7 +3058,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           className="preview-iframe-section"
           style={browserSplitEnabled ? { flex: `0 0 ${browserSplitPosition}%` } : { flex: 1 }}
         >
-          <div className="preview-content">
+          <div className={`preview-content${desktopMobileViewportActive ? ' mobile-emulation' : ''}`}>
             {!iframeSrc ? (
               <div className="preview-empty">
                 {url && (url.includes(`:${uiPort}`) || url.includes(`preview-${uiPort}`)) ? (
