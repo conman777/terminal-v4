@@ -1726,6 +1726,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, mode); } catch {}
     if (mode === 'split') setMobileSplitHeight(h => clampMobileSplitHeight(h));
     if (mode !== 'terminal') setShowMobileToolsMenu(false);
+    // Keep view mode controls accessible when switching between mobile layouts.
+    setShowLogs(false);
     // Exit inspect if switching to terminal
     if (mode === 'terminal' && inspectMode) setInspectMode(false);
     // Trigger terminal refit when entering terminal mode
@@ -2002,10 +2004,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Auto-expand logs when errors appear
   useEffect(() => {
-    if (errorLogs.length > 0 && !showLogs) {
+    // On mobile, avoid auto-opening the logs sheet because it can mask mode controls.
+    if (!isMobile && errorLogs.length > 0 && !showLogs) {
       setShowLogs(true);
     }
-  }, [errorLogs.length, showLogs]);
+  }, [errorLogs.length, isMobile, showLogs]);
 
   const mobileViewportHeight = getViewportHeight();
   const mobileSplitMaxHeight = Math.max(180, mobileViewportHeight * 0.75);

@@ -75,7 +75,7 @@ export function MobileHeader({
   const [renamingSessionId, setRenamingSessionId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [hasOverflow, setHasOverflow] = useState(false);
-  const [previewOpened, setPreviewOpened] = useState(false);
+  const [previewOpened, setPreviewOpened] = useState(() => mobileView === 'preview' && Boolean(previewUrl));
   const tabsRef = useRef(null);
   const headerRef = useRef(null);
   const renameInputRef = useRef(null);
@@ -90,7 +90,7 @@ export function MobileHeader({
 
     const updateHeight = () => {
       if (headerRef.current) {
-        const height = headerRef.current.offsetHeight;
+        const height = Math.round(headerRef.current.getBoundingClientRect().height || headerRef.current.offsetHeight || 0);
         document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
       }
     };
@@ -104,6 +104,16 @@ export function MobileHeader({
 
     return () => observer.disconnect();
   }, []);
+
+  // Force a height re-sync when header row composition changes.
+  useEffect(() => {
+    if (!headerRef.current) return;
+    const raf = requestAnimationFrame(() => {
+      const height = Math.round(headerRef.current?.getBoundingClientRect().height || 0);
+      document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [mobileView, previewOpened, previewUrl, activeSessions.length, isNavCollapsed]);
 
   // Check if tabs overflow
   const updateOverflowState = useCallback(() => {
@@ -255,7 +265,7 @@ export function MobileHeader({
     <>
       <header 
         ref={headerRef}
-        className={`mobile-header mobile-header-modern${isNavCollapsed ? ' nav-collapsed' : ''}`}
+        className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}`}
       >
         <div className="mobile-header-top-row">
           <button
@@ -271,33 +281,44 @@ export function MobileHeader({
             </svg>
           </button>
 
-          <div className="mobile-mode-toggle">
-            <button
-              className={`mode-btn ${mobileView === 'terminal' || mobileView === 'preview' ? 'active' : ''}`}
-              onClick={() => onViewChange?.('terminal')}
-            >
-              Term
-            </button>
-            <button
-              className={`mode-btn ${mobileView === 'claude' ? 'active' : ''}`}
-              onClick={() => onViewChange?.('claude')}
-            >
-              Claude
-            </button>
-          </div>
+          {previewUrl && previewOpened ? (
+            <MobileViewTabs
+              mobileView={mobileView}
+              onViewChange={onViewChange}
+              previewUrl={previewUrl}
+            />
+          ) : (
+            <div className="mobile-mode-toggle">
+              <button
+                className={`mobile-mode-btn ${mobileView === 'terminal' || mobileView === 'preview' ? 'active' : ''}`}
+                onClick={() => onViewChange?.('terminal')}
+              >
+                Term
+              </button>
+              <button
+                className={`mobile-mode-btn ${mobileView === 'claude' ? 'active' : ''}`}
+                onClick={() => onViewChange?.('claude')}
+              >
+                Claude
+              </button>
+            </div>
+          )}
 
           <div className="mobile-header-actions-right">
-            <button
-              className={`mobile-header-btn-modern ${mobileView === 'preview' ? 'active' : ''}`}
-              onClick={() => onViewChange?.('preview')}
-              aria-label="Preview"
-              title="Preview"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <line x1="12" y1="3" x2="12" y2="21" />
-              </svg>
-            </button>
+            {/* Preview button only when view tabs aren't showing */}
+            {!(previewUrl && previewOpened) && (
+              <button
+                className={`mobile-header-btn-modern ${mobileView === 'preview' ? 'active' : ''}`}
+                onClick={() => onViewChange?.('preview')}
+                aria-label="Preview"
+                title="Preview"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <line x1="12" y1="3" x2="12" y2="21" />
+                </svg>
+              </button>
+            )}
 
             <Dropdown
               trigger={
@@ -328,201 +349,40 @@ export function MobileHeader({
           </div>
         </div>
 
-        {/* Second row for tabs - only in terminal mode */}
-        {(mobileView === 'terminal' || mobileView === 'preview') && (
+        {/* Second row for session tabs - only when not showing view tabs in top row */}
+        {(mobileView === 'terminal' || mobileView === 'preview') && !(previewUrl && previewOpened) && (
           <div className="mobile-header-tabs-row">
-            {previewUrl && previewOpened ? (
-              <MobileViewTabs
-                mobileView={mobileView}
-                onViewChange={onViewChange}
-                previewUrl={previewUrl}
-              />
-            ) : (
-              <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
-                {activeSessions.map((session) => (
-                  <MobileTab
-                    key={session.id}
-                    session={session}
-                    isActive={session.id === activeSessionId}
-                    onSelect={onSelectSession}
-                    onLongPress={handleTabLongPress}
-                    isRenaming={renamingSessionId === session.id}
-                    renameValue={renameValue}
-                    onRenameChange={setRenameValue}
-                    onRenameSubmit={handleRenameSubmit}
-                    onRenameKeyDown={handleRenameKeyDown}
-                    inputRef={renameInputRef}
-                  />
-                ))}
-                <button
-                  type="button"
-                  className="mobile-header-tab-add"
-                  onClick={onCreateSession}
-                  aria-label="New terminal"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
-                  </svg>
-                </button>
-              </div>
-            )}
+            <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
+              {activeSessions.map((session) => (
+                <MobileTab
+                  key={session.id}
+                  session={session}
+                  isActive={session.id === activeSessionId}
+                  onSelect={onSelectSession}
+                  onLongPress={handleTabLongPress}
+                  isRenaming={renamingSessionId === session.id}
+                  renameValue={renameValue}
+                  onRenameChange={setRenameValue}
+                  onRenameSubmit={handleRenameSubmit}
+                  onRenameKeyDown={handleRenameKeyDown}
+                  inputRef={renameInputRef}
+                />
+              ))}
+              <button
+                type="button"
+                className="mobile-header-tab-add"
+                onClick={onCreateSession}
+                aria-label="New terminal"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+            </div>
           </div>
         )}
 
-        <style jsx>{`
-          .mobile-header-modern {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            background: var(--bg-primary, #09090b);
-            border-bottom: 1px solid var(--border-default, #3f3f46);
-            display: flex;
-            flex-direction: column;
-            z-index: 1000;
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            /* Remove backdrop-filter as it causes z-index context issues on some browsers */
-            /* backdrop-filter: blur(12px); */
-          }
-
-          .mobile-header-modern.nav-collapsed {
-            transform: translateY(-100%);
-          }
-
-          .mobile-header-top-row {
-            height: 48px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 8px;
-          }
-
-          .mobile-mode-toggle {
-            display: flex;
-            background: var(--bg-surface, #18181b);
-            padding: 2px;
-            border-radius: 8px;
-            border: 1px solid var(--border-subtle, #27272a);
-          }
-
-          .mode-btn {
-            padding: 4px 12px;
-            border-radius: 6px;
-            border: none;
-            background: transparent;
-            color: var(--text-secondary, #a1a1aa);
-            font-size: 12px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-          }
-
-          .mode-btn.active {
-            background: var(--bg-elevated, #27272a);
-            color: var(--accent-primary, #f59e0b);
-            box-shadow: var(--shadow-sm);
-          }
-
-          .mobile-header-btn-modern {
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: transparent;
-            border: none;
-            color: var(--text-secondary, #a1a1aa);
-            border-radius: 8px;
-            transition: all 0.2s ease;
-          }
-
-          .mobile-header-btn-modern.active {
-            color: var(--accent-primary, #f59e0b);
-            background: var(--accent-primary-dim);
-          }
-
-          .mobile-header-actions-right {
-            display: flex;
-            gap: 4px;
-          }
-
-          .mobile-header-tabs-row {
-            height: 44px;
-            border-top: 1px solid var(--border-subtle, #27272a);
-            display: flex;
-            align-items: center;
-            padding: 0 4px;
-            background: rgba(0, 0, 0, 0.2);
-          }
-
-          .mobile-header-tabs-modern {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            overflow-x: auto;
-            scrollbar-width: none;
-            gap: 6px;
-            padding: 0 4px;
-          }
-
-          .mobile-header-tabs-modern::-webkit-scrollbar {
-            display: none;
-          }
-
-          :global(.mobile-header-tab) {
-            flex-shrink: 0;
-            height: 36px;
-            min-height: 36px;
-            padding: 0 12px;
-            background: var(--bg-surface, #18181b);
-            border: 1px solid var(--border-subtle, #27272a);
-            border-radius: 18px;
-            color: var(--text-secondary, #a1a1aa);
-            font-size: 13px;
-            font-weight: 600;
-            white-space: nowrap;
-            max-width: 100px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-
-          :global(.mobile-header-tab.active) {
-            background: var(--accent-primary-dim);
-            border-color: var(--accent-primary, #f59e0b);
-            color: var(--accent-primary, #f59e0b);
-            box-shadow: 0 0 10px var(--accent-primary-dim);
-          }
-
-          .mobile-header-tab-add {
-            flex-shrink: 0;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: var(--bg-elevated, #27272a);
-            border: 1px solid var(--border-default, #3f3f46);
-            color: var(--text-muted, #71717a);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          }
-
-          :global(.mobile-header-tab-input) {
-            height: 36px;
-            background: var(--bg-primary, #09090b);
-            border: 1px solid var(--accent-primary, #f59e0b);
-            border-radius: 18px;
-            color: var(--text-primary, #fafafa);
-            padding: 0 12px;
-            font-size: 16px;
-            width: 90px;
-            outline: none;
-          }
-        `}</style>
       </header>
 
       <MobileDrawer

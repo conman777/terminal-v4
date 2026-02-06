@@ -758,6 +758,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let resizeObserver = null;
     let openRetryCount = 0;
     let openRetryTimeout = null;
+    let iosRefreshRaf = null;
     const MAX_OPEN_RETRIES = 20;
     const MIN_CONTAINER_WIDTH = 50;
     const MIN_CONTAINER_HEIGHT = 30;
@@ -777,7 +778,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       fontWeight: '400',
       fontWeightBold: '600',
       letterSpacing: 0,
-      lineHeight: isMobile ? 1.1 : 1.2,
+      lineHeight: 1.2,
       scrollback,
       theme: {
         background: '#1e1e1e',
@@ -793,6 +794,35 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         getWinTitle: false, pushTitle: false, popTitle: false, setWinLines: false
       }
     });
+
+    const scheduleIOSRefresh = () => {
+      if (!isMobile || !isIOS) return;
+      if (iosRefreshRaf) return;
+      iosRefreshRaf = requestAnimationFrame(() => {
+        iosRefreshRaf = null;
+        if (disposed || !xtermRef.current) return;
+        try {
+          const rows = xtermRef.current.rows || 0;
+          if (rows > 0) {
+            xtermRef.current.refresh(0, rows - 1);
+          }
+        } catch {
+          // Ignore transient refresh failures during resize/reconnect.
+        }
+      });
+    };
+
+    const writeTerminal = (text, callback) => {
+      if (typeof callback === 'function') {
+        term.write(text, () => {
+          callback();
+          scheduleIOSRefresh();
+        });
+        return;
+      }
+      term.write(text);
+      scheduleIOSRefresh();
+    };
 
     const sendTerminalInput = (text) => {
       if (!text || disposed) return;
@@ -1108,7 +1138,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }
           const chunk = historyText.slice(offset, offset + chunkSize);
           offset += chunk.length;
-          term.write(chunk, () => {
+          writeTerminal(chunk, () => {
             if (offset < historyText.length) {
               requestAnimationFrame(writeNext);
             } else {
@@ -1127,9 +1157,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const pendingText = pending.join('');
         const shouldAppendReader = viewModeRef.current === 'reader' || !isMobile;
         if (viewModeRef.current === 'reader') {
-          term.write(pendingText, scheduleReaderSync);
+          writeTerminal(pendingText, scheduleReaderSync);
         } else {
-          term.write(pendingText);
+          writeTerminal(pendingText);
           if (shouldAppendReader) {
             appendToReader(pendingText);
           }
@@ -1249,9 +1279,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
 
             if (viewModeRef.current === 'reader') {
-              term.write(combined, scheduleReaderSync);
+              writeTerminal(combined, scheduleReaderSync);
             } else {
-              term.write(combined);
+              writeTerminal(combined);
               if (!isMobile) {
                 appendToReader(combined);
               }
@@ -1448,7 +1478,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           onConnectionChange?.(false);
           if (!hadConnectionError) {
             hadConnectionError = true;
-            term.write(`\r\n[${message || 'Session expired - please refresh'}]\r\n`);
+            writeTerminal(`\r\n[${message || 'Session expired - please refresh'}]\r\n`);
           }
         };
 
@@ -1469,7 +1499,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             markDisconnected();
             if (!hadConnectionError) {
               hadConnectionError = true;
-              term.write('\r\n[Connection timed out – retrying…]\r\n');
+              writeTerminal('\r\n[Connection timed out – retrying…]\r\n');
             }
             try {
               socket.close(4408, 'Connection timeout');
@@ -1563,9 +1593,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             appendHistoryEntry({ text: data, ts: Date.now() });
 
             if (viewModeRef.current === 'reader') {
-              term.write(data, scheduleReaderSync);
+              writeTerminal(data, scheduleReaderSync);
             } else {
-              term.write(data);
+              writeTerminal(data);
               if (!isMobile) {
                 appendToReader(data);
               }
@@ -1603,7 +1633,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 if (droppedChars > 0) parts.push(`${droppedChars} chars`);
                 if (droppedEvents > 0) parts.push(`${droppedEvents} events`);
                 const notice = `\r\n[Output skipped: ${parts.join(', ')} due to backlog]\r\n`;
-                term.write(notice);
+                writeTerminal(notice);
                 appendHistoryEntry({ text: notice, ts: Date.now() });
                 if (!isMobile) {
                   appendToReader(notice);
@@ -1730,7 +1760,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             markDisconnected();
             if (!hadConnectionError) {
               hadConnectionError = true;
-              term.write('\r\n[Connection lost – attempting to reconnect…]\r\n');
+              writeTerminal('\r\n[Connection lost – attempting to reconnect…]\r\n');
             }
           };
 
@@ -1748,12 +1778,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             messageQueue.length = 0;
             if (event.reason === 'Session ended') {
               shouldReconnect = false;
-              term.write('\r\n[Terminal session ended]\r\n');
+              writeTerminal('\r\n[Terminal session ended]\r\n');
               return;
             }
             if (event.reason === 'Terminal session not found' || event.code === 4404) {
               shouldReconnect = false;
-              term.write('\r\n[Terminal session not found]\r\n');
+              writeTerminal('\r\n[Terminal session not found]\r\n');
               return;
             }
             if (event.reason === 'Unauthorized' || event.code === 4401) {
@@ -1913,6 +1943,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           clearTimeout(openRetryTimeout);
           openRetryTimeout = null;
         }
+        if (iosRefreshRaf) {
+          cancelAnimationFrame(iosRefreshRaf);
+          iosRefreshRaf = null;
+        }
         if (webglAddonRef.current) {
           try {
             webglAddonRef.current.dispose();
@@ -1940,6 +1974,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (openRetryTimeout) {
         clearTimeout(openRetryTimeout);
         openRetryTimeout = null;
+      }
+      if (iosRefreshRaf) {
+        cancelAnimationFrame(iosRefreshRaf);
+        iosRefreshRaf = null;
       }
       if (fitTimeoutRef.current) {
         clearTimeout(fitTimeoutRef.current);
