@@ -208,14 +208,18 @@ function getStartCommand(repoPath: string, projectType: 'node' | 'python' | 'unk
 
 // Track spawned processes for log capture
 const spawnedProcesses = new Map<number, ChildProcess>();
+const APP_PORT = (() => {
+  const parsed = Number.parseInt(process.env.PORT || '3020', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+})();
 
 // Patterns to detect port from process output
 const PORT_PATTERNS = [
-  /(?:listening|running|started|server|http).*?(?:on|at|port|:)\s*(\d{4,5})/i,
-  /localhost:(\d{4,5})/i,
-  /127\.0\.0\.1:(\d{4,5})/i,
-  /0\.0\.0\.0:(\d{4,5})/i,
-  /port\s*[=:]\s*(\d{4,5})/i,
+  /(?:listening|running|started|server|http).*?(?:on|at|port|:)\s*(\d{1,5})/i,
+  /localhost:(\d{1,5})/i,
+  /127\.0\.0\.1:(\d{1,5})/i,
+  /0\.0\.0\.0:(\d{1,5})/i,
+  /port\s*[=:]\s*(\d{1,5})/i,
 ];
 
 /**
@@ -259,7 +263,7 @@ export async function startRepo(repoPath: string): Promise<{ success: boolean; p
         const match = text.match(pattern);
         if (match) {
           const port = parseInt(match[1], 10);
-          if (port >= 3000 && port <= 65535) {
+          if (port >= 1 && port <= 65535 && port !== APP_PORT) {
             associatePort(pid, port);
             break;
           }
@@ -277,7 +281,7 @@ export async function startRepo(repoPath: string): Promise<{ success: boolean; p
         const match = text.match(pattern);
         if (match) {
           const port = parseInt(match[1], 10);
-          if (port >= 3000 && port <= 65535) {
+          if (port >= 1 && port <= 65535 && port !== APP_PORT) {
             associatePort(pid, port);
             break;
           }

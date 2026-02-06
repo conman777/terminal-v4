@@ -19,10 +19,12 @@ export function PreviewProvider({ children }) {
       const isPreviewPath = parsed.pathname.startsWith('/preview/');
       const isApiPreview = parsed.pathname.startsWith('/api/preview');
       const isSameOrigin = parsed.origin === window.location.origin;
+      const uiPort = window.location.port;
+      const isLoopbackHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
       if (isSameOrigin && !isPreviewPath && !isApiPreview) {
         return null;
       }
-      if (parsed.port === '3020' && !isPreviewPath && !isApiPreview) {
+      if (uiPort && isLoopbackHost && parsed.port === uiPort && !isPreviewPath && !isApiPreview) {
         return null;
       }
     } catch {

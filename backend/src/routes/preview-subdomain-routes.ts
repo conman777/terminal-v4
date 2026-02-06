@@ -42,7 +42,11 @@ const PREVIEW_SUBDOMAIN_PATTERN = new RegExp(
   'i'
 );
 const PREVIEW_PATH_PATTERN = /^\/preview\/(\d+)(\/.*)?$/;
-const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW === 'true';
+const APP_PORT = (() => {
+  const parsed = Number.parseInt(process.env.PORT || '3020', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+})();
+const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW !== 'false';
 const PREVIEW_PORT_RANGE = UNRESTRICTED_PREVIEW ? { min: 1, max: 65535 } : { min: 3000, max: 9999 };
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for response buffering
 const RESPONSE_READ_TIMEOUT = 30000; // 30 second timeout for reading responses
@@ -1346,6 +1350,7 @@ function getPreviewPort(host: string | undefined): number | null {
   const port = parseInt(portStr, 10);
   // Validate port is a safe integer and within allowed range
   if (!Number.isSafeInteger(port) || Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) return null;
+  if (port === APP_PORT) return null;
   return port;
 }
 
@@ -1367,6 +1372,9 @@ function getPreviewPathMatch(url: string | undefined): { port: number; path: str
   const port = parseInt(portStr, 10);
   // Validate port is a safe integer and within allowed range
   if (!Number.isSafeInteger(port) || Number.isNaN(port) || port < PREVIEW_PORT_RANGE.min || port > PREVIEW_PORT_RANGE.max) {
+    return null;
+  }
+  if (port === APP_PORT) {
     return null;
   }
   const path = (match[2] || '/') + parsed.search + parsed.hash;

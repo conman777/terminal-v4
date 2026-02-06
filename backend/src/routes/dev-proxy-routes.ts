@@ -190,9 +190,22 @@ const DEV_PROXY_SCRIPT = `
 </script>
 `;
 
+const APP_PORT = (() => {
+  const parsed = Number.parseInt(process.env.PORT || '3020', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+})();
+
 function isPortAllowed(port: number): boolean {
-  // Allow any port between 3000-9999 for flexibility
-  return port >= 3000 && port <= 9999;
+  if (!Number.isInteger(port)) return false;
+  if (port < 1 || port > 65535) return false;
+  return port !== APP_PORT;
+}
+
+function getPortError(port: number): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return `Port ${port} is invalid. Use ports 1-65535.`;
+  }
+  return `Port ${port} is reserved by Terminal V4.`;
 }
 
 export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void> {
@@ -203,7 +216,7 @@ export async function registerDevProxyRoutes(app: FastifyInstance): Promise<void
     const path = (request.params as Record<string, string>)['*'] || '';
 
     if (isNaN(port) || !isPortAllowed(port)) {
-      reply.code(400).send({ error: `Port ${port} is not allowed. Use ports 3000-9999.` });
+      reply.code(400).send({ error: getPortError(port) });
       return;
     }
 
@@ -378,7 +391,7 @@ html[data-preview-force-anim="1"] :is([style*="max-height:0"],[style*="height:0"
     const port = parseInt(request.params.port, 10);
 
     if (isNaN(port) || !isPortAllowed(port)) {
-      reply.code(400).send({ error: `Port ${port} is not allowed. Use ports 3000-9999.` });
+      reply.code(400).send({ error: getPortError(port) });
       return;
     }
 
@@ -396,7 +409,7 @@ html[data-preview-force-anim="1"] :is([style*="max-height:0"],[style*="height:0"
     const port = parseInt(request.params.port, 10);
 
     if (isNaN(port) || !isPortAllowed(port)) {
-      socket.close(4400, `Port ${port} is not allowed`);
+      socket.close(4400, getPortError(port));
       return;
     }
 

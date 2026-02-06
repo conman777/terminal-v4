@@ -343,7 +343,8 @@ Stored in `backend/data/preview-cookies.json` by default (overridable via
   browser automation endpoints.
 - Preview file server is sandboxed to the project root.
 - File manager resolves paths safely but is not restricted to project root.
-- Dev proxy only allows a fixed set of local ports.
+- Dev proxy allows localhost ports across the valid TCP range (1-65535),
+  excluding the Terminal V4 UI port to prevent self-preview recursion.
 - External proxy blocks localhost and private IP ranges.
 
 ## Development vs Production

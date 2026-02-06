@@ -22,7 +22,27 @@ const PREVIEW_PORT_PROBE_TIMEOUT_MS = (() => {
   const parsed = Number.parseInt(process.env.PREVIEW_PORT_PROBE_TIMEOUT_MS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 900;
 })();
-const NON_PREVIEW_PROCESS_PREFIXES = ['chrome', 'chromium', 'firefox', 'brave', 'safari', 'arc'];
+const NON_PREVIEW_PROCESS_PREFIXES = [
+  'chrome',
+  'chromium',
+  'firefox',
+  'brave',
+  'safari',
+  'arc',
+  'postgres',
+  'mysqld',
+  'redis-server',
+  'mongod',
+  'memcached',
+  'rabbitmq',
+  'elasticsearch',
+  'kafka',
+  'influxd'
+];
+const APP_PORT = (() => {
+  const parsed = Number.parseInt(process.env.PORT || '3020', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+})();
 
 interface ActivePortInfo {
   process: string;
@@ -43,7 +63,7 @@ let activePortsCache: { expiresAt: number; ports: ActivePortResponse[] } | null 
 let activePortsInFlight: Promise<ActivePortResponse[]> | null = null;
 
 // Clean up old rate limit entries every 5 minutes
-setInterval(() => {
+const evalRateLimiterCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of evalRateLimiter.entries()) {
     if (entry.resetTime < now) {
@@ -51,6 +71,36 @@ setInterval(() => {
     }
   }
 }, 5 * 60 * 1000);
+evalRateLimiterCleanupInterval.unref?.();
+
+function toCwdScope(cwdPath: string | null | undefined): string | null {
+  if (!cwdPath || typeof cwdPath !== 'string') return null;
+  const normalized = cwdPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!normalized) return null;
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
+async function lookupDarwinProcessCwd(pid: number): Promise<string | null> {
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  return new Promise((resolve) => {
+    exec(`lsof -a -p ${pid} -d cwd -Fn 2>/dev/null`, (error, stdout) => {
+      if (error || !stdout) {
+        resolve(null);
+        return;
+      }
+      const cwdLine = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.startsWith('n'));
+      if (!cwdLine || cwdLine.length <= 1) {
+        resolve(null);
+        return;
+      }
+      resolve(toCwdScope(cwdLine.slice(1).trim()));
+    });
+  });
+}
 
 async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
   if (process.platform === 'darwin') {
@@ -62,17 +112,31 @@ async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
           return;
         }
         const lines = stdout.trim().split('\n').slice(1);
+        const cwdPromises: Promise<void>[] = [];
         for (const line of lines) {
           const match = line.match(/^(\S+)\s+(\d+)\s+\S+.*TCP\s+\S+:(\d+)\s+\(LISTEN\)\s*$/);
           if (!match) continue;
           const processName = match[1];
+          const pid = Number.parseInt(match[2], 10);
           const port = Number.parseInt(match[3], 10);
-          if (!Number.isFinite(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
+          if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
           if (!portMap.has(port)) {
             portMap.set(port, { process: processName, cwd: null });
           }
+          if (Number.isFinite(pid) && pid > 0) {
+            const cwdPromise = lookupDarwinProcessCwd(pid).then((cwd) => {
+              if (!cwd) return;
+              const existing = portMap.get(port);
+              if (existing && !existing.cwd) {
+                existing.cwd = cwd;
+              }
+            });
+            cwdPromises.push(cwdPromise);
+          }
         }
-        resolve(portMap);
+        Promise.all(cwdPromises)
+          .then(() => resolve(portMap))
+          .catch(() => resolve(portMap));
       });
     });
   }
@@ -91,7 +155,7 @@ async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
         const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
         if (!portMatch) continue;
         const port = Number.parseInt(portMatch[1], 10);
-        if (!Number.isFinite(port) || port <= 1024 || port >= 65535 || port === 3020) continue;
+        if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
 
         const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
         const processName = processMatch ? processMatch[1] : '';
@@ -104,7 +168,8 @@ async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
               const { readlink } = await import('fs/promises');
               const cwd = await readlink(`/proc/${pid}/cwd`);
               if (!cwd) return;
-              const dirName = cwd.split('/').filter(Boolean).pop() || cwd;
+              const dirName = toCwdScope(cwd);
+              if (!dirName) return;
               const existing = portMap.get(port);
               if (existing) {
                 existing.cwd = dirName;
@@ -138,7 +203,7 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
     const listeningPorts = Array.from(portInfo.keys());
     const listeningSet = new Set(listeningPorts);
     const previewedSet = new Set(previewedPorts);
-    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8888];
+    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8885, 8888];
     const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
     const previewableByPort = new Map<number, boolean>();
 
@@ -188,6 +253,26 @@ function isLikelyPreviewContentType(contentType: string | null): boolean {
   return normalized.includes('text/html') || normalized.includes('application/xhtml+xml');
 }
 
+function isLikelyApiOnlyPath(pathname: string): boolean {
+  const normalized = pathname.toLowerCase();
+  return (
+    normalized === '/api' ||
+    normalized.startsWith('/api/') ||
+    normalized === '/graphql' ||
+    normalized.startsWith('/graphql/') ||
+    normalized === '/openapi' ||
+    normalized.startsWith('/openapi') ||
+    normalized.startsWith('/swagger') ||
+    normalized === '/health' ||
+    normalized.startsWith('/health/') ||
+    normalized === '/metrics' ||
+    normalized.startsWith('/metrics/') ||
+    normalized === '/status' ||
+    normalized.startsWith('/status/') ||
+    /^\/v\d+\/(api|graphql|health|metrics)/.test(normalized)
+  );
+}
+
 async function isPortPreviewable(port: number): Promise<boolean> {
   const hosts = ['127.0.0.1', 'localhost'];
   for (const host of hosts) {
@@ -202,6 +287,19 @@ async function isPortPreviewable(port: number): Promise<boolean> {
       });
 
       if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
+        const location = response.headers.get('location');
+        if (!location) continue;
+
+        try {
+          const redirectUrl = new URL(location, `http://${host}:${port}`);
+          if (isLikelyApiOnlyPath(redirectUrl.pathname)) {
+            continue;
+          }
+        } catch {
+          // Unparseable redirect target; keep probing fallback host.
+          continue;
+        }
+
         return true;
       }
 

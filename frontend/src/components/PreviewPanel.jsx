@@ -76,6 +76,11 @@ function normalizeStorageSnapshot(snapshot) {
 
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
+  const uiPort = useMemo(() => {
+    if (typeof window === 'undefined') return 3020;
+    const parsed = Number.parseInt(window.location.port || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+  }, []);
   const getViewportHeight = useCallback(() => {
     if (typeof window === 'undefined') return 0;
     return window.visualViewport?.height || window.innerHeight;
@@ -239,7 +244,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         cleanUrl = url.replace(/([?&])_cb=[^&]*/g, '').replace(/\?&/, '?').replace(/\?$/, '');
       }
     }
-    // Prevent viewing Terminal V4 in its own preview panel (port 3020)
+    // Prevent viewing Terminal V4 in its own preview panel.
     if (cleanUrl) {
       try {
         const parsed = new URL(cleanUrl, window.location.origin);
@@ -248,8 +253,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const hostPort = parsed.port ? parseInt(parsed.port, 10) : null;
         const previewPort = hostMatch ? parseInt(hostMatch[1], 10) : (pathMatch ? parseInt(pathMatch[1], 10) : null);
         const isLocalUiHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
-        if (previewPort === 3020 || (isLocalUiHost && hostPort === 3020 && !pathMatch && !hostMatch)) {
-          console.warn('[Preview] Cannot view Terminal V4 (port 3020) in its own preview panel');
+        if (previewPort === uiPort || (isLocalUiHost && hostPort === uiPort && !pathMatch && !hostMatch)) {
+          console.warn(`[Preview] Cannot view Terminal V4 (port ${uiPort}) in its own preview panel`);
           return null;
         }
       } catch {
@@ -259,7 +264,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     const result = toPreviewUrl(cleanUrl);
     console.log('[Preview] URL conversion:', url, '->', result);
     return result;
-  }, [url]);
+  }, [uiPort, url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
   const baseIframeSrcRef = useRef(baseIframeSrc);
   useEffect(() => { baseIframeSrcRef.current = baseIframeSrc; }, [baseIframeSrc]);
@@ -2041,7 +2046,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [activePorts, effectivePortScope]);
   const isPreviewSelectablePort = useCallback((portInfo) => {
     if (!portInfo?.listening) return false;
-    const previewable = portInfo.previewable !== false;
+    const previewable = portInfo.previewable === true;
     return previewable || portInfo.previewed || portInfo.port === previewPort;
   }, [previewPort]);
   const mobileListeningPorts = useMemo(() => {
@@ -2098,11 +2103,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         >
           {!iframeSrc ? (
             <div className="preview-empty">
-              {url && (url.includes(':3020') || url.includes('preview-3020')) ? (
+              {url && (url.includes(`:${uiPort}`) || url.includes(`preview-${uiPort}`)) ? (
                 <>
                   <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
                   <h3>Cannot Preview Terminal V4</h3>
-                  <p>Terminal V4 (port 3020) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                  <p>Terminal V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
                   <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector.</p>
                 </>
               ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
@@ -2915,11 +2920,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           <div className="preview-content">
             {!iframeSrc ? (
               <div className="preview-empty">
-                {url && (url.includes(':3020') || url.includes('preview-3020')) ? (
+                {url && (url.includes(`:${uiPort}`) || url.includes(`preview-${uiPort}`)) ? (
                   <>
                     <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
                     <h3>Cannot Preview Terminal V4</h3>
-                    <p>Terminal V4 (port 3020) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                    <p>Terminal V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
                     <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector above.</p>
                   </>
                 ) : projectInfo && projectInfo.projectType !== 'unknown' ? (

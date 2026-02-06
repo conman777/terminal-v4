@@ -7,6 +7,10 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
 
 - If you access Terminal V4 at `http://localhost:3020`, previews use **path-based
   routing** (`/preview/<port>/`). This is the most reliable method for local dev.
+- Preview supports **all valid local ports** (`1-65535`) except the Terminal V4
+  UI port itself.
+- Port dropdowns prioritize ports that look like real web previews (HTML/SPA
+  entry points) to reduce noise from non-frontend service ports.
 - If you access Terminal V4 at `http://192.168.x.x:3020` or a hostname
   (`darthome.ddns.net`, `code.conordart.com`), **do not use localhost** in the
   preview URL. `localhost` would point at the browser machine, not the server.
@@ -52,6 +56,9 @@ Set a resolvable subdomain base in `backend/.env`:
 ```
 PREVIEW_SUBDOMAIN_BASES=127.0.0.1.nip.io,lvh.me,localhost
 PREVIEW_SUBDOMAIN_BASE=127.0.0.1.nip.io
+
+# Optional: lock preview routing back to legacy dev-only ports (3000-9999)
+# UNRESTRICTED_PREVIEW=false
 ```
 
 The frontend reads `/api/system/preview-config` and stores the base in

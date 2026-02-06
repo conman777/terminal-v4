@@ -62,7 +62,7 @@ export function PreviewUrlBar({
   const selectablePorts = useMemo(() => {
     return activePorts.filter((port) => {
       if (!port.listening) return false;
-      const previewable = port.previewable !== false;
+      const previewable = port.previewable === true;
       return previewable || port.previewed || port.port === previewPort;
     });
   }, [activePorts, previewPort]);

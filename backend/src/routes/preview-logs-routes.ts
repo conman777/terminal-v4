@@ -12,18 +12,22 @@ import {
   getLogStats,
   getActivePorts,
   startCleanupInterval,
+  stopCleanupInterval,
   type PreviewLogEntry,
   type GetLogsOptions
 } from '../preview/preview-logs-service.js';
 
 // Validate port number
 function isValidPort(port: number): boolean {
-  return Number.isInteger(port) && port >= 3000 && port <= 9999;
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<void> {
   // Start cleanup interval when routes are registered
   startCleanupInterval();
+  app.addHook('onClose', async () => {
+    stopCleanupInterval();
+  });
 
   /**
    * OPTIONS /api/preview/:port/logs - CORS preflight
@@ -62,7 +66,7 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     const port = parseInt(request.params.port, 10);
 
     if (!isValidPort(port)) {
-      return reply.code(400).send({ error: 'Invalid port. Must be 3000-9999.' });
+      return reply.code(400).send({ error: 'Invalid port. Must be 1-65535.' });
     }
 
     const body = request.body;
@@ -104,7 +108,7 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     const port = parseInt(request.params.port, 10);
 
     if (!isValidPort(port)) {
-      return reply.code(400).send({ error: 'Invalid port. Must be 3000-9999.' });
+      return reply.code(400).send({ error: 'Invalid port. Must be 1-65535.' });
     }
 
     const options: GetLogsOptions = {};
@@ -152,7 +156,7 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     const port = parseInt(request.params.port, 10);
 
     if (!isValidPort(port)) {
-      return reply.code(400).send({ error: 'Invalid port. Must be 3000-9999.' });
+      return reply.code(400).send({ error: 'Invalid port. Must be 1-65535.' });
     }
 
     const cleared = clearLogs(port);

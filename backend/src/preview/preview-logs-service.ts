@@ -303,6 +303,7 @@ export function startCleanupInterval(): void {
       console.log(`[preview-logs] Cleaned up ${cleaned} stale port(s)`);
     }
   }, CLEANUP_INTERVAL_MS);
+  cleanupInterval.unref?.();
 }
 
 export function stopCleanupInterval(): void {

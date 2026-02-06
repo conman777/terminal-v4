@@ -6,18 +6,22 @@
 
 import { BrowserSession, LogEntry } from './browser-session-service.js';
 
-// Allowed ports for security
-const MIN_PORT = 3000;
-const MAX_PORT = 9999;
+// Allowed localhost range for browser automation
+const MIN_PORT = 1;
+const MAX_PORT = 65535;
+const APP_PORT = (() => {
+  const parsed = Number.parseInt(process.env.PORT || '3020', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
+})();
 
 function isAllowedUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    // Allow localhost with ports 3000-9999
+    // Allow localhost with any valid TCP port except the Terminal V4 UI port
     if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
       const port = parseInt(parsed.port, 10);
       if (!parsed.port) return true; // No port specified, allow
-      return port >= MIN_PORT && port <= MAX_PORT;
+      return port >= MIN_PORT && port <= MAX_PORT && port !== APP_PORT;
     }
     // Allow preview subdomains
     if (parsed.hostname.match(/^preview-\d+\./)) {
@@ -43,7 +47,7 @@ export async function goto(session: BrowserSession, url: string, options: GotoOp
   error?: string;
 }> {
   if (!isAllowedUrl(url)) {
-    return { success: false, url, title: '', error: 'URL not allowed. Only localhost:3000-9999 and preview subdomains permitted.' };
+    return { success: false, url, title: '', error: 'URL not allowed. Use localhost:1-65535 (except UI port) or preview subdomains.' };
   }
 
   try {
