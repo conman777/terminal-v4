@@ -23,7 +23,7 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -43,7 +43,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const performanceMode = true;
   const USE_FRAMED_PROTOCOL = true;
   const MAX_PENDING_WRITE_CHARS = 1_000_000;
-  const TAIL_KEEP_CHARS = 200_000;
   const MAX_MESSAGE_QUEUE = 500;
   const DROP_NOTICE_INTERVAL_MS = 5000;
   const LARGE_PASTE_THRESHOLD = 5000;
@@ -66,6 +65,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
   const isPrimaryRef = useRef(isPrimary);
+  const syncPtySizeRef = useRef(syncPtySize !== false);
   const readerSyncRef = useRef(null);
   const droppedOutputRef = useRef(0);
   const droppedEventCountRef = useRef(0);
@@ -667,6 +667,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     usesTmuxRef.current = Boolean(usesTmux);
   }, [usesTmux]);
+
+  useEffect(() => {
+    syncPtySizeRef.current = syncPtySize !== false;
+  }, [syncPtySize]);
 
   useEffect(() => {
     webglEnabledRef.current = webglEnabled !== false;
@@ -1331,7 +1335,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (!disposed && fitAddonRef.current) {
           fitAddonRef.current.fit();
           const { cols, rows } = term;
-          if (cols && rows) {
+          if (syncPtySizeRef.current && cols && rows) {
             apiFetch(`/api/terminal/${sessionId}/resize`, {
               method: 'POST',
               body: isPrimaryRef.current && !isMobile ? { cols, rows, priority: true } : { cols, rows }
@@ -1572,9 +1576,22 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           let pendingWrite = '';
           let pendingWriteFrame = null;
+          let parserRecoveryNeeded = false;
           const flushPendingWrites = () => {
             if (disposed) return;
             pendingWriteFrame = null;
+            if (parserRecoveryNeeded) {
+              parserRecoveryNeeded = false;
+              pendingWrite = '';
+              term.reset();
+              clearReader();
+              const recoveryNotice = '\r\n[Terminal display resynced after high output]\r\n';
+              writeTerminal(recoveryNotice);
+              appendHistoryEntry({ text: recoveryNotice, ts: Date.now() });
+              if (!isMobile) {
+                appendToReader(recoveryNotice);
+              }
+            }
             if (!pendingWrite) return;
 
             const data = pendingWrite;
@@ -1646,12 +1663,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (!data) return;
             pendingWrite += data;
             if (pendingWrite.length > MAX_PENDING_WRITE_CHARS) {
-              const overflow = pendingWrite.length - TAIL_KEEP_CHARS;
-              if (overflow > 0) {
-                droppedOutputRef.current += overflow;
-                pendingWrite = pendingWrite.slice(-TAIL_KEEP_CHARS);
-                tailModeRef.current = true;
-              }
+              droppedOutputRef.current += pendingWrite.length;
+              pendingWrite = '';
+              parserRecoveryNeeded = true;
+              tailModeRef.current = true;
             }
             if (pendingWriteFrame) return;
             pendingWriteFrame = requestAnimationFrame(flushPendingWrites);
@@ -1665,7 +1680,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
               const { cols, rows } = term;
-              if (cols && rows) {
+              if (syncPtySizeRef.current && cols && rows) {
                 apiFetch(`/api/terminal/${sessionId}/resize`, {
                   method: 'POST',
                   body: isPrimaryRef.current && !isMobile
@@ -1746,6 +1761,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               const overflow = messageQueue.length - MAX_MESSAGE_QUEUE;
               messageQueue.splice(0, overflow);
               droppedEventCountRef.current += overflow;
+              parserRecoveryNeeded = true;
               tailModeRef.current = true;
             }
             void processMessageQueue();
@@ -1829,9 +1845,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       let resizeTimeout = null;
       const resizeDisposer = term.onResize(({ cols, rows }) => {
+        if (!syncPtySizeRef.current) return;
         if (disposed) return;
         if (resizeTimeout) clearTimeout(resizeTimeout);
         resizeTimeout = setTimeout(() => {
+          if (!syncPtySizeRef.current) return;
           if (disposed) return;
           const resizeBody = { cols, rows };
           if (clientIdRef.current) resizeBody.clientId = clientIdRef.current;

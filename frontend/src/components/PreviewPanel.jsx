@@ -1667,6 +1667,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setIsDraggingDevTools(true);
   }, [devToolsHeight]);
 
+  const handleDevToolsResizeTouchStart = useCallback((event) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    devToolsDragStartYRef.current = touch.clientY;
+    devToolsDragStartHeightRef.current = devToolsHeight;
+    setIsDraggingDevTools(true);
+  }, [devToolsHeight]);
+
   useEffect(() => {
     if (!isDraggingDevTools) return;
 
@@ -1677,15 +1685,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setDevToolsHeight(nextHeight);
     };
 
-    const handleMouseUp = () => {
+    const handleTouchMove = (event) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+      const delta = devToolsDragStartYRef.current - touch.clientY;
+      const maxHeight = Math.floor(window.innerHeight * 0.7);
+      const nextHeight = Math.min(Math.max(devToolsDragStartHeightRef.current + delta, 140), maxHeight);
+      setDevToolsHeight(nextHeight);
+    };
+
+    const handleEnd = () => {
       setIsDraggingDevTools(false);
     };
 
     document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleTouchMove, { passive: true });
+    document.addEventListener('touchend', handleEnd);
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', handleEnd);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleEnd);
     };
   }, [isDraggingDevTools]);
 
@@ -2075,11 +2096,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const totalLogCount = logs.length + proxyLogs.length + processLogs.length;
   const previewTerminalFontSize = useMemo(() => {
     const base = Number.isFinite(fontSize) ? fontSize : 14;
-    if (isMobile) return base;
-    if (showDevTools && browserSplitEnabled) return Math.max(11, base - 2);
-    if (browserSplitEnabled) return Math.max(12, base - 1);
     return base;
-  }, [browserSplitEnabled, fontSize, isMobile, showDevTools]);
+  }, [fontSize]);
   const mobilePanelStyle = {
     '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
     '--mobile-footer-height': '68px',
@@ -2911,7 +2929,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
       <div
         ref={browserSplitRef}
-        className={`preview-content-wrapper${isDraggingBrowserSplit ? ' dragging' : ''}${terminalPosition === 'left' ? ' terminal-left' : ''}`}
+        className={`preview-content-wrapper${isDraggingBrowserSplit || isDraggingDevTools ? ' dragging' : ''}${terminalPosition === 'left' ? ' terminal-left' : ''}`}
       >
         <div
           className="preview-iframe-section"
@@ -3101,6 +3119,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     viewportHeight={null}
                     fontSize={previewTerminalFontSize}
                     webglEnabled={webglEnabled}
+                    syncPtySize={mainTerminalMinimized}
                     fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
@@ -3131,6 +3150,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           <div
             className="preview-logs-resize-handle"
             onMouseDown={handleDevToolsResizeMouseDown}
+            onTouchStart={handleDevToolsResizeTouchStart}
             onDoubleClick={() => setDevToolsHeight(280)}
             title="Resize DevTools"
           >
