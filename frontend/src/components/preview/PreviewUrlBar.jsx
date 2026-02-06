@@ -59,10 +59,13 @@ export function PreviewUrlBar({
 }) {
   const [portSearch, setPortSearch] = useState('');
 
-  const listeningPorts = useMemo(
-    () => activePorts.filter((port) => port.listening),
-    [activePorts]
-  );
+  const selectablePorts = useMemo(() => {
+    return activePorts.filter((port) => {
+      if (!port.listening) return false;
+      const previewable = port.previewable !== false;
+      return previewable || port.previewed || port.port === previewPort;
+    });
+  }, [activePorts, previewPort]);
 
   const visiblePorts = useMemo(() => {
     const query = portSearch.trim().toLowerCase();
@@ -76,14 +79,14 @@ export function PreviewUrlBar({
         cwd.includes(query)
       );
     };
-    return listeningPorts
+    return selectablePorts
       .filter(matches)
       .sort((a, b) => {
         if (a.port === previewPort && b.port !== previewPort) return -1;
         if (b.port === previewPort && a.port !== previewPort) return 1;
         return a.port - b.port;
       });
-  }, [listeningPorts, portSearch, previewPort]);
+  }, [selectablePorts, portSearch, previewPort]);
 
   return (
     <div className="preview-header">
@@ -100,17 +103,17 @@ export function PreviewUrlBar({
             <path d="M8 21h8" />
             <path d="M12 17v4" />
           </svg>
-          {listeningPorts.length > 0 && (
-            <span className="preview-port-badge">{listeningPorts.length}</span>
+          {selectablePorts.length > 0 && (
+            <span className="preview-port-badge">{selectablePorts.length}</span>
           )}
         </button>
         {showPortDropdown && (
           <div className="preview-port-dropdown">
             <div className="preview-port-dropdown-header">
               <span>Active Ports</span>
-              <span className="preview-port-dropdown-count">{listeningPorts.length}</span>
+              <span className="preview-port-dropdown-count">{selectablePorts.length}</span>
             </div>
-            {listeningPorts.length > 0 && (
+            {selectablePorts.length > 0 && (
               <div className="preview-port-dropdown-toolbar">
                 <input
                   type="text"
@@ -123,7 +126,7 @@ export function PreviewUrlBar({
               </div>
             )}
             {visiblePorts.length === 0 ? (
-              <div className="preview-port-dropdown-empty">No active ports found</div>
+              <div className="preview-port-dropdown-empty">No previewable ports found</div>
             ) : (
               <div className="preview-port-dropdown-list">
                 {visiblePorts.map(({ port, process, cwd }) => {

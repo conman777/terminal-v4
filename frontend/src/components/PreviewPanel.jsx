@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useMobileDetect } from '../hooks/useMobileDetect';
-import { toPreviewUrl, toPathPreviewFallbackUrl, withAuthToken } from '../utils/previewUrl';
+import { toPreviewUrl, toPathPreviewFallbackUrl, withAuthToken, extractPortFromUrl } from '../utils/previewUrl';
 import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
 import { isWebContainerSupported } from '../utils/webcontainer';
@@ -2014,15 +2014,45 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileSplitMaxHeight = Math.max(180, mobileViewportHeight * 0.75);
   const mobileTerminalVisible = Boolean(mobileViewMode === 'split' && activeSessions && activeSessions.length > 0);
   const mobileOverlayHeight = Math.min(mobileSplitHeight, mobileSplitMaxHeight);
+  const projectFolderScope = useMemo(() => {
+    const cwd = projectInfo?.cwd;
+    if (!cwd || typeof cwd !== 'string') return '';
+    const normalized = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+    const parts = normalized.split('/').filter(Boolean);
+    return (parts[parts.length - 1] || '').toLowerCase();
+  }, [projectInfo?.cwd]);
+  const currentPreviewCwdScope = useMemo(() => {
+    const candidatePort = previewPort || extractPortFromUrl(inputUrl);
+    if (!candidatePort) return '';
+    const currentPort = activePorts.find((portInfo) => portInfo.port === candidatePort);
+    const cwd = currentPort?.cwd;
+    if (!cwd || typeof cwd !== 'string') return '';
+    return cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  }, [activePorts, inputUrl, previewPort]);
+  const effectivePortScope = projectFolderScope || currentPreviewCwdScope;
+  const scopedActivePorts = useMemo(() => {
+    if (!effectivePortScope) return activePorts;
+    const matches = activePorts.filter(({ cwd }) => {
+      if (!cwd || typeof cwd !== 'string') return false;
+      const normalized = cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      return normalized === effectivePortScope || normalized.endsWith(`/${effectivePortScope}`);
+    });
+    return matches.length > 0 ? matches : activePorts;
+  }, [activePorts, effectivePortScope]);
+  const isPreviewSelectablePort = useCallback((portInfo) => {
+    if (!portInfo?.listening) return false;
+    const previewable = portInfo.previewable !== false;
+    return previewable || portInfo.previewed || portInfo.port === previewPort;
+  }, [previewPort]);
   const mobileListeningPorts = useMemo(() => {
-    return activePorts
-      .filter((port) => port.listening)
+    return scopedActivePorts
+      .filter(isPreviewSelectablePort)
       .sort((a, b) => {
         if (a.port === previewPort && b.port !== previewPort) return -1;
         if (b.port === previewPort && a.port !== previewPort) return 1;
         return a.port - b.port;
       });
-  }, [activePorts, previewPort]);
+  }, [scopedActivePorts, isPreviewSelectablePort, previewPort]);
   const mobileVisiblePorts = useMemo(() => {
     const query = mobilePortSearch.trim().toLowerCase();
     if (!query) return mobileListeningPorts;
@@ -2349,7 +2379,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </button>
             </div>
             {mobileListeningPorts.length === 0 ? (
-              <div className="preview-port-sheet-empty">No active ports found</div>
+              <div className="preview-port-sheet-empty">No previewable ports found</div>
             ) : (
               <>
                 <div className="preview-port-sheet-toolbar">
@@ -2835,7 +2865,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       <PreviewUrlBar
         inputUrl={inputUrl}
         onInputUrlChange={setInputUrl}
-        activePorts={activePorts}
+        activePorts={scopedActivePorts}
         previewPort={previewPort}
         showPortDropdown={showPortDropdown}
         onTogglePortDropdown={() => setShowPortDropdown(!showPortDropdown)}
@@ -2933,13 +2963,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <p className="preview-hint">
                       <code>C:\path\to\project\index.html</code>
                     </p>
-                    {activePorts.some((p) => p.listening) && (
+                    {scopedActivePorts.some(isPreviewSelectablePort) && (
                       <div className="preview-empty-actions">
                         <button
                           type="button"
                           className="btn-primary"
                           onClick={() => {
-                            const firstPort = activePorts.find((p) => p.listening)?.port;
+                            const firstPort = scopedActivePorts.find(isPreviewSelectablePort)?.port;
                             if (!firstPort) return;
                             const detectedUrl = `http://localhost:${firstPort}`;
                             setInputUrl(detectedUrl);

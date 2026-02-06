@@ -96,12 +96,21 @@ function getPreviewSubdomainBase() {
 }
 
 function getEffectiveSubdomainBase() {
-  if (typeof window === 'undefined') return getPreviewSubdomainBase();
+  const configuredBase = getPreviewSubdomainBase();
+  if (typeof window === 'undefined') return configuredBase;
   const uiHost = window.location.hostname || '';
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost)) {
+    // On loopback IP, prefer the backend-provided base (if configured) so
+    // frontend URL synthesis doesn't drift from backend host constraints.
+    if (uiHost === '127.0.0.1') {
+      const normalizedConfigured = configuredBase.toLowerCase();
+      if (normalizedConfigured && normalizedConfigured !== 'localhost') {
+        return configuredBase;
+      }
+    }
     return `${uiHost}.nip.io`;
   }
-  return getPreviewSubdomainBase();
+  return configuredBase;
 }
 
 function shouldPreferPathBased() {

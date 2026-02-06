@@ -61,6 +61,31 @@ describe('toPreviewUrl', () => {
     expect(result).toBe('/preview/5173/app');
   });
 
+  it('keeps configured subdomain base on 127.0.0.1 host', () => {
+    const originalWindow = window;
+    const fakeWindow = Object.create(window);
+    Object.defineProperty(fakeWindow, 'location', {
+      value: {
+        ...window.location,
+        hostname: '127.0.0.1',
+        port: '3020',
+        protocol: 'http:',
+        origin: 'http://127.0.0.1:3020'
+      }
+    });
+    vi.stubGlobal('window', fakeWindow);
+
+    try {
+      localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+      localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, '192.168.1.199.nip.io');
+
+      const result = toPreviewUrl('http://localhost:8082');
+      expect(result).toBe('http://preview-8082.192.168.1.199.nip.io:3020/');
+    } finally {
+      vi.stubGlobal('window', originalWindow);
+    }
+  });
+
   it('converts preview subdomain URL to path fallback URL', () => {
     const result = toPathPreviewFallbackUrl('http://preview-5173.127.0.0.1.nip.io:3020/app?foo=bar');
     expect(result).toBe('/preview/5173/app?foo=bar');

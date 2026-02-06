@@ -18,6 +18,11 @@ const PREVIEW_LOG_STREAM_POLL_MS = (() => {
   const parsed = Number.parseInt(process.env.PREVIEW_LOG_STREAM_POLL_MS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
 })();
+const PREVIEW_PORT_PROBE_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(process.env.PREVIEW_PORT_PROBE_TIMEOUT_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 900;
+})();
+const NON_PREVIEW_PROCESS_PREFIXES = ['chrome', 'chromium', 'firefox', 'brave', 'safari', 'arc'];
 
 interface ActivePortInfo {
   process: string;
@@ -28,6 +33,7 @@ interface ActivePortResponse {
   port: number;
   listening: boolean;
   previewed: boolean;
+  previewable: boolean;
   common: boolean;
   process: string | null;
   cwd: string | null;
@@ -130,15 +136,32 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
     const previewedPorts = getActivePreviewPorts();
     const portInfo = await scanListeningPorts();
     const listeningPorts = Array.from(portInfo.keys());
+    const listeningSet = new Set(listeningPorts);
+    const previewedSet = new Set(previewedPorts);
     const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8888];
     const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
+    const previewableByPort = new Map<number, boolean>();
+
+    await Promise.all(allPorts.map(async (port) => {
+      if (!listeningSet.has(port)) {
+        previewableByPort.set(port, false);
+        return;
+      }
+      const processName = portInfo.get(port)?.process;
+      if (isExcludedProcessForPreview(processName)) {
+        previewableByPort.set(port, false);
+        return;
+      }
+      previewableByPort.set(port, await isPortPreviewable(port));
+    }));
 
     const ports = allPorts.map((port) => {
       const info = portInfo.get(port);
       return {
         port,
-        listening: listeningPorts.includes(port),
-        previewed: previewedPorts.includes(port),
+        listening: listeningSet.has(port),
+        previewed: previewedSet.has(port),
+        previewable: previewableByPort.get(port) || false,
         common: commonDevPorts.includes(port),
         process: info?.process || null,
         cwd: info?.cwd || null
@@ -157,6 +180,45 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
   } finally {
     activePortsInFlight = null;
   }
+}
+
+function isLikelyPreviewContentType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const normalized = contentType.toLowerCase();
+  return normalized.includes('text/html') || normalized.includes('application/xhtml+xml');
+}
+
+async function isPortPreviewable(port: number): Promise<boolean> {
+  const hosts = ['127.0.0.1', 'localhost'];
+  for (const host of hosts) {
+    try {
+      const response = await fetch(`http://${host}:${port}/`, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(PREVIEW_PORT_PROBE_TIMEOUT_MS),
+        headers: {
+          Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1'
+        }
+      });
+
+      if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
+        return true;
+      }
+
+      if (isLikelyPreviewContentType(response.headers.get('content-type'))) {
+        return true;
+      }
+    } catch {
+      // Try the next host mapping.
+    }
+  }
+  return false;
+}
+
+function isExcludedProcessForPreview(processName: string | null | undefined): boolean {
+  if (!processName) return false;
+  const normalized = processName.toLowerCase();
+  return NON_PREVIEW_PROCESS_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<void> {
