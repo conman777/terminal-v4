@@ -1,5 +1,11 @@
 import { useLayoutEffect, useRef } from 'react';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
+import { uploadScreenshot } from '../utils/api';
+import {
+  getImageFileFromClipboardItems,
+  hasMeaningfulClipboardText,
+  shouldPreferImageOverText
+} from '../utils/clipboardImage';
 
 export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   const keybarRef = useRef(null);
@@ -78,9 +84,37 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
 
   const handlePaste = async () => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        sendKeyRaw(text);
+      let clipboardText = '';
+      if (navigator.clipboard?.readText) {
+        try {
+          clipboardText = await navigator.clipboard.readText();
+        } catch {
+          // Continue to image clipboard checks below.
+        }
+      }
+
+      if (navigator.clipboard?.read) {
+        try {
+          const clipboardItems = await navigator.clipboard.read();
+          const imageFile = await getImageFileFromClipboardItems(clipboardItems);
+          const shouldUseImage = imageFile && (
+            !hasMeaningfulClipboardText(clipboardText || '') ||
+            shouldPreferImageOverText(clipboardText || '')
+          );
+          if (shouldUseImage) {
+            const path = await uploadScreenshot(imageFile);
+            if (path) {
+              await sendKeyRaw(`${path} `);
+              return;
+            }
+          }
+        } catch {
+          // Continue to text fallback below.
+        }
+      }
+
+      if (hasMeaningfulClipboardText(clipboardText)) {
+        await sendKeyRaw(clipboardText);
       }
     } catch (error) {
       console.error('Failed to read clipboard:', error);

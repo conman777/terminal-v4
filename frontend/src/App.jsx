@@ -274,9 +274,9 @@ function AppContent() {
       if (deviceStored) return parseInt(deviceStored, 10);
       const stored = localStorage.getItem('terminalFontSize');
       if (stored) return parseInt(stored, 10);
-      return isMobile ? 18 : 14;
+      return isMobile ? 16 : 14;
     } catch {
-      return isMobile ? 18 : 14;
+      return isMobile ? 16 : 14;
     }
   });
 

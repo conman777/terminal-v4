@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
-import { apiFetch } from '../utils/api';
+import { apiFetch, uploadScreenshot } from '../utils/api';
+import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 
 export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true, onRefreshTerminal }) {
   const [inputText, setInputText] = useState('');
@@ -26,6 +27,21 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
     }
   }, [sessionId]);
 
+  const sendRawToTerminal = useCallback(async (text) => {
+    if (!sessionId || !text) return;
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/input`, {
+        method: 'POST',
+        body: { command: text }
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to send input (${response.status})`);
+      }
+    } catch (error) {
+      console.error('Failed to send raw input to terminal:', error);
+    }
+  }, [sessionId]);
+
   const handleSubmit = useCallback((e) => {
     e.preventDefault();
     sendToTerminal(inputText);
@@ -40,6 +56,25 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
       setInputText('');
     }
   }, [inputText, sendToTerminal]);
+
+  const handlePaste = useCallback(async (e) => {
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+    const imageFile = await getImageFileFromDataTransfer(clipboardData);
+
+    if (!imageFile) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const path = await uploadScreenshot(imageFile);
+      if (path) {
+        await sendRawToTerminal(`${path} `);
+      }
+    } catch (error) {
+      console.error('Failed to paste image in mobile input:', error);
+    }
+  }, [sendRawToTerminal]);
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded(prev => {
@@ -62,6 +97,7 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder="Type or dictate..."
             autoComplete="off"
             autoCorrect="off"

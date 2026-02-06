@@ -20,8 +20,13 @@ function formatTime(timestamp) {
 const PREVIEW_STORAGE_KEY = 'terminal_preview_storage_v1';
 const PREVIEW_STORAGE_MAX_BYTES = 200 * 1024;
 const MOBILE_SPLIT_ENABLED_KEY = 'preview_mobile_split_enabled_v1';
+const MOBILE_VIEW_MODE_KEY = 'preview_mobile_view_mode_v1';
 const MOBILE_SPLIT_HEIGHT_KEY = 'preview_mobile_split_height_v1';
 const MOBILE_SPLIT_SESSION_KEY = 'preview_mobile_split_session_v1';
+const DEVTOOLS_HEIGHT_KEY = 'preview_devtools_height_v1';
+const DEVTOOLS_VISIBLE_KEY = 'preview_devtools_visible_v1';
+const PREVIEW_CHROME_COMPACT_KEY = 'preview_compact_chrome_v1';
+const DESKTOP_BROWSER_SPLIT_DEFAULT = 68;
 
 function normalizePreviewUrl(value) {
   if (!value || typeof value !== 'string') return '';
@@ -83,8 +88,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [processLogs, setProcessLogs] = useState([]);  // Process stdout/stderr logs
   const [storageData, setStorageData] = useState({ localStorage: {}, sessionStorage: {}, cookies: {} });
   const [showLogs, setShowLogs] = useState(false);
-  const [showDevTools, setShowDevTools] = useState(() => !isMobile);
+  const [showDevTools, setShowDevTools] = useState(() => {
+    if (isMobile) return false;
+    try {
+      const stored = localStorage.getItem(DEVTOOLS_VISIBLE_KEY);
+      if (stored === null) return false;
+      return stored === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [compactChrome, setCompactChrome] = useState(() => {
+    if (isMobile) return false;
+    try {
+      const stored = localStorage.getItem(PREVIEW_CHROME_COMPACT_KEY);
+      if (stored === null) return true;
+      return stored === 'true';
+    } catch {
+      return true;
+    }
+  });
   const [showToolsMenu, setShowToolsMenu] = useState(false);
+  const [showMobileToolsMenu, setShowMobileToolsMenu] = useState(false);
   const [logFilter, setLogFilter] = useState('all');  // 'all', 'client', 'proxy', 'server'
   const [logSearch, setLogSearch] = useState('');
   const [showUrlInput, setShowUrlInput] = useState(false);
@@ -102,6 +127,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [hasCookies, setHasCookies] = useState(false);
   const [activePorts, setActivePorts] = useState([]);
   const [showPortDropdown, setShowPortDropdown] = useState(false);
+  const [mobilePortSearch, setMobilePortSearch] = useState('');
   const [previewTerminalFitToken, setPreviewTerminalFitToken] = useState(0);
   // WebContainer mode state
   const [useWebContainer, setUseWebContainer] = useState(false);
@@ -123,13 +149,23 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [browserSplitPosition, setBrowserSplitPosition] = useState(() => {
     try {
       const stored = localStorage.getItem('browser_split_position_v1');
-      if (!stored) return 60; // Default to 60% browser, 40% terminal
+      if (!stored) return DESKTOP_BROWSER_SPLIT_DEFAULT;
       const parsed = parseInt(stored, 10);
       // Validate range (10-90%)
-      if (isNaN(parsed) || parsed < 10 || parsed > 90) return 60;
+      if (isNaN(parsed) || parsed < 10 || parsed > 90) return DESKTOP_BROWSER_SPLIT_DEFAULT;
       return parsed;
     } catch {
-      return 60;
+      return DESKTOP_BROWSER_SPLIT_DEFAULT;
+    }
+  });
+  const [devToolsHeight, setDevToolsHeight] = useState(() => {
+    try {
+      const stored = Number.parseInt(localStorage.getItem(DEVTOOLS_HEIGHT_KEY) || '', 10);
+      if (!Number.isFinite(stored)) return 220;
+      if (stored < 140 || stored > 900) return 220;
+      return stored;
+    } catch {
+      return 220;
     }
   });
   const [terminalPosition, setTerminalPosition] = useState(() => {
@@ -153,20 +189,27 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setPreviewTerminalRefreshToken(v => v + 1);
   }, []);
   const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
+  const [isDraggingDevTools, setIsDraggingDevTools] = useState(false);
   const browserSplitRef = useRef(null);
+  const devToolsDragStartYRef = useRef(0);
+  const devToolsDragStartHeightRef = useRef(0);
   const resizeRafRef = useRef(null);
   const focusPreviewTerminalRef = useRef(null);
   const mobileChromeTimerRef = useRef(null);
   const mobileSplitModeRef = useRef(null);
+  const mobileToolsMenuRef = useRef(null);
 
-  // Mobile split view state (bottom sheet overlay)
-  const [mobileSplitEnabled, setMobileSplitEnabled] = useState(() => {
+  // Mobile view mode state ('preview' | 'split' | 'terminal')
+  const [mobileViewMode, setMobileViewMode] = useState(() => {
     try {
-      return localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true';
-    } catch {
-      return false;
-    }
+      const stored = localStorage.getItem(MOBILE_VIEW_MODE_KEY);
+      if (stored === 'preview' || stored === 'split' || stored === 'terminal') return stored;
+      // Migration from old boolean key
+      if (localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true') return 'split';
+      return 'preview';
+    } catch { return 'preview'; }
   });
+  const mobileSplitEnabled = mobileViewMode === 'split';
   const [mobileSplitHeight, setMobileSplitHeight] = useState(() => {
     try {
       const stored = Number.parseFloat(localStorage.getItem(MOBILE_SPLIT_HEIGHT_KEY) || '');
@@ -415,6 +458,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     const newUrl = `http://localhost:${port}`;
     setInputUrl(newUrl);
     setShowPortDropdown(false);
+    setMobilePortSearch('');
     if (onUrlChange) {
       onUrlChange(newUrl);
     }
@@ -1244,6 +1288,141 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [filteredLogs]);
 
+  const handleCopyPreviewDebugInfo = useCallback(() => {
+    const isMobileViewport = typeof window !== 'undefined' ? window.innerWidth <= 768 : null;
+    const payload = {
+      timestamp: new Date().toISOString(),
+      view: {
+        isMobile,
+        isMobileViewport,
+        window: typeof window !== 'undefined' ? {
+          innerWidth: window.innerWidth,
+          innerHeight: window.innerHeight,
+          devicePixelRatio: window.devicePixelRatio
+        } : null,
+        visualViewport: typeof window !== 'undefined' && window.visualViewport ? {
+          width: window.visualViewport.width,
+          height: window.visualViewport.height,
+          offsetTop: window.visualViewport.offsetTop,
+          offsetLeft: window.visualViewport.offsetLeft
+        } : null
+      },
+      preview: {
+        url,
+        inputUrl,
+        iframeSrc,
+        displayUrl,
+        previewPort,
+        isLoading,
+        error,
+        showUrlInput,
+        showPortDropdown,
+        showLogs,
+        inspectMode,
+        selectedElement: selectedElement?.selector || null
+      },
+      mobile: {
+        mobileChromeHidden,
+        mobileKeyboardInset,
+        mobileSplitEnabled,
+        mobileSplitHeight: Math.round(mobileSplitHeight),
+        mobileOverlayHeight: Math.round(mobileOverlayHeight),
+        mobileTerminalVisible
+      },
+      desktop: {
+        browserSplitEnabled,
+        browserSplitPosition,
+        terminalPosition,
+        showDevTools,
+        devToolsHeight,
+        compactChrome
+      },
+      logs: {
+        client: logs.length,
+        proxy: proxyLogs.length,
+        server: processLogs.length,
+        filtered: filteredLogs.length,
+        errors: errorLogs.length,
+        filter: logFilter,
+        search: logSearch
+      },
+      ports: {
+        total: activePorts.length,
+        listening: activePorts.filter((port) => port.listening).length,
+        current: previewPort,
+        sample: activePorts
+          .filter((port) => port.listening)
+          .slice(0, 20)
+          .map(({ port, process, cwd }) => ({ port, process: process || null, cwd: cwd || null }))
+      },
+      sessions: {
+        total: activeSessions.length,
+        selectedTerminalSession,
+        sessions: activeSessions.slice(0, 10).map(({ id, title, usesTmux: tmux }) => ({
+          id,
+          title: title || null,
+          usesTmux: Boolean(tmux)
+        }))
+      }
+    };
+
+    const text = JSON.stringify(payload, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch((err) => {
+        console.error('Failed to copy preview debug info:', err);
+      });
+      return;
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.opacity = '0';
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+    } catch (err) {
+      console.error('Failed to copy preview debug info:', err);
+    } finally {
+      document.body.removeChild(textArea);
+    }
+  }, [
+    activePorts,
+    activeSessions,
+    browserSplitEnabled,
+    browserSplitPosition,
+    compactChrome,
+    devToolsHeight,
+    displayUrl,
+    error,
+    errorLogs.length,
+    filteredLogs.length,
+    iframeSrc,
+    inputUrl,
+    inspectMode,
+    isLoading,
+    isMobile,
+    logFilter,
+    logSearch,
+    logs.length,
+    mobileChromeHidden,
+    mobileKeyboardInset,
+    mobileSplitEnabled,
+    mobileSplitHeight,
+    previewPort,
+    processLogs.length,
+    proxyLogs.length,
+    selectedElement?.selector,
+    selectedTerminalSession,
+    showDevTools,
+    showLogs,
+    showPortDropdown,
+    showUrlInput,
+    terminalPosition,
+    url
+  ]);
+
   // Compute breadcrumb path for inspector
   const elementPath = useMemo(() => {
     if (!selectedElement) return [];
@@ -1308,6 +1487,47 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const handleToggleTerminalSplit = useCallback(() => {
     setBrowserSplitEnabled(prev => !prev);
     setPreviewTerminalFitToken(token => token + 1);
+  }, []);
+
+  const handleSetDesktopLayout = useCallback((mode) => {
+    if (mode === 'preview') {
+      setBrowserSplitEnabled(false);
+      setShowDevTools(false);
+      return;
+    }
+    if (mode === 'split') {
+      setBrowserSplitEnabled(true);
+      setShowDevTools(false);
+      setBrowserSplitPosition((position) => {
+        const next = Math.max(position, DESKTOP_BROWSER_SPLIT_DEFAULT);
+        try {
+          localStorage.setItem('browser_split_position_v1', String(Math.round(next)));
+        } catch {
+          // Ignore localStorage persistence failures
+        }
+        return next;
+      });
+      return;
+    }
+    if (mode === 'debug') {
+      setBrowserSplitEnabled(true);
+      setShowDevTools(true);
+      setBrowserSplitPosition((position) => {
+        // Keep terminal wide enough in debug mode so wrapped logs/prompts stay readable.
+        const next = Math.min(Math.max(position, 52), 60);
+        try {
+          localStorage.setItem('browser_split_position_v1', String(Math.round(next)));
+        } catch {
+          // Ignore localStorage persistence failures
+        }
+        return next;
+      });
+      setDevToolsHeight((height) => Math.max(height, 190));
+    }
+  }, []);
+
+  const handleToggleDevTools = useCallback(() => {
+    setShowDevTools((prev) => !prev);
   }, []);
 
   const handleToggleTerminalPosition = useCallback(() => {
@@ -1395,6 +1615,75 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
   }, [browserSplitEnabled, browserSplitPosition, terminalPosition, isMobile]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isMobile) return;
+    if (!showDevTools) return;
+    const rafId = requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [devToolsHeight, isMobile, showDevTools]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isMobile) return;
+    try {
+      localStorage.setItem(DEVTOOLS_VISIBLE_KEY, String(showDevTools));
+      localStorage.setItem(PREVIEW_CHROME_COMPACT_KEY, String(compactChrome));
+    } catch {
+      // Ignore localStorage persistence failures
+    }
+  }, [compactChrome, isMobile, showDevTools]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isMobile) return;
+    try {
+      localStorage.setItem(DEVTOOLS_HEIGHT_KEY, String(Math.round(devToolsHeight)));
+    } catch {
+      // Ignore localStorage persistence failures
+    }
+  }, [devToolsHeight, isMobile]);
+
+  useEffect(() => {
+    if (isMobile) return;
+    if (!browserSplitEnabled) return;
+    const rafId = requestAnimationFrame(() => {
+      setPreviewTerminalFitToken((token) => token + 1);
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [browserSplitEnabled, compactChrome, devToolsHeight, isMobile, showDevTools]);
+
+  const handleDevToolsResizeMouseDown = useCallback((event) => {
+    event.preventDefault();
+    devToolsDragStartYRef.current = event.clientY;
+    devToolsDragStartHeightRef.current = devToolsHeight;
+    setIsDraggingDevTools(true);
+  }, [devToolsHeight]);
+
+  useEffect(() => {
+    if (!isDraggingDevTools) return;
+
+    const handleMouseMove = (event) => {
+      const delta = devToolsDragStartYRef.current - event.clientY;
+      const maxHeight = Math.floor(window.innerHeight * 0.7);
+      const nextHeight = Math.min(Math.max(devToolsDragStartHeightRef.current + delta, 140), maxHeight);
+      setDevToolsHeight(nextHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingDevTools(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingDevTools]);
+
   const getMobileSplitBounds = useCallback(() => {
     const viewportHeight = getViewportHeight();
     const minHeight = 180;
@@ -1423,41 +1712,37 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     ), snapPoints[0]);
   }, [clampMobileSplitHeight, getMobileSplitSnapPoints]);
 
-  const scheduleMobileChromeHide = useCallback((delayMs = 1800) => {
-    if (!isMobile) return;
-    if (mobileChromeTimerRef.current) {
-      clearTimeout(mobileChromeTimerRef.current);
-      mobileChromeTimerRef.current = null;
-    }
-    mobileChromeTimerRef.current = setTimeout(() => {
-      setMobileChromeHidden(true);
-      mobileChromeTimerRef.current = null;
-    }, delayMs);
-  }, [isMobile]);
+  const scheduleMobileChromeHide = useCallback(() => {
+    // No-op: auto-hide removed — chrome visibility is driven by mobileViewMode
+  }, []);
 
-  const revealMobileChrome = useCallback((delayMs = 2400) => {
-    setMobileChromeHidden(false);
-    scheduleMobileChromeHide(delayMs);
-  }, [scheduleMobileChromeHide]);
+  const revealMobileChrome = useCallback(() => {
+    // No-op: chrome visibility is driven by mobileViewMode
+  }, []);
 
-  // Mobile split view handlers
+  // Mobile view mode handler
+  const handleSetMobileViewMode = useCallback((mode) => {
+    setMobileViewMode(mode);
+    try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, mode); } catch {}
+    if (mode === 'split') setMobileSplitHeight(h => clampMobileSplitHeight(h));
+    if (mode !== 'terminal') setShowMobileToolsMenu(false);
+    // Exit inspect if switching to terminal
+    if (mode === 'terminal' && inspectMode) setInspectMode(false);
+    // Trigger terminal refit when entering terminal mode
+    if (mode === 'terminal' || mode === 'split') setPreviewTerminalFitToken(t => t + 1);
+  }, [clampMobileSplitHeight, inspectMode]);
+
+  // Toggle between preview/split (keeps Cmd+K shortcut working)
   const handleToggleMobileSplit = useCallback(() => {
-    setMobileSplitEnabled((prev) => {
-      const next = !prev;
-      if (next) {
-        revealMobileChrome();
-      }
-      return next;
-    });
-  }, [revealMobileChrome]);
+    handleSetMobileViewMode(mobileViewMode === 'split' ? 'preview' : 'split');
+  }, [handleSetMobileViewMode, mobileViewMode]);
 
   const beginMobileSplitDrag = useCallback((clientY, mode) => {
     mobileSplitModeRef.current = mode;
     mobileSplitStartY.current = clientY;
     mobileSplitStartHeight.current = mobileSplitHeight;
     setIsDraggingMobileSplit(true);
-    revealMobileChrome();
-  }, [mobileSplitHeight, revealMobileChrome]);
+  }, [mobileSplitHeight]);
 
   const handleMobileSplitTouchStart = useCallback((e) => {
     if (!e.touches || e.touches.length === 0) return;
@@ -1504,8 +1789,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setMobileSplitHeight((height) => snapMobileSplitHeight(height));
     mobileSplitModeRef.current = null;
     setIsDraggingMobileSplit(false);
-    scheduleMobileChromeHide();
-  }, [isDraggingMobileSplit, scheduleMobileChromeHide, snapMobileSplitHeight]);
+  }, [isDraggingMobileSplit, snapMobileSplitHeight]);
 
   // Add drag event listeners for mobile split drag
   useEffect(() => {
@@ -1559,16 +1843,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   useEffect(() => {
     if (!isMobile) return;
     if (!activeSessions || activeSessions.length === 0) {
-      setMobileSplitEnabled(false);
+      // Auto-switch to preview when last session closes
+      if (mobileViewMode !== 'preview') {
+        setMobileViewMode('preview');
+        try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, 'preview'); } catch {}
+      }
       return;
     }
     setMobileSplitHeight((height) => clampMobileSplitHeight(height));
-  }, [activeSessions, clampMobileSplitHeight, isMobile]);
+  }, [activeSessions, clampMobileSplitHeight, isMobile, mobileViewMode]);
 
   useEffect(() => {
     if (!isMobile) return;
     try {
-      localStorage.setItem(MOBILE_SPLIT_ENABLED_KEY, String(mobileSplitEnabled));
+      localStorage.setItem(MOBILE_VIEW_MODE_KEY, mobileViewMode);
       localStorage.setItem(MOBILE_SPLIT_HEIGHT_KEY, String(Math.round(clampMobileSplitHeight(mobileSplitHeight))));
       if (selectedTerminalSession) {
         localStorage.setItem(MOBILE_SPLIT_SESSION_KEY, selectedTerminalSession);
@@ -1576,7 +1864,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     } catch {
       // Ignore localStorage persistence failures on restricted browsers
     }
-  }, [clampMobileSplitHeight, isMobile, mobileSplitEnabled, mobileSplitHeight, selectedTerminalSession]);
+  }, [clampMobileSplitHeight, isMobile, mobileViewMode, mobileSplitHeight, selectedTerminalSession]);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -1597,16 +1885,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   useEffect(() => {
     if (!isMobile) return;
-    if (!mobileSplitEnabled || showUrlInput || showPortDropdown || showLogs || inspectMode || selectedElement) {
-      setMobileChromeHidden(false);
-      if (mobileChromeTimerRef.current) {
-        clearTimeout(mobileChromeTimerRef.current);
-        mobileChromeTimerRef.current = null;
-      }
-      return;
+    // Chrome is only hidden in terminal mode
+    setMobileChromeHidden(mobileViewMode === 'terminal');
+    if (mobileChromeTimerRef.current) {
+      clearTimeout(mobileChromeTimerRef.current);
+      mobileChromeTimerRef.current = null;
     }
-    scheduleMobileChromeHide();
-  }, [inspectMode, isMobile, mobileSplitEnabled, scheduleMobileChromeHide, selectedElement, showLogs, showPortDropdown, showUrlInput]);
+  }, [isMobile, mobileViewMode]);
 
   useEffect(() => {
     return () => {
@@ -1616,6 +1901,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       }
     };
   }, []);
+
+  // Click-outside handler for mobile tools menu
+  useEffect(() => {
+    if (!showMobileToolsMenu) return;
+    const handleClickOutside = (e) => {
+      if (mobileToolsMenuRef.current && !mobileToolsMenuRef.current.contains(e.target)) {
+        setShowMobileToolsMenu(false);
+      }
+    };
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
+  }, [showMobileToolsMenu]);
 
   // Keyboard shortcuts (consolidated for both mobile and desktop)
   useEffect(() => {
@@ -1712,8 +2009,39 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const mobileViewportHeight = getViewportHeight();
   const mobileSplitMaxHeight = Math.max(180, mobileViewportHeight * 0.75);
-  const mobileTerminalVisible = Boolean(mobileSplitEnabled && activeSessions && activeSessions.length > 0);
+  const mobileTerminalVisible = Boolean(mobileViewMode === 'split' && activeSessions && activeSessions.length > 0);
   const mobileOverlayHeight = Math.min(mobileSplitHeight, mobileSplitMaxHeight);
+  const mobileListeningPorts = useMemo(() => {
+    return activePorts
+      .filter((port) => port.listening)
+      .sort((a, b) => {
+        if (a.port === previewPort && b.port !== previewPort) return -1;
+        if (b.port === previewPort && a.port !== previewPort) return 1;
+        return a.port - b.port;
+      });
+  }, [activePorts, previewPort]);
+  const mobileVisiblePorts = useMemo(() => {
+    const query = mobilePortSearch.trim().toLowerCase();
+    if (!query) return mobileListeningPorts;
+    return mobileListeningPorts.filter(({ port, process, cwd }) => {
+      const processText = (process || '').toLowerCase();
+      const cwdText = (cwd || '').toLowerCase();
+      return (
+        String(port).includes(query) ||
+        processText.includes(query) ||
+        cwdText.includes(query)
+      );
+    });
+  }, [mobileListeningPorts, mobilePortSearch]);
+  const desktopLayoutMode = showDevTools ? 'debug' : (browserSplitEnabled ? 'split' : 'preview');
+  const totalLogCount = logs.length + proxyLogs.length + processLogs.length;
+  const previewTerminalFontSize = useMemo(() => {
+    const base = Number.isFinite(fontSize) ? fontSize : 14;
+    if (isMobile) return base;
+    if (showDevTools && browserSplitEnabled) return Math.max(11, base - 2);
+    if (browserSplitEnabled) return Math.max(12, base - 1);
+    return base;
+  }, [browserSplitEnabled, fontSize, isMobile, showDevTools]);
   const mobilePanelStyle = {
     '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
     '--mobile-footer-height': '68px',
@@ -1724,14 +2052,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   if (isMobile) {
     return (
       <div
-        className={`preview-panel preview-panel-mobile${mobileChromeHidden ? ' chrome-hidden' : ''}`}
+        className={`preview-panel preview-panel-mobile mode-${mobileViewMode}${mobileChromeHidden ? ' chrome-hidden' : ''}`}
         style={mobilePanelStyle}
       >
-        {/* Full-screen iframe */}
+        {/* Iframe content (hidden in terminal mode) */}
+        {mobileViewMode !== 'terminal' && (
         <div
           className="preview-content-mobile"
-          onPointerDown={() => revealMobileChrome()}
-          onTouchStart={() => revealMobileChrome()}
           style={mobileTerminalVisible ? {
             height: `calc(100% - ${mobileOverlayHeight}px)`
           } : undefined}
@@ -1813,44 +2140,47 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             </>
           )}
         </div>
+        )}
 
-        {/* Mobile terminal overlay (bottom sheet) */}
-        {activeSessions && activeSessions.length > 0 && (
+        {/* Unified mobile terminal — one TerminalChat instance for both split and terminal modes */}
+        {(mobileViewMode === 'split' || mobileViewMode === 'terminal') && activeSessions && activeSessions.length > 0 && (
           <div
-            className={`preview-mobile-terminal${isDraggingMobileSplit ? ' dragging' : ''}${mobileTerminalVisible ? ' open' : ' hidden'}`}
-            style={{ height: `${mobileOverlayHeight}px` }}
-            aria-hidden={!mobileTerminalVisible}
+            className={
+              mobileViewMode === 'terminal'
+                ? 'preview-mobile-terminal-fullscreen'
+                : `preview-mobile-terminal${isDraggingMobileSplit ? ' dragging' : ''}${mobileTerminalVisible ? ' open' : ' hidden'}`
+            }
+            style={mobileViewMode === 'split' ? { height: `${mobileOverlayHeight}px` } : undefined}
+            aria-hidden={mobileViewMode === 'split' && !mobileTerminalVisible}
           >
-            {/* Drag handle */}
-            <div
-              className="preview-mobile-terminal-handle"
-              onTouchStart={handleMobileSplitTouchStart}
-              onPointerDown={handleMobileSplitPointerDown}
-            >
-              <div className="preview-mobile-terminal-handle-bar" />
-            </div>
+            {/* Drag handle (split mode only) */}
+            {mobileViewMode === 'split' && (
+              <div
+                className="preview-mobile-terminal-handle"
+                onTouchStart={handleMobileSplitTouchStart}
+                onPointerDown={handleMobileSplitPointerDown}
+              >
+                <div className="preview-mobile-terminal-handle-bar" />
+              </div>
+            )}
 
             {/* Session switcher */}
             <div className="preview-mobile-terminal-header">
-              {activeSessions.length > 0 ? (
-                <div className="preview-mobile-terminal-sessions">
-                  {activeSessions.map(session => (
-                    <button
-                      key={session.id}
-                      className={`preview-mobile-session-chip ${selectedTerminalSession === session.id ? 'active' : ''}`}
-                      onClick={() => setSelectedTerminalSession(session.id)}
-                      type="button"
-                    >
-                      <span className="session-indicator" />
-                      <span className="session-name">
-                        {session.title || `Session ${session.id.slice(0, 8)}`}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <span className="preview-mobile-terminal-empty">No terminal sessions</span>
-              )}
+              <div className="preview-mobile-terminal-sessions">
+                {activeSessions.map(session => (
+                  <button
+                    key={session.id}
+                    className={`preview-mobile-session-chip ${selectedTerminalSession === session.id ? 'active' : ''}`}
+                    onClick={() => setSelectedTerminalSession(session.id)}
+                    type="button"
+                  >
+                    <span className="session-indicator" />
+                    <span className="session-name">
+                      {session.title || `Session ${session.id.slice(0, 8)}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
               <button
                 className="preview-mobile-terminal-btn preview-mobile-terminal-btn-reconnect"
                 onClick={handleRefreshPreviewTerminal}
@@ -1873,14 +2203,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
                 </svg>
               </button>
-              <button
-                className="preview-mobile-terminal-btn preview-mobile-terminal-btn-close"
-                onClick={handleToggleMobileSplit}
-                type="button"
-                aria-label="Close terminal"
-              >
-                ×
-              </button>
+              {mobileViewMode === 'split' && (
+                <button
+                  className="preview-mobile-terminal-btn preview-mobile-terminal-btn-close"
+                  onClick={handleToggleMobileSplit}
+                  type="button"
+                  aria-label="Close terminal"
+                >
+                  ×
+                </button>
+              )}
             </div>
 
             {/* Terminal content */}
@@ -1912,13 +2244,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           </div>
         )}
 
-        {/* Floating URL bar at top */}
-        <div className={`preview-floating-url${mobileChromeHidden ? ' hidden' : ''}`}>
+        {/* Floating URL bar at top (hidden in terminal mode) */}
+        <div className={`preview-floating-url${mobileViewMode === 'terminal' ? ' hidden' : ''}`}>
           {/* Port selector button */}
           <button
             type="button"
             className={`preview-floating-btn preview-port-btn-mobile ${showPortDropdown ? 'active' : ''}`}
-            onClick={() => setShowPortDropdown(!showPortDropdown)}
+            onClick={() => {
+              setShowPortDropdown((prev) => {
+                if (prev) setMobilePortSearch('');
+                return !prev;
+              });
+            }}
             aria-label="Select port"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1926,8 +2263,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <path d="M8 21h8" />
               <path d="M12 17v4" />
             </svg>
-            {activePorts.filter(p => p.listening).length > 0 && (
-              <span className="preview-port-badge-mobile">{activePorts.filter(p => p.listening).length}</span>
+            {mobileListeningPorts.length > 0 && (
+              <span className="preview-port-badge-mobile">{mobileListeningPorts.length}</span>
             )}
           </button>
           {showUrlInput ? (
@@ -1999,17 +2336,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <button
                 type="button"
                 className="preview-port-sheet-close"
-                onClick={() => setShowPortDropdown(false)}
+                onClick={() => {
+                  setShowPortDropdown(false);
+                  setMobilePortSearch('');
+                }}
                 aria-label="Close"
               >
                 {'\u00D7'}
               </button>
             </div>
-            {activePorts.filter(p => p.listening).length === 0 ? (
+            {mobileListeningPorts.length === 0 ? (
               <div className="preview-port-sheet-empty">No active ports found</div>
             ) : (
-              <div className="preview-port-sheet-list">
-                {activePorts.filter(p => p.listening).map(({ port, process, cwd }) => (
+              <>
+                <div className="preview-port-sheet-toolbar">
+                  <input
+                    type="text"
+                    className="preview-port-sheet-search"
+                    placeholder="Filter by port, process, folder..."
+                    value={mobilePortSearch}
+                    onChange={(event) => setMobilePortSearch(event.target.value)}
+                    aria-label="Filter active ports"
+                  />
+                </div>
+                <div className="preview-port-sheet-list">
+                  {mobileVisiblePorts.length === 0 && (
+                    <div className="preview-port-sheet-empty">No matches for "{mobilePortSearch}"</div>
+                  )}
+                  {mobileVisiblePorts.map(({ port, process, cwd }) => (
                   <button
                     key={port}
                     type="button"
@@ -2017,13 +2371,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     onClick={() => handleSelectPort(port)}
                   >
                     <span className="preview-port-sheet-number">:{port}</span>
-                    {(cwd || process) && <span className="preview-port-sheet-process">{cwd || process}</span>}
+                    {(cwd || process) && (
+                      <span className="preview-port-sheet-process" title={`${process || ''} ${cwd || ''}`.trim()}>
+                        {process || cwd}
+                      </span>
+                    )}
                     <span className="preview-port-sheet-status">
                       <span className="preview-port-dot listening" title="Listening" />
                     </span>
                   </button>
                 ))}
-              </div>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2052,6 +2411,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
+            </button>
+            <button
+              type="button"
+              className="preview-console-clear"
+              onClick={(e) => { e.stopPropagation(); handleCopyPreviewDebugInfo(); }}
+              title="Copy preview debug snapshot"
+            >
+              Debug
             </button>
             {onSendToTerminal && (
               <button
@@ -2342,65 +2709,126 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           </div>
         )}
 
-        {/* Footer with action buttons */}
-        <div className={`preview-mobile-footer${mobileChromeHidden ? ' hidden' : ''}`}>
+        {/* Footer with segmented control + overflow */}
+        <div className="preview-mobile-footer">
+          <div className="preview-mobile-segmented" role="tablist">
+            <div
+              className="preview-mobile-segmented-indicator"
+              style={{ transform: `translateX(${mobileViewMode === 'preview' ? 0 : mobileViewMode === 'split' ? 100 : 200}%)` }}
+            />
+            <button
+              className={`preview-mobile-segmented-btn${mobileViewMode === 'preview' ? ' active' : ''}`}
+              onClick={() => handleSetMobileViewMode('preview')}
+              role="tab"
+              aria-selected={mobileViewMode === 'preview'}
+              type="button"
+            >Preview</button>
+            <button
+              className={`preview-mobile-segmented-btn${mobileViewMode === 'split' ? ' active' : ''}`}
+              onClick={() => handleSetMobileViewMode('split')}
+              disabled={!activeSessions?.length}
+              role="tab"
+              aria-selected={mobileViewMode === 'split'}
+              type="button"
+            >Split</button>
+            <button
+              className={`preview-mobile-segmented-btn${mobileViewMode === 'terminal' ? ' active' : ''}`}
+              onClick={() => handleSetMobileViewMode('terminal')}
+              disabled={!activeSessions?.length}
+              role="tab"
+              aria-selected={mobileViewMode === 'terminal'}
+              type="button"
+            >Terminal</button>
+          </div>
           <button
+            className="preview-mobile-overflow-btn"
+            onClick={() => setShowMobileToolsMenu(prev => !prev)}
+            aria-label="More tools"
             type="button"
-            className={`preview-footer-btn ${inspectMode ? 'active' : ''}`}
-            onClick={handleToggleInspect}
-            disabled={!iframeSrc}
-            aria-label={inspectMode ? 'Exit inspect mode' : 'Inspect elements'}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
-              <path d="M13 13l6 6" />
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="5" r="2" />
+              <circle cx="12" cy="12" r="2" />
+              <circle cx="12" cy="19" r="2" />
             </svg>
-          </button>
-          <button
-            type="button"
-            className={`preview-footer-btn ${mobileSplitEnabled ? 'active' : ''}`}
-            onClick={handleToggleMobileSplit}
-            disabled={!iframeSrc || !activeSessions || activeSessions.length === 0}
-            aria-label={mobileSplitEnabled ? 'Hide terminal' : 'Show terminal'}
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="7" height="18" rx="1" />
-              <rect x="14" y="3" width="7" height="18" rx="1" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="preview-footer-btn"
-            onClick={handleOpenExternal}
-            disabled={!iframeSrc}
-            aria-label="Open in new tab"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`preview-footer-btn ${showLogs ? 'active' : ''}`}
-            onClick={() => setShowLogs(!showLogs)}
-            aria-label="Toggle console"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            {(logs.length + proxyLogs.length + processLogs.length) > 0 && <span className="preview-log-badge">{logs.length + proxyLogs.length + processLogs.length}</span>}
+            {totalLogCount > 0 && <span className="preview-log-badge">{totalLogCount}</span>}
           </button>
         </div>
+
+        {/* Tools bottom sheet */}
+        {showMobileToolsMenu && (
+          <div className="preview-mobile-tools-sheet" ref={mobileToolsMenuRef}>
+            <div className="preview-mobile-tools-sheet-header">
+              <span>Tools</span>
+              <button
+                type="button"
+                className="preview-mobile-tools-sheet-close"
+                onClick={() => setShowMobileToolsMenu(false)}
+                aria-label="Close"
+              >{'\u00D7'}</button>
+            </div>
+            <div className="preview-mobile-tools-sheet-items">
+              <button
+                type="button"
+                className={`preview-mobile-tools-item${inspectMode ? ' active' : ''}`}
+                onClick={() => { handleToggleInspect(); setShowMobileToolsMenu(false); }}
+                disabled={!iframeSrc}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z" />
+                  <path d="M13 13l6 6" />
+                </svg>
+                <span>Inspect Element</span>
+              </button>
+              <button
+                type="button"
+                className="preview-mobile-tools-item"
+                onClick={() => { handleOpenExternal(); setShowMobileToolsMenu(false); }}
+                disabled={!iframeSrc}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                <span>Open in New Tab</span>
+              </button>
+              <button
+                type="button"
+                className={`preview-mobile-tools-item${showLogs ? ' active' : ''}`}
+                onClick={() => { setShowLogs(!showLogs); setShowMobileToolsMenu(false); }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                <span>Console</span>
+                {totalLogCount > 0 && <span className="preview-mobile-tools-count">{totalLogCount}</span>}
+              </button>
+              {previewPort && hasCookies && (
+                <button
+                  type="button"
+                  className="preview-mobile-tools-item"
+                  onClick={() => { handleClearCookies(); setShowMobileToolsMenu(false); }}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M8 12h8" />
+                    <circle cx="12" cy="12" r="3" fill="currentColor" />
+                  </svg>
+                  <span>Clear Cookies</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
   // Desktop layout
   return (
-    <div className="preview-panel">
+    <div className={`preview-panel${compactChrome ? ' compact-chrome' : ''}`}>
       <PreviewUrlBar
         inputUrl={inputUrl}
         onInputUrlChange={setInputUrl}
@@ -2420,10 +2848,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         iframeSrc={iframeSrc}
         browserSplitEnabled={browserSplitEnabled}
         onToggleTerminalSplit={handleToggleTerminalSplit}
+        desktopLayoutMode={desktopLayoutMode}
+        onSetDesktopLayout={handleSetDesktopLayout}
         useWebContainer={useWebContainer}
         showDevTools={showDevTools}
-        onToggleDevTools={() => setShowDevTools(prev => !prev)}
-        logCount={logs.length + proxyLogs.length}
+        onToggleDevTools={handleToggleDevTools}
+        compactChrome={compactChrome}
+        onToggleCompactChrome={() => setCompactChrome((prev) => !prev)}
+        logCount={totalLogCount}
         showToolsMenu={showToolsMenu}
         onToggleToolsMenu={() => setShowToolsMenu(prev => !prev)}
         toolsMenuRef={toolsMenuRef}
@@ -2629,7 +3061,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     sessionId={selectedTerminalSession}
                     keybarOpen={false}
                     viewportHeight={null}
-                    fontSize={fontSize}
+                    fontSize={previewTerminalFontSize}
                     webglEnabled={webglEnabled}
                     fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
@@ -2654,7 +3086,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
       {/* Desktop DevTools Panel */}
       {showDevTools && (
-        <div className={`preview-logs ${showDevTools ? 'expanded' : 'collapsed'}`}>
+        <div
+          className={`preview-logs expanded${isDraggingDevTools ? ' dragging' : ''}`}
+          style={{ height: `${Math.round(devToolsHeight)}px` }}
+        >
+          <div
+            className="preview-logs-resize-handle"
+            onMouseDown={handleDevToolsResizeMouseDown}
+            onDoubleClick={() => setDevToolsHeight(280)}
+            title="Resize DevTools"
+          >
+            <span className="preview-logs-resize-label">Drag to resize DevTools</span>
+          </div>
           <DevToolsPanel
             networkRequests={proxyLogs}
             consoleLogs={logs}

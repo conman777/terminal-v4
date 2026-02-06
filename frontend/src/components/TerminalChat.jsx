@@ -5,6 +5,12 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
+import {
+  getImageFileFromClipboardItems,
+  getImageFileFromDataTransfer,
+  hasMeaningfulClipboardText,
+  shouldPreferImageOverText
+} from '../utils/clipboardImage';
 import { getAccessToken, isAccessTokenExpired, refreshTokens } from '../utils/auth';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
@@ -30,6 +36,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputFlushRef = useRef(null);
   const mobileInputRef = useRef(null);
   const isMobile = useMobileDetect();
+  const isIOS = typeof navigator !== 'undefined' && (
+    /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
   const performanceMode = true;
   const USE_FRAMED_PROTOCOL = true;
   const MAX_PENDING_WRITE_CHARS = 1_000_000;
@@ -617,22 +627,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [isMobile, toggleScrollMode]);
 
   const handleTouchMove = useCallback((info) => {
-    if (!scrollModeRef.current) return;
     const term = xtermRef.current;
     if (!term) return;
     const deltaY = info?.deltaY || 0;
+    const deltaX = info?.deltaX || 0;
     if (!deltaY) return;
+
+    // Ignore horizontal swipes so session switching keeps working.
+    const isVerticalDrag = Math.abs(deltaY) >= Math.abs(deltaX);
+    if (!isVerticalDrag) return;
+
     if (info?.event?.cancelable) {
       info.event.preventDefault();
     }
-    const lineHeight = Math.max(10, Math.round((term.options?.fontSize || 14) * 1.25));
-    const lines = Math.max(1, Math.round(Math.abs(deltaY) / lineHeight));
-    const scrollingUp = deltaY > 0;
-    term.scrollLines(scrollingUp ? -lines : lines);
-    if (scrollingUp) {
+
+    // Touch delta direction is opposite wheel delta direction.
+    scrollByWheel(-deltaY, 1, term.rows);
+    if (deltaY > 0) {
       triggerLoadMoreIfAtTop();
     }
-  }, [triggerLoadMoreIfAtTop]);
+  }, [scrollByWheel, triggerLoadMoreIfAtTop]);
 
   const {
     touchStateRef,
@@ -751,14 +765,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const scrollback = performanceMode
       ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
       : (isMobile ? SCROLLBACK_MOBILE * 2 : SCROLLBACK_DESKTOP * 3);
+    const defaultTerminalFontSize = fontSize || (isMobile ? 16 : 14);
+    const terminalFontFamily = isMobile
+      ? 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace'
+      : '"JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace';
+
     const term = new Terminal({
       cursorBlink: false,
-      fontSize: fontSize || (isMobile ? 18 : 14),
-      fontFamily: '"JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace',
+      fontSize: defaultTerminalFontSize,
+      fontFamily: terminalFontFamily,
       fontWeight: '400',
       fontWeightBold: '600',
       letterSpacing: 0,
-      lineHeight: 1.2,
+      lineHeight: isMobile ? 1.1 : 1.2,
       scrollback,
       theme: {
         background: '#1e1e1e',
@@ -829,6 +848,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!confirmLargePaste(text)) return;
       sendUserInput(`\x1b[200~${text}\x1b[201~`);
     };
+    const shouldSendTextBeforeImage = (text) => {
+      if (!hasMeaningfulClipboardText(text)) return false;
+      return !shouldPreferImageOverText(text);
+    };
     sendTerminalInputRef.current = sendUserInput;
     if (registerTerminalSender) {
       registerTerminalSender(sessionId, sendUserInput);
@@ -836,11 +859,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const handleClipboardPaste = async () => {
       try {
+        let clipboardText = '';
         if (navigator.clipboard?.readText) {
           try {
-            const text = await navigator.clipboard.readText();
-            if (text) {
-              sendPastedText(text);
+            clipboardText = await navigator.clipboard.readText();
+            if (shouldSendTextBeforeImage(clipboardText)) {
+              sendPastedText(clipboardText);
               return;
             }
           } catch {
@@ -851,15 +875,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (navigator.clipboard?.read) {
           try {
             const clipboardItems = await navigator.clipboard.read();
-            for (const item of clipboardItems) {
-              const imageType = item.types.find(t => t.startsWith('image/'));
-              if (imageType) {
-                const blob = await item.getType(imageType);
-                const path = await uploadScreenshot(blob);
-                if (path) {
-                  sendPastedText(path + ' ');
-                  return;
-                }
+            const imageFile = await getImageFileFromClipboardItems(clipboardItems);
+            if (imageFile) {
+              const path = await uploadScreenshot(imageFile);
+              if (path) {
+                sendPastedText(path + ' ');
+                return;
               }
             }
           } catch {
@@ -868,9 +889,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
 
         if (navigator.clipboard?.readText) {
-          const text = await navigator.clipboard.readText();
-          if (text) {
-            sendPastedText(text);
+          if (!hasMeaningfulClipboardText(clipboardText)) {
+            clipboardText = await navigator.clipboard.readText();
+          }
+          if (hasMeaningfulClipboardText(clipboardText)) {
+            sendPastedText(clipboardText);
           }
         }
       } catch (err) {
@@ -951,7 +974,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }, 200);
 
       const initWebglAddon = () => {
-        if (!webglEnabledRef.current || isMobile || webglAddonRef.current) {
+        const shouldEnableWebgl = webglEnabledRef.current && !(isMobile && isIOS);
+        if (!shouldEnableWebgl || webglAddonRef.current) {
           return;
         }
         try {
@@ -1002,7 +1026,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
       }
 
-      // Custom wheel handling to improve tmux scroll reliability
+      // Custom wheel handling: let xterm handle scrolling natively for smooth
+      // scroll, only intercept when xterm scrollback is exhausted (tmux copy-mode)
       term.attachCustomWheelEventHandler((event) => {
         if (!usesTmuxRef.current) {
           return true;
@@ -1011,6 +1036,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const buffer = term.buffer?.active;
         const isAlternate = buffer?.type === 'alternate';
         const mouseTrackingMode = term.modes?.mouseTrackingMode;
+
         if (mouseTrackingMode && mouseTrackingMode !== 'none' && isAlternate) {
           return true;
         }
@@ -1019,12 +1045,33 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           return true;
         }
 
-        event.preventDefault();
-        scrollByWheel(event.deltaY, event.deltaMode, term.rows);
-        if (event.deltaY < 0) {
-          triggerLoadMoreIfAtTop();
+        // If currently in tmux copy-mode, keep handling through tmux
+        if (inCopyModeRef.current) {
+          event.preventDefault();
+          scrollByWheel(event.deltaY, event.deltaMode, term.rows);
+          return false;
         }
-        return false;
+
+        const baseY = buffer?.baseY || 0;
+
+        // xterm has scrollback — let it handle natively (smooth scroll)
+        if (baseY > 0) {
+          if (event.deltaY < 0) {
+            setTimeout(() => triggerLoadMoreIfAtTop(), 0);
+          }
+          return true;
+        }
+
+        // baseY === 0 and scrolling UP: xterm scrollback exhausted → tmux copy-mode
+        if (event.deltaY < 0) {
+          event.preventDefault();
+          scrollByWheel(event.deltaY, event.deltaMode, term.rows);
+          triggerLoadMoreIfAtTop();
+          return false;
+        }
+
+        // baseY === 0 and scrolling DOWN: nothing to scroll
+        return true;
       });
 
       // Scroll direction detection for header collapse
@@ -1257,7 +1304,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (cols && rows) {
             apiFetch(`/api/terminal/${sessionId}/resize`, {
               method: 'POST',
-              body: isPrimaryRef.current ? { cols, rows, priority: true } : { cols, rows }
+              body: isPrimaryRef.current && !isMobile ? { cols, rows, priority: true } : { cols, rows }
             }).catch(() => {});
           }
         }
@@ -1591,7 +1638,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               if (cols && rows) {
                 apiFetch(`/api/terminal/${sessionId}/resize`, {
                   method: 'POST',
-                  body: isPrimaryRef.current
+                  body: isPrimaryRef.current && !isMobile
                     ? { cols, rows, clientId: msg.clientId, priority: true }
                     : { cols, rows, clientId: msg.clientId }
                 }).catch(() => {});
@@ -1758,7 +1805,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (disposed) return;
           const resizeBody = { cols, rows };
           if (clientIdRef.current) resizeBody.clientId = clientIdRef.current;
-          if (isPrimaryRef.current) resizeBody.priority = true;
+          if (isPrimaryRef.current && !isMobile) resizeBody.priority = true;
           apiFetch(`/api/terminal/${sessionId}/resize`, {
             method: 'POST',
             body: resizeBody
@@ -1782,7 +1829,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       container.addEventListener('contextmenu', handleContextMenu);
 
-      const handlePasteEvent = (e) => {
+      const handlePasteEvent = async (e) => {
         if (suppressPasteEventRef.current) {
           e.preventDefault();
           e.stopPropagation();
@@ -1795,37 +1842,52 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
 
         const text = clipboardData.getData('text/plain') || clipboardData.getData('text');
-        if (text) {
+        const shouldSendText = shouldSendTextBeforeImage(text);
+
+        let imageFile = null;
+        try {
+          imageFile = await getImageFileFromDataTransfer(clipboardData);
+        } catch (error) {
+          console.error('Failed to inspect clipboard image data:', error);
+        }
+        if (imageFile && !shouldSendText) {
+          e.preventDefault();
+          e.stopPropagation();
+          uploadScreenshot(imageFile)
+            .then((path) => {
+              if (path) {
+                sendPastedText(path + ' ');
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to paste image:', error);
+            });
+          return;
+        }
+
+        if (shouldSendText) {
           e.preventDefault();
           e.stopPropagation();
           sendPastedText(text);
           return;
         }
 
-        const files = Array.from(clipboardData.files || []);
-        let imageFile = files.find((file) => file.type && file.type.startsWith('image/')) || null;
-        if (!imageFile) {
-          const items = Array.from(clipboardData.items || []);
-          const imageItem = items.find((item) => item.type && item.type.startsWith('image/'));
-          imageFile = imageItem ? imageItem.getAsFile() : null;
-        }
-
-        if (!imageFile) {
-          handleClipboardPaste();
+        if (imageFile) {
+          e.preventDefault();
+          e.stopPropagation();
+          uploadScreenshot(imageFile)
+            .then((path) => {
+              if (path) {
+                sendPastedText(path + ' ');
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to paste image:', error);
+            });
           return;
         }
 
-        e.preventDefault();
-        e.stopPropagation();
-        uploadScreenshot(imageFile)
-          .then((path) => {
-            if (path) {
-              sendPastedText(path + ' ');
-            }
-          })
-          .catch((error) => {
-            console.error('Failed to paste image:', error);
-          });
+        handleClipboardPaste();
       };
       container.addEventListener('paste', handlePasteEvent, true);
 
@@ -1913,9 +1975,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    if (isMobile) return;
 
-    if (webglEnabledRef.current) {
+    const shouldEnableWebgl = webglEnabledRef.current && !(isMobile && isIOS);
+    if (shouldEnableWebgl) {
       if (!webglAddonRef.current) {
         try {
           const webglAddon = new WebglAddon();
@@ -1943,13 +2005,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       } catch {}
       webglAddonRef.current = null;
     }
-  }, [webglEnabled, isMobile]);
+  }, [webglEnabled, isMobile, isIOS]);
 
   // Handle font size changes without recreating terminal
   useEffect(() => {
     if (!xtermRef.current || !fitAddonRef.current) return;
     const term = xtermRef.current;
-    const newSize = fontSize || (isMobile ? 18 : 14);
+    const newSize = fontSize || (isMobile ? 16 : 14);
     if (term.options.fontSize !== newSize) {
       term.options.fontSize = newSize;
       fitAddonRef.current.fit();
@@ -2048,7 +2110,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           lines={readerLines}
           lineHeight={readerLineHeight}
           scrollToken={readerScrollToken}
-          fontSize={fontSize || (isMobile ? 18 : 14)}
+          fontSize={fontSize || (isMobile ? 16 : 14)}
           onScrollDirection={onScrollDirection}
           onLoadMore={handleReaderLoadMore}
           onInput={handleReaderInput}
