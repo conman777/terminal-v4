@@ -1312,6 +1312,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }
         }
       };
+      let incrementalResyncTimer = null;
+      let lastIncrementalResyncAt = 0;
+      const scheduleIncrementalResync = (delay = 150) => {
+        if (disposed) return;
+        const now = Date.now();
+        if (now - lastIncrementalResyncAt < 1000) return;
+        if (incrementalResyncTimer) return;
+        incrementalResyncTimer = setTimeout(() => {
+          incrementalResyncTimer = null;
+          if (disposed) return;
+          lastIncrementalResyncAt = Date.now();
+          void loadIncrementalHistory();
+        }, delay);
+      };
       const scrollDisposer = term.onScroll((newPos) => {
         if (onScrollDirectionRef.current && !disposed) {
           const isUserScrolling = touchStateRef.current !== null;
@@ -1376,6 +1390,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           // Trigger reconnect if socket is closed and we're online
           if (navigator.onLine && socketRef.current?.readyState !== WebSocket.OPEN) {
             reconnectSocketRef.current?.();
+          } else {
+            scheduleIncrementalResync(0);
           }
         }
       };
@@ -1384,6 +1400,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         // Attempt reconnect when coming back online
         if (socketRef.current?.readyState !== WebSocket.OPEN) {
           reconnectSocketRef.current?.();
+        } else {
+          scheduleIncrementalResync(0);
         }
       };
       const handleOffline = () => {
@@ -1667,6 +1685,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               pendingWrite = '';
               parserRecoveryNeeded = true;
               tailModeRef.current = true;
+              scheduleIncrementalResync(0);
             }
             if (pendingWriteFrame) return;
             pendingWriteFrame = requestAnimationFrame(flushPendingWrites);
@@ -1763,6 +1782,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               droppedEventCountRef.current += overflow;
               parserRecoveryNeeded = true;
               tailModeRef.current = true;
+              scheduleIncrementalResync(0);
             }
             void processMessageQueue();
           };
@@ -1822,6 +1842,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (skipUrlTimeout) clearTimeout(skipUrlTimeout);
           if (heartbeatTimer) clearInterval(heartbeatTimer);
           if (connectTimeout) clearTimeout(connectTimeout);
+          if (incrementalResyncTimer) {
+            clearTimeout(incrementalResyncTimer);
+            incrementalResyncTimer = null;
+          }
           if (socket) socket.close();
         };
       };

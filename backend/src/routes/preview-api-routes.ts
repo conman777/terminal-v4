@@ -20,7 +20,7 @@ const PREVIEW_LOG_STREAM_POLL_MS = (() => {
 })();
 const PREVIEW_PORT_PROBE_TIMEOUT_MS = (() => {
   const parsed = Number.parseInt(process.env.PREVIEW_PORT_PROBE_TIMEOUT_MS || '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 900;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1500;
 })();
 const NON_PREVIEW_PROCESS_PREFIXES = [
   'chrome',
@@ -29,6 +29,19 @@ const NON_PREVIEW_PROCESS_PREFIXES = [
   'brave',
   'safari',
   'arc',
+  'cups',
+  'cupsd',
+  'avahi',
+  'systemd',
+  'mdnsresponder',
+  'dnsmasq',
+  'ntpd',
+  'sshd',
+  'tailscaled',
+  'containerd',
+  'dockerd',
+  'docker',
+  'podman',
   'postgres',
   'mysqld',
   'redis-server',
@@ -54,9 +67,19 @@ interface ActivePortResponse {
   listening: boolean;
   previewed: boolean;
   previewable: boolean;
+  probeStatus: 'html' | 'redirect' | 'reachable-non-html' | 'unreachable' | 'timeout' | 'excluded-process';
+  reachable: boolean;
+  frontendLikely: boolean;
   common: boolean;
   process: string | null;
   cwd: string | null;
+}
+
+interface PortProbeResult {
+  probeStatus: ActivePortResponse['probeStatus'];
+  reachable: boolean;
+  frontendLikely: boolean;
+  previewable: boolean;
 }
 
 let activePortsCache: { expiresAt: number; ports: ActivePortResponse[] } | null = null;
@@ -205,28 +228,47 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
     const previewedSet = new Set(previewedPorts);
     const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8885, 8888];
     const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
-    const previewableByPort = new Map<number, boolean>();
+    const probeByPort = new Map<number, PortProbeResult>();
 
     await Promise.all(allPorts.map(async (port) => {
       if (!listeningSet.has(port)) {
-        previewableByPort.set(port, false);
+        probeByPort.set(port, {
+          probeStatus: 'unreachable',
+          reachable: false,
+          frontendLikely: false,
+          previewable: false
+        });
         return;
       }
       const processName = portInfo.get(port)?.process;
       if (isExcludedProcessForPreview(processName)) {
-        previewableByPort.set(port, false);
+        probeByPort.set(port, {
+          probeStatus: 'excluded-process',
+          reachable: false,
+          frontendLikely: false,
+          previewable: false
+        });
         return;
       }
-      previewableByPort.set(port, await isPortPreviewable(port));
+      probeByPort.set(port, await probePortPreviewability(port));
     }));
 
     const ports = allPorts.map((port) => {
       const info = portInfo.get(port);
+      const probe = probeByPort.get(port) || {
+        probeStatus: 'unreachable',
+        reachable: false,
+        frontendLikely: false,
+        previewable: false
+      };
       return {
         port,
         listening: listeningSet.has(port),
         previewed: previewedSet.has(port),
-        previewable: previewableByPort.get(port) || false,
+        previewable: probe.previewable,
+        probeStatus: probe.probeStatus,
+        reachable: probe.reachable,
+        frontendLikely: probe.frontendLikely,
         common: commonDevPorts.includes(port),
         process: info?.process || null,
         cwd: info?.cwd || null
@@ -273,8 +315,10 @@ function isLikelyApiOnlyPath(pathname: string): boolean {
   );
 }
 
-async function isPortPreviewable(port: number): Promise<boolean> {
+async function probePortPreviewability(port: number): Promise<PortProbeResult> {
   const hosts = ['127.0.0.1', 'localhost'];
+  let sawReachable = false;
+  let sawTimeout = false;
   for (const host of hosts) {
     try {
       const response = await fetch(`http://${host}:${port}/`, {
@@ -287,6 +331,7 @@ async function isPortPreviewable(port: number): Promise<boolean> {
       });
 
       if (response.status >= 300 && response.status < 400 && response.headers.has('location')) {
+        sawReachable = true;
         const location = response.headers.get('location');
         if (!location) continue;
 
@@ -300,17 +345,53 @@ async function isPortPreviewable(port: number): Promise<boolean> {
           continue;
         }
 
-        return true;
+        return {
+          probeStatus: 'redirect',
+          reachable: true,
+          frontendLikely: true,
+          previewable: true
+        };
       }
 
+      sawReachable = true;
       if (isLikelyPreviewContentType(response.headers.get('content-type'))) {
-        return true;
+        return {
+          probeStatus: 'html',
+          reachable: true,
+          frontendLikely: true,
+          previewable: true
+        };
       }
-    } catch {
-      // Try the next host mapping.
+    } catch (error) {
+      const errorName = error && typeof error === 'object' && 'name' in error ? String((error as { name?: unknown }).name) : '';
+      const errorMessage = error instanceof Error ? error.message : '';
+      if (errorName === 'TimeoutError' || errorName === 'AbortError' || /timed?\s*out/i.test(errorMessage)) {
+        sawTimeout = true;
+      }
     }
   }
-  return false;
+  if (sawReachable) {
+    return {
+      probeStatus: 'reachable-non-html',
+      reachable: true,
+      frontendLikely: false,
+      previewable: false
+    };
+  }
+  if (sawTimeout) {
+    return {
+      probeStatus: 'timeout',
+      reachable: false,
+      frontendLikely: false,
+      previewable: false
+    };
+  }
+  return {
+    probeStatus: 'unreachable',
+    reachable: false,
+    frontendLikely: false,
+    previewable: false
+  };
 }
 
 function isExcludedProcessForPreview(processName: string | null | undefined): boolean {
