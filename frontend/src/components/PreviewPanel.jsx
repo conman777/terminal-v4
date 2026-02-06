@@ -27,6 +27,31 @@ const DEVTOOLS_HEIGHT_KEY = 'preview_devtools_height_v1';
 const DEVTOOLS_VISIBLE_KEY = 'preview_devtools_visible_v1';
 const PREVIEW_CHROME_COMPACT_KEY = 'preview_compact_chrome_v1';
 const DESKTOP_BROWSER_SPLIT_DEFAULT = 68;
+const GENERIC_RUNTIME_PROCESSES = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'python', 'python3', 'deno']);
+
+function isFrontendCandidatePort(portInfo, previewPort) {
+  if (!portInfo?.listening) return false;
+  if (portInfo.port === previewPort) return true;
+  // Ignore common system service ports unless explicitly selected.
+  if (portInfo.port < 1024) return false;
+  // If we have no process/cwd metadata, this is usually noisy/system traffic.
+  if (!portInfo.process && !portInfo.cwd) return false;
+  if (portInfo.frontendLikely === true || portInfo.previewable === true) return true;
+  return portInfo.probeStatus === 'html' || portInfo.probeStatus === 'redirect';
+}
+
+function getPortAppKey(portInfo) {
+  if (portInfo?.cwd && typeof portInfo.cwd === 'string') {
+    return `cwd:${portInfo.cwd.toLowerCase()}`;
+  }
+  if (portInfo?.process && typeof portInfo.process === 'string') {
+    const normalizedProcess = portInfo.process.trim().toLowerCase();
+    if (!GENERIC_RUNTIME_PROCESSES.has(normalizedProcess)) {
+      return `proc:${normalizedProcess}`;
+    }
+  }
+  return `port:${portInfo?.port}`;
+}
 
 function normalizePreviewUrl(value) {
   if (!value || typeof value !== 'string') return '';
@@ -435,6 +460,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       }
     };
   }, [isDocumentVisible]);
+
+  useEffect(() => {
+    if (!showPortDropdown || !isDocumentVisible) return;
+    let disposed = false;
+    const refreshActivePorts = async () => {
+      try {
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/preview/active-ports', { headers });
+        if (!res.ok || disposed) return;
+        const data = await res.json();
+        if (disposed) return;
+        setActivePorts(data.ports || []);
+      } catch {
+        // Ignore fetch errors while opening dropdown.
+      }
+    };
+    void refreshActivePorts();
+    return () => {
+      disposed = true;
+    };
+  }, [isDocumentVisible, showPortDropdown]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -2047,38 +2094,99 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     const parts = normalized.split('/').filter(Boolean);
     return (parts[parts.length - 1] || '').toLowerCase();
   }, [projectInfo?.cwd]);
+  const sessionFolderScopes = useMemo(() => {
+    const scopes = new Set();
+    for (const session of activeSessions || []) {
+      const pathCandidate = session?.thread?.projectPath || session?.groupPath || session?.cwd;
+      if (!pathCandidate || typeof pathCandidate !== 'string') continue;
+      const normalized = pathCandidate.replace(/\\/g, '/').replace(/\/+$/, '');
+      const parts = normalized.split('/').filter(Boolean);
+      const scope = (parts[parts.length - 1] || '').toLowerCase();
+      if (scope) scopes.add(scope);
+    }
+    return scopes;
+  }, [activeSessions]);
+  const currentPreviewPortCandidate = useMemo(() => {
+    return previewPort || extractPortFromUrl(inputUrl);
+  }, [inputUrl, previewPort]);
   const currentPreviewCwdScope = useMemo(() => {
-    const candidatePort = previewPort || extractPortFromUrl(inputUrl);
-    if (!candidatePort) return '';
-    const currentPort = activePorts.find((portInfo) => portInfo.port === candidatePort);
+    if (!currentPreviewPortCandidate) return '';
+    const currentPort = activePorts.find((portInfo) => portInfo.port === currentPreviewPortCandidate);
     const cwd = currentPort?.cwd;
     if (!cwd || typeof cwd !== 'string') return '';
     return cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-  }, [activePorts, inputUrl, previewPort]);
-  const effectivePortScope = projectFolderScope || currentPreviewCwdScope;
+  }, [activePorts, currentPreviewPortCandidate]);
+  const scopedFolderScopes = useMemo(() => {
+    const scopes = new Set(sessionFolderScopes);
+    if (projectFolderScope) scopes.add(projectFolderScope);
+    if (currentPreviewCwdScope) scopes.add(currentPreviewCwdScope);
+    return scopes;
+  }, [currentPreviewCwdScope, projectFolderScope, sessionFolderScopes]);
   const scopedActivePorts = useMemo(() => {
-    if (!effectivePortScope) return activePorts;
-    const matches = activePorts.filter(({ cwd }) => {
-      if (!cwd || typeof cwd !== 'string') return false;
-      const normalized = cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-      return normalized === effectivePortScope || normalized.endsWith(`/${effectivePortScope}`);
+    if (scopedFolderScopes.size === 0) return activePorts;
+    const matches = activePorts.filter((portInfo) => {
+      if (currentPreviewPortCandidate && portInfo.port === currentPreviewPortCandidate) return true;
+      if (!portInfo?.cwd || typeof portInfo.cwd !== 'string') return false;
+      const normalized = portInfo.cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+      return scopedFolderScopes.has(normalized);
     });
     return matches.length > 0 ? matches : activePorts;
-  }, [activePorts, effectivePortScope]);
-  const isPreviewSelectablePort = useCallback((portInfo) => {
-    if (!portInfo?.listening) return false;
-    const previewable = portInfo.previewable === true;
-    return previewable || portInfo.previewed || portInfo.port === previewPort;
-  }, [previewPort]);
+  }, [activePorts, currentPreviewPortCandidate, scopedFolderScopes]);
+  const isProjectScopedPort = useCallback((portInfo) => {
+    if (!projectFolderScope || !portInfo?.cwd || typeof portInfo.cwd !== 'string') return false;
+    const normalized = portInfo.cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    return normalized === projectFolderScope || normalized.endsWith(`/${projectFolderScope}`);
+  }, [projectFolderScope]);
+  const rankPort = useCallback((portInfo) => {
+    let score = 0;
+    if (!portInfo?.listening) score += 10000;
+    if (portInfo?.port === previewPort) score -= 1000;
+    if (isProjectScopedPort(portInfo)) score -= 250;
+    if (portInfo?.frontendLikely === true || portInfo?.previewable === true) score -= 200;
+    if (portInfo?.reachable === true) score -= 120;
+    if (portInfo?.previewed) score -= 60;
+    if (portInfo?.common) score -= 30;
+    if (portInfo?.probeStatus === 'excluded-process') score += 40;
+    if (portInfo?.probeStatus === 'timeout') score += 20;
+    return score;
+  }, [isProjectScopedPort, previewPort]);
+  const rankedActivePorts = useMemo(() => {
+    return [...scopedActivePorts].sort((a, b) => {
+      const delta = rankPort(a) - rankPort(b);
+      if (delta !== 0) return delta;
+      return a.port - b.port;
+    });
+  }, [rankPort, scopedActivePorts]);
+  const frontendCandidatePorts = useMemo(() => {
+    return rankedActivePorts.filter((portInfo) => isFrontendCandidatePort(portInfo, previewPort));
+  }, [previewPort, rankedActivePorts]);
+  const uniqueFrontendPorts = useMemo(() => {
+    const bestByApp = new Map();
+    for (const portInfo of frontendCandidatePorts) {
+      const key = getPortAppKey(portInfo);
+      const existing = bestByApp.get(key);
+      if (!existing) {
+        bestByApp.set(key, portInfo);
+        continue;
+      }
+      const currentRank = rankPort(portInfo);
+      const existingRank = rankPort(existing);
+      if (currentRank < existingRank || (currentRank === existingRank && portInfo.port < existing.port)) {
+        bestByApp.set(key, portInfo);
+      }
+    }
+    return Array.from(bestByApp.values()).sort((a, b) => {
+      const delta = rankPort(a) - rankPort(b);
+      if (delta !== 0) return delta;
+      return a.port - b.port;
+    });
+  }, [frontendCandidatePorts, rankPort]);
   const mobileListeningPorts = useMemo(() => {
-    return scopedActivePorts
-      .filter(isPreviewSelectablePort)
-      .sort((a, b) => {
-        if (a.port === previewPort && b.port !== previewPort) return -1;
-        if (b.port === previewPort && a.port !== previewPort) return 1;
-        return a.port - b.port;
-      });
-  }, [scopedActivePorts, isPreviewSelectablePort, previewPort]);
+    return uniqueFrontendPorts;
+  }, [uniqueFrontendPorts]);
+  const desktopVisiblePorts = useMemo(() => {
+    return uniqueFrontendPorts;
+  }, [uniqueFrontendPorts]);
   const mobileVisiblePorts = useMemo(() => {
     const query = mobilePortSearch.trim().toLowerCase();
     if (!query) return mobileListeningPorts;
@@ -2402,7 +2510,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </button>
             </div>
             {mobileListeningPorts.length === 0 ? (
-              <div className="preview-port-sheet-empty">No previewable ports found</div>
+              <div className="preview-port-sheet-empty">No frontend ports found</div>
             ) : (
               <>
                 <div className="preview-port-sheet-toolbar">
@@ -2888,7 +2996,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       <PreviewUrlBar
         inputUrl={inputUrl}
         onInputUrlChange={setInputUrl}
-        activePorts={scopedActivePorts}
+        activePorts={desktopVisiblePorts}
         previewPort={previewPort}
         showPortDropdown={showPortDropdown}
         onTogglePortDropdown={() => setShowPortDropdown(!showPortDropdown)}
@@ -2986,13 +3094,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <p className="preview-hint">
                       <code>C:\path\to\project\index.html</code>
                     </p>
-                    {scopedActivePorts.some(isPreviewSelectablePort) && (
+                    {uniqueFrontendPorts.length > 0 && (
                       <div className="preview-empty-actions">
                         <button
                           type="button"
                           className="btn-primary"
                           onClick={() => {
-                            const firstPort = scopedActivePorts.find(isPreviewSelectablePort)?.port;
+                            const firstPort = uniqueFrontendPorts[0]?.port;
                             if (!firstPort) return;
                             const detectedUrl = `http://localhost:${firstPort}`;
                             setInputUrl(detectedUrl);

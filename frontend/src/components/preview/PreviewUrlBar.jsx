@@ -1,5 +1,49 @@
 import { useMemo, useState } from 'react';
 
+function isFrontendPort(port, previewPort) {
+  if (!port?.listening) return false;
+  if (port.port === previewPort) return true;
+  if (port.frontendLikely === true || port.previewable === true) return true;
+  return port.probeStatus === 'html' || port.probeStatus === 'redirect';
+}
+
+function isGenericRuntimeProcess(processName) {
+  if (!processName || typeof processName !== 'string') return true;
+  const normalized = processName.trim().toLowerCase();
+  return (
+    normalized === 'node' ||
+    normalized === 'npm' ||
+    normalized === 'pnpm' ||
+    normalized === 'yarn' ||
+    normalized === 'bun' ||
+    normalized === 'python' ||
+    normalized === 'python3' ||
+    normalized === 'deno'
+  );
+}
+
+function getAppKey(portInfo) {
+  if (portInfo?.cwd) {
+    return `cwd:${String(portInfo.cwd).toLowerCase()}`;
+  }
+  if (portInfo?.process && !isGenericRuntimeProcess(portInfo.process)) {
+    return `proc:${String(portInfo.process).toLowerCase()}`;
+  }
+  return `port:${portInfo?.port}`;
+}
+
+function rankPortForSelection(portInfo, previewPort) {
+  let score = 0;
+  if (portInfo?.port === previewPort) score -= 1000;
+  if (portInfo?.frontendLikely === true || portInfo?.previewable === true) score -= 200;
+  if (portInfo?.reachable === true) score -= 120;
+  if (portInfo?.previewed) score -= 60;
+  if (portInfo?.common) score -= 30;
+  if (portInfo?.probeStatus === 'excluded-process') score += 40;
+  if (portInfo?.probeStatus === 'timeout') score += 20;
+  return score;
+}
+
 function Tooltip({ children, text, shortcut }) {
   const [show, setShow] = useState(false);
 
@@ -60,11 +104,22 @@ export function PreviewUrlBar({
   const [portSearch, setPortSearch] = useState('');
 
   const selectablePorts = useMemo(() => {
-    return activePorts.filter((port) => {
-      if (!port.listening) return false;
-      const previewable = port.previewable === true;
-      return previewable || port.previewed || port.port === previewPort;
-    });
+    const frontendPorts = activePorts.filter((port) => isFrontendPort(port, previewPort));
+    const bestByApp = new Map();
+    for (const portInfo of frontendPorts) {
+      const key = getAppKey(portInfo);
+      const existing = bestByApp.get(key);
+      if (!existing) {
+        bestByApp.set(key, portInfo);
+        continue;
+      }
+      const currentRank = rankPortForSelection(portInfo, previewPort);
+      const existingRank = rankPortForSelection(existing, previewPort);
+      if (currentRank < existingRank || (currentRank === existingRank && portInfo.port < existing.port)) {
+        bestByApp.set(key, portInfo);
+      }
+    }
+    return Array.from(bestByApp.values());
   }, [activePorts, previewPort]);
 
   const visiblePorts = useMemo(() => {
@@ -82,6 +137,8 @@ export function PreviewUrlBar({
     return selectablePorts
       .filter(matches)
       .sort((a, b) => {
+        const scoreDelta = rankPortForSelection(a, previewPort) - rankPortForSelection(b, previewPort);
+        if (scoreDelta !== 0) return scoreDelta;
         if (a.port === previewPort && b.port !== previewPort) return -1;
         if (b.port === previewPort && a.port !== previewPort) return 1;
         return a.port - b.port;
@@ -126,14 +183,17 @@ export function PreviewUrlBar({
               </div>
             )}
             {visiblePorts.length === 0 ? (
-              <div className="preview-port-dropdown-empty">No previewable ports found</div>
+              <div className="preview-port-dropdown-empty">No frontend ports found</div>
             ) : (
               <div className="preview-port-dropdown-list">
-                {visiblePorts.map(({ port, process, cwd }) => {
+                {visiblePorts.map(({ port, process, cwd, frontendLikely, reachable, probeStatus }) => {
                   const cwdLabel = typeof cwd === 'string' && cwd.length > 0
                     ? cwd.split('/').filter(Boolean).slice(-2).join('/')
                     : '';
                   const hasMeta = Boolean(process || cwdLabel);
+                  const statusLabel = frontendLikely || probeStatus === 'html' || probeStatus === 'redirect'
+                    ? 'Frontend'
+                    : (reachable ? 'Reachable' : (probeStatus === 'excluded-process' ? 'Excluded' : 'Unknown'));
                   return (
                   <button
                     key={port}
@@ -147,7 +207,9 @@ export function PreviewUrlBar({
                           <span className="preview-port-status-dot" />
                           :{port}
                         </span>
-                        <span className="preview-port-listening-badge">{port === previewPort ? 'Current' : 'Active'}</span>
+                        <span className="preview-port-listening-badge">
+                          {port === previewPort ? 'Current' : statusLabel}
+                        </span>
                       </div>
                       {hasMeta && (
                         <div className="preview-port-details">
