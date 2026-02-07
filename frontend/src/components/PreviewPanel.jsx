@@ -2221,7 +2221,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [fontSize]);
   const mobilePanelStyle = {
     '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
-    '--mobile-footer-height': '68px',
+    '--mobile-footer-height': '48px',
     '--mobile-terminal-sheet-height': `${Math.round(mobileOverlayHeight)}px`
   };
 

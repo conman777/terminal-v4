@@ -263,9 +263,9 @@ export function MobileHeader({
 
   return (
     <>
-      <header 
+      <header
         ref={headerRef}
-        className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}`}
+        className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}${previewOpened ? ' preview-mode' : ''}`}
       >
         <div className="mobile-header-top-row">
           <button
