@@ -3,7 +3,7 @@ import { TerminalChat } from './components/TerminalChat';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileKeybar } from './components/MobileKeybar';
-import { SessionTabBar } from './components/SessionTabBar';
+// SessionTabBar is now rendered inside Header
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { Header } from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -18,6 +18,7 @@ import { NotesProvider, useNotes } from './contexts/NotesContext';
 import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
 import { ClaudeCodeProvider, useClaudeCode } from './contexts/ClaudeCodeContext';
 import { PreviewProvider, usePreview } from './contexts/PreviewContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
@@ -128,6 +129,7 @@ const SystemResourcesView = lazyWithChunkRecovery(
 
 function AppContent() {
   const { logout, user } = useAuth();
+  const { setTheme } = useTheme();
 
   // Context hooks
   const {
@@ -307,6 +309,30 @@ function AppContent() {
     setSessionBusy(sessionId, isBusy);
   }, [setSessionBusy]);
 
+  // Tab reorder state - stores session IDs in user-defined order
+  const [tabOrder, setTabOrder] = useState([]);
+
+  // Keep tabOrder in sync: add new sessions, remove deleted ones
+  useEffect(() => {
+    const activeIds = new Set(activeSessions.map(s => s.id));
+    setTabOrder(prev => {
+      const existing = prev.filter(id => activeIds.has(id));
+      const newIds = activeSessions.filter(s => !prev.includes(s.id)).map(s => s.id);
+      if (newIds.length === 0 && existing.length === prev.length) return prev;
+      return [...existing, ...newIds];
+    });
+  }, [activeSessions]);
+
+  // Ordered sessions respects user drag reorder
+  const orderedSessions = useMemo(() => {
+    const map = new Map(activeSessions.map(s => [s.id, s]));
+    return tabOrder.map(id => map.get(id)).filter(Boolean);
+  }, [activeSessions, tabOrder]);
+
+  const handleReorderSessions = useCallback((newOrder) => {
+    setTabOrder(newOrder);
+  }, []);
+
   // Reset header collapse when switching mobile views
   useEffect(() => {
     resetScrollDirection();
@@ -418,6 +444,16 @@ function AppContent() {
               localStorage.setItem('sidebarCollapsed', String(data.sidebarCollapsed));
             } catch { /* ignore */ }
           }
+          // Apply server theme if no localStorage override
+          if (data.theme) {
+            let hasLocalTheme = false;
+            try {
+              hasLocalTheme = localStorage.getItem('theme') !== null;
+            } catch { hasLocalTheme = false; }
+            if (!hasLocalTheme) {
+              setTheme(data.theme);
+            }
+          }
         }
       } catch (e) {
         console.error('Failed to fetch settings from server:', e);
@@ -426,7 +462,7 @@ function AppContent() {
       }
     };
     fetchSettings();
-  }, [terminalFontSizeStorageKey]);
+  }, [terminalFontSizeStorageKey, setTheme]);
 
   const updateTerminalFontSize = useCallback((size) => {
     setTerminalFontSize(size);
@@ -478,22 +514,11 @@ function AppContent() {
     });
   }, []);
 
-  // Initialize pane with active session
-  // - In single-pane mode: always sync pane to active session (tab switching)
-  // - In multi-pane mode: only initialize if pane has no session yet
+  // Sync the active pane to show the active session when tabs are clicked
   useEffect(() => {
     if (!activeSessionId) return;
-    const isSinglePane = legacyLayout.panes.length === 1;
-    const activePane = legacyLayout.panes.find(p => p.id === legacyLayout.activePaneId);
-
-    if (isSinglePane) {
-      // Single pane: tabs control which session is shown
-      initializePaneWithSession(activeSessionId);
-    } else if (activePane && !activePane.sessionId) {
-      // Multi-pane: only initialize empty panes
-      initializePaneWithSession(activeSessionId);
-    }
-  }, [activeSessionId, initializePaneWithSession, legacyLayout.panes, legacyLayout.activePaneId]);
+    initializePaneWithSession(activeSessionId);
+  }, [activeSessionId, initializePaneWithSession]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
@@ -728,8 +753,10 @@ function AppContent() {
   // Grouped props for Header
   const headerSessionProps = {
     activeSessions, inactiveSessions, activeSessionId,
+    orderedSessions,
     onSelectSession: handleSelectSession, onRestoreSession: handleRestoreSession,
     onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
+    onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
     sessionActivity, sessionsGroupedByProject,
   };
@@ -898,19 +925,6 @@ function AppContent() {
               sidebarMode={sidebarMode}
               onToggleSidebarMode={toggleSidebarMode}
             />
-
-          {/* Session tab bar - only show in terminal mode */}
-          {leftPanelMode === 'terminal' && activeSessions.length > 0 && !showPreview && (
-            <SessionTabBar
-              sessions={activeSessions}
-              activeSessionId={activeSessionId}
-              sessionActivity={sessionActivity}
-              onSelectSession={handleSelectSession}
-              onCreateSession={handleRequestNewSession}
-              onCloseSession={closeSession}
-              onRenameSession={renameSession}
-            />
-          )}
 
           <main
             ref={mainContentRef}
@@ -1162,20 +1176,22 @@ function AuthenticatedApp() {
   }
 
   return (
-    <NotesProvider>
-      <FolderProvider>
-        <TerminalSessionProvider>
-          <BookmarkProvider>
-            <PaneLayoutProvider>
-              <ClaudeCodeProvider>
-                <PreviewProvider>
-                  <AppContent />
-                </PreviewProvider>
-              </ClaudeCodeProvider>
-            </PaneLayoutProvider>
-          </BookmarkProvider>
-        </TerminalSessionProvider>
-      </FolderProvider>
-    </NotesProvider>
+    <ThemeProvider>
+      <NotesProvider>
+        <FolderProvider>
+          <TerminalSessionProvider>
+            <BookmarkProvider>
+              <PaneLayoutProvider>
+                <ClaudeCodeProvider>
+                  <PreviewProvider>
+                    <AppContent />
+                  </PreviewProvider>
+                </ClaudeCodeProvider>
+              </PaneLayoutProvider>
+            </BookmarkProvider>
+          </TerminalSessionProvider>
+        </FolderProvider>
+      </NotesProvider>
+    </ThemeProvider>
   );
 }

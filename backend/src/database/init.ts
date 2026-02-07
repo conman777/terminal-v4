@@ -94,6 +94,12 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN terminal_webgl_enabled INTEGER DEFAULT 1;
       `
+    },
+    {
+      name: '007_add_theme',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN theme TEXT DEFAULT 'dark';
+      `
     }
   ];
 

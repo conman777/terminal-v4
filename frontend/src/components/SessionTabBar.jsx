@@ -43,7 +43,8 @@ export function SessionTabBar({
   onCreateSession,
   onCloseSession,
   onRenameSession,
-  onReorderSessions
+  onReorderSessions,
+  inHeader = false
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
@@ -197,7 +198,7 @@ export function SessionTabBar({
   const hasOverflow = canScrollLeft || canScrollRight;
 
   return (
-    <div className="session-tab-bar-container-modern">
+    <div className={`session-tab-bar-container-modern${inHeader ? ' in-header' : ''}`}>
       {/* Left scroll button */}
       {canScrollLeft && (
         <button
@@ -339,6 +340,13 @@ export function SessionTabBar({
           position: relative;
         }
 
+        .session-tab-bar-container-modern.in-header {
+          background: transparent;
+          border-bottom: none;
+          height: 100%;
+          padding: 0;
+        }
+
         .session-tab-bar-modern {
           display: flex;
           align-items: center;
@@ -347,7 +355,7 @@ export function SessionTabBar({
           overflow-x: auto;
           scrollbar-width: none;
           height: 100%;
-          padding: 0 4px;
+          padding: 6px 4px;
         }
 
         .session-tab-bar-modern::-webkit-scrollbar {

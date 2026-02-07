@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { SessionSelector } from './SessionSelector';
+import { SessionTabBar } from './SessionTabBar';
 import ClaudeCodeSessionSelector from './ClaudeCodeSessionSelector';
 import { Dropdown } from './Dropdown';
 import { MobileHeader } from './MobileHeader';
+import { useTheme } from '../contexts/ThemeContext';
 
 export function Header({
   isMobile,
@@ -27,7 +28,9 @@ export function Header({
   // Destructure grouped props
   const {
     activeSessions, inactiveSessions, activeSessionId,
+    orderedSessions,
     onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession,
+    onReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad,
     sessionActivity, sessionsGroupedByProject,
   } = sessionProps;
@@ -41,6 +44,8 @@ export function Header({
     setShowApiSettings, onOpenSettings,
     setShowBookmarks, setShowNotes, setShowProcessManager,
   } = modalProps;
+
+  const { theme, toggleTheme } = useTheme();
 
   // Mobile-only props (may be undefined on desktop)
   const {
@@ -206,23 +211,7 @@ export function Header({
           </button>
         </div>
 
-        {leftPanelMode === 'terminal' ? (
-          activeSessions.length > 0 && (
-            <SessionSelector
-              activeSessions={activeSessions}
-              inactiveSessions={inactiveSessions}
-              activeSessionId={activeSessionId}
-              onSelectSession={onSelectSession}
-              onRestoreSession={onRestoreSession}
-              onCreateSession={onCreateSession}
-              onCloseSession={onCloseSession}
-              onRenameSession={onRenameSession}
-              isLoading={loadingSessions}
-              sessionLoadError={sessionLoadError}
-              onRetryLoad={onRetryLoad}
-            />
-          )
-        ) : (
+        {leftPanelMode !== 'terminal' && (
           <ClaudeCodeSessionSelector
             sessions={claudeCodeSessions}
             activeId={activeClaudeCodeId}
@@ -232,6 +221,22 @@ export function Header({
           />
         )}
       </div>
+
+      {leftPanelMode === 'terminal' && orderedSessions.length > 0 && (
+        <div className="header-tabs-area">
+          <SessionTabBar
+            sessions={orderedSessions}
+            activeSessionId={activeSessionId}
+            sessionActivity={sessionActivity}
+            onSelectSession={onSelectSession}
+            onCreateSession={onCreateSession}
+            onCloseSession={onCloseSession}
+            onRenameSession={onRenameSession}
+            onReorderSessions={onReorderSessions}
+            inHeader
+          />
+        </div>
+      )}
 
       <div className="header-actions">
         <button
@@ -245,6 +250,31 @@ export function Header({
             <line x1="12" y1="3" x2="12" y2="21" />
           </svg>
           <span>Browser</span>
+        </button>
+
+        <button
+          className="header-btn-modern"
+          type="button"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+          ) : (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
         </button>
 
         <div className="header-divider" />
@@ -313,6 +343,14 @@ export function Header({
           display: flex;
           align-items: center;
           gap: 20px;
+          flex-shrink: 0;
+        }
+
+        .header-tabs-area {
+          flex: 1;
+          min-width: 0;
+          overflow: visible;
+          margin: 0 12px;
         }
 
         .app-title {
@@ -378,6 +416,7 @@ export function Header({
           display: flex;
           align-items: center;
           gap: 8px;
+          flex-shrink: 0;
         }
 
         .header-btn-modern {

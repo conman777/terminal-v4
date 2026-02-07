@@ -246,10 +246,10 @@ export const TerminalPane = memo(function TerminalPane({
             />
             <DesktopStatusBar
               sessionId={pane.sessionId}
+              sessionTitle={currentSession?.title}
               cwd={currentCwd || projectInfo?.cwd}
               gitBranch={projectInfo?.gitBranch}
               onImageUpload={handleImageUpload}
-              isConnected={isConnected}
               viewMode={viewMode}
               onToggleViewMode={handleToggleViewMode}
             />

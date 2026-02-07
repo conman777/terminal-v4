@@ -170,10 +170,10 @@ export const SessionTab = memo(function SessionTab({
           gap: 8px;
           height: 28px;
           padding: 0 10px;
-          background: var(--bg-surface, #18181b);
+          background: transparent;
           border: 1px solid var(--border-subtle, #27272a);
           border-radius: 6px;
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--text-muted, #71717a);
           font-size: 13px;
           font-weight: 500;
           white-space: nowrap;
@@ -190,37 +190,56 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item.active {
-          background: rgba(39, 39, 42, 0.9);
-          border-color: rgba(113, 113, 122, 0.65);
-          color: var(--text-primary, #fafafa);
-          box-shadow: 0 0 0 1px rgba(63, 63, 70, 0.45);
+          background: rgba(245, 158, 11, 0.22);
+          border-color: rgba(245, 158, 11, 0.7);
+          color: #fafafa;
+          box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25);
           z-index: 5;
           font-weight: 600;
         }
 
         .session-tab-item.busy {
-          border-color: rgba(59, 130, 246, 0.4);
+          border-color: rgba(59, 130, 246, 0.5);
         }
 
         .session-tab-item.busy.active {
-          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2);
+          border-color: rgba(96, 165, 250, 0.7);
+          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3);
+          animation: tab-busy-pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes tab-busy-pulse {
+          0%, 100% { box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3); }
+          50% { box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4); }
         }
 
         .tab-status-dot-modern {
-          width: 6px;
-          height: 6px;
+          width: 7px;
+          height: 7px;
           border-radius: 50%;
           flex-shrink: 0;
+          transition: background 0.3s ease, box-shadow 0.3s ease;
         }
 
         .tab-status-dot-modern.busy {
           background: #60a5fa;
-          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 8px rgba(59, 130, 246, 0.35);
+          box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4);
+          animation: dot-busy-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes dot-busy-pulse {
+          0%, 100% { box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4); }
+          50% { box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5), 0 0 14px rgba(59, 130, 246, 0.5); }
         }
 
         .tab-status-dot-modern.ready {
           background: #4ade80;
-          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 8px rgba(34, 197, 94, 0.3);
+          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.3), 0 0 6px rgba(34, 197, 94, 0.25);
+        }
+
+        .session-tab-item:not(.active) .tab-status-dot-modern.ready {
+          background: #52525b;
+          box-shadow: none;
         }
 
         .tab-title-modern {

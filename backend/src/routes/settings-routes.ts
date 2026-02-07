@@ -7,6 +7,7 @@ interface UserSettings {
   terminalFontSize: number | null;
   sidebarCollapsed: boolean | null;
   terminalWebglEnabled: boolean | null;
+  theme: string | null;
 }
 
 interface UpdateSettingsBody {
@@ -15,6 +16,7 @@ interface UpdateSettingsBody {
   terminalFontSize?: number | null;
   sidebarCollapsed?: boolean | null;
   terminalWebglEnabled?: boolean | null;
+  theme?: string | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -27,7 +29,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -41,7 +43,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       sidebarCollapsed: row?.sidebar_collapsed === 1,
       terminalWebglEnabled: row?.terminal_webgl_enabled === null || row?.terminal_webgl_enabled === undefined
         ? null
-        : row?.terminal_webgl_enabled === 1
+        : row?.terminal_webgl_enabled === 1,
+      theme: row?.theme || 'dark'
     };
   });
 
@@ -53,7 +56,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled } = request.body || {};
+    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -82,6 +85,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     if (terminalWebglEnabled !== undefined && terminalWebglEnabled !== null && typeof terminalWebglEnabled !== 'boolean') {
       reply.code(400).send({ error: 'Terminal WebGL setting must be a boolean' });
+      return;
+    }
+
+    if (theme !== undefined && theme !== null && theme !== 'dark' && theme !== 'light') {
+      reply.code(400).send({ error: 'Theme must be "dark" or "light"' });
       return;
     }
 
@@ -116,17 +124,22 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('terminal_webgl_enabled = ?');
         values.push(terminalWebglEnabled ? 1 : 0);
       }
+      if (theme !== undefined) {
+        updates.push('theme = ?');
+        values.push(theme);
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
         terminalFontSize ?? null,
         sidebarCollapsed ? 1 : 0,
         terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
+        theme || 'dark',
         now
       );
     }

@@ -6,26 +6,26 @@ import { TerminalMicButton } from './TerminalMicButton';
  */
 export function DesktopStatusBar({
   sessionId,
+  sessionTitle,
   cwd,
   gitBranch,
   onImageUpload,
-  isConnected = true,
   viewMode = 'terminal',
   onToggleViewMode
 }) {
-  // Extract folder name from cwd
+  // Extract folder name from cwd, fall back to session title
   const folderName = cwd ? cwd.split('/').pop() || cwd : '';
+  const displayName = folderName || sessionTitle || '';
 
   return (
     <div className="desktop-status-bar">
       <div className="status-bar-left">
-        <span className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`} />
-        {folderName && (
-          <span className="status-cwd" title={cwd}>
+        {displayName && (
+          <span className="status-cwd" title={cwd || sessionTitle}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
-            {folderName}
+            {displayName}
           </span>
         )}
         {gitBranch && (

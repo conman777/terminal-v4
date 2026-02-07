@@ -22,6 +22,24 @@ import { useIdleDetection } from '../hooks/useIdleDetection';
 import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
+import { useTheme } from '../contexts/ThemeContext';
+
+const TERMINAL_THEMES = {
+  dark: {
+    background: '#1e1e1e',
+    foreground: '#d4d4d4',
+    cursor: '#d4d4d4',
+    cursorAccent: '#1e1e1e',
+    selectionBackground: 'rgba(255, 255, 255, 0.15)',
+  },
+  light: {
+    background: '#fafaf9',
+    foreground: '#1e1e1e',
+    cursor: '#1e1e1e',
+    cursorAccent: '#fafaf9',
+    selectionBackground: 'rgba(0, 0, 0, 0.12)',
+  }
+};
 
 export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
@@ -35,6 +53,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputBufferRef = useRef('');
   const inputFlushRef = useRef(null);
   const mobileInputRef = useRef(null);
+  const { theme } = useTheme();
   const isMobile = useMobileDetect();
   const isIOS = typeof navigator !== 'undefined' && (
     /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
@@ -601,6 +620,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [viewMode]);
 
+  // Update terminal colors when theme changes
+  useEffect(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+    const newTheme = TERMINAL_THEMES[theme] || TERMINAL_THEMES.dark;
+    term.options.theme = newTheme;
+    try {
+      term.refresh(0, term.rows - 1);
+    } catch { /* ignore refresh errors during setup */ }
+  }, [theme]);
+
   const handleTerminalTap = useCallback((event) => {
     if (!isMobile || event?.defaultPrevented) return;
     if (viewMode === 'reader') return;
@@ -709,7 +739,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Reset loading state when session changes
   useEffect(() => {
     shouldReplayHistoryRef.current = !skipHistory;
-    setIsLoadingHistory(!skipHistory);
     setIsLoadingMoreHistory(false);
     onActivityChange?.(false);
     applyHistoryConfig();
@@ -785,10 +814,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       letterSpacing: 0,
       lineHeight: 1.2,
       scrollback,
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4'
-      },
+      theme: TERMINAL_THEMES[theme] || TERMINAL_THEMES.dark,
       allowProposedApi: true,
       windowOptions: {
         setWinSizePixels: false, raiseWin: false, lowerWin: false, refreshWin: false,
@@ -871,6 +897,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!text || disposed) return;
       exitCopyModeIfActive();
       markUserInput();
+      resetIdleTimer(false);
       queueTerminalInput(text);
     };
     const confirmLargePaste = (text) => {
@@ -1184,7 +1211,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         try {
           const history = await fetchHistoryPage();
-          if (!history) return;
+          if (!history) {
+            setIsLoadingHistory(false);
+            return;
+          }
           setHistoryEntries(history);
           state.exhausted = history.length === 0;
           term.reset();
@@ -1815,11 +1845,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             messageQueue.length = 0;
             if (event.reason === 'Session ended') {
               shouldReconnect = false;
+              setIsLoadingHistory(false);
               writeTerminal('\r\n[Terminal session ended]\r\n');
               return;
             }
             if (event.reason === 'Terminal session not found' || event.code === 4404) {
               shouldReconnect = false;
+              setIsLoadingHistory(false);
               writeTerminal('\r\n[Terminal session not found]\r\n');
               return;
             }
@@ -1862,6 +1894,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         exitCopyModeIfActive();
         markUserInput();
+        resetIdleTimer(false);
         queueTerminalInput(data);
       });
 

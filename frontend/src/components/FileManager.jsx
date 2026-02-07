@@ -360,7 +360,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
           placeholder="Search files..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ marginLeft: 'auto', padding: '4px 8px', borderRadius: '4px', border: '1px solid #444', background: '#1a1a1a', color: 'white' }}
+          style={{ marginLeft: 'auto', padding: '4px 8px', borderRadius: '4px', border: '1px solid var(--border-default)', background: 'var(--bg-surface)', color: 'var(--text-primary)' }}
         />
         <input
           ref={fileInputRef}
@@ -498,9 +498,9 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
               style={{
                 padding: '10px 20px',
                 fontSize: '16px',
-                background: '#333',
-                color: 'white',
-                border: '1px solid #555',
+                background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-hover)',
                 borderRadius: '4px',
                 cursor: 'pointer'
               }}
@@ -512,9 +512,9 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
               style={{
                 padding: '10px 20px',
                 fontSize: '16px',
-                background: '#333',
-                color: 'white',
-                border: '1px solid #555',
+                background: 'var(--bg-elevated)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-hover)',
                 borderRadius: '4px',
                 cursor: 'pointer'
               }}
