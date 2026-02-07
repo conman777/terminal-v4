@@ -711,6 +711,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     shouldReplayHistoryRef.current = !skipHistory;
     setIsLoadingHistory(!skipHistory);
     setIsLoadingMoreHistory(false);
+    onActivityChange?.(false);
     applyHistoryConfig();
     historyStateRef.current.exhausted = false;
     historyStateRef.current.loading = false;
@@ -722,7 +723,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyReloadingRef.current = false;
     pendingSocketDataRef.current = [];
     resetCopyModeState();
-  }, [applyHistoryConfig, resetCopyModeState, resetHistoryCache, sessionId, skipHistory]);
+  }, [applyHistoryConfig, onActivityChange, resetCopyModeState, resetHistoryCache, sessionId, skipHistory]);
 
   // Register image upload trigger for external components
   useEffect(() => {
@@ -2025,6 +2026,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         clearTimeout(fitTimeoutRef.current);
         fitTimeoutRef.current = null;
       }
+      onActivityChange?.(false);
       cleanupIdle();
       cleanupScrolling();
       if (resizeObserver) resizeObserver.disconnect();

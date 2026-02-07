@@ -21,6 +21,7 @@ function LayoutNode({
   fontSize,
   webglEnabled,
   sessionActivity,
+  onSessionBusyChange,
   projectInfo,
   paneCount
 }) {
@@ -49,6 +50,7 @@ function LayoutNode({
         fontSize={fontSize}
         webglEnabled={webglEnabled}
         sessionActivity={sessionActivity}
+        onSessionBusyChange={onSessionBusyChange}
         projectInfo={projectInfo}
       />
     );
@@ -88,6 +90,7 @@ function LayoutNode({
             fontSize={fontSize}
             webglEnabled={webglEnabled}
             sessionActivity={sessionActivity}
+            onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
             paneCount={paneCount}
           />
@@ -116,6 +119,7 @@ export function SplitPaneContainer({
   fontSize,
   webglEnabled,
   sessionActivity,
+  onSessionBusyChange,
   projectInfo,
   paneLayout
 }) {
@@ -172,6 +176,7 @@ export function SplitPaneContainer({
             fontSize={fontSize}
             webglEnabled={webglEnabled}
             sessionActivity={sessionActivity}
+            onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
           />
         </div>
@@ -201,6 +206,7 @@ export function SplitPaneContainer({
           fontSize={fontSize}
           webglEnabled={webglEnabled}
           sessionActivity={sessionActivity}
+          onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
           paneCount={paneCount}
         />
@@ -238,6 +244,7 @@ export function SplitPaneContainer({
           fontSize={fontSize}
           webglEnabled={webglEnabled}
           sessionActivity={sessionActivity}
+          onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
         />
       ))}

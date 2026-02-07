@@ -23,7 +23,8 @@ export const TerminalPane = memo(function TerminalPane({
   webglEnabled,
   sessionActivity,
   projectInfo,
-  onCwdChange
+  onCwdChange,
+  onSessionBusyChange
 }) {
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
@@ -241,6 +242,7 @@ export const TerminalPane = memo(function TerminalPane({
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
               onConnectionChange={handleConnectionChange}
               onCwdChange={handleCwdChange}
+              onActivityChange={(isBusy) => onSessionBusyChange?.(pane.sessionId, isBusy)}
             />
             <DesktopStatusBar
               sessionId={pane.sessionId}

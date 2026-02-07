@@ -5,7 +5,7 @@ import { useCallback, useRef, useState } from 'react';
  * Tracks which sessions have unread content (received output while not focused).
  */
 export function useSessionActivity() {
-  // Activity state: { [sessionId]: { hasUnread, lastActivity } }
+  // Activity state: { [sessionId]: { hasUnread, lastActivity, isBusy } }
   const [activity, setActivity] = useState({});
 
   // Track the currently focused session to avoid marking it as unread
@@ -16,12 +16,13 @@ export function useSessionActivity() {
     if (!sessionId) return;
 
     setActivity(prev => {
-      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0 };
+      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false };
       const isFocused = focusedSessionRef.current === sessionId;
 
       return {
         ...prev,
         [sessionId]: {
+          ...current,
           hasUnread: isFocused ? false : true,
           lastActivity: Date.now()
         }
@@ -43,7 +44,8 @@ export function useSessionActivity() {
         ...prev,
         [sessionId]: {
           ...current,
-          hasUnread: false
+          hasUnread: false,
+          isBusy: false
         }
       };
     });
@@ -55,7 +57,7 @@ export function useSessionActivity() {
     if (!sessionId) return;
 
     setActivity(prev => {
-      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0 };
+      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false };
       return {
         ...prev,
         [sessionId]: {
@@ -69,8 +71,26 @@ export function useSessionActivity() {
 
   // Get activity state for a specific session
   const getActivity = useCallback((sessionId) => {
-    return activity[sessionId] || { hasUnread: false, lastActivity: 0 };
+    return activity[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false };
   }, [activity]);
+
+  // Track busy/ready command execution state for each session
+  const setBusy = useCallback((sessionId, isBusy) => {
+    if (!sessionId) return;
+    const busy = Boolean(isBusy);
+    setActivity(prev => {
+      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false };
+      if (current.isBusy === busy) return prev;
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          isBusy: busy,
+          lastActivity: busy ? Date.now() : current.lastActivity
+        }
+      };
+    });
+  }, []);
 
   // Check if any session has unread content
   const hasAnyUnread = useCallback(() => {
@@ -90,6 +110,7 @@ export function useSessionActivity() {
     markActivity,
     clearUnread,
     setFocusedSession,
+    setBusy,
     getActivity,
     hasAnyUnread,
     removeSession

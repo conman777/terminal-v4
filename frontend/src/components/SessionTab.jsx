@@ -190,17 +190,20 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item.active {
-          background: rgba(59, 130, 246, 0.2);
-          border-color: rgba(59, 130, 246, 0.7);
-          color: #dbeafe;
-          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), 0 0 12px rgba(59, 130, 246, 0.25);
+          background: rgba(39, 39, 42, 0.9);
+          border-color: rgba(113, 113, 122, 0.65);
+          color: var(--text-primary, #fafafa);
+          box-shadow: 0 0 0 1px rgba(63, 63, 70, 0.45);
           z-index: 5;
           font-weight: 600;
         }
 
-        .session-tab-item.busy:not(.active) {
+        .session-tab-item.busy {
           border-color: rgba(59, 130, 246, 0.4);
-          color: var(--text-primary, #fafafa);
+        }
+
+        .session-tab-item.busy.active {
+          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2);
         }
 
         .tab-status-dot-modern {

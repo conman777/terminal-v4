@@ -224,8 +224,8 @@ export function SessionTabBar({
             session={session}
             isActive={session.id === activeSessionId}
             hasUnread={sessionActivity?.[session.id]?.hasUnread}
-            isBusy={Boolean(sessionActivity?.[session.id]?.hasUnread)}
-            isReady={!sessionActivity?.[session.id]?.hasUnread}
+            isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
+            isReady={!sessionActivity?.[session.id]?.isBusy}
             onSelect={onSelectSession}
             onClose={onCloseSession}
             onRename={onRenameSession}

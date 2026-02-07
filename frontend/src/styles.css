@@ -3155,13 +3155,21 @@ button {
 }
 
 .preview-session-btn.active {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.7);
-  color: #dbeafe;
+  background: rgba(39, 39, 42, 0.92);
+  border-color: rgba(113, 113, 122, 0.65);
+  color: #f8fafc;
   font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), 0 0 12px rgba(59, 130, 246, 0.25);
+  box-shadow: 0 0 0 1px rgba(63, 63, 70, 0.45);
   transform: none;
   animation: none;
+}
+
+.preview-session-btn.busy {
+  border-color: rgba(59, 130, 246, 0.38);
+}
+
+.preview-session-btn.busy.active {
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2);
 }
 
 .preview-session-btn .session-name {
@@ -5893,19 +5901,23 @@ button {
   .preview-mobile-session-chip .session-indicator {
     width: 6px;
     height: 6px;
-    background: var(--accent-primary);
     border-radius: 50%;
   }
 
   .preview-mobile-session-chip.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
+    background: rgba(39, 39, 42, 0.92);
+    border-color: rgba(113, 113, 122, 0.65);
     color: #f8fafc;
   }
 
   .preview-mobile-session-chip.busy:not(.active) {
     border-color: rgba(59, 130, 246, 0.35);
     color: var(--text-primary, #e5e7eb);
+  }
+
+  .preview-mobile-session-chip.busy.active {
+    border-color: rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3);
   }
 
   .preview-mobile-session-chip:active {

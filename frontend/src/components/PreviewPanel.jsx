@@ -130,7 +130,7 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
     if (typeof window === 'undefined') return 3020;
@@ -2365,9 +2365,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {activeSessions.map(session => (
                   (() => {
                     const isActive = selectedTerminalSession === session.id;
-                    const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                    const isBusy = Boolean(hasUnread);
-                    const isReady = !hasUnread;
+                    const isBusy = Boolean(sessionActivity?.[session.id]?.isBusy);
+                    const isReady = !isBusy;
                     return (
                   <button
                     key={session.id}
@@ -2433,7 +2432,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   onRegisterImageUpload={() => {}}
                   onRegisterHistoryPanel={() => {}}
                   onRegisterFocusTerminal={(focusFn) => { focusPreviewTerminalRef.current = focusFn; }}
-                  onActivityChange={() => {}}
+                  onActivityChange={(isBusy) => onSessionBusyChange?.(selectedTerminalSession, isBusy)}
                   onConnectionChange={() => {}}
                   onCwdChange={() => {}}
                   onScrollDirection={() => {}}
@@ -3215,9 +3214,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     {activeSessions.map(session => (
                       (() => {
                         const isActive = selectedTerminalSession === session.id;
-                        const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                        const isBusy = Boolean(hasUnread);
-                        const isReady = !hasUnread;
+                        const isBusy = Boolean(sessionActivity?.[session.id]?.isBusy);
+                        const isReady = !isBusy;
                         return (
                       <button
                         key={session.id}
@@ -3283,7 +3281,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                     onRegisterImageUpload={() => {}}
                     onRegisterFocusTerminal={() => {}}
-                    onActivityChange={() => {}}
+                    onActivityChange={(isBusy) => onSessionBusyChange?.(selectedTerminalSession, isBusy)}
                     onConnectionChange={() => {}}
                     onCwdChange={() => {}}
                     onScrollDirection={() => {}}

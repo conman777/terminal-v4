@@ -13,7 +13,8 @@ export function MobileTerminalCarousel({
   fontSize,
   webglEnabled,
   onScrollDirection,
-  onRegisterFocusTerminal
+  onRegisterFocusTerminal,
+  onSessionBusyChange
 }) {
   // Clamp index to valid range when sessions change
   useEffect(() => {
@@ -121,6 +122,7 @@ export function MobileTerminalCarousel({
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
           onConnectionChange={handleConnectionChange}
+          onActivityChange={(isBusy) => onSessionBusyChange?.(currentSession.id, isBusy)}
         />
       </div>
 
