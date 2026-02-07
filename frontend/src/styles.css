@@ -3005,8 +3005,8 @@ button {
 }
 
 .preview-panel.compact-chrome .preview-action-btn {
-  width: 24px;
-  height: 24px;
+  width: var(--preview-header-btn-size, 28px);
+  height: var(--preview-header-btn-size, 28px);
 }
 
 .preview-panel.compact-chrome .preview-layout-chip {
@@ -3199,15 +3199,20 @@ button {
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
-  width: 34px;
-  height: 34px;
+  width: var(--preview-terminal-control-size, 34px);
+  height: var(--preview-terminal-control-size, 34px);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   color: var(--text-muted);
-  font-size: 20px;
+  font-size: calc(var(--preview-terminal-control-size, 34px) * 0.58);
   transition: all var(--transition-fast);
+}
+
+.preview-terminal-toggle svg {
+  width: calc(var(--preview-terminal-control-size, 34px) * 0.42);
+  height: calc(var(--preview-terminal-control-size, 34px) * 0.42);
 }
 
 .preview-terminal-toggle:hover {
@@ -3323,6 +3328,34 @@ button {
   position: relative;
 }
 
+.preview-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.preview-header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.preview-header.align-terminal .preview-header-right {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.preview-header.align-terminal .preview-header-right::-webkit-scrollbar {
+  display: none;
+}
+
 .preview-header::after {
   display: none;
 }
@@ -3393,6 +3426,7 @@ button {
   color: #93a0b8;
   border-radius: 6px;
   padding: 4px 8px;
+  min-height: var(--preview-header-btn-size, 28px);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -3415,17 +3449,22 @@ button {
   background: var(--preview-chrome);
   border: 1px solid var(--preview-border);
   border-radius: 6px;
-  width: 28px;
-  height: 28px;
+  width: var(--preview-header-btn-size, 28px);
+  height: var(--preview-header-btn-size, 28px);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   color: #e5e7eb;
-  font-size: 14px;
+  font-size: calc(var(--preview-header-btn-size, 28px) * 0.5);
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   box-shadow: none;
   overflow: hidden;
+}
+
+.preview-action-btn svg {
+  width: calc(var(--preview-header-btn-size, 28px) * 0.5);
+  height: calc(var(--preview-header-btn-size, 28px) * 0.5);
 }
 
 .preview-action-btn.with-label {
@@ -4226,7 +4265,8 @@ button {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
+  height: var(--preview-header-btn-size, 28px);
+  padding: 0 8px;
   background: var(--preview-chrome);
   border: 1px solid var(--preview-border);
   border-radius: 6px;

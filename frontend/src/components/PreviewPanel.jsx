@@ -64,6 +64,36 @@ function normalizePreviewUrl(value) {
   }
 }
 
+function formatElementForTerminal(element) {
+  if (!element || typeof element !== 'object') return '';
+  const selector = element.fullSelector || element.selector || '';
+  const parts = [];
+  if (selector) parts.push(`Element: ${selector}`);
+  if (element.rect) {
+    parts.push(`Size: ${element.rect.width}x${element.rect.height}px`);
+  }
+  if (element.className) {
+    parts.push(`Classes: ${element.className}`);
+  }
+
+  let openingTag = '';
+  if (typeof element.outerHTML === 'string' && element.outerHTML.length > 0) {
+    const match = element.outerHTML.match(/^<[^>]+>/);
+    openingTag = match ? match[0] : '';
+  }
+  if (!openingTag && element.tagName) {
+    openingTag = `<${element.tagName}`;
+    if (element.id) openingTag += ` id="${element.id}"`;
+    if (element.className) openingTag += ` class="${element.className}"`;
+    openingTag += '>';
+  }
+  if (openingTag) {
+    parts.push(`HTML: ${openingTag}`);
+  }
+
+  return parts.join(' | ');
+}
+
 function readPreviewStorage() {
   try {
     const raw = localStorage.getItem(PREVIEW_STORAGE_KEY);
@@ -231,7 +261,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, []);
   const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
   const [isDraggingDevTools, setIsDraggingDevTools] = useState(false);
+  const previewPanelRef = useRef(null);
   const browserSplitRef = useRef(null);
+  const previewTerminalSectionRef = useRef(null);
   const devToolsDragStartYRef = useRef(0);
   const devToolsDragStartHeightRef = useRef(0);
   const resizeRafRef = useRef(null);
@@ -239,6 +271,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileChromeTimerRef = useRef(null);
   const mobileSplitModeRef = useRef(null);
   const mobileToolsMenuRef = useRef(null);
+  const [terminalControlSize, setTerminalControlSize] = useState(() => {
+    const base = Number.isFinite(fontSize) ? fontSize : 14;
+    return Math.max(28, Math.min(42, Math.round(base * 2.2)));
+  });
+  const [terminalAlignedWidth, setTerminalAlignedWidth] = useState(null);
 
   // Mobile view mode state ('preview' | 'split' | 'terminal')
   const [mobileViewMode, setMobileViewMode] = useState(() => {
@@ -633,6 +670,33 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setIframeSrc(baseIframeSrc);
   }, [baseIframeSrc]);
 
+  const sendElementToActiveTerminal = useCallback(async (element) => {
+    const text = formatElementForTerminal(element);
+    if (!text) return;
+
+    const hasPreviewTerminal = browserSplitEnabled || mobileSplitEnabled;
+    const targetSessionId = hasPreviewTerminal
+      ? (selectedTerminalSession || activeSessions?.[0]?.id || null)
+      : null;
+
+    if (targetSessionId) {
+      try {
+        await apiFetch(`/api/terminal/${targetSessionId}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: text })
+        });
+        return;
+      } catch (error) {
+        console.error('Failed to send to terminal', error);
+      }
+    }
+
+    if (onSendToTerminal) {
+      onSendToTerminal(text);
+    }
+  }, [activeSessions, browserSplitEnabled, mobileSplitEnabled, onSendToTerminal, selectedTerminalSession]);
+
   // Listen for messages from iframe (console logs, navigation, and element selection)
   useEffect(() => {
     const handleMessage = (event) => {
@@ -659,10 +723,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           stack
         }]);
       } else if (event.data?.type === 'preview-element-selected') {
-        setSelectedElement(event.data.element);
-        setShowEditInput(true);
+        const element = event.data.element;
+        setSelectedElement(null);
+        setShowEditInput(false);
         setShowStyleEditor(false);
         setEditDescription('');
+        if (element) {
+          void sendElementToActiveTerminal(element);
+        }
       } else if (event.data?.type === 'preview-inspector-ready') {
         // Inspector is ready, sync inspect mode state
         if (inspectMode && iframeRef.current?.contentWindow) {
@@ -714,32 +782,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         allStorage[syncPort] = { local: localSnapshot, session: sessionSnapshot };
         writePreviewStorage(allStorage);
       } else if (event.data?.type === 'preview-send-to-terminal') {
-        // Send element info to terminal
-        if (onSendToTerminal && event.data.element) {
-          const el = event.data.element;
-          // Format element info for terminal - include selector and key details
-          const parts = [`Element: ${el.selector}`];
-          if (el.rect) {
-            parts.push(`Size: ${el.rect.width}x${el.rect.height}px`);
-          }
-          if (el.className) {
-            parts.push(`Classes: ${el.className}`);
-          }
-          // Get the outer HTML structure hint
-          let htmlHint = `<${el.tagName}`;
-          if (el.id) htmlHint += ` id="${el.id}"`;
-          if (el.className) htmlHint += ` class="${el.className}"`;
-          htmlHint += '>';
-          parts.push(`HTML: ${htmlHint}`);
-
-          const text = parts.join(' | ');
-          onSendToTerminal(text);
+        if (event.data.element) {
+          void sendElementToActiveTerminal(event.data.element);
         }
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [inspectMode, onSendToTerminal, onUrlChange, url, previewPort]);
+  }, [inspectMode, onUrlChange, previewPort, sendElementToActiveTerminal, url]);
 
   // Track if user scrolled away from bottom in logs
   const handleLogsScroll = useCallback(() => {
@@ -916,44 +966,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, []);
 
-  // Format element context for Claude and send
-  // Send element info to terminal for Claude to see
-  const handleSendElementToTerminal = useCallback(() => {
-    if (!selectedElement || !onSendToTerminal) return;
-
-    const el = selectedElement;
-    const parentPath = el.parentChain
-      ? el.parentChain.map(p => p.selector).reverse().join(' > ')
-      : '';
-
-    let text = `\n--- Selected Element ---\n`;
-    text += `Selector: ${el.fullSelector || el.selector}\n`;
-    text += `Tag: <${el.tagName}>\n`;
-    if (el.id) text += `ID: ${el.id}\n`;
-    if (el.className) text += `Classes: ${el.className}\n`;
-    if (parentPath) text += `Parent path: ${parentPath}\n`;
-    if (el.rect) text += `Size: ${Math.round(el.rect.width)} x ${Math.round(el.rect.height)}px\n`;
-
-    // Add React component info if available
-    if (el.react?.componentName) {
-      text += `\nReact Component: <${el.react.componentName}>\n`;
-      if (el.react.filePath) {
-        text += `Source: ${el.react.filePath}${el.react.lineNumber ? ':' + el.react.lineNumber : ''}\n`;
-      }
-    }
-
-    // Add HTML snippet (truncated)
-    if (el.outerHTML) {
-      const htmlSnippet = el.outerHTML.length > 300
-        ? el.outerHTML.substring(0, 300) + '...'
-        : el.outerHTML;
-      text += `\nHTML:\n${htmlSnippet}\n`;
-    }
-
-    text += `--- End Element ---\n`;
-    onSendToTerminal(text);
-  }, [selectedElement, onSendToTerminal]);
-
   // Send style preview to iframe
   const handleStylePreview = useCallback((styles) => {
     if (!selectedElement?.elementId || !iframeRef.current?.contentWindow) return;
@@ -975,43 +987,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   // Copy element info to terminal
   const handleCopyToTerminal = useCallback(async () => {
     if (!selectedElement) return;
-
-    const el = selectedElement;
-    const parts = [`Element: ${el.selector}`];
-    if (el.rect) {
-      parts.push(`Size: ${el.rect.width}x${el.rect.height}px`);
-    }
-    if (el.className) {
-      parts.push(`Classes: ${el.className}`);
-    }
-    // HTML hint
-    let htmlHint = `<${el.tagName}`;
-    if (el.id) htmlHint += ` id="${el.id}"`;
-    if (el.className) htmlHint += ` class="${el.className}"`;
-    htmlHint += '>';
-    parts.push(`HTML: ${htmlHint}`);
-
-    const text = parts.join(' | ');
-
-    // Send to browser split terminal if available, otherwise use parent callback
-    const targetSessionId = (browserSplitEnabled || mobileSplitEnabled) && selectedTerminalSession
-      ? selectedTerminalSession
-      : null;
-
-    if (targetSessionId) {
-      try {
-        await apiFetch(`/api/terminal/${targetSessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command: text })
-        });
-      } catch (error) {
-        console.error('Failed to send to terminal', error);
-      }
-    } else if (onSendToTerminal) {
-      onSendToTerminal(text);
-    }
-  }, [selectedElement, onSendToTerminal, browserSplitEnabled, mobileSplitEnabled, selectedTerminalSession]);
+    await sendElementToActiveTerminal(selectedElement);
+  }, [selectedElement, sendElementToActiveTerminal]);
 
   // Copy element info to clipboard
   const handleCopyElementInfo = useCallback(async () => {
@@ -2219,11 +2196,52 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     const base = Number.isFinite(fontSize) ? fontSize : 14;
     return base;
   }, [fontSize]);
+  const desktopPanelStyle = useMemo(() => ({
+    '--preview-header-btn-size': `${terminalControlSize}px`,
+    '--preview-terminal-control-size': `${terminalControlSize}px`,
+  }), [terminalControlSize]);
   const mobilePanelStyle = {
     '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
     '--mobile-footer-height': '48px',
     '--mobile-terminal-sheet-height': `${Math.round(mobileOverlayHeight)}px`
   };
+
+  useEffect(() => {
+    if (isMobile) return;
+
+    const baseSize = Math.max(28, Math.min(42, Math.round((Number.isFinite(fontSize) ? fontSize : 14) * 2.2)));
+    const panel = previewPanelRef.current;
+    const section = previewTerminalSectionRef.current;
+    if (!browserSplitEnabled || !panel || !section || typeof ResizeObserver === 'undefined') {
+      setTerminalControlSize((prev) => (prev === baseSize ? prev : baseSize));
+      setTerminalAlignedWidth(null);
+      return;
+    }
+
+    const minWidth = 300;
+    const maxWidth = 760;
+    const headerRightPadding = compactChrome ? 6 : 8;
+    const update = () => {
+      const sectionRect = section.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const width = sectionRect.width;
+      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, width));
+      const widthScale = 0.9 + ((clampedWidth - minWidth) / (maxWidth - minWidth)) * 0.2;
+      const nextSize = Math.max(26, Math.min(44, Math.round(baseSize * widthScale)));
+      setTerminalControlSize((prev) => (prev === nextSize ? prev : nextSize));
+      const rightZoneWidth = terminalPosition === 'right'
+        ? (panelRect.right - headerRightPadding) - sectionRect.left
+        : (panelRect.right - headerRightPadding) - sectionRect.right;
+      const nextWidth = Math.max(0, Math.round(rightZoneWidth));
+      setTerminalAlignedWidth((prev) => (prev === nextWidth ? prev : nextWidth));
+    };
+
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(panel);
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, [browserSplitEnabled, compactChrome, fontSize, isMobile, terminalPosition]);
 
   // Mobile layout
   if (isMobile) {
@@ -3005,7 +3023,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Desktop layout
   return (
-    <div className={`preview-panel${compactChrome ? ' compact-chrome' : ''}`}>
+    <div ref={previewPanelRef} className={`preview-panel${compactChrome ? ' compact-chrome' : ''}`} style={desktopPanelStyle}>
       <PreviewUrlBar
         inputUrl={inputUrl}
         onInputUrlChange={setInputUrl}
@@ -3047,6 +3065,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         onClearCookies={handleClearCookies}
         mainTerminalMinimized={mainTerminalMinimized}
         onToggleMainTerminal={onToggleMainTerminal}
+        alignTerminalControls={browserSplitEnabled}
+        terminalAlignedWidth={terminalAlignedWidth}
         onClose={onClose}
       />
 
@@ -3180,7 +3200,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               className="split-handle"
               onMouseDown={handleBrowserSplitMouseDown}
             />
-            <div className="preview-terminal-section">
+            <div className="preview-terminal-section" ref={previewTerminalSectionRef}>
               <div className="preview-terminal-header">
                 {activeSessions && activeSessions.length > 0 ? (
                   <div className="preview-session-switcher">

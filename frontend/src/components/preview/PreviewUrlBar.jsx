@@ -101,6 +101,8 @@ export function PreviewUrlBar({
   onClearCookies,
   mainTerminalMinimized,
   onToggleMainTerminal,
+  alignTerminalControls,
+  terminalAlignedWidth,
   onClose,
 }) {
   const [portSearch, setPortSearch] = useState('');
@@ -147,10 +149,16 @@ export function PreviewUrlBar({
       });
   }, [selectablePorts, portSearch, previewPort]);
 
+  const rightControlsStyle =
+    alignTerminalControls && Number.isFinite(terminalAlignedWidth) && terminalAlignedWidth > 0
+      ? { width: `${terminalAlignedWidth}px` }
+      : undefined;
+
   return (
-    <div className="preview-header">
-      {/* Port selector */}
-      <div className="preview-port-selector" ref={portDropdownRef}>
+    <div className={`preview-header${alignTerminalControls ? ' align-terminal' : ''}`}>
+      <div className="preview-header-left">
+        {/* Port selector */}
+        <div className="preview-port-selector" ref={portDropdownRef}>
         <button
           type="button"
           className={`preview-port-btn ${showPortDropdown ? 'active' : ''}`}
@@ -235,22 +243,24 @@ export function PreviewUrlBar({
             )}
           </div>
         )}
+        </div>
+
+        {/* URL bar */}
+        <form className="preview-url-form" onSubmit={onUrlSubmit}>
+          <input
+            type="text"
+            className="preview-url-input"
+            value={inputUrl}
+            onChange={(e) => onInputUrlChange(e.target.value)}
+            placeholder="localhost:3000"
+            aria-label="Preview URL"
+          />
+        </form>
       </div>
 
-      {/* URL bar */}
-      <form className="preview-url-form" onSubmit={onUrlSubmit}>
-        <input
-          type="text"
-          className="preview-url-input"
-          value={inputUrl}
-          onChange={(e) => onInputUrlChange(e.target.value)}
-          placeholder="localhost:3000"
-          aria-label="Preview URL"
-        />
-      </form>
-
-      {/* Navigation buttons */}
-      <div className="preview-nav-group">
+      <div className="preview-header-right" style={rightControlsStyle}>
+        {/* Navigation buttons */}
+        <div className="preview-nav-group">
         <Tooltip text="Go back">
           <button
             type="button"
@@ -298,10 +308,26 @@ export function PreviewUrlBar({
             </svg>
           </button>
         </Tooltip>
-      </div>
+        <Tooltip text={inspectMode ? 'Exit Inspect Element' : 'Inspect Element'} shortcut={'\u2318/\u2303I'}>
+          <button
+            type="button"
+            className={`preview-action-btn ${inspectMode ? 'active' : ''}`}
+            onClick={onToggleInspect}
+            disabled={!iframeSrc}
+            aria-label={inspectMode ? 'Exit inspect element' : 'Inspect element'}
+            title={inspectMode ? 'Exit inspect element' : 'Inspect element'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 4l6 6" />
+              <path d="M17 2l5 5-8 8-5-5z" />
+              <path d="M2 22l6-2 10-10-4-4L4 16z" />
+            </svg>
+          </button>
+        </Tooltip>
+        </div>
 
-      {/* Layout presets */}
-      <div className="preview-layout-presets" aria-label="Preview layout presets">
+        {/* Layout presets */}
+        <div className="preview-layout-presets" aria-label="Preview layout presets">
         <button
           type="button"
           className={`preview-layout-chip ${desktopLayoutMode === 'preview' ? 'active' : ''}`}
@@ -327,10 +353,10 @@ export function PreviewUrlBar({
           Debug
           {logCount > 0 && <span className="preview-log-badge-sm">{logCount}</span>}
         </button>
-      </div>
+        </div>
 
-      {/* Tools overflow menu */}
-      <div className="preview-tools-menu-wrap" ref={toolsMenuRef}>
+        {/* Tools overflow menu */}
+        <div className="preview-tools-menu-wrap" ref={toolsMenuRef}>
         <button
           type="button"
           className={`preview-action-btn ${showToolsMenu ? 'active' : ''}`}
@@ -407,18 +433,19 @@ export function PreviewUrlBar({
             )}
           </div>
         )}
-      </div>
+        </div>
 
-      {/* Close */}
-      <button
-        type="button"
-        className="preview-action-btn preview-close-btn"
-        onClick={onClose}
-        title="Close browser"
-        aria-label="Close browser"
-      >
-        {'\u00D7'}
-      </button>
+        {/* Close */}
+        <button
+          type="button"
+          className="preview-action-btn preview-close-btn"
+          onClick={onClose}
+          title="Close browser"
+          aria-label="Close browser"
+        >
+          {'\u00D7'}
+        </button>
+      </div>
     </div>
   );
 }
