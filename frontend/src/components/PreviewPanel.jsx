@@ -2378,7 +2378,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <span className="session-name">
                       {session.title || `Session ${session.id.slice(0, 8)}`}
                     </span>
-                    {isCompleted && <span className="session-complete-check" aria-label="Completed" title="Completed">✓</span>}
                   </button>
                     );
                   })()
@@ -3229,7 +3228,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                           {session.title || `Session ${session.id.slice(0, 8)}`}
                         </span>
                         {hasUnread && <span className="session-unread-dot" />}
-                        {isCompleted && <span className="session-complete-check" aria-label="Completed" title="Completed">✓</span>}
                       </button>
                         );
                       })()

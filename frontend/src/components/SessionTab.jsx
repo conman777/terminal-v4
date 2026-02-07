@@ -149,9 +149,6 @@ export const SessionTab = memo(function SessionTab({
       ) : (
         <span className="tab-title-modern">{session.title}</span>
       )}
-      {isCompleted && !hasUnread && !isRenaming && (
-        <span className="tab-complete-check" aria-label="Completed" title="Completed">✓</span>
-      )}
 
       <button
         type="button"
@@ -218,23 +215,6 @@ export const SessionTab = memo(function SessionTab({
           background: var(--accent-primary, #f59e0b);
           flex-shrink: 0;
           box-shadow: var(--shadow-glow);
-        }
-
-        .tab-complete-check {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 16px;
-          height: 16px;
-          padding: 0 4px;
-          margin-left: -2px;
-          border-radius: 999px;
-          font-size: 10px;
-          font-weight: 700;
-          background: rgba(34, 197, 94, 0.2);
-          color: #86efac;
-          border: 1px solid rgba(34, 197, 94, 0.4);
-          flex-shrink: 0;
         }
 
         .tab-title-modern {
