@@ -880,7 +880,7 @@ button {
   flex-direction: row;
   overflow: hidden;
   min-height: 0;
-  background: #0b0b0d;
+  background: var(--bg-primary, #0b0b0d);
   background-image: none !important;
 }
 
@@ -893,7 +893,7 @@ button {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #0b0b0d;
+  background: var(--bg-primary, #0b0b0d);
   background-image: none !important;
   overflow: hidden;
   min-height: 0;
@@ -908,7 +908,7 @@ button {
   flex-direction: column;
   padding: 0;
   overflow: hidden;
-  background: #0b0b0d;
+  background: var(--bg-primary, #0b0b0d);
   background-image: none !important;
 }
 
@@ -922,7 +922,7 @@ button {
   height: 100%;
   overflow: hidden;
   position: relative;
-  background: #0b0b0d;
+  background: var(--bg-primary, #0b0b0d);
   background-image: none !important;
 }
 
@@ -3218,12 +3218,12 @@ button {
 }
 
 .preview-session-switcher::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+  background: var(--border-default, #3f3f46);
   border-radius: 3px;
 }
 
 .preview-session-switcher::-webkit-scrollbar-thumb:hover {
-  background: #52525b;
+  background: var(--border-hover, #52525b);
 }
 
 .preview-session-btn {
@@ -3232,10 +3232,10 @@ button {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #1f1f1f;
-  border: 1px solid #2a2a2a;
+  background: var(--bg-surface, #1f1f1f);
+  border: 1px solid var(--border-subtle, #2a2a2a);
   border-radius: 6px;
-  color: #d1d5db;
+  color: var(--text-secondary, #d1d5db);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -3250,9 +3250,9 @@ button {
 }
 
 .preview-session-btn:hover {
-  background: #27272a;
-  border-color: #3f3f46;
-  color: #f8fafc;
+  background: var(--bg-elevated, #27272a);
+  border-color: var(--border-default, #3f3f46);
+  color: var(--text-primary, #f8fafc);
   transform: none;
   box-shadow: none;
 }
@@ -7056,14 +7056,14 @@ button {
   position: fixed;
   bottom: auto;
   left: auto;
-  background: rgba(31, 31, 31, 0.98);
+  background: var(--bg-elevated, rgba(31, 31, 31, 0.98));
   backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.2));
   border-radius: var(--radius-md);
   padding: 6px 10px;
   font-size: 12px;
   white-space: nowrap;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-lg, 0 10px 24px rgba(0, 0, 0, 0.6));
   z-index: 99999;
   pointer-events: none;
   animation: tooltipFadeIn 0.15s ease-out;
@@ -7076,20 +7076,20 @@ button {
   left: 50%;
   transform: translateX(-50%);
   border: 6px solid transparent;
-  border-top-color: rgba(255, 255, 255, 0.2);
+  border-top-color: var(--border-default, rgba(255, 255, 255, 0.2));
 }
 
 .tooltip-text {
-  color: #f8fafc;
+  color: var(--text-primary, #f8fafc);
   font-weight: 500;
 }
 
 .tooltip-shortcut {
   margin-left: 8px;
   padding: 2px 6px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-surface, rgba(255, 255, 255, 0.1));
   border-radius: var(--radius-sm);
-  color: #9ca3af;
+  color: var(--text-muted, #9ca3af);
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
 }
@@ -10626,10 +10626,10 @@ textarea:focus-visible {
     z-index: 10000 !important;
     transform: none !important;
     box-shadow: -4px 0 20px rgba(0, 0, 0, 0.5);
-    background: #1f1f23 !important;
+    background: var(--bg-surface, #1f1f23) !important;
     display: flex !important;
     flex-direction: column !important;
-    border-left: 1px solid #333;
+    border-left: 1px solid var(--border-default, #333);
   }
 
   .file-manager-overlay {
@@ -10641,51 +10641,51 @@ textarea:focus-visible {
     width: 100vw !important;
     height: 100vh !important;
     height: 100dvh !important;
-    background: rgba(0, 0, 0, 0.6) !important;
+    background: var(--bg-overlay, rgba(0, 0, 0, 0.6)) !important;
     z-index: 9999 !important;
   }
 
   .file-manager-header {
     padding: 16px;
-    background: #1f1f23 !important;
-    border-bottom: 1px solid #333;
+    background: var(--bg-surface, #1f1f23) !important;
+    border-bottom: 1px solid var(--border-default, #333);
   }
 
   .file-manager-header h3 {
-    color: #fff !important;
+    color: var(--text-primary, #fff) !important;
   }
 
   .file-manager-breadcrumbs {
-    background: #1f1f23 !important;
-    color: #fff !important;
+    background: var(--bg-surface, #1f1f23) !important;
+    color: var(--text-primary, #fff) !important;
   }
 
   .file-manager-toolbar {
-    background: #1f1f23 !important;
+    background: var(--bg-surface, #1f1f23) !important;
   }
 
   .file-manager-toolbar button {
-    color: #fff !important;
+    color: var(--text-primary, #fff) !important;
   }
 
   .file-manager-list {
-    background: #18181b !important;
+    background: var(--bg-primary, #18181b) !important;
     flex: 1;
     overflow-y: auto;
   }
 
   .file-manager-loading,
   .file-manager-empty {
-    color: #888 !important;
+    color: var(--text-muted, #888) !important;
   }
 
   .file-item {
     min-height: 44px;
-    color: #fff !important;
+    color: var(--text-primary, #fff) !important;
   }
 
   .file-name {
-    color: #fff !important;
+    color: var(--text-primary, #fff) !important;
   }
 
   .file-actions {
@@ -10693,7 +10693,7 @@ textarea:focus-visible {
   }
 
   .file-manager-close {
-    color: #fff !important;
+    color: var(--text-primary, #fff) !important;
     font-size: 24px;
   }
 }

@@ -192,7 +192,7 @@ export const SessionTab = memo(function SessionTab({
         .session-tab-item.active {
           background: rgba(245, 158, 11, 0.22);
           border-color: rgba(245, 158, 11, 0.7);
-          color: #fafafa;
+          color: var(--text-primary, #fafafa);
           box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25);
           z-index: 5;
           font-weight: 600;
