@@ -916,6 +916,7 @@ function AppContent() {
                           onSendToClaudeCode={handleSendToClaudeCode}
                           activeSessions={activeSessions}
                           activeSessionId={activeSessionId}
+                          sessionActivity={sessionActivity}
                           fontSize={terminalFontSize}
                           webglEnabled={terminalWebglEnabled}
                           onUrlDetected={handlePreviewUrlChange}

@@ -7,6 +7,7 @@ export const SessionTab = memo(function SessionTab({
   session,
   isActive,
   hasUnread,
+  isCompleted,
   onSelect,
   onClose,
   onRename,
@@ -107,6 +108,7 @@ export const SessionTab = memo(function SessionTab({
   const tabClasses = [
     'session-tab-item',
     isActive && 'active',
+    isCompleted && 'completed',
     hasUnread && 'unread',
     isDragging && 'dragging',
     isDragOver && 'drag-over'
@@ -146,6 +148,9 @@ export const SessionTab = memo(function SessionTab({
         />
       ) : (
         <span className="tab-title-modern">{session.title}</span>
+      )}
+      {isCompleted && !hasUnread && !isRenaming && (
+        <span className="tab-complete-check" aria-label="Completed" title="Completed">✓</span>
       )}
 
       <button
@@ -188,11 +193,18 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item.active {
-          background: var(--accent-primary-dim);
-          border-color: var(--accent-primary, #f59e0b);
-          color: var(--accent-primary, #f59e0b);
-          box-shadow: var(--shadow-glow);
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(59, 130, 246, 0.7);
+          color: #dbeafe;
+          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.3), 0 0 12px rgba(59, 130, 246, 0.25);
           z-index: 5;
+          font-weight: 600;
+        }
+
+        .session-tab-item.completed:not(.active) {
+          background: rgba(34, 197, 94, 0.12);
+          border-color: rgba(34, 197, 94, 0.45);
+          color: #bbf7d0;
         }
 
         .session-tab-item.unread:not(.active) {
@@ -206,6 +218,23 @@ export const SessionTab = memo(function SessionTab({
           background: var(--accent-primary, #f59e0b);
           flex-shrink: 0;
           box-shadow: var(--shadow-glow);
+        }
+
+        .tab-complete-check {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 16px;
+          height: 16px;
+          padding: 0 4px;
+          margin-left: -2px;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 700;
+          background: rgba(34, 197, 94, 0.2);
+          color: #86efac;
+          border: 1px solid rgba(34, 197, 94, 0.4);
+          flex-shrink: 0;
         }
 
         .tab-title-modern {

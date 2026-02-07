@@ -130,7 +130,7 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
     if (typeof window === 'undefined') return 3020;
@@ -2363,9 +2363,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             <div className="preview-mobile-terminal-header">
               <div className="preview-mobile-terminal-sessions">
                 {activeSessions.map(session => (
+                  (() => {
+                    const isActive = selectedTerminalSession === session.id;
+                    const hasUnread = sessionActivity?.[session.id]?.hasUnread;
+                    const isCompleted = !isActive && !hasUnread;
+                    return (
                   <button
                     key={session.id}
-                    className={`preview-mobile-session-chip ${selectedTerminalSession === session.id ? 'active' : ''}`}
+                    className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isCompleted ? ' completed' : ''}`}
                     onClick={() => setSelectedTerminalSession(session.id)}
                     type="button"
                   >
@@ -2373,7 +2378,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     <span className="session-name">
                       {session.title || `Session ${session.id.slice(0, 8)}`}
                     </span>
+                    {isCompleted && <span className="session-complete-check" aria-label="Completed" title="Completed">✓</span>}
                   </button>
+                    );
+                  })()
                 ))}
               </div>
               <button
@@ -3205,9 +3213,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {activeSessions && activeSessions.length > 0 ? (
                   <div className="preview-session-switcher">
                     {activeSessions.map(session => (
+                      (() => {
+                        const isActive = selectedTerminalSession === session.id;
+                        const hasUnread = sessionActivity?.[session.id]?.hasUnread;
+                        const isCompleted = !isActive && !hasUnread;
+                        return (
                       <button
                         key={session.id}
-                        className={`preview-session-btn ${selectedTerminalSession === session.id ? 'active' : ''}`}
+                        className={`preview-session-btn ${isActive ? 'active' : ''}${isCompleted ? ' completed' : ''}`}
                         onClick={() => setSelectedTerminalSession(session.id)}
                         title={session.title || `Session ${session.id.slice(0, 8)}`}
                       >
@@ -3215,8 +3228,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                         <span className="session-name">
                           {session.title || `Session ${session.id.slice(0, 8)}`}
                         </span>
-                        {session.hasUnread && <span className="session-unread-dot" />}
+                        {hasUnread && <span className="session-unread-dot" />}
+                        {isCompleted && <span className="session-complete-check" aria-label="Completed" title="Completed">✓</span>}
                       </button>
+                        );
+                      })()
                     ))}
                   </div>
                 ) : (
