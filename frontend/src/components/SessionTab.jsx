@@ -6,8 +6,8 @@ import { useCallback, useState, useRef, useEffect, memo } from 'react';
 export const SessionTab = memo(function SessionTab({
   session,
   isActive,
-  hasUnread,
-  isCompleted,
+  isBusy,
+  isReady,
   onSelect,
   onClose,
   onRename,
@@ -108,8 +108,8 @@ export const SessionTab = memo(function SessionTab({
   const tabClasses = [
     'session-tab-item',
     isActive && 'active',
-    isCompleted && 'completed',
-    hasUnread && 'unread',
+    isBusy && 'busy',
+    isReady && 'ready',
     isDragging && 'dragging',
     isDragOver && 'drag-over'
   ].filter(Boolean).join(' ');
@@ -133,7 +133,7 @@ export const SessionTab = memo(function SessionTab({
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
     >
-      {hasUnread && <span className="tab-unread-dot-modern" />}
+      <span className={`tab-status-dot-modern ${isBusy ? 'busy' : 'ready'}`} />
 
       {isRenaming ? (
         <input
@@ -198,23 +198,26 @@ export const SessionTab = memo(function SessionTab({
           font-weight: 600;
         }
 
-        .session-tab-item.completed:not(.active) {
-          background: rgba(34, 197, 94, 0.12);
-          border-color: rgba(34, 197, 94, 0.45);
-          color: #bbf7d0;
-        }
-
-        .session-tab-item.unread:not(.active) {
+        .session-tab-item.busy:not(.active) {
+          border-color: rgba(59, 130, 246, 0.4);
           color: var(--text-primary, #fafafa);
         }
 
-        .tab-unread-dot-modern {
+        .tab-status-dot-modern {
           width: 6px;
           height: 6px;
           border-radius: 50%;
-          background: var(--accent-primary, #f59e0b);
           flex-shrink: 0;
-          box-shadow: var(--shadow-glow);
+        }
+
+        .tab-status-dot-modern.busy {
+          background: #60a5fa;
+          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 8px rgba(59, 130, 246, 0.35);
+        }
+
+        .tab-status-dot-modern.ready {
+          background: #4ade80;
+          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 8px rgba(34, 197, 94, 0.3);
         }
 
         .tab-title-modern {

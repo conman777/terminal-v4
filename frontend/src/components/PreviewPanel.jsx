@@ -2366,15 +2366,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   (() => {
                     const isActive = selectedTerminalSession === session.id;
                     const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                    const isCompleted = !isActive && !hasUnread;
+                    const isBusy = Boolean(hasUnread);
+                    const isReady = !hasUnread;
                     return (
                   <button
                     key={session.id}
-                    className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isCompleted ? ' completed' : ''}`}
+                    className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}${isReady ? ' ready' : ''}`}
                     onClick={() => setSelectedTerminalSession(session.id)}
                     type="button"
                   >
-                    <span className="session-indicator" />
+                    <span className={`session-indicator ${isBusy ? 'busy' : 'ready'}`} />
                     <span className="session-name">
                       {session.title || `Session ${session.id.slice(0, 8)}`}
                     </span>
@@ -3215,19 +3216,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                       (() => {
                         const isActive = selectedTerminalSession === session.id;
                         const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                        const isCompleted = !isActive && !hasUnread;
+                        const isBusy = Boolean(hasUnread);
+                        const isReady = !hasUnread;
                         return (
                       <button
                         key={session.id}
-                        className={`preview-session-btn ${isActive ? 'active' : ''}${isCompleted ? ' completed' : ''}`}
+                        className={`preview-session-btn ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}${isReady ? ' ready' : ''}`}
                         onClick={() => setSelectedTerminalSession(session.id)}
                         title={session.title || `Session ${session.id.slice(0, 8)}`}
                       >
-                        <span className="session-indicator" />
+                        <span className={`session-indicator ${isBusy ? 'busy' : 'ready'}`} />
                         <span className="session-name">
                           {session.title || `Session ${session.id.slice(0, 8)}`}
                         </span>
-                        {hasUnread && <span className="session-unread-dot" />}
                       </button>
                         );
                       })()
