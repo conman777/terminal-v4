@@ -5,7 +5,6 @@ import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileKeybar } from './components/MobileKeybar';
 import { SessionTabBar } from './components/SessionTabBar';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
-const ClaudeCodePanel = lazy(() => import('./components/ClaudeCodePanel'));
 import { Header } from './components/Header';
 import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
@@ -28,15 +27,104 @@ import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 
-const PreviewPanel = lazy(() => import('./components/PreviewPanel').then((module) => ({ default: module.PreviewPanel })));
-const FileManager = lazy(() => import('./components/FileManager').then((module) => ({ default: module.FileManager })));
-const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
-const BookmarkModal = lazy(() => import('./components/BookmarkModal').then((module) => ({ default: module.BookmarkModal })));
-const NotesModal = lazy(() => import('./components/NotesModal').then((module) => ({ default: module.NotesModal })));
-const ApiSettingsModal = lazy(() => import('./components/ApiSettingsModal'));
-const BrowserSettingsModal = lazy(() => import('./components/BrowserSettingsModal').then((module) => ({ default: module.BrowserSettingsModal })));
-const ProcessManagerModal = lazy(() => import('./components/ProcessManagerModal').then((module) => ({ default: module.ProcessManagerModal })));
-const SystemResourcesView = lazy(() => import('./components/SystemResourcesView').then((module) => ({ default: module.SystemResourcesView })));
+function isDynamicImportFetchError(error) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return (
+    message.includes('Failed to fetch dynamically imported module') ||
+    message.includes('Importing a module script failed') ||
+    message.includes('ChunkLoadError') ||
+    /Loading chunk [\w-]+ failed/i.test(message)
+  );
+}
+
+function triggerOneTimeChunkRecovery(chunkName) {
+  if (typeof window === 'undefined') return false;
+  try {
+    const key = `chunk-reload:${chunkName}`;
+    const lastAttemptRaw = sessionStorage.getItem(key);
+    const lastAttempt = lastAttemptRaw ? Number.parseInt(lastAttemptRaw, 10) : 0;
+    const now = Date.now();
+    if (Number.isFinite(lastAttempt) && now - lastAttempt < 30000) {
+      return false;
+    }
+    sessionStorage.setItem(key, String(now));
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.set('__chunk_reload', String(now));
+    window.location.replace(nextUrl.toString());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function lazyWithChunkRecovery(importer, chunkName, pickDefault = (module) => module.default ?? module) {
+  return lazy(async () => {
+    try {
+      const module = await importer();
+      try {
+        sessionStorage.removeItem(`chunk-reload:${chunkName}`);
+      } catch {
+        // Ignore sessionStorage failures
+      }
+      return { default: pickDefault(module) };
+    } catch (error) {
+      if (isDynamicImportFetchError(error) && triggerOneTimeChunkRecovery(chunkName)) {
+        // Keep suspense fallback while navigation happens.
+        return new Promise(() => {});
+      }
+      throw error;
+    }
+  });
+}
+
+const ClaudeCodePanel = lazyWithChunkRecovery(
+  () => import('./components/ClaudeCodePanel'),
+  'ClaudeCodePanel'
+);
+const PreviewPanel = lazyWithChunkRecovery(
+  () => import('./components/PreviewPanel'),
+  'PreviewPanel',
+  (module) => module.PreviewPanel
+);
+const FileManager = lazyWithChunkRecovery(
+  () => import('./components/FileManager'),
+  'FileManager',
+  (module) => module.FileManager
+);
+const SettingsModal = lazyWithChunkRecovery(
+  () => import('./components/SettingsModal'),
+  'SettingsModal',
+  (module) => module.SettingsModal
+);
+const BookmarkModal = lazyWithChunkRecovery(
+  () => import('./components/BookmarkModal'),
+  'BookmarkModal',
+  (module) => module.BookmarkModal
+);
+const NotesModal = lazyWithChunkRecovery(
+  () => import('./components/NotesModal'),
+  'NotesModal',
+  (module) => module.NotesModal
+);
+const ApiSettingsModal = lazyWithChunkRecovery(
+  () => import('./components/ApiSettingsModal'),
+  'ApiSettingsModal'
+);
+const BrowserSettingsModal = lazyWithChunkRecovery(
+  () => import('./components/BrowserSettingsModal'),
+  'BrowserSettingsModal',
+  (module) => module.BrowserSettingsModal
+);
+const ProcessManagerModal = lazyWithChunkRecovery(
+  () => import('./components/ProcessManagerModal'),
+  'ProcessManagerModal',
+  (module) => module.ProcessManagerModal
+);
+const SystemResourcesView = lazyWithChunkRecovery(
+  () => import('./components/SystemResourcesView'),
+  'SystemResourcesView',
+  (module) => module.SystemResourcesView
+);
 
 function AppContent() {
   const { logout, user } = useAuth();
@@ -210,10 +298,14 @@ function AppContent() {
   // Session activity tracking for unread indicators
   const {
     activity: sessionActivity,
-    markActivity,
     setFocusedSession,
+    setBusy: setSessionBusy,
     removeSession: removeSessionActivity
   } = useSessionActivity();
+
+  const handleSessionBusyChange = useCallback((sessionId, isBusy) => {
+    setSessionBusy(sessionId, isBusy);
+  }, [setSessionBusy]);
 
   // Reset header collapse when switching mobile views
   useEffect(() => {
@@ -865,6 +957,7 @@ function AppContent() {
                           fontSize={terminalFontSize}
                           webglEnabled={terminalWebglEnabled}
                           sessionActivity={sessionActivity}
+                          onSessionBusyChange={handleSessionBusyChange}
                           projectInfo={projectInfo}
                         />
                       </ErrorBoundary>
@@ -917,6 +1010,7 @@ function AppContent() {
                           activeSessions={activeSessions}
                           activeSessionId={activeSessionId}
                           sessionActivity={sessionActivity}
+                          onSessionBusyChange={handleSessionBusyChange}
                           fontSize={terminalFontSize}
                           webglEnabled={terminalWebglEnabled}
                           onUrlDetected={handlePreviewUrlChange}
@@ -966,6 +1060,7 @@ function AppContent() {
                   webglEnabled={terminalWebglEnabled}
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                  onSessionBusyChange={handleSessionBusyChange}
                 />
               </div>
             )}
@@ -1002,6 +1097,8 @@ function AppContent() {
                   onSendToClaudeCode={handleSendToClaudeCode}
                   activeSessions={activeSessions}
                   activeSessionId={activeSessionId}
+                  sessionActivity={sessionActivity}
+                  onSessionBusyChange={handleSessionBusyChange}
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
                   onUrlDetected={handlePreviewUrlChange}
