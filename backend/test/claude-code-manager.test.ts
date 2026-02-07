@@ -66,7 +66,7 @@ describe('ClaudeCodeManager', () => {
     });
 
     const manager = new ClaudeCodeManager();
-    const session = manager.createSession(TEST_USER_ID, process.cwd());
+    const session = await manager.createSession(TEST_USER_ID, process.cwd());
     await manager.sendInput(TEST_USER_ID, session.id, 'test');
 
     const updated = manager.getSession(TEST_USER_ID, session.id);
@@ -86,7 +86,7 @@ describe('ClaudeCodeManager', () => {
     });
 
     const manager = new ClaudeCodeManager();
-    const session = manager.createSession(TEST_USER_ID, process.cwd());
+    const session = await manager.createSession(TEST_USER_ID, process.cwd());
 
     await expect(manager.sendInput(TEST_USER_ID, session.id, 'test')).rejects.toThrow('spawn failed');
 

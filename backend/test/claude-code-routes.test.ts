@@ -3,11 +3,23 @@ import supertest from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import { registerClaudeCodeRoutes } from '../src/claude-code/claude-code-routes';
 
+const TEST_USER_ID = 'test-user-123';
+const TEST_USERNAME = 'test-user';
+
+function createAuthedApp() {
+  const app = Fastify({ logger: false });
+  app.addHook('onRequest', async (request) => {
+    request.userId = TEST_USER_ID;
+    request.username = TEST_USERNAME;
+  });
+  return app;
+}
+
 describe('Claude Code routes', () => {
   it('creates a new Claude Code session', async () => {
-    const app = Fastify({ logger: false });
+    const app = createAuthedApp();
 
-    const createSession = vi.fn((cwd: string) => ({
+    const createSession = vi.fn((_userId: string, cwd: string) => ({
       id: 'cc-1',
       cwd,
       createdAt: Date.now(),
@@ -17,6 +29,7 @@ describe('Claude Code routes', () => {
     }));
 
     const manager = {
+      loadUserSessions: vi.fn(async () => {}),
       getAllSessions: vi.fn(() => []),
       createSession,
       getSession: vi.fn(() => null),
@@ -37,7 +50,7 @@ describe('Claude Code routes', () => {
         .send({})
         .expect(200);
 
-      expect(createSession).toHaveBeenCalledWith(process.cwd());
+      expect(createSession).toHaveBeenCalledWith(TEST_USER_ID, process.cwd(), 'sonnet');
       expect(res.body).toMatchObject({ id: 'cc-1', cwd: process.cwd() });
     } finally {
       await app.close();
@@ -45,10 +58,11 @@ describe('Claude Code routes', () => {
   });
 
   it('validates input payload and forwards to manager', async () => {
-    const app = Fastify({ logger: false });
+    const app = createAuthedApp();
 
     const sendInput = vi.fn(async () => {});
     const manager = {
+      loadUserSessions: vi.fn(async () => {}),
       getAllSessions: vi.fn(() => []),
       createSession: vi.fn(),
       getSession: vi.fn(() => ({ id: 'cc-1', cwd: process.cwd(), createdAt: 0, updatedAt: 0, events: [], isActive: false })),
@@ -75,16 +89,16 @@ describe('Claude Code routes', () => {
         .expect(200);
 
       expect(ok.body).toEqual({ success: true });
-      expect(sendInput).toHaveBeenCalledWith('cc-1', 'hi');
+      expect(sendInput).toHaveBeenCalledWith(TEST_USER_ID, 'cc-1', 'hi');
     } finally {
       await app.close();
     }
   });
 
   it('lists sessions and updates cwd', async () => {
-    const app = Fastify({ logger: false });
+    const app = createAuthedApp();
 
-    const updateCwd = vi.fn((_id: string, cwd: string) => ({
+    const updateCwd = vi.fn((_userId: string, _id: string, cwd: string) => ({
       id: 'cc-1',
       cwd,
       createdAt: 0,
@@ -94,6 +108,7 @@ describe('Claude Code routes', () => {
     }));
 
     const manager = {
+      loadUserSessions: vi.fn(async () => {}),
       getAllSessions: vi.fn(() => [{ id: 'cc-1', cwd: 'C:\\tmp', createdAt: 0, updatedAt: 0, events: [], isActive: false }]),
       createSession: vi.fn(),
       getSession: vi.fn(() => null),
@@ -126,12 +141,10 @@ describe('Claude Code routes', () => {
         .send({ cwd: 'C:\\new' })
         .expect(200);
 
-      expect(updateCwd).toHaveBeenCalledWith('cc-1', 'C:\\new');
+      expect(updateCwd).toHaveBeenCalledWith(TEST_USER_ID, 'cc-1', 'C:\\new');
       expect(patched.body).toMatchObject({ id: 'cc-1', cwd: 'C:\\new' });
     } finally {
       await app.close();
     }
   });
 });
-
-

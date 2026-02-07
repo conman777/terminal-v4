@@ -21,7 +21,7 @@ See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 
 ## Requirements
 
-- Node.js 22 recommended (Node.js 18+ supported by package constraints)
+- Node.js 22+ (for node-pty compatibility)
 - Windows (PowerShell/cmd), macOS, or Linux
 
 ## Quick Start
@@ -172,7 +172,7 @@ npm run test:watch   # Watch mode
 - Clear Vite cache: `rm -rf frontend/node_modules/.vite`
 
 ### Node.js version issues
-- Node.js 22 is recommended for best compatibility
+- Requires Node.js 22+ for node-pty compatibility
 - Use `nvm` to switch Node versions if needed
 
 ## Contributing

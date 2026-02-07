@@ -36,7 +36,7 @@ describe('TerminalManager', () => {
     try {
       const fakeProcess = new FakeTerminalProcess();
       const spawnMock = vi.fn((_options: TerminalSpawnOptions) => fakeProcess);
-      const manager = new TerminalManager({ spawnTerminal: spawnMock });
+      const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
       const snapshot = manager.createSession(TEST_USER_ID, { title: 'Demo Terminal', cols: 80, rows: 24 });
       expect(snapshot.title).toBe('Demo Terminal');
@@ -62,7 +62,7 @@ describe('TerminalManager', () => {
     vi.useFakeTimers();
     try {
       const fakeProcess = new FakeTerminalProcess();
-      const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess) });
+      const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess), useTmux: false });
       const snapshot = manager.createSession(TEST_USER_ID);
       const subscriber = vi.fn();
 
@@ -83,7 +83,7 @@ describe('TerminalManager', () => {
   it('writes input with newline normalisation and supports resize/close', () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     const snapshot = manager.createSession(TEST_USER_ID);
     manager.write(TEST_USER_ID, snapshot.id, 'ls\n');
@@ -104,7 +104,7 @@ describe('TerminalManager', () => {
       expect(options.cwd).toBe(process.env.HOME || process.cwd());
       return fakeProcess;
     });
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     manager.createSession(TEST_USER_ID, { cwd: '/this/path/should/not/exist' });
     expect(spawnMock).toHaveBeenCalled();
@@ -113,7 +113,7 @@ describe('TerminalManager', () => {
   it('updates stored cwd when receiving a full cd command payload (UI-driven navigation)', async () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     const snapshot = manager.createSession(TEST_USER_ID, { cwd: process.cwd() });
     const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-cwd-'));
@@ -131,7 +131,7 @@ describe('TerminalManager', () => {
   it('updates stored cwd when cd input arrives in incremental chunks', async () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     const snapshot = manager.createSession(TEST_USER_ID, { cwd: process.cwd() });
     const tmpDir = await fs.mkdtemp(path.join(process.cwd(), 'tmp-cwd-'));
@@ -154,7 +154,7 @@ describe('TerminalManager', () => {
     try {
       const fakeProcess = new FakeTerminalProcess();
       const spawnMock = vi.fn(() => fakeProcess);
-      const manager = new TerminalManager({ spawnTerminal: spawnMock });
+      const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
       const snapshot = manager.createSession(TEST_USER_ID);
 
@@ -178,7 +178,7 @@ describe('TerminalManager', () => {
   it('renames an active session', async () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);
-    const manager = new TerminalManager({ spawnTerminal: spawnMock });
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     const snapshot = manager.createSession(TEST_USER_ID, { title: 'Old Name' });
     const updated = await manager.renameSession(TEST_USER_ID, snapshot.id, 'New Name');
@@ -190,6 +190,7 @@ describe('TerminalManager', () => {
   it('enforces maximum active sessions per user when configured', () => {
     const manager = new TerminalManager({
       spawnTerminal: vi.fn(() => new FakeTerminalProcess()),
+      useTmux: false,
       maxActiveSessions: 1
     });
 
@@ -203,6 +204,7 @@ describe('TerminalManager', () => {
       const fakeProcess = new FakeTerminalProcess();
       const manager = new TerminalManager({
         spawnTerminal: vi.fn(() => fakeProcess),
+        useTmux: false,
         idleTimeoutMs: 50
       });
       const snapshot = manager.createSession(TEST_USER_ID);

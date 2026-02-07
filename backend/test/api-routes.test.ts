@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import supertest from 'supertest';
 import { createServer } from '../src/index';
+import { register } from '../src/auth/auth-service';
 import type { TerminalManager } from '../src/terminal/terminal-manager';
 import type { TerminalSessionSnapshot } from '../src/terminal/terminal-types';
 
@@ -13,6 +14,7 @@ async function withApp<T>(
   fn: (context: {
     app: Awaited<ReturnType<typeof createServer>>;
     terminalManager: TerminalManagerContract;
+    accessToken: string;
   }) => Promise<T>
 ): Promise<T> {
   const terminalSession: TerminalSessionSnapshot = {
@@ -50,9 +52,11 @@ async function withApp<T>(
     terminalManager: terminalManager as unknown as TerminalManager
   });
   await app.listen({ port: 0 });
+  const username = `api-routes-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const auth = await register(username, 'test-password-123');
 
   try {
-    return await fn({ app, terminalManager });
+    return await fn({ app, terminalManager, accessToken: auth.tokens.accessToken });
   } finally {
     await app.close();
   }
@@ -60,9 +64,10 @@ async function withApp<T>(
 
 describe('API routes', () => {
   it('creates a terminal session', async () => {
-    await withApp(async ({ app, terminalManager }) => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
       const response = await supertest(app.server)
         .post('/api/terminal')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({})
         .expect(201);
 
@@ -75,9 +80,10 @@ describe('API routes', () => {
   });
 
   it('validates terminal payload', async () => {
-    await withApp(async ({ app }) => {
+    await withApp(async ({ app, accessToken }) => {
       const response = await supertest(app.server)
         .post('/api/terminal')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({ cols: -1 })
         .expect(400);
 
@@ -86,20 +92,26 @@ describe('API routes', () => {
   });
 
   it('sends terminal input', async () => {
-    await withApp(async ({ app, terminalManager }) => {
-      const response = await supertest(app.server)
+    await withApp(async ({ app, terminalManager, accessToken }) => {
+      await supertest(app.server)
         .post('/api/terminal/term-1/input')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({ command: 'ls' })
         .expect(204);
 
-      expect(terminalManager.write).toHaveBeenCalledWith('term-1', 'ls');
+      expect(terminalManager.write).toHaveBeenCalledWith(
+        expect.any(String),
+        'term-1',
+        'ls'
+      );
     });
   });
 
   it('returns terminal history', async () => {
-    await withApp(async ({ app }) => {
+    await withApp(async ({ app, accessToken }) => {
       const response = await supertest(app.server)
         .get('/api/terminal/term-1/history')
+        .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
 
       expect(response.body.id).toBe('term-1');
@@ -107,9 +119,10 @@ describe('API routes', () => {
   });
 
   it('renames a terminal session', async () => {
-    await withApp(async ({ app, terminalManager }) => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
       const response = await supertest(app.server)
         .patch('/api/terminal/term-1')
+        .set('Authorization', `Bearer ${accessToken}`)
         .send({ title: 'Renamed Terminal' })
         .expect(200);
 

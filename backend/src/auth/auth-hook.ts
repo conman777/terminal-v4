@@ -11,9 +11,6 @@ const PUBLIC_ROUTES = [
 
 // Route patterns that don't require authentication (for dynamic routes)
 const PUBLIC_ROUTE_PATTERNS = [
-  /^\/api\/preview\/\d+\/logs$/, // Preview logs per port (client-side)
-  /^\/api\/preview\/logs$/,      // List all preview logs
-  /^\/api\/preview\/\d+\/process-logs$/, // Server-side process logs per port
   /^\/api\/process-logs(\/\d+)?$/, // Process logs by PID or list all
   /^\/api\/browser\//            // Browser automation API
 ];
@@ -26,17 +23,14 @@ declare module 'fastify' {
   }
 }
 
+// Match preview subdomain pattern (preview-{port}.*)
+const PREVIEW_SUBDOMAIN_REGEX = /^preview-\d+\./i;
+
 export function registerAuthHook(app: FastifyInstance): void {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Preview subdomain traffic has dedicated auth/guard logic in preview-subdomain-routes.
+    // Skip auth for preview subdomain requests (they're proxied to other apps)
     const host = request.headers.host || '';
-    if (host.startsWith('preview-')) {
-      return;
-    }
-
-    // Allow routes to opt out explicitly (debug/internal endpoints).
-    const routeConfig = (request.routeOptions?.config || {}) as { skipAuth?: boolean };
-    if (routeConfig.skipAuth) {
+    if (PREVIEW_SUBDOMAIN_REGEX.test(host)) {
       return;
     }
 

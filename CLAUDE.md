@@ -60,52 +60,41 @@ Logs are written to `/tmp/backend.log`.
 
 ### Preview System
 
-The preview panel (`frontend/src/components/PreviewPanel.jsx`) displays apps running on the VM via an iframe.
+The preview panel displays local apps via an iframe using a **subdomain-based proxy** for LAN access.
 
-**Subdomain Proxy Architecture:**
+**How it works:**
+- User enters `localhost:8787` in preview panel
+- Frontend converts to `http://preview-8787.{LAN_IP}.nip.io:3020/`
+- nip.io provides wildcard DNS (resolves to the LAN IP)
+- Backend intercepts requests with `preview-{port}.*` Host header
+- Backend proxies to `localhost:{port}` and streams response
 
-When accessing from LAN (e.g., `192.168.1.199:3020`), the preview uses a subdomain proxy pattern:
-- User enters `localhost:3000` in the preview panel
-- URL transforms to `http://preview-3000.192.168.1.199.nip.io:3020/`
-- nip.io DNS resolves to `192.168.1.199`, request hits Terminal V4 backend
-- Backend extracts port from subdomain and proxies to `localhost:3000`
+**Key files:**
+- `frontend/src/utils/previewUrl.js` - URL transformation (must be idempotent!)
+- `frontend/src/contexts/PreviewContext.jsx` - Preview state management
+- `backend/src/routes/preview-proxy-routes.ts` - Subdomain proxy handler
 
-This allows previewing localhost apps from any device on the LAN.
+**Critical implementation details:**
+- `toPreviewUrl()` must be idempotent - returns unchanged URL if already a preview subdomain
+- The `onRequest` hook must set `reply.sent = true` and return `reply` to stop Fastify's chain
+- Iframe-blocking headers are stripped by the proxy
+- **Auth bypass**: Preview subdomain requests skip Terminal V4 auth (in `auth-hook.ts`) so proxied app requests aren't blocked
+- **Cookie handling**: Set-Cookie headers are rewritten to remove Domain attribute so cookies work on preview subdomain
 
-**Key Preview Files:**
-- `frontend/src/components/PreviewPanel.jsx` - Preview panel UI
-- `backend/src/routes/preview-subdomain-routes.ts` - Subdomain proxy logic
-- `backend/src/inspector/inspector-script.ts` - DOM inspector injected into previews
+**Common issues:**
+- **App login not working**: Check if Terminal V4 auth is blocking the request (returns "Unauthorized"). The auth hook must skip requests where Host matches `preview-{port}.*`
+- **Cookies not persisting**: Access Terminal V4 via nip.io URL (e.g., `192.168.1.199.nip.io:3020`) so preview iframe is same-site
+- **App API calls failing**: If app calls a different port (e.g., port 3002 for backend), that port also needs to go through the preview proxy
 
-**Lazy Inspector Injection:**
+See `docs/PREVIEW_SETUP.md` for full documentation.
 
-The DOM inspector script is NOT injected by default. It uses lazy injection:
-- Normal preview loads: No inspector script (cleaner, fewer failure points)
-- When user clicks "Inspect": Page reloads with `?__inspect=1` parameter
-- Backend only injects inspector script when `__inspect=1` is present
-- Script auto-enables inspect mode when loaded with this parameter
-
-This prevents CSP conflicts and module loading issues that could cause infinite "Loading..." states.
-
-**Cache-Busting Architecture:**
-
-The preview proxy implements deep cache-busting to ensure hard refresh works correctly:
-
-1. **HTML**: Rewrites all `src` and `href` attributes to include `?_cb=timestamp`
-2. **JavaScript**: Rewrites ES module `import` statements to include cache-buster
-3. **CSS**: Rewrites `url()` and `@import` to include cache-buster
-
-This ensures the entire resource chain gets fresh content on refresh:
-```
-HTML → JS/CSS → imported JS → imported CSS → images/fonts
-```
-
-**Important patterns to follow:**
-
-- Never directly mutate DOM elements that React controls (e.g., don't do `iframeRef.current.src = x` when React renders `<iframe src={state} />`)
-- When cache-busting, remember that entry-point busting alone doesn't bust downstream resources
-- The cache-buster is extracted from `?_cb=` param or generated fresh, then propagated to all resources
-- The 5-second loading timeout prevents infinite "Loading..." if iframe onLoad never fires
+> **DO NOT MODIFY** the preview system files without explicit permission from the user. This includes:
+> - `frontend/src/utils/previewUrl.js`
+> - `backend/src/routes/preview-proxy-routes.ts`
+> - `frontend/src/contexts/PreviewContext.jsx`
+> - `backend/src/auth/auth-hook.ts` (preview auth bypass)
+>
+> The preview system has subtle requirements (idempotency, hook ordering, auth bypass) that are easy to break.
 
 ---
 
