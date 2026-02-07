@@ -36,6 +36,26 @@
   --success: #10b981;
   --error: #f43f5e;
   --warning: #f59e0b;
+
+  /* Session tab colors */
+  --tab-active-bg: rgba(245, 158, 11, 0.34);
+  --tab-active-border: rgba(251, 191, 36, 0.95);
+  --tab-active-text: #fafafa;
+  --tab-active-shadow: 0 0 0 1px rgba(245, 158, 11, 0.55), 0 0 18px rgba(245, 158, 11, 0.35);
+  --tab-busy-border: rgba(59, 130, 246, 0.5);
+  --tab-busy-bg: rgba(59, 130, 246, 0.16);
+  --tab-busy-text: #dbeafe;
+  --tab-busy-shadow-soft: 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2);
+  --tab-busy-active-border: rgba(96, 165, 250, 0.7);
+  --tab-busy-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3);
+  --tab-busy-shadow-peak: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4);
+  --tab-dot-busy: #60a5fa;
+  --tab-dot-ready-active: #4ade80;
+  --tab-dot-ready-inactive: #52525b;
+  --tab-done-bg: rgba(34, 197, 94, 0.24);
+  --tab-done-border: rgba(34, 197, 94, 0.75);
+  --tab-done-text: #ecfdf5;
+  --tab-done-shadow: 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24);
   
   /* Spacing */
   --radius-sm: 6px;
@@ -114,6 +134,26 @@
   --success: #059669;
   --error: #e11d48;
   --warning: #d97706;
+
+  /* Session tab colors */
+  --tab-active-bg: rgba(217, 119, 6, 0.28);
+  --tab-active-border: rgba(180, 83, 9, 0.85);
+  --tab-active-text: #18181b;
+  --tab-active-shadow: 0 0 0 1px rgba(180, 83, 9, 0.34), 0 0 14px rgba(217, 119, 6, 0.26);
+  --tab-busy-border: rgba(59, 130, 246, 0.45);
+  --tab-busy-bg: rgba(59, 130, 246, 0.15);
+  --tab-busy-text: #1e3a8a;
+  --tab-busy-shadow-soft: 0 0 0 1px rgba(59, 130, 246, 0.32), 0 0 10px rgba(59, 130, 246, 0.18);
+  --tab-busy-active-border: rgba(59, 130, 246, 0.7);
+  --tab-busy-shadow: 0 0 0 1px rgba(59, 130, 246, 0.42), 0 0 16px rgba(59, 130, 246, 0.24);
+  --tab-busy-shadow-peak: 0 0 0 1px rgba(37, 99, 235, 0.52), 0 0 20px rgba(59, 130, 246, 0.32);
+  --tab-dot-busy: #3b82f6;
+  --tab-dot-ready-active: #16a34a;
+  --tab-dot-ready-inactive: #a1a1aa;
+  --tab-done-bg: rgba(22, 163, 74, 0.2);
+  --tab-done-border: rgba(21, 128, 61, 0.58);
+  --tab-done-text: #14532d;
+  --tab-done-shadow: 0 0 0 1px rgba(21, 128, 61, 0.25), 0 0 12px rgba(22, 163, 74, 0.2);
 
   /* Shadows - lighter */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
@@ -3258,28 +3298,28 @@ button {
 }
 
 .preview-session-btn.active {
-  background: rgba(30, 41, 59, 0.92);
-  border-color: rgba(96, 165, 250, 0.55);
-  color: #f8fafc;
+  background: var(--tab-active-bg);
+  border-color: var(--tab-active-border);
+  color: var(--tab-active-text);
   font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.38), 0 0 12px rgba(59, 130, 246, 0.2);
+  box-shadow: var(--tab-active-shadow);
   transform: none;
   animation: none;
 }
 
 .preview-session-btn.busy {
-  border-color: rgba(59, 130, 246, 0.5);
+  border-color: var(--tab-busy-border);
 }
 
 .preview-session-btn.busy.active {
-  border-color: rgba(96, 165, 250, 0.7);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3);
+  border-color: var(--tab-busy-active-border);
+  box-shadow: var(--tab-busy-shadow);
   animation: tab-busy-pulse 2s ease-in-out infinite;
 }
 
 @keyframes tab-busy-pulse {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3); }
-  50% { box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4); }
+  0%, 100% { box-shadow: var(--tab-busy-shadow); }
+  50% { box-shadow: var(--tab-busy-shadow-peak); }
 }
 
 .preview-session-btn .session-name {
@@ -3297,7 +3337,7 @@ button {
 }
 
 .session-indicator.busy {
-  background: #60a5fa;
+  background: var(--tab-dot-busy);
   box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4);
   animation: dot-busy-pulse 1.5s ease-in-out infinite;
 }
@@ -3308,7 +3348,7 @@ button {
 }
 
 .session-indicator.ready {
-  background: #4ade80;
+  background: var(--tab-dot-ready-active);
   box-shadow: 0 0 0 1.5px rgba(34, 197, 94, 0.4), 0 0 10px rgba(34, 197, 94, 0.35);
 }
 
@@ -6022,10 +6062,10 @@ button {
   }
 
   .preview-mobile-session-chip.active {
-    background: rgba(30, 41, 59, 0.92);
-    border-color: rgba(96, 165, 250, 0.55);
-    color: #f8fafc;
-    box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35), 0 0 10px rgba(59, 130, 246, 0.18);
+    background: var(--tab-active-bg);
+    border-color: var(--tab-active-border);
+    color: var(--tab-active-text);
+    box-shadow: var(--tab-active-shadow);
   }
 
   .preview-mobile-session-chip.busy:not(.active) {
@@ -6034,8 +6074,8 @@ button {
   }
 
   .preview-mobile-session-chip.busy.active {
-    border-color: rgba(96, 165, 250, 0.7);
-    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3);
+    border-color: var(--tab-busy-active-border);
+    box-shadow: var(--tab-busy-shadow);
     animation: tab-busy-pulse 2s ease-in-out infinite;
   }
 

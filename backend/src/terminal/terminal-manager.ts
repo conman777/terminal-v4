@@ -80,6 +80,10 @@ const DEFAULT_MAX_ACTIVE_SESSIONS = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_MAX_ACTIVE_SESSIONS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 })();
+const DEFAULT_BUSY_WINDOW_MS = (() => {
+  const parsed = Number.parseInt(process.env.TERMINAL_BUSY_WINDOW_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
+})();
 
 export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
@@ -356,6 +360,10 @@ export class TerminalManager {
     this.#resetIdleTimer(session);
   }
 
+  #isSessionBusy(session: ManagedTerminal, now = Date.now()): boolean {
+    return now - session.lastActivityAt <= DEFAULT_BUSY_WINDOW_MS;
+  }
+
   #expireIdleSession(session: ManagedTerminal): void {
     if (!this.#sessions.has(session.id)) {
       return;
@@ -512,6 +520,7 @@ export class TerminalManager {
     const metadataIndex = this.#metadataIndexByUser.get(userId) || {};
     const defaultCwd = process.env.HOME || process.cwd();
     const homeDir = process.env.HOME || null;
+    const now = Date.now();
 
     // Get active sessions for this user
     const activeSessions = Array.from(this.#sessions.values())
@@ -533,8 +542,10 @@ export class TerminalManager {
           groupPath: resolved.groupPath,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
+          lastActivityAt: new Date(session.lastActivityAt).toISOString(),
           messageCount: session.buffer.length,
           isActive: true,
+          isBusy: this.#isSessionBusy(session, now),
           usesTmux: session.usesTmux,
           thread: session.thread
         };
@@ -562,8 +573,10 @@ export class TerminalManager {
           groupPath: resolved.groupPath,
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
+          lastActivityAt: session.updatedAt,
           messageCount: session.history.length,
           isActive: false,
+          isBusy: false,
           usesTmux: false,
           thread: session.thread
         };
@@ -602,8 +615,10 @@ export class TerminalManager {
         cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
+        lastActivityAt: new Date(session.lastActivityAt).toISOString(),
         messageCount: session.buffer.length,
         isActive: true,
+        isBusy: this.#isSessionBusy(session),
         usesTmux: session.usesTmux,
         thread: session.thread
       };
@@ -639,8 +654,10 @@ export class TerminalManager {
       cwd: updated.cwd,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
+      lastActivityAt: updated.updatedAt,
       messageCount: updated.history.length,
       isActive: false,
+      isBusy: false,
       usesTmux: false,
       thread: updated.thread
     };

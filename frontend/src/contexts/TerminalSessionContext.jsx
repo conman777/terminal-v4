@@ -576,13 +576,13 @@ export function TerminalSessionProvider({ children }) {
       const idleTime = Date.now() - lastActivityRef.current;
       const hasLiveTerminalConnection = liveTerminalCountRef.current > 0;
       if (hasLiveTerminalConnection) {
-        if (idleTime > 60000) return 60000;
-        if (idleTime > 30000) return 30000;
-        return 15000;
+        if (idleTime > 120000) return 15000;
+        if (idleTime > 60000) return 8000;
+        return 2500;
       }
       if (idleTime > 60000) return 30000;
-      if (idleTime > 30000) return 15000;
-      return 5000;
+      if (idleTime > 30000) return 10000;
+      return 4000;
     };
 
     const schedulePoll = () => {

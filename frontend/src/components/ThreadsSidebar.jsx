@@ -17,7 +17,11 @@ export default function ThreadsSidebar({
   onUnarchiveSession,
   onTopicChange,
   onCloseSession,
-  onCreateSession
+  onCreateSession,
+  sidebarMode,
+  onToggleSidebarMode,
+  leftPanelMode,
+  onSetLeftPanelMode
 }) {
   const [showArchived, setShowArchived] = useState(false);
 
@@ -36,44 +40,99 @@ export default function ThreadsSidebar({
 
   return (
     <aside className={`threads-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
-      <div className="threads-sidebar-header">
-        {!isCollapsed && <h1 className="threads-sidebar-title">Threads</h1>}
-        <div className="threads-header-actions">
-          {!isCollapsed && (
+      {/* Top bar: mode switch + collapse */}
+      <div className="ts-topbar">
+        {!isCollapsed ? (
+          <>
+            <div className="ts-mode-switch">
+              <button
+                className={`ts-mode-option ${leftPanelMode === 'terminal' ? 'active' : ''}`}
+                onClick={() => onSetLeftPanelMode('terminal')}
+                type="button"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                Terminal
+              </button>
+              <button
+                className={`ts-mode-option ${leftPanelMode === 'claude-code' ? 'active' : ''}`}
+                onClick={() => onSetLeftPanelMode('claude-code')}
+                type="button"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+                Claude
+              </button>
+            </div>
             <button
-              className="threads-new-btn"
-              onClick={onCreateSession}
-              title="New session"
+              className="ts-collapse-btn"
+              onClick={onToggle}
+              title="Collapse sidebar"
               type="button"
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
+                <polyline points="15 18 9 12 15 6" />
               </svg>
             </button>
-          )}
+          </>
+        ) : (
           <button
-            className="threads-toggle-btn"
+            className="ts-collapse-btn"
             onClick={onToggle}
-            title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title="Expand sidebar"
             type="button"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              {isCollapsed ? (
-                <>
-                  <polyline points="9 18 15 12 9 6" />
-                  <line x1="3" y1="12" x2="3" y2="12" />
-                </>
-              ) : (
-                <>
-                  <polyline points="15 18 9 12 15 6" />
-                  <line x1="21" y1="12" x2="21" y2="12" />
-                </>
-              )}
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* Toolbar: view toggle + new session */}
+      {!isCollapsed && (
+        <div className="ts-toolbar">
+          <div className="ts-toolbar-left">
+            {onToggleSidebarMode && (
+              <button
+                className={`ts-view-toggle ${sidebarMode === 'threads' ? 'active' : ''}`}
+                onClick={onToggleSidebarMode}
+                title={sidebarMode === 'threads' ? 'Switch to Explorer' : 'Switch to Threads'}
+                type="button"
+              >
+                {sidebarMode === 'threads' ? (
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z" />
+                  </svg>
+                ) : (
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+                  </svg>
+                )}
+              </button>
+            )}
+            <span className="ts-toolbar-label">
+              {sidebarMode === 'threads' ? 'Threads' : 'Explorer'}
+            </span>
+          </div>
+          <button
+            className="ts-new-btn"
+            onClick={onCreateSession}
+            title="New session"
+            type="button"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
         </div>
-      </div>
+      )}
 
       {!isCollapsed && (
         <div className="threads-sidebar-content">
@@ -196,35 +255,73 @@ export default function ThreadsSidebar({
           width: 48px;
         }
 
-        .threads-sidebar-header {
-          height: 52px;
+        /* ── Top bar: mode switch + collapse ── */
+        .ts-topbar {
+          height: 48px;
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          padding: 0 14px;
+          gap: 6px;
+          padding: 0 8px;
           border-bottom: 1px solid var(--border-subtle, #27272a);
           flex-shrink: 0;
         }
 
-        .threads-sidebar-title {
-          font-size: 11.5px;
-          font-weight: 700;
-          color: var(--text-muted, #71717a);
-          text-transform: uppercase;
-          letter-spacing: 1px;
-          margin: 0;
+        .threads-sidebar.collapsed .ts-topbar {
+          justify-content: center;
+          padding: 0;
         }
 
-        .threads-header-actions {
+        .ts-mode-switch {
+          flex: 1;
+          display: flex;
+          background: var(--bg-surface, #18181b);
+          border-radius: 8px;
+          padding: 3px;
+          gap: 2px;
+        }
+
+        .ts-mode-option {
+          flex: 1;
           display: flex;
           align-items: center;
-          gap: 4px;
+          justify-content: center;
+          gap: 6px;
+          height: 30px;
+          border: none;
+          border-radius: 6px;
+          background: transparent;
+          color: var(--text-muted, #71717a);
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          white-space: nowrap;
         }
 
-        .threads-new-btn,
-        .threads-toggle-btn {
-          width: 28px;
-          height: 28px;
+        .ts-mode-option:hover:not(.active) {
+          color: var(--text-secondary, #a1a1aa);
+          background: rgba(255, 255, 255, 0.03);
+        }
+
+        .ts-mode-option.active {
+          background: var(--bg-elevated, #27272a);
+          color: var(--text-primary, #fafafa);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+
+        .ts-mode-option svg {
+          opacity: 0.6;
+          flex-shrink: 0;
+        }
+
+        .ts-mode-option.active svg {
+          opacity: 1;
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .ts-collapse-btn {
+          width: 30px;
+          height: 30px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -233,21 +330,89 @@ export default function ThreadsSidebar({
           color: var(--text-muted, #71717a);
           border-radius: 6px;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.15s ease;
+          flex-shrink: 0;
         }
 
-        .threads-new-btn:hover,
-        .threads-toggle-btn:hover {
+        .ts-collapse-btn:hover {
           background: var(--bg-surface, #18181b);
           color: var(--text-primary, #fafafa);
         }
 
+        /* ── Toolbar: view toggle + new ── */
+        .ts-toolbar {
+          height: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 0 10px 0 12px;
+          border-bottom: 1px solid var(--border-subtle, #27272a);
+          flex-shrink: 0;
+        }
+
+        .ts-toolbar-left {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .ts-view-toggle {
+          width: 24px;
+          height: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          border-radius: 5px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .ts-view-toggle:hover {
+          background: var(--bg-surface, #18181b);
+          color: var(--text-primary, #fafafa);
+        }
+
+        .ts-view-toggle.active {
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .ts-toolbar-label {
+          font-size: 11px;
+          font-weight: 700;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .ts-new-btn {
+          width: 24px;
+          height: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
+          border-radius: 5px;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .ts-new-btn:hover {
+          background: var(--bg-surface, #18181b);
+          color: var(--text-primary, #fafafa);
+        }
+
+        /* ── Content area ── */
         .threads-sidebar-content {
           flex: 1;
           overflow-y: auto;
           scrollbar-width: thin;
           scrollbar-color: var(--border-default) transparent;
-          padding-top: 10px;
+          padding-top: 4px;
         }
 
         .threads-sidebar-content::-webkit-scrollbar {
@@ -337,13 +502,14 @@ export default function ThreadsSidebar({
             border-right: none;
           }
 
-          .threads-sidebar-header {
-            height: 56px;
-            padding: 0 16px;
+          .ts-topbar {
+            height: 52px;
+            padding: 0 12px;
           }
 
-          .threads-sidebar-title {
-            font-size: 12px;
+          .ts-toolbar {
+            height: 38px;
+            padding: 0 14px;
           }
 
           .threads-section-header {

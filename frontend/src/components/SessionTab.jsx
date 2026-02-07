@@ -8,6 +8,7 @@ export const SessionTab = memo(function SessionTab({
   isActive,
   isBusy,
   isReady,
+  isDone,
   onSelect,
   onClose,
   onRename,
@@ -110,6 +111,7 @@ export const SessionTab = memo(function SessionTab({
     isActive && 'active',
     isBusy && 'busy',
     isReady && 'ready',
+    isDone && !isBusy && !isActive && 'done',
     isDragging && 'dragging',
     isDragOver && 'drag-over'
   ].filter(Boolean).join(' ');
@@ -181,48 +183,87 @@ export const SessionTab = memo(function SessionTab({
           transition: all 0.2s ease;
           position: relative;
           user-select: none;
+          overflow: hidden;
+          opacity: 0.82;
         }
 
         .session-tab-item:hover:not(.active) {
           background: var(--bg-elevated, #27272a);
           color: var(--text-primary, #fafafa);
           border-color: var(--border-default, #3f3f46);
+          opacity: 1;
         }
 
         .session-tab-item.active {
-          background: rgba(245, 158, 11, 0.22);
-          border-color: rgba(245, 158, 11, 0.7);
-          color: var(--text-primary, #fafafa);
-          box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25);
+          background: var(--tab-active-bg, rgba(245, 158, 11, 0.22));
+          border-color: var(--tab-active-border, rgba(245, 158, 11, 0.7));
+          color: var(--tab-active-text, var(--text-primary, #fafafa));
+          box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
           z-index: 5;
-          font-weight: 600;
+          font-weight: 700;
+          opacity: 1;
+          transform: translateY(-1px);
+        }
+
+        .session-tab-item.busy:not(.active)::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          left: -140%;
+          width: 55%;
+          background: linear-gradient(100deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
+          pointer-events: none;
+          animation: busy-tab-beam 1.8s linear infinite;
+        }
+
+        @keyframes busy-tab-beam {
+          0% { transform: translateX(0); opacity: 0; }
+          12% { opacity: 0.9; }
+          65% { opacity: 0.35; }
+          100% { transform: translateX(520%); opacity: 0; }
+        }
+
+        .session-tab-item.done:not(.active) {
+          background: var(--tab-done-bg, rgba(34, 197, 94, 0.24));
+          border-color: var(--tab-done-border, rgba(34, 197, 94, 0.75));
+          color: var(--tab-done-text, #ecfdf5);
+          box-shadow: var(--tab-done-shadow, 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24));
+          font-weight: 650;
+          opacity: 1;
         }
 
         .session-tab-item.busy {
-          border-color: rgba(59, 130, 246, 0.5);
+          border-color: var(--tab-busy-border, rgba(59, 130, 246, 0.5));
+          background: var(--tab-busy-bg, rgba(59, 130, 246, 0.16));
+          color: var(--tab-busy-text, var(--text-primary, #fafafa));
+          box-shadow: var(--tab-busy-shadow-soft, 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2));
+          opacity: 1;
         }
 
         .session-tab-item.busy.active {
-          border-color: rgba(96, 165, 250, 0.7);
-          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3);
-          animation: tab-busy-pulse 2s ease-in-out infinite;
+          background: var(--tab-active-bg, rgba(245, 158, 11, 0.22));
+          color: var(--tab-active-text, var(--text-primary, #fafafa));
+          border-color: var(--tab-active-border, rgba(245, 158, 11, 0.7));
+          box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
+          animation: none;
         }
 
         @keyframes tab-busy-pulse {
-          0%, 100% { box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3); }
-          50% { box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4); }
+          0%, 100% { box-shadow: var(--tab-busy-shadow, 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3)); }
+          50% { box-shadow: var(--tab-busy-shadow-peak, 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4)); }
         }
 
         .tab-status-dot-modern {
-          width: 7px;
-          height: 7px;
+          width: 8px;
+          height: 8px;
           border-radius: 50%;
           flex-shrink: 0;
           transition: background 0.3s ease, box-shadow 0.3s ease;
         }
 
         .tab-status-dot-modern.busy {
-          background: #60a5fa;
+          background: var(--tab-dot-busy, #60a5fa);
           box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4);
           animation: dot-busy-pulse 1.5s ease-in-out infinite;
         }
@@ -233,13 +274,18 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .tab-status-dot-modern.ready {
-          background: #4ade80;
+          background: var(--tab-dot-ready-active, #4ade80);
           box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.3), 0 0 6px rgba(34, 197, 94, 0.25);
         }
 
         .session-tab-item:not(.active) .tab-status-dot-modern.ready {
-          background: #52525b;
+          background: var(--tab-dot-ready-inactive, #52525b);
           box-shadow: none;
+        }
+
+        .session-tab-item.done:not(.active) .tab-status-dot-modern.ready {
+          background: var(--tab-dot-ready-active, #4ade80);
+          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 8px rgba(34, 197, 94, 0.25);
         }
 
         .tab-title-modern {

@@ -16,8 +16,10 @@ export interface TerminalSessionSummary {
   groupPath?: string | null;
   createdAt: string;
   updatedAt: string;
+  lastActivityAt?: string;
   messageCount: number;
   isActive: boolean;
+  isBusy?: boolean;
   usesTmux: boolean;
   thread?: ThreadMetadata;
 }

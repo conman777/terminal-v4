@@ -309,6 +309,24 @@ function AppContent() {
     setSessionBusy(sessionId, isBusy);
   }, [setSessionBusy]);
 
+  useEffect(() => {
+    if (!Array.isArray(sessions) || sessions.length === 0) return;
+    const now = Date.now();
+    const busyWindowMs = 8000;
+
+    sessions.forEach((session) => {
+      const snapshotTs = Number.isFinite(Date.parse(session.lastActivityAt || session.updatedAt || ''))
+        ? Date.parse(session.lastActivityAt || session.updatedAt || '')
+        : 0;
+      // Fallback inference when backend process has not been restarted and
+      // does not yet provide `isBusy`.
+      const inferredBusy = snapshotTs > 0 && now - snapshotTs <= busyWindowMs;
+      const busy = typeof session.isBusy === 'boolean' ? session.isBusy : inferredBusy;
+
+      setSessionBusy(session.id, busy, { lastActivityAt: snapshotTs });
+    });
+  }, [sessions, setSessionBusy]);
+
   // Tab reorder state - stores session IDs in user-defined order
   const [tabOrder, setTabOrder] = useState([]);
 
@@ -890,6 +908,10 @@ function AppContent() {
               onTopicChange={updateSessionTopic}
               onCloseSession={closeSession}
               onCreateSession={handleRequestNewSession}
+              sidebarMode={sidebarMode}
+              onToggleSidebarMode={toggleSidebarMode}
+              leftPanelMode={leftPanelMode}
+              onSetLeftPanelMode={setLeftPanelMode}
             />
           ) : (
             <Sidebar
@@ -922,8 +944,6 @@ function AppContent() {
               onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
               user={user}
               logout={logout}
-              sidebarMode={sidebarMode}
-              onToggleSidebarMode={toggleSidebarMode}
             />
 
           <main
