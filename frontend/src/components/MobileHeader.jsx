@@ -290,20 +290,7 @@ export function MobileHeader({
               previewUrl={previewUrl}
             />
           ) : (
-            <div className="mobile-mode-toggle">
-              <button
-                className={`mobile-mode-btn ${mobileView === 'terminal' || mobileView === 'preview' ? 'active' : ''}`}
-                onClick={() => onViewChange?.('terminal')}
-              >
-                Term
-              </button>
-              <button
-                className={`mobile-mode-btn ${mobileView === 'claude' ? 'active' : ''}`}
-                onClick={() => onViewChange?.('claude')}
-              >
-                Claude
-              </button>
-            </div>
+            <span className="mobile-header-title">Terminal</span>
           )}
 
           <div className="mobile-header-actions-right">

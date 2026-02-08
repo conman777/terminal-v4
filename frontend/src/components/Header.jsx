@@ -1,16 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 import { SessionTabBar } from './SessionTabBar';
-import ClaudeCodeSessionSelector from './ClaudeCodeSessionSelector';
 import { Dropdown } from './Dropdown';
 import { MobileHeader } from './MobileHeader';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function Header({
   isMobile,
-  leftPanelMode,
-  setLeftPanelMode,
   sessionProps,
-  claudeCodeProps,
   modalProps,
   showPreview,
   onTogglePreview,
@@ -32,11 +28,6 @@ export function Header({
     loadingSessions, sessionLoadError, onRetryLoad,
     sessionActivity, sessionsGroupedByProject,
   } = sessionProps;
-
-  const {
-    claudeCodeSessions, activeClaudeCodeId,
-    onSelectClaudeCode, onNewClaudeCode, onDeleteClaudeCode,
-  } = claudeCodeProps;
 
   const {
     setShowApiSettings, onOpenSettings,
@@ -170,19 +161,7 @@ export function Header({
 
   return (
     <header className={`app-header redesign${showPreview ? ' preview-active' : ''}`}>
-      <div className="header-left">
-        {leftPanelMode !== 'terminal' && (
-          <ClaudeCodeSessionSelector
-            sessions={claudeCodeSessions}
-            activeId={activeClaudeCodeId}
-            onSelect={onSelectClaudeCode}
-            onNew={onNewClaudeCode}
-            onDelete={onDeleteClaudeCode}
-          />
-        )}
-      </div>
-
-      {leftPanelMode === 'terminal' && orderedSessions.length > 0 && (
+      {orderedSessions.length > 0 && (
         <div className="header-tabs-area">
           <SessionTabBar
             sessions={orderedSessions}

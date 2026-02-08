@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 const RECENT_DONE_WINDOW_MS = 60000;
+const DONE_STATE_STORAGE_KEY = 'terminalSessionDoneStateV2';
 
 function toTimestamp(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -9,6 +10,40 @@ function toTimestamp(value) {
     return Number.isFinite(ts) ? ts : 0;
   }
   return 0;
+}
+
+function loadDoneState() {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(DONE_STATE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const now = Date.now();
+    const cleaned = {};
+    for (const [sessionId, ts] of Object.entries(parsed)) {
+      const value = toTimestamp(ts);
+      if (value > 0 && now - value <= RECENT_DONE_WINDOW_MS) {
+        cleaned[sessionId] = value;
+      }
+    }
+    return cleaned;
+  } catch {
+    return {};
+  }
+}
+
+function saveDoneState(state) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!state || Object.keys(state).length === 0) {
+      window.localStorage.removeItem(DONE_STATE_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(DONE_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    // Ignore persistence failures.
+  }
 }
 
 /**
@@ -21,6 +56,36 @@ export function useSessionActivity() {
 
   // Track the currently focused session to avoid marking it as unread
   const focusedSessionRef = useRef(null);
+  const doneStateRef = useRef(loadDoneState());
+
+  const pruneDoneState = useCallback((now = Date.now()) => {
+    const current = doneStateRef.current;
+    let changed = false;
+    for (const [sessionId, ts] of Object.entries(current)) {
+      const value = toTimestamp(ts);
+      if (!value || now - value > RECENT_DONE_WINDOW_MS) {
+        delete current[sessionId];
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveDoneState(current);
+    }
+  }, []);
+
+  const clearDoneState = useCallback((sessionId) => {
+    if (!sessionId) return;
+    if (sessionId in doneStateRef.current) {
+      delete doneStateRef.current[sessionId];
+      saveDoneState(doneStateRef.current);
+    }
+  }, []);
+
+  const markDoneState = useCallback((sessionId, ts = Date.now()) => {
+    if (!sessionId) return;
+    doneStateRef.current[sessionId] = ts;
+    saveDoneState(doneStateRef.current);
+  }, []);
 
   // Mark a session as having new activity
   const markActivity = useCallback((sessionId) => {
@@ -47,10 +112,12 @@ export function useSessionActivity() {
     if (!sessionId) return;
 
     focusedSessionRef.current = sessionId;
+    clearDoneState(sessionId);
 
     setActivity(prev => {
       const current = prev[sessionId];
-      if (!current || !current.hasUnread) return prev;
+      if (!current) return prev;
+      if (!current.hasUnread && !current.isDone && !current.isBusy) return prev;
 
       return {
         ...prev,
@@ -62,12 +129,13 @@ export function useSessionActivity() {
         }
       };
     });
-  }, []);
+  }, [clearDoneState]);
 
   // Set focus to a session (clears its unread state)
   const setFocusedSession = useCallback((sessionId) => {
     focusedSessionRef.current = sessionId;
     if (!sessionId) return;
+    clearDoneState(sessionId);
 
     setActivity(prev => {
       const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
@@ -81,7 +149,7 @@ export function useSessionActivity() {
         }
       };
     });
-  }, []);
+  }, [clearDoneState]);
 
   // Get activity state for a specific session
   const getActivity = useCallback((sessionId) => {
@@ -91,45 +159,55 @@ export function useSessionActivity() {
   // Track busy/ready command execution state for each session
   const setBusy = useCallback((sessionId, isBusy, options = {}) => {
     if (!sessionId) return;
+    const now = Date.now();
+    pruneDoneState(now);
+
     const busy = Boolean(isBusy);
     const activityTs = toTimestamp(options.lastActivityAt);
-    const now = Date.now();
+
     setActivity(prev => {
       const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
       const isFocused = focusedSessionRef.current === sessionId;
       const effectiveLastActivity = activityTs || current.lastActivity;
-      const hasRecentActivity = effectiveLastActivity > 0 && now - effectiveLastActivity <= RECENT_DONE_WINDOW_MS;
+      const persistedDoneAt = toTimestamp(doneStateRef.current[sessionId]);
+      const hasPersistedDone = persistedDoneAt > 0 && now - persistedDoneAt <= RECENT_DONE_WINDOW_MS;
+      const justFinished = current.isBusy && !busy;
 
-      if (current.isBusy === busy) {
-        // Preserve a recent "done" signal across refreshes even when we didn't
-        // observe the exact busy->ready transition locally.
-        const inferredDone = !busy && !isFocused && hasRecentActivity;
-        const nextIsDone = inferredDone ? true : current.isDone;
-        if (nextIsDone === current.isDone && (!busy || effectiveLastActivity === current.lastActivity)) {
-          return prev;
-        }
-        return {
-          ...prev,
-          [sessionId]: {
-            ...current,
-            isDone: nextIsDone,
-            lastActivity: busy ? now : effectiveLastActivity
-          }
-        };
+      let nextIsDone = current.isDone;
+      if (busy) {
+        nextIsDone = false;
+      } else if (justFinished) {
+        nextIsDone = !isFocused;
+      } else if (!current.isBusy && !current.isDone && hasPersistedDone && !isFocused) {
+        nextIsDone = true;
       }
 
-      const justFinished = current.isBusy && !busy;
+      const nextLastActivity = busy ? now : effectiveLastActivity;
+      if (
+        current.isBusy === busy &&
+        current.isDone === nextIsDone &&
+        current.lastActivity === nextLastActivity
+      ) {
+        return prev;
+      }
+
+      if (busy || isFocused || !nextIsDone) {
+        clearDoneState(sessionId);
+      } else if (justFinished && nextIsDone) {
+        markDoneState(sessionId, now);
+      }
+
       return {
         ...prev,
         [sessionId]: {
           ...current,
           isBusy: busy,
-          isDone: busy ? false : (justFinished ? !isFocused : (!isFocused && hasRecentActivity)),
-          lastActivity: busy ? now : effectiveLastActivity
+          isDone: nextIsDone,
+          lastActivity: nextLastActivity
         }
       };
     });
-  }, []);
+  }, [clearDoneState, markDoneState, pruneDoneState]);
 
   // Check if any session has unread content
   const hasAnyUnread = useCallback(() => {
@@ -138,11 +216,12 @@ export function useSessionActivity() {
 
   // Remove activity tracking for a closed session
   const removeSession = useCallback((sessionId) => {
+    clearDoneState(sessionId);
     setActivity(prev => {
       const { [sessionId]: removed, ...rest } = prev;
       return rest;
     });
-  }, []);
+  }, [clearDoneState]);
 
   return {
     activity,

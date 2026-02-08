@@ -19,9 +19,7 @@ export default function ThreadsSidebar({
   onCloseSession,
   onCreateSession,
   sidebarMode,
-  onToggleSidebarMode,
-  leftPanelMode,
-  onSetLeftPanelMode
+  onToggleSidebarMode
 }) {
   const [showArchived, setShowArchived] = useState(false);
 
@@ -40,58 +38,27 @@ export default function ThreadsSidebar({
 
   return (
     <aside className={`threads-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
-      {/* Top bar: mode switch + collapse */}
+      {/* Top bar: title + collapse */}
       <div className="ts-topbar">
-        {!isCollapsed ? (
-          <>
-            <div className="ts-mode-switch">
-              <button
-                className={`ts-mode-option ${leftPanelMode === 'terminal' ? 'active' : ''}`}
-                onClick={() => onSetLeftPanelMode('terminal')}
-                type="button"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="4 17 10 11 4 5" />
-                  <line x1="12" y1="19" x2="20" y2="19" />
-                </svg>
-                Terminal
-              </button>
-              <button
-                className={`ts-mode-option ${leftPanelMode === 'claude-code' ? 'active' : ''}`}
-                onClick={() => onSetLeftPanelMode('claude-code')}
-                type="button"
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
-                Claude
-              </button>
-            </div>
-            <button
-              className="ts-collapse-btn"
-              onClick={onToggle}
-              title="Collapse sidebar"
-              type="button"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-            </button>
-          </>
-        ) : (
-          <button
-            className="ts-collapse-btn"
-            onClick={onToggle}
-            title="Expand sidebar"
-            type="button"
-          >
+        {!isCollapsed && (
+          <div className="ts-title">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 18 15 12 9 6" />
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
-          </button>
+            <span>Terminal</span>
+          </div>
         )}
+        <button
+          className="ts-collapse-btn"
+          onClick={onToggle}
+          title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          type="button"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points={isCollapsed ? '9 18 15 12 9 6' : '15 18 9 12 15 6'} />
+          </svg>
+        </button>
       </div>
 
       {/* Toolbar: view toggle + new session */}
@@ -271,52 +238,20 @@ export default function ThreadsSidebar({
           padding: 0;
         }
 
-        .ts-mode-switch {
-          flex: 1;
-          display: flex;
-          background: var(--bg-surface, #18181b);
-          border-radius: 8px;
-          padding: 3px;
-          gap: 2px;
-        }
-
-        .ts-mode-option {
+        .ts-title {
           flex: 1;
           display: flex;
           align-items: center;
-          justify-content: center;
-          gap: 6px;
-          height: 30px;
-          border: none;
-          border-radius: 6px;
-          background: transparent;
-          color: var(--text-muted, #71717a);
-          font-size: 12px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.15s ease;
-          white-space: nowrap;
-        }
-
-        .ts-mode-option:hover:not(.active) {
-          color: var(--text-secondary, #a1a1aa);
-          background: rgba(255, 255, 255, 0.03);
-        }
-
-        .ts-mode-option.active {
-          background: var(--bg-elevated, #27272a);
-          color: var(--text-primary, #fafafa);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-        }
-
-        .ts-mode-option svg {
-          opacity: 0.6;
-          flex-shrink: 0;
-        }
-
-        .ts-mode-option.active svg {
-          opacity: 1;
+          gap: 8px;
           color: var(--accent-primary, #f59e0b);
+          font-size: 13px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+
+        .ts-title svg {
+          opacity: 0.8;
         }
 
         .ts-collapse-btn {

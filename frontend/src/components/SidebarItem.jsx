@@ -28,102 +28,101 @@ export default function SidebarItem({
 
   return (
     <div
-      className={`sidebar-item-modern ${isActive ? 'active' : ''}`}
+      className={`es-item ${isActive ? 'active' : ''}`}
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       title={path}
     >
-      <span className="sidebar-item-icon-modern">
+      <span className="es-item-icon">
         {branch ? (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="6" y1="3" x2="6" y2="15" />
             <circle cx="18" cy="6" r="3" />
             <circle cx="6" cy="18" r="3" />
             <path d="M18 9a9 9 0 0 1-9 9" />
           </svg>
         ) : (
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
           </svg>
         )}
       </span>
 
-      <span className="sidebar-item-name-modern">{name}</span>
+      <span className="es-item-name">{name}</span>
 
       {branch && (
-        <span className="sidebar-item-badge-modern">{branch}</span>
+        <span className="es-item-branch">{branch}</span>
       )}
 
       {showPinAction && (isHovered || isPinned) && (
-        <div className="sidebar-item-actions-modern" onClick={e => e.stopPropagation()}>
+        <div className="es-item-actions" onClick={e => e.stopPropagation()}>
           <button
-            className={`sidebar-item-pin-btn-modern ${isPinned ? 'pinned' : ''}`}
+            className={`es-item-pin ${isPinned ? 'pinned' : ''}`}
             onClick={handlePinClick}
             title={isPinned ? 'Unpin' : 'Pin'}
             type="button"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14" />
-              <path d="M16.5 9.4 7 14.9" />
-              <polyline points="3.2 6.9 12 12 20.8 6.9" />
-              <path d="M12 22V12" />
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.456.734a1.75 1.75 0 0 1 2.826.504l.613 1.327a3.08 3.08 0 0 0 2.084 1.707l2.454.584c1.332.317 1.8 1.972.832 2.94L11.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06L10 11.06l-2.204 2.205c-.968.968-2.623.5-2.94-.832l-.584-2.454a3.08 3.08 0 0 0-1.707-2.084l-1.327-.613a1.75 1.75 0 0 1-.504-2.826L4.456.734Z" />
             </svg>
           </button>
         </div>
       )}
 
       <style jsx>{`
-        .sidebar-item-modern {
-          height: 30px;
+        .es-item {
+          height: 28px;
           display: flex;
           align-items: center;
-          padding: 0 12px;
-          padding-left: 28px;
+          padding: 0 10px 0 26px;
           cursor: pointer;
           user-select: none;
-          transition: all 0.15s ease;
+          transition: all 0.12s ease;
           color: var(--text-secondary, #a1a1aa);
           position: relative;
-          gap: 10px;
+          gap: 8px;
         }
 
-        .sidebar-item-modern:hover {
+        .es-item:hover {
           background: var(--bg-surface, #18181b);
           color: var(--text-primary, #fafafa);
         }
 
-        .sidebar-item-modern.active {
+        .es-item.active {
           background: var(--accent-primary-dim);
           color: var(--accent-primary, #f59e0b);
         }
 
-        .sidebar-item-modern.active::before {
+        .es-item.active::before {
           content: '';
           position: absolute;
           left: 0;
           top: 4px;
           bottom: 4px;
-          width: 3px;
+          width: 2px;
           background: var(--accent-primary, #f59e0b);
-          border-radius: 0 2px 2px 0;
-          box-shadow: var(--shadow-glow);
+          border-radius: 0 1px 1px 0;
         }
 
-        .sidebar-item-icon-modern {
+        .es-item-icon {
           display: flex;
           align-items: center;
           justify-content: center;
-          opacity: 0.6;
+          opacity: 0.5;
           flex-shrink: 0;
         }
 
-        .sidebar-item-modern.active .sidebar-item-icon-modern {
-          opacity: 1;
+        .es-item.active .es-item-icon {
+          opacity: 0.9;
         }
 
-        .sidebar-item-name-modern {
-          font-size: 13px;
+        .es-item:hover .es-item-icon {
+          opacity: 0.7;
+        }
+
+        .es-item-name {
+          font-size: 12.5px;
           font-weight: 500;
           white-space: nowrap;
           overflow: hidden;
@@ -131,49 +130,56 @@ export default function SidebarItem({
           flex: 1;
         }
 
-        .sidebar-item-badge-modern {
+        .es-item-branch {
           font-size: 10px;
+          font-weight: 500;
           background: var(--bg-elevated, #27272a);
-          padding: 1px 6px;
-          border-radius: 10px;
+          padding: 1px 5px;
+          border-radius: 3px;
           color: var(--text-muted, #71717a);
-          max-width: 80px;
+          max-width: 72px;
           overflow: hidden;
           text-overflow: ellipsis;
+          white-space: nowrap;
+          flex-shrink: 0;
         }
 
-        .sidebar-item-actions-modern {
+        .es-item.active .es-item-branch {
+          background: rgba(245, 158, 11, 0.15);
+          color: var(--accent-primary, #f59e0b);
+        }
+
+        .es-item-actions {
           display: flex;
           align-items: center;
-          gap: 4px;
           opacity: 0;
-          transition: opacity 0.15s ease;
+          transition: opacity 0.12s ease;
         }
 
-        .sidebar-item-modern:hover .sidebar-item-actions-modern {
+        .es-item:hover .es-item-actions {
           opacity: 1;
         }
 
-        .sidebar-item-pin-btn-modern {
-          width: 22px;
-          height: 22px;
+        .es-item-pin {
+          width: 20px;
+          height: 20px;
           display: flex;
           align-items: center;
           justify-content: center;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          border-radius: 4px;
+          border-radius: 3px;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: all 0.12s ease;
         }
 
-        .sidebar-item-pin-btn-modern:hover {
+        .es-item-pin:hover {
           background: var(--bg-elevated, #27272a);
           color: var(--text-primary, #fafafa);
         }
 
-        .sidebar-item-pin-btn-modern.pinned {
+        .es-item-pin.pinned {
           color: var(--accent-primary, #f59e0b);
           opacity: 1;
         }

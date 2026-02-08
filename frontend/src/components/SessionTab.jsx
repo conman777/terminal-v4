@@ -249,7 +249,7 @@ export const SessionTab = memo(function SessionTab({
           animation: none;
         }
 
-        @keyframes tab-busy-pulse {
+        @keyframes session-tab-busy-pulse {
           0%, 100% { box-shadow: var(--tab-busy-shadow, 0 0 0 1px rgba(59, 130, 246, 0.5), 0 0 16px rgba(59, 130, 246, 0.3)); }
           50% { box-shadow: var(--tab-busy-shadow-peak, 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4)); }
         }
@@ -265,10 +265,10 @@ export const SessionTab = memo(function SessionTab({
         .tab-status-dot-modern.busy {
           background: var(--tab-dot-busy, #60a5fa);
           box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4);
-          animation: dot-busy-pulse 1.5s ease-in-out infinite;
+          animation: session-tab-dot-busy-pulse 1.5s ease-in-out infinite;
         }
 
-        @keyframes dot-busy-pulse {
+        @keyframes session-tab-dot-busy-pulse {
           0%, 100% { box-shadow: 0 0 0 1.5px rgba(59, 130, 246, 0.4), 0 0 10px rgba(59, 130, 246, 0.4); }
           50% { box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5), 0 0 14px rgba(59, 130, 246, 0.5); }
         }

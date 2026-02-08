@@ -16,7 +16,6 @@ import { FolderProvider, useFolders } from './contexts/FolderContext';
 import { BookmarkProvider, useBookmarks } from './contexts/BookmarkContext';
 import { NotesProvider, useNotes } from './contexts/NotesContext';
 import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
-import { ClaudeCodeProvider, useClaudeCode } from './contexts/ClaudeCodeContext';
 import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
@@ -78,10 +77,6 @@ function lazyWithChunkRecovery(importer, chunkName, pickDefault = (module) => mo
   });
 }
 
-const ClaudeCodePanel = lazyWithChunkRecovery(
-  () => import('./components/ClaudeCodePanel'),
-  'ClaudeCodePanel'
-);
 const PreviewPanel = lazyWithChunkRecovery(
   () => import('./components/PreviewPanel'),
   'PreviewPanel',
@@ -190,16 +185,6 @@ function AppContent() {
     stopDragging,
     setIsDragging
   } = usePaneLayout();
-
-  const {
-    leftPanelMode,
-    claudeCodeSessions,
-    activeClaudeCodeId,
-    setLeftPanelMode,
-    startClaudeCode,
-    selectClaudeCode,
-    deleteClaudeCode
-  } = useClaudeCode();
 
   const {
     previewUrl,
@@ -315,8 +300,8 @@ function AppContent() {
     const busyWindowMs = 8000;
 
     sessions.forEach((session) => {
-      const snapshotTs = Number.isFinite(Date.parse(session.lastActivityAt || session.updatedAt || ''))
-        ? Date.parse(session.lastActivityAt || session.updatedAt || '')
+      const snapshotTs = Number.isFinite(Date.parse(session.lastActivityAt || ''))
+        ? Date.parse(session.lastActivityAt || '')
         : 0;
       // Fallback inference when backend process has not been restarted and
       // does not yet provide `isBusy`.
@@ -326,6 +311,15 @@ function AppContent() {
       setSessionBusy(session.id, busy, { lastActivityAt: snapshotTs });
     });
   }, [sessions, setSessionBusy]);
+
+  useEffect(() => {
+    const activeIds = new Set((sessions || []).map((session) => session.id));
+    Object.keys(sessionActivity || {}).forEach((sessionId) => {
+      if (!activeIds.has(sessionId)) {
+        removeSessionActivity(sessionId);
+      }
+    });
+  }, [sessions, sessionActivity, removeSessionActivity]);
 
   // Tab reorder state - stores session IDs in user-defined order
   const [tabOrder, setTabOrder] = useState([]);
@@ -650,40 +644,6 @@ function AppContent() {
     }
   }, [activeSessionId]);
 
-  // Send element context to Claude Code from preview inspector
-  const handleSendToClaudeCode = useCallback(async (context) => {
-    if (!context) return;
-
-    // If no active Claude Code session, start one
-    let sessionId = activeClaudeCodeId;
-    if (!sessionId) {
-      try {
-        const session = await startClaudeCode();
-        sessionId = session.id;
-      } catch (error) {
-        console.error('Failed to start Claude Code session:', error);
-        return;
-      }
-    }
-
-    // Switch to Claude Code panel
-    setLeftPanelMode('claude-code');
-
-    // Send the context as input
-    try {
-      const command = context.endsWith('\n') || context.endsWith('\r')
-        ? context
-        : `${context}\r`;
-      await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command })
-      });
-    } catch (error) {
-      console.error('Failed to send to Claude Code:', error);
-    }
-  }, [activeClaudeCodeId, startClaudeCode, setLeftPanelMode]);
-
   const handleNavigateToPath = useCallback(async (path) => {
     if (!activeSessionId || !path) return;
 
@@ -779,11 +739,6 @@ function AppContent() {
     sessionActivity, sessionsGroupedByProject,
   };
 
-  const headerClaudeCodeProps = {
-    claudeCodeSessions, activeClaudeCodeId,
-    onSelectClaudeCode: selectClaudeCode, onNewClaudeCode: startClaudeCode, onDeleteClaudeCode: deleteClaudeCode,
-  };
-
   const headerModalProps = {
     setShowApiSettings, onOpenSettings: handleOpenSettings,
     setShowBookmarks, setShowNotes, setShowProcessManager,
@@ -852,10 +807,7 @@ function AppContent() {
         <>
           <Header
             isMobile={true}
-            leftPanelMode={leftPanelMode}
-            setLeftPanelMode={setLeftPanelMode}
             sessionProps={headerSessionProps}
-            claudeCodeProps={headerClaudeCodeProps}
             modalProps={headerModalProps}
             showPreview={showPreview}
             onTogglePreview={togglePreview}
@@ -910,8 +862,6 @@ function AppContent() {
               onCreateSession={handleRequestNewSession}
               sidebarMode={sidebarMode}
               onToggleSidebarMode={toggleSidebarMode}
-              leftPanelMode={leftPanelMode}
-              onSetLeftPanelMode={setLeftPanelMode}
             />
           ) : (
             <Sidebar
@@ -926,15 +876,15 @@ function AppContent() {
               onUnpinFolder={unpinFolder}
               currentPath={projectInfo?.cwd}
               onAddScanFolder={handleAddScanFolder}
+              sidebarMode={sidebarMode}
+              onToggleSidebarMode={toggleSidebarMode}
+              onCreateSession={handleRequestNewSession}
             />
           )}
           <div className="main-container">
             <Header
               isMobile={false}
-              leftPanelMode={leftPanelMode}
-              setLeftPanelMode={setLeftPanelMode}
               sessionProps={headerSessionProps}
-              claudeCodeProps={headerClaudeCodeProps}
               modalProps={headerModalProps}
               showPreview={showPreview}
               onTogglePreview={togglePreview}
@@ -957,68 +907,42 @@ function AppContent() {
               </Suspense>
             ) : (
               <>
-                {/* Left pane - switches between Terminal and Claude Code */}
                 <div
                   className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
                   style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
                 >
-                  {leftPanelMode === 'terminal' ? (
-                    activeSessions.length === 0 ? (
-                      <div className="empty-state">
-                        <h2>Welcome to Terminal</h2>
-                        <p>Create a new terminal session to get started.</p>
-                        <button className="btn-primary" onClick={handleRequestNewSession}>
-                          + New Terminal
-                        </button>
-                      </div>
-                    ) : (
-                      <ErrorBoundary name="terminal" resetKey={activeSessionId}>
-                        <SplitPaneContainer
-                          layout={legacyLayout}
-                          paneLayout={paneLayout}
-                          sessions={activeSessions}
-                          onPaneSessionSelect={handlePaneSessionSelect}
-                          onPaneSplit={splitPane}
-                          onPaneClose={closePane}
-                          onPaneFocus={handlePaneFocus}
-                          onPaneFullscreen={toggleFullscreen}
-                          fullscreenPaneId={fullscreenPaneId}
-                          showPreview={showPreview && !fullscreenPaneId}
-                          onMinimizeMainTerminal={handleToggleMainTerminal}
-                          keybarOpen={keybarOpen}
-                          viewportHeight={viewportHeight}
-                          onUrlDetected={handleUrlDetected}
-                          fontSize={terminalFontSize}
-                          webglEnabled={terminalWebglEnabled}
-                          sessionActivity={sessionActivity}
-                          onSessionBusyChange={handleSessionBusyChange}
-                          projectInfo={projectInfo}
-                        />
-                      </ErrorBoundary>
-                    )
+                  {activeSessions.length === 0 ? (
+                    <div className="empty-state">
+                      <h2>Welcome to Terminal</h2>
+                      <p>Create a new terminal session to get started.</p>
+                      <button className="btn-primary" onClick={handleRequestNewSession}>
+                        + New Terminal
+                      </button>
+                    </div>
                   ) : (
-                    !activeClaudeCodeId ? (
-                      <div className="empty-state">
-                        <h2>Claude Code</h2>
-                        <p>Start a Claude Code session to open the interactive CLI.</p>
-                        <p className="empty-hint">Use /model inside the CLI to change models.</p>
-                        <button className="btn-primary" onClick={startClaudeCode}>
-                          + New Session
-                        </button>
-                      </div>
-                    ) : (
-                      <Suspense fallback={<div className="empty-state"><p>Loading Claude Code...</p></div>}>
-                        <ClaudeCodePanel
-                          sessionId={activeClaudeCodeId}
-                          keybarOpen={keybarOpen}
-                          viewportHeight={viewportHeight}
-                          onUrlDetected={handleUrlDetected}
-                          fontSize={terminalFontSize}
-                          webglEnabled={terminalWebglEnabled}
-                          usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
-                        />
-                      </Suspense>
-                    )
+                    <ErrorBoundary name="terminal" resetKey={activeSessionId}>
+                      <SplitPaneContainer
+                        layout={legacyLayout}
+                        paneLayout={paneLayout}
+                        sessions={activeSessions}
+                        onPaneSessionSelect={handlePaneSessionSelect}
+                        onPaneSplit={splitPane}
+                        onPaneClose={closePane}
+                        onPaneFocus={handlePaneFocus}
+                        onPaneFullscreen={toggleFullscreen}
+                        fullscreenPaneId={fullscreenPaneId}
+                        showPreview={showPreview && !fullscreenPaneId}
+                        onMinimizeMainTerminal={handleToggleMainTerminal}
+                        keybarOpen={keybarOpen}
+                        viewportHeight={viewportHeight}
+                        onUrlDetected={handleUrlDetected}
+                        fontSize={terminalFontSize}
+                        webglEnabled={terminalWebglEnabled}
+                        sessionActivity={sessionActivity}
+                        onSessionBusyChange={handleSessionBusyChange}
+                        projectInfo={projectInfo}
+                      />
+                    </ErrorBoundary>
                   )}
                 </div>
 
@@ -1040,7 +964,7 @@ function AppContent() {
                           projectInfo={projectInfo}
                           onStartProject={handleStartProject}
                           onSendToTerminal={handleSendToTerminal}
-                          onSendToClaudeCode={handleSendToClaudeCode}
+
                           activeSessions={activeSessions}
                           activeSessionId={activeSessionId}
                           sessionActivity={sessionActivity}
@@ -1096,25 +1020,6 @@ function AppContent() {
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
                 />
-              </div>
-            )}
-
-            {/* Claude Code pane */}
-            {mobileView === 'claude' && (
-              <div className="claude-code-pane">
-                <Suspense fallback={<div className="empty-state"><p>Loading...</p></div>}>
-                  <ClaudeCodePanel
-                    sessionId={activeClaudeCodeId}
-                    keybarOpen={keybarOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={handleUrlDetected}
-                    fontSize={terminalFontSize}
-                    webglEnabled={terminalWebglEnabled}
-                    onScrollDirection={handleScrollDirectionSafe}
-                    onRegisterFocusTerminal={handleRegisterFocusTerminal}
-                    usesTmux={sessions.find(s => s.id === activeClaudeCodeId)?.usesTmux}
-                  />
-                </Suspense>
               </div>
             )}
 
@@ -1202,11 +1107,9 @@ function AuthenticatedApp() {
           <TerminalSessionProvider>
             <BookmarkProvider>
               <PaneLayoutProvider>
-                <ClaudeCodeProvider>
-                  <PreviewProvider>
-                    <AppContent />
-                  </PreviewProvider>
-                </ClaudeCodeProvider>
+                <PreviewProvider>
+                  <AppContent />
+                </PreviewProvider>
               </PaneLayoutProvider>
             </BookmarkProvider>
           </TerminalSessionProvider>
