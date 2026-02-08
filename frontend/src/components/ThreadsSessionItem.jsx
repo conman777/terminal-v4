@@ -203,12 +203,12 @@ export default function ThreadsSessionItem({
         }
 
         .threads-session-item:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
         .threads-session-item.active {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
         }
 
@@ -236,7 +236,7 @@ export default function ThreadsSessionItem({
         .threads-session-edit {
           font-size: 12px;
           font-weight: 500;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           border: 1px solid var(--accent-primary, #f59e0b);
           border-radius: 3px;
           padding: 2px 6px;
@@ -295,7 +295,7 @@ export default function ThreadsSessionItem({
         }
 
         .threads-action-btn:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
         }
 

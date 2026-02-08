@@ -85,7 +85,7 @@ export default function SidebarItem({
         }
 
         .es-item:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
@@ -133,7 +133,7 @@ export default function SidebarItem({
         .es-item-branch {
           font-size: 10px;
           font-weight: 500;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           padding: 1px 5px;
           border-radius: 3px;
           color: var(--text-muted, #71717a);
@@ -175,7 +175,7 @@ export default function SidebarItem({
         }
 
         .es-item-pin:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
         }
 

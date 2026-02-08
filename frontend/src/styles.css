@@ -5,36 +5,37 @@
 
 /* CSS Variables */
 :root {
-  /* Background colors - deep charcoal */
-  --bg-base: #09090b;
-  --bg-primary: #09090b;  /* Alias for bg-base, used in some components */
-  --bg-surface: #18181b;
-  --bg-elevated: #27272a;
-  --bg-overlay: rgba(9, 9, 11, 0.85);
-  
-  /* Primary accent - warm amber/gold */
-  --accent-primary: #f59e0b;
-  --accent-primary-light: #fbbf24;
+  /* Background colors - warm charcoal (subtle warm tint) */
+  --bg-base: #0a0a0c;
+  --bg-primary: #0a0a0c;
+  --bg-surface: #141416;
+  --bg-elevated: #1e1e21;
+  --bg-overlay: rgba(10, 10, 12, 0.88);
+
+  /* Primary accent - warm amber/gold (three tiers: ember, flame, spark) */
+  --accent-primary: #f59e0b;       /* Flame - standard */
+  --accent-primary-light: #fbbf24; /* Spark - bright, hover emphasis */
   --accent-primary-dim: rgba(245, 158, 11, 0.15);
   --accent-primary-glow: rgba(245, 158, 11, 0.25);
-  
-  /* Secondary accent - emerald */
+  --accent-ember: #b45309;         /* Ember - dark amber for subtle use */
+
+  /* Secondary accent - emerald (reserved for success/git states) */
   --accent-secondary: #10b981;
   --accent-secondary-dim: rgba(16, 185, 129, 0.15);
-  
+
   /* Text colors */
   --text-primary: #fafafa;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
-  
-  /* Border colors */
-  --border-subtle: #27272a;
-  --border-default: #3f3f46;
-  --border-hover: #52525b;
-  
+
+  /* Border colors - reduced usage, prefer shadows */
+  --border-subtle: #1e1e21;
+  --border-default: #2a2a2e;
+  --border-hover: #3f3f46;
+
   /* Status colors */
   --success: #10b981;
-  --error: #f43f5e;
+  --error: #fb3654;
   --warning: #f59e0b;
 
   /* Session tab colors */
@@ -56,30 +57,32 @@
   --tab-done-border: rgba(34, 197, 94, 0.75);
   --tab-done-text: #ecfdf5;
   --tab-done-shadow: 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24);
-  
+
   /* Spacing */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
-  --radius-xl: 20px;
-  
+  --radius-xl: 16px;
+
   /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
-  
-  /* Shadows */
+
+  /* Shadows - layered for depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
   --shadow-glow: 0 0 20px var(--accent-primary-glow);
+  --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
+  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.05);
 
   /* Atmospheric backgrounds - warm amber glow from top */
   --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(245, 158, 11, 0.18), transparent 50%),
-                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(16, 185, 129, 0.12), transparent 40%);
+                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(245, 158, 11, 0.06), transparent 40%);
 
   /* Glass effects */
-  --surface-glass: rgba(24, 24, 27, 0.85);
+  --surface-glass: rgba(20, 20, 22, 0.88);
   --surface-glass-border: rgba(245, 158, 11, 0.15);
 
   /* Amber glow system */
@@ -91,10 +94,10 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
 
   /* Interactive state colors */
-  --bg-hover: #1f1f23;
-  --bg-active: #2a2a2e;
-  --bg-tertiary: #131316;
-  --border-dim: #1e1e22;
+  --bg-hover: #1a1a1e;
+  --bg-active: #242428;
+  --bg-tertiary: #111114;
+  --border-dim: #1a1a1e;
   --accent-primary-hover: #d97706;
   --accent: var(--accent-primary);
 
@@ -173,6 +176,10 @@
   --amber-glow-subtle: 0 0 20px rgba(217, 119, 6, 0.1);
   --amber-glow-medium: 0 0 30px rgba(217, 119, 6, 0.15);
   --amber-glow-strong: 0 0 40px rgba(217, 119, 6, 0.2), 0 0 80px rgba(217, 119, 6, 0.1);
+
+  /* Shadows - lighter */
+  --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(217, 119, 6, 0.03);
 
   /* Interactive state colors */
   --bg-hover: #ececee;
@@ -269,11 +276,11 @@ button {
    =========================================== */
 
 .sidebar {
-  width: 260px;
-  min-width: 260px;
+  width: 256px;
+  min-width: 256px;
   background: var(--surface-glass);
   backdrop-filter: blur(20px);
-  border-right: 1px solid var(--surface-glass-border);
+  border-right: none;
   display: flex;
   flex-direction: column;
   transition: width var(--transition-base), min-width var(--transition-base);
@@ -289,8 +296,9 @@ button {
   right: 0;
   bottom: 0;
   width: 1px;
-  background: linear-gradient(180deg, var(--accent-primary) 0%, transparent 30%, transparent 70%, var(--accent-secondary) 100%);
+  background: linear-gradient(180deg, var(--accent-primary) 0%, rgba(245, 158, 11, 0.3) 30%, transparent 100%);
   opacity: 0.4;
+  pointer-events: none;
 }
 
 .sidebar.collapsed {
@@ -1705,8 +1713,8 @@ button {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(12px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1721,12 +1729,12 @@ button {
 
 .modal-content {
   background: var(--bg-surface);
-  border: 1px solid var(--border-default);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-xl);
   width: 90%;
   max-width: 480px;
-  box-shadow: var(--shadow-lg);
-  animation: modalSlideIn var(--transition-slow) ease-out;
+  box-shadow: var(--shadow-modal, 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.05));
+  animation: modalSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .modal-content-wide {
@@ -1736,7 +1744,7 @@ button {
 @keyframes modalSlideIn {
   from {
     opacity: 0;
-    transform: translateY(20px) scale(0.98);
+    transform: translateY(24px) scale(0.96);
   }
   to {
     opacity: 1;
@@ -2095,51 +2103,83 @@ button {
 
 .bookmark-modal {
   background: var(--bg-surface);
-  border: 1px solid var(--border-default);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-xl);
   width: 90%;
   max-width: 900px;
   max-height: 80vh;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-modal, 0 25px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.06));
   display: flex;
   flex-direction: column;
-  animation: modalSlideIn var(--transition-slow) ease-out;
+  animation: modalSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .bookmark-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22px 26px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 18px 22px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.bookmark-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent-primary, #f59e0b);
+}
+
+.bookmark-modal-title svg {
+  opacity: 0.7;
 }
 
 .bookmark-modal-header h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.bookmark-modal-header .modal-close {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #71717a);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.bookmark-modal-header .modal-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #fafafa);
 }
 
 .bookmark-modal-search {
-  padding: 18px 26px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 12px 22px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .bookmark-modal-search input {
   width: 100%;
-  background: var(--bg-base);
-  border: 1px solid var(--border-default);
+  background: var(--bg-primary, #0a0a0c);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: var(--radius-md);
-  padding: 12px 16px;
+  padding: 10px 14px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 13px;
   outline: none;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
 }
 
 .bookmark-modal-search input:focus {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-primary-dim);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
 }
 
 .bookmark-modal-body {
@@ -2150,68 +2190,88 @@ button {
 
 /* Bookmark Categories */
 .bookmark-categories {
-  width: 200px;
-  border-right: 1px solid var(--border-subtle);
+  width: 190px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  background: var(--bg-primary, #0a0a0c);
+  position: relative;
+}
+
+.bookmark-categories::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.04);
+  pointer-events: none;
 }
 
 .bookmark-categories-header {
-  padding: 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 16px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
 }
 
 .bookmark-categories-header h3 {
   margin: 0;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 1px;
   color: var(--text-muted);
 }
 
 .bookmark-category-list {
   flex: 1;
   overflow-y: auto;
-  padding: 10px;
+  padding: 8px;
 }
 
 .bookmark-category-item {
   width: 100%;
   background: transparent;
   border: none;
-  border-radius: var(--radius-md);
-  padding: 12px 14px;
+  border-radius: 6px;
+  padding: 9px 12px;
   color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 14px;
-  margin-bottom: 4px;
+  font-size: 13px;
+  margin-bottom: 2px;
 }
 
 .bookmark-category-item:hover {
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
 }
 
 .bookmark-category-item.active {
-  background: var(--accent-primary-dim);
+  background: rgba(245, 158, 11, 0.08);
   color: var(--accent-primary);
-  border-left: 3px solid var(--accent-primary);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
 }
 
 .bookmark-count {
-  font-size: 11px;
-  padding: 3px 8px;
+  font-size: 10px;
+  padding: 2px 7px;
   border-radius: 999px;
-  background: var(--bg-elevated);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);
   font-weight: 500;
+}
+
+.bookmark-category-item.active .bookmark-count {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent-primary);
 }
 
 /* Bookmark List */
@@ -2226,111 +2286,111 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 20px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .bookmark-list-header h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .bookmark-add-btn {
-  background: var(--accent-primary-dim);
-  border: 1px solid var(--accent-primary);
+  background: transparent;
+  border: 1px solid rgba(245, 158, 11, 0.3);
   color: var(--accent-primary);
-  padding: 8px 16px;
-  border-radius: var(--radius-md);
-  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
   font-weight: 600;
-  transition: all var(--transition-fast);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .bookmark-add-btn:hover {
-  background: var(--accent-primary);
-  color: var(--bg-base);
+  background: rgba(245, 158, 11, 0.1);
+  border-color: var(--accent-primary);
 }
 
 .bookmark-list-items {
   flex: 1;
   overflow-y: auto;
-  padding: 18px 22px;
+  padding: 14px 20px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
 }
 
 .bookmark-empty {
   text-align: center;
   padding: 48px 24px;
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 /* Bookmark Item */
 .bookmark-item {
   display: flex;
   align-items: center;
-  gap: 14px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
-  padding: 14px 16px;
-  transition: all var(--transition-fast);
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 12px 14px;
+  transition: all 0.15s ease;
 }
 
 .bookmark-item:hover {
-  border-color: var(--accent-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(245, 158, 11, 0.25);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
 }
 
 .bookmark-execute-btn {
-  background: var(--accent-primary-dim);
-  border: 1px solid var(--accent-primary);
-  border-radius: var(--radius-md);
-  width: 40px;
-  height: 40px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 8px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
   flex-shrink: 0;
+  color: var(--accent-primary);
 }
 
 .bookmark-execute-btn:hover {
   background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: var(--bg-primary, #0a0a0c);
   transform: scale(1.05);
-}
-
-.bookmark-play {
-  font-size: 14px;
-  color: var(--accent-primary);
-  transition: color var(--transition-fast);
-}
-
-.bookmark-execute-btn:hover .bookmark-play {
-  color: var(--bg-base);
 }
 
 .bookmark-content {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
 .bookmark-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .bookmark-command {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
   font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
@@ -2346,22 +2406,22 @@ button {
 }
 
 .bookmark-category-badge {
-  font-size: 10px;
-  padding: 3px 10px;
+  font-size: 9px;
+  padding: 2px 8px;
   border-radius: 999px;
-  background: var(--accent-secondary-dim);
-  color: var(--accent-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.5px;
 }
 
 .bookmark-actions {
   display: flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
   opacity: 0;
-  transition: opacity var(--transition-fast);
+  transition: opacity 0.15s ease;
 }
 
 .bookmark-item:hover .bookmark-actions {
@@ -2370,49 +2430,49 @@ button {
 
 .bookmark-edit-btn,
 .bookmark-delete-btn {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  width: 32px;
-  height: 32px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  font-size: 14px;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
 }
 
 .bookmark-edit-btn {
-  color: var(--accent-primary);
+  color: var(--text-muted);
 }
 
 .bookmark-edit-btn:hover {
-  background: var(--accent-primary-dim);
-  border-color: var(--accent-primary);
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: var(--accent-primary);
 }
 
 .bookmark-delete-btn {
-  color: var(--error);
-  font-size: 18px;
+  color: var(--text-muted);
 }
 
 .bookmark-delete-btn:hover {
-  background: rgba(244, 63, 94, 0.15);
-  border-color: var(--error);
+  background: rgba(251, 54, 84, 0.1);
+  border-color: rgba(251, 54, 84, 0.3);
+  color: var(--error, #fb3654);
 }
 
 /* Bookmark Form */
 .bookmark-form-container {
-  padding: 18px 22px;
-  background: var(--bg-base);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 20px;
+  background: var(--bg-primary, #0a0a0c);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .bookmark-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .bookmark-form .form-group {
@@ -2420,24 +2480,24 @@ button {
 }
 
 .bookmark-form label {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.5px;
 }
 
 .bookmark-form input,
 .bookmark-form textarea {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-md);
-  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 9px 12px;
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  transition: all var(--transition-fast);
+  transition: all 0.15s ease;
 }
 
 .bookmark-form textarea {
@@ -2448,7 +2508,7 @@ button {
 .bookmark-form input:focus,
 .bookmark-form textarea:focus {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-primary-dim);
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
 }
 
 .form-actions {
@@ -6888,8 +6948,8 @@ button {
 
 /* Split Handle */
 .split-handle {
-  width: 6px;
-  background: var(--border-subtle);
+  width: 1px;
+  background: rgba(255, 255, 255, 0.06);
   cursor: col-resize;
   transition: background var(--transition-fast);
   flex-shrink: 0;
@@ -6909,7 +6969,9 @@ button {
 }
 
 .split-handle:hover {
+  width: 4px;
   background: var(--accent-primary-dim);
+  transition: width 0.15s ease, background 0.15s ease;
 }
 
 .split-handle:hover::after {
@@ -6917,6 +6979,7 @@ button {
 }
 
 .split-handle.active {
+  width: 4px;
   background: var(--accent-primary-dim);
 }
 

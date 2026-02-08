@@ -170,39 +170,35 @@ export const SessionTab = memo(function SessionTab({
           display: flex;
           align-items: center;
           gap: 8px;
-          height: 28px;
-          padding: 0 10px;
+          height: 30px;
+          padding: 0 12px;
           background: transparent;
-          border: 1px solid var(--border-subtle, #27272a);
-          border-radius: 6px;
+          border: none;
+          border-top: 2px solid transparent;
+          border-radius: 8px 8px 0 0;
           color: var(--text-muted, #71717a);
           font-size: 13px;
-          font-weight: 500;
+          font-weight: 400;
           white-space: nowrap;
           cursor: pointer;
           transition: all 0.2s ease;
           position: relative;
           user-select: none;
           overflow: hidden;
-          opacity: 0.82;
         }
 
         .session-tab-item:hover:not(.active) {
-          background: var(--bg-elevated, #27272a);
+          background: rgba(255, 255, 255, 0.04);
           color: var(--text-primary, #fafafa);
-          border-color: var(--border-default, #3f3f46);
-          opacity: 1;
         }
 
         .session-tab-item.active {
-          background: var(--tab-active-bg, rgba(245, 158, 11, 0.22));
-          border-color: var(--tab-active-border, rgba(245, 158, 11, 0.7));
-          color: var(--tab-active-text, var(--text-primary, #fafafa));
+          background: rgba(245, 158, 11, 0.08);
+          border-top-color: var(--accent-primary, #f59e0b);
+          color: var(--text-primary, #fafafa);
           box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
           z-index: 5;
-          font-weight: 700;
-          opacity: 1;
-          transform: translateY(-1px);
+          font-weight: 600;
         }
 
         .session-tab-item.busy:not(.active)::before {
@@ -226,25 +222,23 @@ export const SessionTab = memo(function SessionTab({
 
         .session-tab-item.done:not(.active) {
           background: var(--tab-done-bg, rgba(34, 197, 94, 0.24));
-          border-color: var(--tab-done-border, rgba(34, 197, 94, 0.75));
+          border-top-color: var(--success, #10b981);
           color: var(--tab-done-text, #ecfdf5);
           box-shadow: var(--tab-done-shadow, 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24));
-          font-weight: 650;
-          opacity: 1;
+          font-weight: 600;
         }
 
         .session-tab-item.busy {
-          border-color: var(--tab-busy-border, rgba(59, 130, 246, 0.5));
           background: var(--tab-busy-bg, rgba(59, 130, 246, 0.16));
+          border-top-color: var(--tab-dot-busy, #60a5fa);
           color: var(--tab-busy-text, var(--text-primary, #fafafa));
           box-shadow: var(--tab-busy-shadow-soft, 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2));
-          opacity: 1;
         }
 
         .session-tab-item.busy.active {
-          background: var(--tab-active-bg, rgba(245, 158, 11, 0.22));
+          background: rgba(245, 158, 11, 0.08);
           color: var(--tab-active-text, var(--text-primary, #fafafa));
-          border-color: var(--tab-active-border, rgba(245, 158, 11, 0.7));
+          border-top-color: var(--accent-primary, #f59e0b);
           box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
           animation: none;
         }
@@ -255,10 +249,11 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .tab-status-dot-modern {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
+          width: 3px;
+          height: 14px;
+          border-radius: 2px;
           flex-shrink: 0;
+          margin-left: -6px;
           transition: background 0.3s ease, box-shadow 0.3s ease;
         }
 
@@ -316,7 +311,7 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .tab-rename-input-modern {
-          background: var(--bg-primary, #09090b);
+          background: var(--bg-primary, #0a0a0c);
           border: 1px solid var(--accent-primary, #f59e0b);
           border-radius: 4px;
           color: var(--text-primary, #fafafa);
@@ -330,13 +325,13 @@ export const SessionTab = memo(function SessionTab({
 
         .session-tab-item.dragging {
           opacity: 0.4;
-          transform: scale(0.95);
+          transform: scale(0.97);
+          box-shadow: var(--shadow-md);
         }
 
         .session-tab-item.drag-over {
-          border-style: dashed;
           background: var(--accent-primary-dim);
-          transform: scale(1.02);
+          border-top-color: var(--accent-primary);
         }
       `}</style>
     </div>

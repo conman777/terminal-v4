@@ -52,9 +52,17 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
     <div className="modal-overlay" onClick={onClose}>
       <div className="bookmark-modal" onClick={(e) => e.stopPropagation()}>
         <div className="bookmark-modal-header">
-          <h2>Bookmarks</h2>
+          <div className="bookmark-modal-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />
+            </svg>
+            <h2>Bookmarks</h2>
+          </div>
           <button className="modal-close" onClick={onClose} aria-label="Close">
-            ×
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
 
@@ -72,6 +80,9 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
           {/* Categories sidebar */}
           <div className="bookmark-categories">
             <div className="bookmark-categories-header">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+              </svg>
               <h3>Categories</h3>
             </div>
             <div className="bookmark-category-list">
@@ -104,8 +115,13 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                   setShowAddForm(true);
                   setEditingBookmark(null);
                 }}
+                title="Add bookmark"
               >
-                + Add
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>Add</span>
               </button>
             </div>
 
@@ -143,7 +159,9 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                     title={`Execute: ${bookmark.command}`}
                     aria-label={`Execute bookmark: ${bookmark.name}`}
                   >
-                    <span className="bookmark-play">▶</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                      <polygon points="6 3 20 12 6 21 6 3" />
+                    </svg>
                   </button>
 
                   <div className="bookmark-content">
@@ -164,7 +182,9 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                       title="Edit bookmark"
                       aria-label="Edit bookmark"
                     >
-                      ✎
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                      </svg>
                     </button>
                     <button
                       className="bookmark-delete-btn"
@@ -172,7 +192,11 @@ export function BookmarkModal({ isOpen, onClose, bookmarks, onAdd, onUpdate, onD
                       title="Delete bookmark"
                       aria-label="Delete bookmark"
                     >
-                      ×
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M3 6h18" />
+                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                      </svg>
                     </button>
                   </div>
                 </div>

@@ -333,8 +333,8 @@ export function SessionTabBar({
         .session-tab-bar-container-modern {
           display: flex;
           align-items: center;
-          background: var(--bg-primary, #09090b);
-          border-bottom: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-primary, #0a0a0c);
+          border-bottom: 1px solid var(--border-subtle, #1e1e21);
           padding: 0 4px;
           height: 38px;
           flex-shrink: 0;
@@ -369,8 +369,8 @@ export function SessionTabBar({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           color: var(--text-muted, #71717a);
           border-radius: 6px;
           cursor: pointer;
@@ -380,7 +380,7 @@ export function SessionTabBar({
 
         .session-tab-scroll-btn-modern:hover {
           color: var(--text-primary, #fafafa);
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .session-tab-new-modern {
@@ -400,7 +400,7 @@ export function SessionTabBar({
         }
 
         .session-tab-new-modern:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
@@ -415,8 +415,8 @@ export function SessionTabBar({
           gap: 6px;
           height: 28px;
           padding: 0 10px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           color: var(--text-secondary, #a1a1aa);
           border-radius: 6px;
           font-size: 11px;
@@ -426,7 +426,7 @@ export function SessionTabBar({
         }
 
         .session-tab-overflow-btn-modern:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
         }
 
@@ -435,8 +435,8 @@ export function SessionTabBar({
           top: calc(100% + 8px);
           right: 0;
           width: 200px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 8px;
           box-shadow: var(--shadow-lg);
           z-index: 1000;
@@ -456,7 +456,7 @@ export function SessionTabBar({
           color: var(--text-muted, #71717a);
           text-transform: uppercase;
           letter-spacing: 0.5px;
-          border-bottom: 1px solid var(--border-subtle, #27272a);
+          border-bottom: 1px solid var(--border-subtle, #1e1e21);
           margin-bottom: 4px;
         }
 
@@ -482,7 +482,7 @@ export function SessionTabBar({
         }
 
         .session-tab-overflow-item-modern:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .session-tab-overflow-item-modern.active {

@@ -115,8 +115,8 @@ export default function ClaudeCodeSessionSelector({
           align-items: center;
           gap: 10px;
           padding: 0 12px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 8px;
           color: var(--text-primary, #fafafa);
           font-size: 13px;
@@ -127,7 +127,7 @@ export default function ClaudeCodeSessionSelector({
 
         .claude-selector-btn-modern:hover {
           border-color: var(--border-hover, #52525b);
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .claude-selector-btn-modern.open {
@@ -163,8 +163,8 @@ export default function ClaudeCodeSessionSelector({
           top: calc(100% + 8px);
           left: 0;
           width: 240px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 10px;
           box-shadow: var(--shadow-lg);
           z-index: 1000;
@@ -198,7 +198,7 @@ export default function ClaudeCodeSessionSelector({
         }
 
         .claude-item-modern:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .claude-item-modern.active {
@@ -281,9 +281,9 @@ export default function ClaudeCodeSessionSelector({
           align-items: center;
           justify-content: center;
           gap: 8px;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           border: none;
-          border-top: 1px solid var(--border-subtle, #27272a);
+          border-top: 1px solid var(--border-subtle, #1e1e21);
           color: var(--accent-primary, #f59e0b);
           font-size: 13px;
           font-weight: 600;
@@ -292,7 +292,7 @@ export default function ClaudeCodeSessionSelector({
         }
 
         .claude-new-btn-modern:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
         }
 
         .claude-empty-modern {

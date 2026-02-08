@@ -349,8 +349,8 @@ export function SessionSelector({
           align-items: center;
           gap: 10px;
           padding: 0 12px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 8px;
           color: var(--text-primary, #fafafa);
           font-size: 13px;
@@ -361,7 +361,7 @@ export function SessionSelector({
 
         .session-selector-btn-modern:hover {
           border-color: var(--border-hover, #52525b);
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .session-selector-btn-modern.open {
@@ -394,8 +394,8 @@ export function SessionSelector({
           top: calc(100% + 8px);
           left: 0;
           width: 320px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 10px;
           box-shadow: var(--shadow-lg);
           z-index: 1000;
@@ -429,7 +429,7 @@ export function SessionSelector({
         }
 
         .session-selector-item-modern:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .session-selector-item-modern.active {
@@ -485,8 +485,8 @@ export function SessionSelector({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           color: var(--text-muted, #71717a);
           border-radius: 4px;
           cursor: pointer;
@@ -494,9 +494,9 @@ export function SessionSelector({
         }
 
         .session-selector-action-btn-modern:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
-          border-color: var(--border-default, #3f3f46);
+          border-color: var(--border-default, #2a2a2e);
         }
 
         .session-selector-action-btn-modern.delete:hover {
@@ -513,7 +513,7 @@ export function SessionSelector({
 
         .session-selector-action-btn-modern.save {
           background: var(--accent-primary, #f59e0b);
-          color: var(--bg-primary, #09090b);
+          color: var(--bg-primary, #0a0a0c);
           border: none;
           width: auto;
           padding: 0 8px;
@@ -524,7 +524,7 @@ export function SessionSelector({
         .session-selector-rename-input-modern {
           width: 100%;
           height: 24px;
-          background: var(--bg-primary, #09090b);
+          background: var(--bg-primary, #0a0a0c);
           border: 1px solid var(--accent-primary, #f59e0b);
           border-radius: 4px;
           color: var(--text-primary, #fafafa);
@@ -549,9 +549,9 @@ export function SessionSelector({
           align-items: center;
           justify-content: center;
           gap: 8px;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           border: none;
-          border-top: 1px solid var(--border-subtle, #27272a);
+          border-top: 1px solid var(--border-subtle, #1e1e21);
           color: var(--accent-primary, #f59e0b);
           font-size: 13px;
           font-weight: 600;
@@ -560,7 +560,7 @@ export function SessionSelector({
         }
 
         .session-selector-new-modern:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
         }
 
         .session-inactive-icon-modern {

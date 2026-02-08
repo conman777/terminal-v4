@@ -74,8 +74,8 @@ export function Dropdown({
         .dropdown-menu {
           position: absolute;
           top: calc(100% + 8px);
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           border-radius: 8px;
           min-width: 180px;
           box-shadow: var(--shadow-lg);
@@ -114,7 +114,7 @@ export function Dropdown({
         }
 
         .dropdown-item:hover:not(:disabled) {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
         }
 
         .dropdown-item.active {
@@ -148,7 +148,7 @@ export function Dropdown({
 
         .dropdown-item-badge {
           font-size: 10px;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           padding: 2px 6px;
           border-radius: 10px;
           color: var(--text-muted, #71717a);
@@ -156,7 +156,7 @@ export function Dropdown({
 
         .dropdown-separator {
           height: 1px;
-          background: var(--border-subtle, #27272a);
+          background: var(--border-subtle, #1e1e21);
           margin: 6px 0;
         }
       `}</style>

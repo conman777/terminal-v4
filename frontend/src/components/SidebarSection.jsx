@@ -234,7 +234,7 @@ export default function SidebarSection({
         }
 
         .es-section-header:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-secondary, #a1a1aa);
         }
 
@@ -277,7 +277,7 @@ export default function SidebarSection({
           font-size: 10px;
           font-weight: 600;
           color: var(--text-muted, #71717a);
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           padding: 0 5px;
           height: 16px;
           line-height: 16px;
@@ -306,7 +306,7 @@ export default function SidebarSection({
         }
 
         .es-section-add:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
           opacity: 1;
         }
@@ -334,8 +334,8 @@ export default function SidebarSection({
         .es-search-input {
           width: 100%;
           height: 26px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 5px;
           padding: 0 26px 0 26px;
           color: var(--text-primary, #fafafa);
@@ -373,7 +373,7 @@ export default function SidebarSection({
         }
 
         .es-search-clear:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
         }
 
@@ -397,7 +397,7 @@ export default function SidebarSection({
         .es-section-loader {
           width: 10px;
           height: 10px;
-          border: 1.5px solid var(--border-subtle, #27272a);
+          border: 1.5px solid var(--border-subtle, #1e1e21);
           border-top-color: var(--accent-primary, #f59e0b);
           border-radius: 50%;
           animation: es-spin 0.7s linear infinite;
@@ -408,7 +408,7 @@ export default function SidebarSection({
         .es-empty-loader {
           width: 12px;
           height: 12px;
-          border: 1.5px solid var(--border-subtle, #27272a);
+          border: 1.5px solid var(--border-subtle, #1e1e21);
           border-top-color: var(--accent-primary, #f59e0b);
           border-radius: 50%;
           animation: es-spin 0.7s linear infinite;

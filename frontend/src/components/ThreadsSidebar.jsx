@@ -207,15 +207,32 @@ export default function ThreadsSidebar({
 
       <style jsx>{`
         .threads-sidebar {
-          width: 272px;
+          width: 256px;
           height: 100%;
-          background: var(--bg-primary, #09090b);
-          border-right: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-primary, #0a0a0c);
+          border-right: none;
           display: flex;
           flex-direction: column;
           transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           flex-shrink: 0;
           z-index: 50;
+          position: relative;
+        }
+
+        .threads-sidebar::after {
+          content: '';
+          position: absolute;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 1px;
+          background: linear-gradient(180deg, var(--accent-primary, #f59e0b) 0%, rgba(245, 158, 11, 0.3) 30%, transparent 100%);
+          opacity: 0.4;
+          pointer-events: none;
+        }
+
+        .threads-sidebar.collapsed::after {
+          opacity: 0.2;
         }
 
         .threads-sidebar.collapsed {
@@ -224,12 +241,13 @@ export default function ThreadsSidebar({
 
         /* ── Top bar: mode switch + collapse ── */
         .ts-topbar {
-          height: 48px;
+          height: 44px;
           display: flex;
           align-items: center;
           gap: 6px;
           padding: 0 8px;
-          border-bottom: 1px solid var(--border-subtle, #27272a);
+          border-bottom: none;
+          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
           flex-shrink: 0;
         }
 
@@ -270,7 +288,7 @@ export default function ThreadsSidebar({
         }
 
         .ts-collapse-btn:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
@@ -281,7 +299,8 @@ export default function ThreadsSidebar({
           align-items: center;
           justify-content: space-between;
           padding: 0 10px 0 12px;
-          border-bottom: 1px solid var(--border-subtle, #27272a);
+          border-bottom: none;
+          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
           flex-shrink: 0;
         }
 
@@ -306,7 +325,7 @@ export default function ThreadsSidebar({
         }
 
         .ts-view-toggle:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
@@ -315,11 +334,11 @@ export default function ThreadsSidebar({
         }
 
         .ts-toolbar-label {
-          font-size: 11px;
-          font-weight: 700;
+          font-size: 10px;
+          font-weight: 600;
           color: var(--text-muted, #71717a);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 1px;
         }
 
         .ts-new-btn {
@@ -337,7 +356,7 @@ export default function ThreadsSidebar({
         }
 
         .ts-new-btn:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 
@@ -355,7 +374,7 @@ export default function ThreadsSidebar({
         }
 
         .threads-sidebar-content::-webkit-scrollbar-thumb {
-          background: var(--border-default, #3f3f46);
+          background: var(--border-default, #2a2a2e);
           border-radius: 2px;
         }
 
@@ -394,7 +413,8 @@ export default function ThreadsSidebar({
         }
 
         .threads-section.archived {
-          border-top: 1px solid var(--border-subtle, #27272a);
+          border-top: none;
+          box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
           padding-top: 8px;
           margin-top: 8px;
         }
@@ -414,8 +434,8 @@ export default function ThreadsSidebar({
         }
 
         .threads-empty-btn {
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           color: var(--text-secondary, #a1a1aa);
           padding: 8px 16px;
           border-radius: 6px;
@@ -426,7 +446,7 @@ export default function ThreadsSidebar({
         }
 
         .threads-empty-btn:hover {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           border-color: var(--accent-primary, #f59e0b);
           color: var(--text-primary, #fafafa);
         }

@@ -164,8 +164,8 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
 
         .folder-browser-search input {
           width: 100%;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           color: var(--text-primary, #fafafa);
           border-radius: 8px;
           padding: 8px 10px;

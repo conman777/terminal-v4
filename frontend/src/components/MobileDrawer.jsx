@@ -380,7 +380,7 @@ export function MobileDrawer({
           left: 0;
           bottom: 0;
           width: min(90vw, 360px);
-          background: var(--bg-primary, #09090b);
+          background: var(--bg-primary, #0a0a0c);
           z-index: 1500;
           transform: translateX(-100%);
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -418,7 +418,7 @@ export function MobileDrawer({
           display: flex;
           align-items: center;
           justify-content: space-between;
-          border-bottom: 1px solid var(--border-subtle, #27272a);
+          border-bottom: 1px solid var(--border-subtle, #1e1e21);
         }
 
         .mobile-drawer-header-modern h2 {
@@ -433,8 +433,8 @@ export function MobileDrawer({
           width: 36px;
           height: 36px;
           border-radius: 50%;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
           color: var(--text-secondary, #a1a1aa);
           display: flex;
           align-items: center;
@@ -475,8 +475,8 @@ export function MobileDrawer({
           align-items: center;
           gap: 8px;
           padding: 10px 4px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 12px;
           color: var(--text-secondary, #a1a1aa);
           font-size: 12px;
@@ -495,7 +495,7 @@ export function MobileDrawer({
           width: 34px;
           height: 34px;
           border-radius: 10px;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           display: flex;
           align-items: center;
           justify-content: center;
@@ -504,7 +504,7 @@ export function MobileDrawer({
 
         .mobile-drawer-grid-btn-modern.active .grid-btn-icon-modern {
           background: var(--accent-primary, #f59e0b);
-          color: var(--bg-primary, #09090b);
+          color: var(--bg-primary, #0a0a0c);
         }
 
         .mobile-drawer-list-modern {
@@ -529,7 +529,7 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-list-item-modern:active {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
         }
 
         .mobile-drawer-list-item-modern.active {
@@ -560,7 +560,7 @@ export function MobileDrawer({
           width: 28px;
           height: 28px;
           border-radius: 8px;
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-muted, #71717a);
           display: flex;
           align-items: center;
@@ -570,7 +570,7 @@ export function MobileDrawer({
 
         .list-item-icon-modern.active {
           background: var(--accent-primary, #f59e0b);
-          color: var(--bg-primary, #09090b);
+          color: var(--bg-primary, #0a0a0c);
         }
 
         .mobile-drawer-section-collapsible-modern {
@@ -656,8 +656,8 @@ export function MobileDrawer({
           justify-content: space-between;
           gap: 8px;
           padding: 7px 9px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 10px;
           color: var(--text-primary, #fafafa);
           font-size: 12.5px;
@@ -666,7 +666,7 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-thread-item-modern.active {
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           border-color: var(--accent-primary, #f59e0b);
         }
 
@@ -704,8 +704,8 @@ export function MobileDrawer({
         .mobile-drawer-search-input-modern {
           width: 100%;
           height: 40px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 10px;
           padding: 0 12px 0 36px;
           color: var(--text-primary, #fafafa);
@@ -724,8 +724,8 @@ export function MobileDrawer({
           flex-direction: column;
           gap: 4px;
           padding: 12px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-subtle, #27272a);
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 12px;
           text-align: left;
           transition: all 0.2s ease;
@@ -762,7 +762,7 @@ export function MobileDrawer({
           gap: 4px;
           font-size: 11px;
           font-weight: 600;
-          background: var(--bg-elevated, #27272a);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-secondary, #a1a1aa);
           padding: 2px 8px;
           border-radius: 6px;

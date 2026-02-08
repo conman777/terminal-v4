@@ -99,7 +99,7 @@ export default function ThreadsProjectGroup({
         }
 
         .threads-project-header:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-surface, #141416);
           color: var(--text-primary, #fafafa);
         }
 

@@ -523,8 +523,10 @@ export function SystemResourcesView() {
         .system-resources-view {
           height: 100%;
           overflow-y: auto;
-          background: var(--bg-primary);
+          background: var(--bg-primary, #0a0a0c);
           padding: 24px;
+          scrollbar-width: thin;
+          scrollbar-color: var(--border-default) transparent;
         }
 
         .sr-header {
@@ -542,41 +544,48 @@ export function SystemResourcesView() {
 
         .sr-title-section h1 {
           margin: 0;
-          font-size: 24px;
-          font-weight: 600;
-          color: var(--text-primary);
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--accent-primary, #f59e0b);
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .sr-status-badge {
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 600;
-          padding: 4px 10px;
+          padding: 3px 10px;
           border-radius: 20px;
         }
 
         .sr-status-badge.healthy {
-          background: rgba(34, 197, 94, 0.15);
+          background: rgba(34, 197, 94, 0.1);
           color: #22c55e;
         }
 
         .sr-status-badge.warning {
-          background: rgba(245, 158, 11, 0.15);
+          background: rgba(245, 158, 11, 0.1);
           color: #f59e0b;
         }
 
         .sr-status-badge.critical {
-          background: rgba(239, 68, 68, 0.15);
+          background: rgba(239, 68, 68, 0.1);
           color: #ef4444;
         }
 
         .sr-time-range select {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-default);
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           border-radius: 6px;
           padding: 6px 12px;
           color: var(--text-primary);
-          font-size: 13px;
+          font-size: 12px;
           cursor: pointer;
+          transition: border-color 0.15s ease;
+        }
+
+        .sr-time-range select:hover {
+          border-color: rgba(245, 158, 11, 0.3);
         }
 
         .sr-alert {
@@ -587,21 +596,21 @@ export function SystemResourcesView() {
         }
 
         .sr-alert.warning {
-          background: rgba(245, 158, 11, 0.1);
-          border: 1px solid rgba(245, 158, 11, 0.3);
+          background: rgba(245, 158, 11, 0.06);
+          border: 1px solid rgba(245, 158, 11, 0.2);
           color: #f59e0b;
         }
 
         .sr-alert.critical {
-          background: rgba(239, 68, 68, 0.1);
-          border: 1px solid rgba(239, 68, 68, 0.3);
+          background: rgba(239, 68, 68, 0.06);
+          border: 1px solid rgba(239, 68, 68, 0.2);
           color: #ef4444;
         }
 
         .sr-grid {
           display: grid;
-          gap: 16px;
-          margin-bottom: 16px;
+          gap: 14px;
+          margin-bottom: 14px;
         }
 
         .sr-grid.primary {
@@ -628,10 +637,15 @@ export function SystemResourcesView() {
         }
 
         .sr-card {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-default);
-          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          border-radius: 10px;
           padding: 16px;
+          transition: border-color 0.15s ease;
+        }
+
+        .sr-card:hover {
+          border-color: rgba(255, 255, 255, 0.08);
         }
 
         .sr-card.large {
@@ -647,21 +661,22 @@ export function SystemResourcesView() {
 
         .sr-card-icon {
           color: var(--text-muted);
+          opacity: 0.6;
         }
 
         .sr-card-title {
-          font-size: 14px;
+          font-size: 11px;
           font-weight: 600;
-          color: var(--text-secondary);
+          color: var(--text-muted);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 1px;
         }
 
         .sr-card-badge {
           margin-left: auto;
-          font-size: 11px;
+          font-size: 10px;
           color: var(--text-muted);
-          background: var(--bg-primary);
+          background: rgba(255, 255, 255, 0.04);
           padding: 2px 8px;
           border-radius: 10px;
         }
@@ -700,13 +715,13 @@ export function SystemResourcesView() {
         }
 
         .sr-circular-value {
-          font-size: 24px;
+          font-size: 22px;
           font-weight: 700;
           line-height: 1;
         }
 
         .sr-circular-unit {
-          font-size: 11px;
+          font-size: 10px;
           color: var(--text-muted);
           margin-top: 2px;
         }
@@ -725,12 +740,12 @@ export function SystemResourcesView() {
         }
 
         .sr-stat-label {
-          font-size: 13px;
+          font-size: 12px;
           color: var(--text-muted);
         }
 
         .sr-stat-value {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 500;
           color: var(--text-primary);
           font-family: var(--font-mono);
@@ -739,7 +754,7 @@ export function SystemResourcesView() {
         .sr-card-chart {
           margin-top: 16px;
           padding-top: 16px;
-          border-top: 1px solid var(--border-subtle);
+          box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
         }
 
         .sr-card-chart.small {
@@ -748,7 +763,7 @@ export function SystemResourcesView() {
         }
 
         .sr-chart-legend {
-          font-size: 11px;
+          font-size: 10px;
           color: var(--text-muted);
           margin-top: 6px;
           text-align: center;
@@ -776,7 +791,7 @@ export function SystemResourcesView() {
           align-items: center;
           gap: 12px;
           padding: 8px 12px;
-          background: var(--bg-primary);
+          background: rgba(255, 255, 255, 0.02);
           border-radius: 8px;
         }
 
@@ -794,12 +809,12 @@ export function SystemResourcesView() {
         }
 
         .sr-io-direction.write {
-          color: #f59e0b;
+          color: var(--accent-primary, #f59e0b);
         }
 
         .sr-io-value {
           margin-left: auto;
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 600;
           color: var(--text-primary);
           font-family: var(--font-mono);
@@ -813,13 +828,13 @@ export function SystemResourcesView() {
         }
 
         .sr-latency-label {
-          font-size: 12px;
+          font-size: 11px;
           color: var(--text-muted);
           min-width: 80px;
         }
 
         .sr-latency-value {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 500;
           color: var(--text-primary);
           font-family: var(--font-mono);
@@ -827,28 +842,28 @@ export function SystemResourcesView() {
         }
 
         .sr-latency-max {
-          font-size: 11px;
+          font-size: 10px;
           color: var(--text-muted);
           font-weight: 400;
         }
 
         .sr-processes-section {
-          margin-top: 24px;
+          margin-top: 20px;
         }
 
         .sr-processes-section h2 {
-          font-size: 14px;
+          font-size: 11px;
           font-weight: 600;
-          color: var(--text-secondary);
+          color: var(--text-muted);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
-          margin: 0 0 12px 0;
+          letter-spacing: 1px;
+          margin: 0 0 10px 0;
         }
 
         .sr-processes-table {
-          background: var(--bg-secondary);
-          border: 1px solid var(--border-default);
-          border-radius: 12px;
+          background: rgba(255, 255, 255, 0.02);
+          border: 1px solid rgba(255, 255, 255, 0.04);
+          border-radius: 10px;
           overflow: hidden;
         }
 
@@ -863,21 +878,22 @@ export function SystemResourcesView() {
         }
 
         .sr-process-header {
-          background: var(--bg-primary);
+          background: rgba(255, 255, 255, 0.02);
           font-weight: 600;
           color: var(--text-muted);
           text-transform: uppercase;
-          font-size: 11px;
-          letter-spacing: 0.3px;
+          font-size: 10px;
+          letter-spacing: 0.5px;
         }
 
         .sr-process-row {
-          border-top: 1px solid var(--border-subtle);
+          box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
           color: var(--text-primary);
+          transition: background 0.1s ease;
         }
 
         .sr-process-row:hover {
-          background: var(--bg-primary);
+          background: rgba(255, 255, 255, 0.03);
         }
 
         .sr-process-name {
@@ -898,11 +914,11 @@ export function SystemResourcesView() {
         }
 
         .sr-process-cpu.critical {
-          color: #ef4444;
+          color: var(--error, #fb3654);
         }
 
         .sr-process-cpu.warning {
-          color: #f59e0b;
+          color: var(--accent-primary, #f59e0b);
         }
 
         .sr-process-mem {
@@ -912,8 +928,9 @@ export function SystemResourcesView() {
         .sr-footer {
           margin-top: 16px;
           text-align: center;
-          font-size: 11px;
+          font-size: 10px;
           color: var(--text-muted);
+          opacity: 0.6;
         }
       `}</style>
     </div>

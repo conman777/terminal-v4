@@ -267,13 +267,14 @@ export function Header({
 
       <style jsx>{`
         .app-header.redesign {
-          height: 48px;
+          height: 44px;
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 0 16px;
-          background: var(--bg-primary, #09090b);
-          border-bottom: 1px solid var(--border-default, #3f3f46);
+          padding: 0 12px;
+          background: var(--bg-primary, #0a0a0c);
+          border-bottom: none;
+          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 12px rgba(0, 0, 0, 0.2);
           user-select: none;
           z-index: 100;
         }
@@ -311,52 +312,57 @@ export function Header({
         .header-btn-modern {
           display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 6px 10px;
+          justify-content: center;
+          gap: 6px;
+          padding: 6px 8px;
           border-radius: 6px;
-          border: 1px solid transparent;
+          border: none;
           background: transparent;
-          color: var(--text-secondary, #a1a1aa);
-          font-size: 13px;
+          color: var(--text-muted, #71717a);
+          font-size: 12px;
           font-weight: 500;
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
+        .header-btn-modern span {
+          display: none;
+        }
+
         .header-btn-modern:hover {
-          background: var(--bg-surface, #18181b);
+          background: var(--bg-elevated, #1e1e21);
           color: var(--text-primary, #fafafa);
+          transform: translateY(-1px);
+        }
+
+        .header-btn-modern:active {
+          transform: scale(0.97);
         }
 
         .header-btn-modern.active {
           color: var(--accent-primary, #f59e0b);
           background: var(--accent-primary-dim);
-          border-color: var(--surface-glass-border);
         }
 
         .header-divider {
-          width: 1px;
-          height: 20px;
-          background: var(--border-subtle, #27272a);
-          margin: 0 4px;
+          display: none;
         }
 
         .header-user-badge-modern {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 4px 8px;
-          padding-left: 4px;
+          gap: 8px;
+          padding: 3px 8px 3px 3px;
           border-radius: 20px;
-          background: var(--bg-surface, #18181b);
-          border: 1px solid var(--border-default, #3f3f46);
+          background: var(--bg-surface, #141416);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
         .header-user-badge-modern:hover {
-          background: var(--bg-elevated, #27272a);
-          border-color: var(--border-hover, #52525b);
+          background: var(--bg-elevated, #1e1e21);
+          border-color: rgba(255, 255, 255, 0.1);
         }
 
         .user-avatar {
@@ -364,7 +370,7 @@ export function Header({
           height: 24px;
           border-radius: 50%;
           background: var(--accent-primary, #f59e0b);
-          color: var(--bg-primary, #09090b);
+          color: var(--bg-primary, #0a0a0c);
           display: flex;
           align-items: center;
           justify-content: center;
