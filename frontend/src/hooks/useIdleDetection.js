@@ -1,4 +1,5 @@
 import { useCallback, useRef } from 'react';
+import { SESSION_BUSY_WINDOW_MS } from '../constants/sessionActivity';
 
 /**
  * Hook to detect terminal idle state and play audio feedback.
@@ -60,7 +61,7 @@ export function useIdleDetection({ onActivityChange, startFaviconFlash, stopFavi
       isActiveRef.current = false;
       stopFaviconFlash?.();
       onActivityChange?.(false);
-    }, 3000);
+    }, SESSION_BUSY_WINDOW_MS);
   }, [onActivityChange, startFaviconFlash, stopFaviconFlash, playIdleTone]);
 
   const resetUserInput = useCallback(() => {

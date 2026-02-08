@@ -7359,7 +7359,8 @@ button {
   transition: all 0.2s ease;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 7px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -7373,6 +7374,65 @@ button {
   border-color: var(--accent-primary, #f59e0b);
   color: var(--accent-primary, #f59e0b);
   box-shadow: 0 0 10px var(--accent-primary-dim);
+}
+
+.mobile-header-tab.busy:not(.active) {
+  background: var(--tab-busy-bg, rgba(59, 130, 246, 0.16));
+  border-color: var(--tab-busy-border, rgba(59, 130, 246, 0.5));
+  color: var(--tab-busy-text, #dbeafe);
+  box-shadow: var(--tab-busy-shadow-soft, 0 0 0 1px rgba(59, 130, 246, 0.35), 0 0 10px rgba(59, 130, 246, 0.2));
+}
+
+.mobile-header-tab.done:not(.active) {
+  background: var(--tab-done-bg, rgba(34, 197, 94, 0.24));
+  border-color: var(--tab-done-border, rgba(34, 197, 94, 0.75));
+  color: var(--tab-done-text, #ecfdf5);
+  box-shadow: var(--tab-done-shadow, 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24));
+}
+
+.mobile-header-tab.unread:not(.active) {
+  color: var(--text-primary, #fafafa);
+}
+
+.mobile-header-tab-status {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mobile-header-tab-status.busy {
+  background: var(--tab-dot-busy, #60a5fa);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4), 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.mobile-header-tab-status.ready {
+  background: var(--tab-dot-ready-inactive, #52525b);
+}
+
+.mobile-header-tab.active .mobile-header-tab-status.ready {
+  background: var(--tab-dot-ready-active, #4ade80);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 6px rgba(34, 197, 94, 0.25);
+}
+
+.mobile-header-tab-status.done {
+  background: var(--tab-dot-ready-active, #4ade80);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 6px rgba(34, 197, 94, 0.25);
+}
+
+.mobile-header-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mobile-header-tab-unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary, #f59e0b);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.35), 0 0 8px rgba(245, 158, 11, 0.3);
+  flex-shrink: 0;
 }
 
 .mobile-header-tab-input {

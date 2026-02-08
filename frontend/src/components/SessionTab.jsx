@@ -6,6 +6,7 @@ import { useCallback, useState, useRef, useEffect, memo } from 'react';
 export const SessionTab = memo(function SessionTab({
   session,
   isActive,
+  hasUnread,
   isBusy,
   isReady,
   isDone,
@@ -109,6 +110,7 @@ export const SessionTab = memo(function SessionTab({
   const tabClasses = [
     'session-tab-item',
     isActive && 'active',
+    hasUnread && !isActive && 'has-unread',
     isBusy && 'busy',
     isReady && 'ready',
     isDone && !isBusy && !isActive && 'done',
@@ -150,6 +152,10 @@ export const SessionTab = memo(function SessionTab({
         />
       ) : (
         <span className="tab-title-modern">{session.title}</span>
+      )}
+
+      {hasUnread && !isActive && (
+        <span className="tab-unread-dot-modern" aria-hidden="true" />
       )}
 
       <button
@@ -228,6 +234,10 @@ export const SessionTab = memo(function SessionTab({
           font-weight: 600;
         }
 
+        .session-tab-item.has-unread:not(.active) {
+          color: var(--text-primary, #fafafa);
+        }
+
         .session-tab-item.busy {
           background: var(--tab-busy-bg, rgba(59, 130, 246, 0.16));
           border-top-color: var(--tab-dot-busy, #60a5fa);
@@ -287,6 +297,16 @@ export const SessionTab = memo(function SessionTab({
           max-width: 140px;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+
+        .tab-unread-dot-modern {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: var(--accent-primary, #f59e0b);
+          box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 8px rgba(245, 158, 11, 0.4);
+          flex-shrink: 0;
+          margin-left: 2px;
         }
 
         .tab-close-btn-modern {

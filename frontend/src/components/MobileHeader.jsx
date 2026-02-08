@@ -7,7 +7,21 @@ import { MobileViewTabs } from './MobileViewTabs';
 import { useTheme } from '../contexts/ThemeContext';
 
 // Separate component for mobile tab to use hooks properly
-function MobileTab({ session, isActive, onSelect, onLongPress, isRenaming, renameValue, onRenameChange, onRenameSubmit, onRenameKeyDown, inputRef }) {
+function MobileTab({
+  session,
+  isActive,
+  isBusy,
+  isDone,
+  hasUnread,
+  onSelect,
+  onLongPress,
+  isRenaming,
+  renameValue,
+  onRenameChange,
+  onRenameSubmit,
+  onRenameKeyDown,
+  inputRef
+}) {
   const longPressHandlers = useLongPress((coords) => {
     onLongPress(session.id, coords);
   });
@@ -27,14 +41,24 @@ function MobileTab({ session, isActive, onSelect, onLongPress, isRenaming, renam
     );
   }
 
+  const tabClasses = [
+    'mobile-header-tab',
+    isActive && 'active',
+    isBusy && 'busy',
+    isDone && !isBusy && 'done',
+    hasUnread && !isActive && 'unread'
+  ].filter(Boolean).join(' ');
+
   return (
     <button
       type="button"
-      className={`mobile-header-tab${isActive ? ' active' : ''}`}
+      className={tabClasses}
       onClick={() => onSelect(session.id)}
       {...longPressHandlers}
     >
-      {session.title || 'Terminal'}
+      <span className={`mobile-header-tab-status${isBusy ? ' busy' : isDone ? ' done' : ' ready'}`} />
+      <span className="mobile-header-tab-label">{session.title || 'Terminal'}</span>
+      {hasUnread && !isActive && <span className="mobile-header-tab-unread-dot" aria-hidden="true" />}
     </button>
   );
 }
@@ -372,6 +396,9 @@ export function MobileHeader({
                   key={session.id}
                   session={session}
                   isActive={session.id === activeSessionId}
+                  isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
+                  isDone={Boolean(sessionActivity?.[session.id]?.isDone)}
+                  hasUnread={Boolean(sessionActivity?.[session.id]?.hasUnread)}
                   onSelect={onSelectSession}
                   onLongPress={handleTabLongPress}
                   isRenaming={renamingSessionId === session.id}

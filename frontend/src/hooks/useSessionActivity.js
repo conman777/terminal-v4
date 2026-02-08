@@ -2,6 +2,22 @@ import { useCallback, useRef, useState } from 'react';
 
 const RECENT_DONE_WINDOW_MS = 60000;
 const DONE_STATE_STORAGE_KEY = 'terminalSessionDoneStateV2';
+const EMPTY_ACTIVITY_STATE = Object.freeze({
+  hasUnread: false,
+  needsAttention: false,
+  lastActivity: 0,
+  isBusy: false,
+  isDone: false
+});
+
+function normalizeActivityState(value = {}) {
+  const next = {
+    ...EMPTY_ACTIVITY_STATE,
+    ...value
+  };
+  next.needsAttention = Boolean(next.hasUnread || next.isDone);
+  return next;
+}
 
 function toTimestamp(value) {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -51,7 +67,7 @@ function saveDoneState(state) {
  * Tracks which sessions have unread content (received output while not focused).
  */
 export function useSessionActivity() {
-  // Activity state: { [sessionId]: { hasUnread, lastActivity, isBusy, isDone } }
+  // Activity state: { [sessionId]: { hasUnread, needsAttention, lastActivity, isBusy, isDone } }
   const [activity, setActivity] = useState({});
 
   // Track the currently focused session to avoid marking it as unread
@@ -90,22 +106,25 @@ export function useSessionActivity() {
   // Mark a session as having new activity
   const markActivity = useCallback((sessionId) => {
     if (!sessionId) return;
+    clearDoneState(sessionId);
 
     setActivity(prev => {
-      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
+      const current = normalizeActivityState(prev[sessionId]);
       const isFocused = focusedSessionRef.current === sessionId;
+
+      const next = normalizeActivityState({
+        ...current,
+        hasUnread: !isFocused,
+        isDone: false,
+        lastActivity: Date.now()
+      });
 
       return {
         ...prev,
-        [sessionId]: {
-          ...current,
-          hasUnread: isFocused ? false : true,
-          isDone: false,
-          lastActivity: Date.now()
-        }
+        [sessionId]: next
       };
     });
-  }, []);
+  }, [clearDoneState]);
 
   // Clear unread flag when session is focused
   const clearUnread = useCallback((sessionId) => {
@@ -115,18 +134,18 @@ export function useSessionActivity() {
     clearDoneState(sessionId);
 
     setActivity(prev => {
-      const current = prev[sessionId];
+      const current = prev[sessionId] ? normalizeActivityState(prev[sessionId]) : null;
       if (!current) return prev;
       if (!current.hasUnread && !current.isDone && !current.isBusy) return prev;
 
       return {
         ...prev,
-        [sessionId]: {
+        [sessionId]: normalizeActivityState({
           ...current,
           hasUnread: false,
           isBusy: false,
           isDone: false
-        }
+        })
       };
     });
   }, [clearDoneState]);
@@ -138,22 +157,22 @@ export function useSessionActivity() {
     clearDoneState(sessionId);
 
     setActivity(prev => {
-      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
+      const current = normalizeActivityState(prev[sessionId]);
       return {
         ...prev,
-        [sessionId]: {
+        [sessionId]: normalizeActivityState({
           ...current,
           hasUnread: false,
           isDone: false,
           lastActivity: Date.now()
-        }
+        })
       };
     });
   }, [clearDoneState]);
 
   // Get activity state for a specific session
   const getActivity = useCallback((sessionId) => {
-    return activity[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
+    return activity[sessionId] || EMPTY_ACTIVITY_STATE;
   }, [activity]);
 
   // Track busy/ready command execution state for each session
@@ -166,7 +185,7 @@ export function useSessionActivity() {
     const activityTs = toTimestamp(options.lastActivityAt);
 
     setActivity(prev => {
-      const current = prev[sessionId] || { hasUnread: false, lastActivity: 0, isBusy: false, isDone: false };
+      const current = normalizeActivityState(prev[sessionId]);
       const isFocused = focusedSessionRef.current === sessionId;
       const effectiveLastActivity = activityTs || current.lastActivity;
       const persistedDoneAt = toTimestamp(doneStateRef.current[sessionId]);
@@ -199,12 +218,12 @@ export function useSessionActivity() {
 
       return {
         ...prev,
-        [sessionId]: {
+        [sessionId]: normalizeActivityState({
           ...current,
           isBusy: busy,
           isDone: nextIsDone,
           lastActivity: nextLastActivity
-        }
+        })
       };
     });
   }, [clearDoneState, markDoneState, pruneDoneState]);

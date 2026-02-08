@@ -25,6 +25,7 @@ import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { SESSION_BUSY_WINDOW_MS } from './constants/sessionActivity';
 import { apiFetch } from './utils/api';
 
 function isDynamicImportFetchError(error) {
@@ -237,6 +238,7 @@ function AppContent() {
 
   const mainContentRef = useRef(null);
   const focusTerminalRef = useRef(null);
+  const previousActiveSessionRef = useRef(null);
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
@@ -285,27 +287,29 @@ function AppContent() {
   // Session activity tracking for unread indicators
   const {
     activity: sessionActivity,
+    markActivity: markSessionActivity,
     setFocusedSession,
     setBusy: setSessionBusy,
     removeSession: removeSessionActivity
   } = useSessionActivity();
 
   const handleSessionBusyChange = useCallback((sessionId, isBusy) => {
+    if (isBusy && sessionId && sessionId !== activeSessionId) {
+      markSessionActivity(sessionId);
+    }
     setSessionBusy(sessionId, isBusy);
-  }, [setSessionBusy]);
+  }, [activeSessionId, markSessionActivity, setSessionBusy]);
 
   useEffect(() => {
     if (!Array.isArray(sessions) || sessions.length === 0) return;
     const now = Date.now();
-    const busyWindowMs = 8000;
 
     sessions.forEach((session) => {
-      const snapshotTs = Number.isFinite(Date.parse(session.lastActivityAt || ''))
-        ? Date.parse(session.lastActivityAt || '')
-        : 0;
+      const parsedLastActivity = Date.parse(session.lastActivityAt || '');
+      const snapshotTs = Number.isFinite(parsedLastActivity) ? parsedLastActivity : 0;
       // Fallback inference when backend process has not been restarted and
       // does not yet provide `isBusy`.
-      const inferredBusy = snapshotTs > 0 && now - snapshotTs <= busyWindowMs;
+      const inferredBusy = snapshotTs > 0 && now - snapshotTs <= SESSION_BUSY_WINDOW_MS;
       const busy = typeof session.isBusy === 'boolean' ? session.isBusy : inferredBusy;
 
       setSessionBusy(session.id, busy, { lastActivityAt: snapshotTs });
@@ -356,6 +360,18 @@ function AppContent() {
       setFocusedSession(activeSessionId);
     }
   }, [activeSessionId, setFocusedSession]);
+
+  useEffect(() => {
+    const previousActiveSessionId = previousActiveSessionRef.current;
+    if (
+      previousActiveSessionId &&
+      previousActiveSessionId !== activeSessionId &&
+      sessionActivity?.[previousActiveSessionId]?.isBusy
+    ) {
+      markSessionActivity(previousActiveSessionId);
+    }
+    previousActiveSessionRef.current = activeSessionId || null;
+  }, [activeSessionId, sessionActivity, markSessionActivity]);
 
   // Auto-switch back to terminal if preview URL gets cleared while viewing preview
   useEffect(() => {
