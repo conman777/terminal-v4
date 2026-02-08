@@ -34,7 +34,7 @@ async function withApp<T>(
     write = vi.fn();
     subscribe = vi.fn(() => () => {});
     resize = vi.fn();
-    close = vi.fn();
+    close = vi.fn(() => true);
     renameSession = vi.fn(async (_userId: string, id: string, title: string) => ({
       id,
       title,
@@ -135,6 +135,31 @@ describe('API routes', () => {
         'term-1',
         'Renamed Terminal'
       );
+    });
+  });
+
+  it('closes a terminal session', async () => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
+      await supertest(app.server)
+        .delete('/api/terminal/term-1')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(204);
+
+      expect(terminalManager.close).toHaveBeenCalledWith(expect.any(String), 'term-1');
+    });
+  });
+
+  it('returns 404 when closing a missing terminal session', async () => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
+      const closeMock = terminalManager.close as unknown as ReturnType<typeof vi.fn>;
+      closeMock.mockReturnValueOnce(false);
+
+      const response = await supertest(app.server)
+        .delete('/api/terminal/term-missing')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(404);
+
+      expect(response.body.error).toBe('Terminal session not found');
     });
   });
 });

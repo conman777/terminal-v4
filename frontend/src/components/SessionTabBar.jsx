@@ -219,25 +219,32 @@ export function SessionTabBar({
         role="tablist"
         aria-label="Terminal sessions"
       >
-        {sessions.map(session => (
-          <SessionTab
-            key={session.id}
-            session={session}
-            isActive={session.id === activeSessionId}
-            hasUnread={sessionActivity?.[session.id]?.hasUnread}
-            isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
-            isReady={!sessionActivity?.[session.id]?.isBusy}
-            isDone={Boolean(sessionActivity?.[session.id]?.isDone)}
-            onSelect={onSelectSession}
-            onClose={onCloseSession}
-            onRename={onRenameSession}
-            onCloseOthers={handleCloseOthers}
-            onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
-            onDrop={handleDrop}
-            onContextMenu={handleContextMenu}
-          />
-        ))}
+        {sessions.map((session) => {
+          const activityState = sessionActivity?.[session.id];
+          const isBusy = typeof activityState?.isBusy === 'boolean'
+            ? activityState.isBusy
+            : Boolean(session.isBusy);
+
+          return (
+            <SessionTab
+              key={session.id}
+              session={session}
+              isActive={session.id === activeSessionId}
+              hasUnread={Boolean(activityState?.hasUnread)}
+              isBusy={isBusy}
+              isReady={!isBusy}
+              isDone={Boolean(activityState?.isDone)}
+              onSelect={onSelectSession}
+              onClose={onCloseSession}
+              onRename={onRenameSession}
+              onCloseOthers={handleCloseOthers}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDrop={handleDrop}
+              onContextMenu={handleContextMenu}
+            />
+          );
+        })}
 
         <button
           type="button"
@@ -289,8 +296,8 @@ export function SessionTabBar({
                 All Terminals ({sessions.length})
               </div>
               <div className="session-tab-overflow-list-modern">
-                {sessions.map(session => {
-                  const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
+                {sessions.map((session) => {
+                  const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.lastActivityAt || session.updatedAt;
                   const relativeTime = formatRelativeTime(lastActivity);
                   return (
                     <button

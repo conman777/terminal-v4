@@ -80,6 +80,10 @@ const DEFAULT_MAX_ACTIVE_SESSIONS = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_MAX_ACTIVE_SESSIONS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 })();
+const DEFAULT_TMUX_RECOVERY_CHECK_INTERVAL_MS = (() => {
+  const parsed = Number.parseInt(process.env.TMUX_RECOVERY_CHECK_INTERVAL_MS || '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1000;
+})();
 const DEFAULT_BUSY_WINDOW_MS = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_BUSY_WINDOW_MS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8000;
@@ -216,6 +220,7 @@ export class TerminalManager {
   #persistedSessions = new Map<string, Map<string, PersistedSession>>(); // userId -> sessionId -> session
   #metadataIndexByUser = new Map<string, SessionMetadataIndex>();
   #recoveredUsers = new Set<string>(); // Track which users have had recovery run
+  #lastTmuxRecoveryCheckByUser = new Map<string, number>();
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
   #counter = 0;
@@ -271,11 +276,13 @@ export class TerminalManager {
     this.#metadataIndexByUser.set(userId, metadataIndex);
     console.log(`Loaded ${persisted.length} persisted terminal sessions for user ${userId}`);
 
-    // Auto-restore sessions that have surviving tmux processes
-    // Only run recovery once per user to prevent duplicate recovered sessions
-    if (this.#useTmux && !this.#recoveredUsers.has(userId)) {
-      this.#recoveredUsers.add(userId);
+    if (!this.#useTmux) {
+      return;
+    }
 
+    // Recover orphaned tmux sessions once per user to prevent duplicate entries.
+    if (!this.#recoveredUsers.has(userId)) {
+      this.#recoveredUsers.add(userId);
       // First, recover any orphaned tmux sessions (tmux exists but no valid persisted data)
       const metadataIds = new Set(Object.keys(metadataIndex));
       const tmuxSessions = listTmuxSessions();
@@ -312,22 +319,27 @@ export class TerminalManager {
           }
         }
       }
+    }
 
-      // Now restore all sessions that have surviving tmux processes
-      for (const session of userSessions.values()) {
-        // Skip if already active
-        if (this.#sessions.has(session.id)) {
-          continue;
+    const lastCheck = this.#lastTmuxRecoveryCheckByUser.get(userId) || 0;
+    const now = Date.now();
+    if (now - lastCheck < DEFAULT_TMUX_RECOVERY_CHECK_INTERVAL_MS) {
+      return;
+    }
+    this.#lastTmuxRecoveryCheckByUser.set(userId, now);
+
+    // Reattach to any surviving tmux sessions not currently active in-memory.
+    for (const session of userSessions.values()) {
+      if (this.#sessions.has(session.id)) {
+        continue;
+      }
+      try {
+        if (tmuxSessionExists(session.id)) {
+          console.log(`Auto-restoring session ${session.id} with surviving tmux process`);
+          this.restoreSession(userId, session.id);
         }
-        // Check if tmux session exists (survived server restart)
-        try {
-          if (tmuxSessionExists(session.id)) {
-            console.log(`Auto-restoring session ${session.id} with surviving tmux process`);
-            this.restoreSession(userId, session.id);
-          }
-        } catch (error) {
-          console.error(`Failed to auto-restore session ${session.id}:`, error);
-        }
+      } catch (error) {
+        console.error(`Failed to auto-restore session ${session.id}:`, error);
       }
     }
   }
@@ -1221,8 +1233,21 @@ export class TerminalManager {
     };
   }
 
-  close(userId: string, id: string): void {
+  close(userId: string, id: string): boolean {
     const session = this.#sessions.get(id);
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    const hasPersistedSession = Boolean(userPersistedSessions?.has(id));
+    const ownsActiveSession = Boolean(session && session.userId === userId);
+
+    if (session && session.userId !== userId) {
+      return false;
+    }
+    if (!ownsActiveSession && !hasPersistedSession) {
+      return false;
+    }
+
+    let closed = false;
+
     if (session && session.userId === userId) {
       // Cancel pending save
       if (session.saveTimer) {
@@ -1253,19 +1278,22 @@ export class TerminalManager {
       }
 
       this.#sessions.delete(id);
+      closed = true;
     } else if (this.#useTmux) {
       // Session might not be active but tmux session could still exist
       // (e.g., user is deleting a persisted session without restoring it first)
-      const userPersistedSessions = this.#persistedSessions.get(userId);
       if (userPersistedSessions?.has(id) && tmuxSessionExists(id)) {
         console.log(`[TerminalManager] Destroying orphaned tmux session ${id}`);
         destroyTmuxSession(id);
+        closed = true;
       }
     }
 
     // Also remove from persisted sessions and delete from disk
-    const userPersistedSessions = this.#persistedSessions.get(userId);
     if (userPersistedSessions) {
+      if (userPersistedSessions.has(id)) {
+        closed = true;
+      }
       userPersistedSessions.delete(id);
     }
     // Fire-and-forget with error handling to prevent unhandled rejection
@@ -1276,6 +1304,7 @@ export class TerminalManager {
     deleteSessionMetadata(userId, id).catch((error) => {
       console.error(`Failed to delete session metadata for ${id}:`, error);
     });
+    return closed;
   }
 
   // Kill all active sessions

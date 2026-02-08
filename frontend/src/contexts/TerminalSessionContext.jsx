@@ -276,9 +276,12 @@ export function TerminalSessionProvider({ children }) {
 
   const closeSession = useCallback(async (sessionId) => {
     try {
-      await apiFetch(`/api/terminal/${sessionId}`, {
+      const response = await apiFetch(`/api/terminal/${sessionId}`, {
         method: 'DELETE'
       });
+      if (!response.ok) {
+        throw new Error(`Failed to close session (${response.status})`);
+      }
 
       setSessions((currentSessions) => {
         const remainingSessions = currentSessions.filter((s) => s.id !== sessionId);
@@ -295,6 +298,7 @@ export function TerminalSessionProvider({ children }) {
       await loadSessions();
     } catch (error) {
       console.error('Failed to close session', error);
+      await loadSessions();
     }
   }, [loadSessions]);
 

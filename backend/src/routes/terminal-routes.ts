@@ -567,7 +567,11 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    deps.terminalManager.close(userId, request.params.id);
+    const closed = deps.terminalManager.close(userId, request.params.id);
+    if (!closed) {
+      reply.code(404).send({ error: 'Terminal session not found' });
+      return;
+    }
     reply.code(204).send();
   });
 

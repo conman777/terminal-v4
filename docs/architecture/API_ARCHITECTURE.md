@@ -21,14 +21,14 @@
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| GET | `/api/terminal` | Yes | List terminal sessions |
+| GET | `/api/terminal` | Yes | List terminal sessions (active + persisted) |
 | POST | `/api/terminal` | Yes | Create session |
 | GET | `/api/terminal/:id/history` | Yes | History snapshot |
 | GET | `/api/terminal/:id/project-info` | Yes | Project info from cwd |
 | POST | `/api/terminal/:id/input` | Yes | Send input (HTTP fallback) |
 | POST | `/api/terminal/:id/resize` | Yes | Resize PTY (optional `clientId`) |
 | PATCH | `/api/terminal/:id` | Yes | Rename session |
-| DELETE | `/api/terminal/:id` | Yes | Close session |
+| DELETE | `/api/terminal/:id` | Yes | Close owned session (404 if not found or not owned) |
 | POST | `/api/terminal/:id/restore` | Yes | Restore persisted session |
 | GET | `/api/terminal/:id/stream` | Yes | SSE stream of output |
 | GET | `/api/terminal/:id/ws` | Yes | WebSocket for IO |
@@ -36,6 +36,10 @@
 WebSocket notes:
 - The first frame is JSON: `{ type: "clientId", clientId: "..." }`.
 - Subsequent frames are raw terminal output/input (string data).
+
+Session state notes:
+- `GET /api/terminal` and `GET /api/state` load per-user sessions and attempt tmux reattach so live processes are surfaced as `isActive: true`.
+- Session summaries include `isActive` and `isBusy` to drive terminal tab status coloring.
 
 ## Consolidated State
 

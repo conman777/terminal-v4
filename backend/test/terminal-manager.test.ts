@@ -10,6 +10,7 @@ import type {
 } from '../src/terminal/terminal-types';
 
 const TEST_USER_ID = 'test-user-123';
+const OTHER_TEST_USER_ID = 'test-user-456';
 
 class FakeTerminalProcess extends EventEmitter implements TerminalProcess {
   writes: string[] = [];
@@ -92,9 +93,22 @@ describe('TerminalManager', () => {
     manager.resize(TEST_USER_ID, snapshot.id, 100, 40);
     expect(fakeProcess.resized).toContainEqual({ cols: 100, rows: 40 });
 
-    manager.close(TEST_USER_ID, snapshot.id);
+    const closed = manager.close(TEST_USER_ID, snapshot.id);
+    expect(closed).toBe(true);
     expect(fakeProcess.killed).toBe(true);
     expect(manager.listSessions(TEST_USER_ID)).toHaveLength(0);
+  });
+
+  it('does not allow one user to close another user terminal session', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess), useTmux: false });
+    const snapshot = manager.createSession(TEST_USER_ID);
+
+    const closed = manager.close(OTHER_TEST_USER_ID, snapshot.id);
+
+    expect(closed).toBe(false);
+    expect(fakeProcess.killed).toBe(false);
+    expect(manager.isActive(snapshot.id)).toBe(true);
   });
 
   it('falls back to a safe cwd when given a non-existent cwd', () => {
