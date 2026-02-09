@@ -216,7 +216,7 @@ export const SessionTab = memo(function SessionTab({
           width: 55%;
           background: linear-gradient(100deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0));
           pointer-events: none;
-          animation: busy-tab-beam 1.8s linear infinite;
+          animation: busy-tab-beam 1.8s linear 5;
         }
 
         @keyframes busy-tab-beam {

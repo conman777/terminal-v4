@@ -386,11 +386,12 @@ export function MobileDrawer({
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           display: flex;
           flex-direction: column;
-          box-shadow: 20px 0 50px rgba(0, 0, 0, 0.5);
+          box-shadow: none;
         }
 
         .mobile-drawer-modern.open {
           transform: translateX(0);
+          box-shadow: 20px 0 50px rgba(0, 0, 0, 0.5);
         }
 
         .mobile-drawer-overlay-modern {

@@ -542,11 +542,18 @@ function AppContent() {
     });
   }, []);
 
-  // Sync the active pane to show the active session when tabs are clicked
+  // Sync active session into pane assignment.
+  // In multi-pane mode, only initialize empty active panes to avoid overwriting
+  // other pane assignments when a different pane/session is selected.
   useEffect(() => {
     if (!activeSessionId) return;
+    const panes = legacyLayout?.panes || [];
+    const activePane = panes.find((pane) => pane.id === legacyLayout?.activePaneId);
+    if (!activePane) return;
+    if (panes.length > 1 && activePane.sessionId) return;
+    if (activePane.sessionId === activeSessionId) return;
     initializePaneWithSession(activeSessionId);
-  }, [activeSessionId, initializePaneWithSession]);
+  }, [activeSessionId, initializePaneWithSession, legacyLayout]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
@@ -560,11 +567,13 @@ function AppContent() {
   }, [restoreSession, setShowPreview]);
 
   const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
+    // Ensure this pane is active before syncing global active session state.
+    focusPane(paneId);
     const newSessionId = setPaneSession(paneId, sessionId);
     if (newSessionId) {
       selectSession(newSessionId);
     }
-  }, [setPaneSession, selectSession]);
+  }, [focusPane, setPaneSession, selectSession]);
 
   const handlePaneFocus = useCallback((paneId) => {
     const sessionId = focusPane(paneId);
