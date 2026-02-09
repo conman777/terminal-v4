@@ -1,34 +1,6 @@
-import { useCallback, useState, useRef, useEffect, useMemo } from 'react';
+import { useCallback, useState, useRef, useEffect } from 'react';
 import { SessionTab } from './SessionTab';
 import { ContextMenu } from './ContextMenu';
-
-/**
- * Format a timestamp as relative time (e.g., "2m ago", "1h ago")
- */
-function formatRelativeTime(timestamp) {
-  if (!timestamp) return null;
-
-  const now = Date.now();
-  const time = typeof timestamp === 'string' ? new Date(timestamp).getTime() : timestamp;
-  const diff = now - time;
-
-  if (diff < 0) return 'just now';
-
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return 'just now';
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days === 1) return 'yesterday';
-  if (days < 7) return `${days}d ago`;
-
-  return `${Math.floor(days / 7)}w ago`;
-}
 
 /**
  * Horizontal tab bar for session management.
@@ -48,11 +20,9 @@ export function SessionTabBar({
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
-  const [showOverflow, setShowOverflow] = useState(false);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const tabBarRef = useRef(null);
-  const overflowRef = useRef(null);
 
   // Check if scroll buttons should be visible
   const updateScrollState = useCallback(() => {
@@ -88,19 +58,6 @@ export function SessionTabBar({
     // Update scroll state after scrolling
     setTimeout(updateScrollState, 50);
   }, [activeSessionId, updateScrollState]);
-
-  // Close overflow menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e) => {
-      if (overflowRef.current && !overflowRef.current.contains(e.target)) {
-        setShowOverflow(false);
-      }
-    };
-    if (showOverflow) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
-    }
-  }, [showOverflow]);
 
   const handleScroll = useCallback((direction) => {
     const el = tabBarRef.current;
@@ -156,11 +113,6 @@ export function SessionTabBar({
     }
   }, [sessions, onReorderSessions]);
 
-  const handleOverflowSelect = useCallback((sessionId) => {
-    onSelectSession(sessionId);
-    setShowOverflow(false);
-  }, [onSelectSession]);
-
   const getContextMenuItems = useCallback((sessionId) => {
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return [];
@@ -194,8 +146,6 @@ export function SessionTabBar({
       }
     ];
   }, [sessions, onCloseSession, handleCloseOthers]);
-
-  const hasOverflow = canScrollLeft || canScrollRight;
 
   return (
     <div className={`session-tab-bar-container-modern${inHeader ? ' in-header' : ''}`}>
@@ -272,59 +222,6 @@ export function SessionTabBar({
             <polyline points="9 18 15 12 9 6" />
           </svg>
         </button>
-      )}
-
-      {/* All terminals dropdown menu - always visible */}
-      {sessions.length > 0 && (
-        <div className="session-tab-overflow-modern" ref={overflowRef}>
-          <button
-            type="button"
-            className="session-tab-overflow-btn-modern"
-            onClick={() => setShowOverflow(!showOverflow)}
-            aria-label={`Show all ${sessions.length} terminals`}
-            title={`Show all ${sessions.length} terminals`}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-            <span className="session-tab-count-modern">{sessions.length}</span>
-          </button>
-
-          {showOverflow && (
-            <div className="session-tab-overflow-menu-modern">
-              <div className="session-tab-overflow-header-modern">
-                All Terminals ({sessions.length})
-              </div>
-              <div className="session-tab-overflow-list-modern">
-                {sessions.map((session) => {
-                  const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.lastActivityAt || session.updatedAt;
-                  const relativeTime = formatRelativeTime(lastActivity);
-                  return (
-                    <button
-                      key={session.id}
-                      type="button"
-                      className={`session-tab-overflow-item-modern ${session.id === activeSessionId ? 'active' : ''}`}
-                      onClick={() => handleOverflowSelect(session.id)}
-                    >
-                      {sessionActivity?.[session.id]?.hasUnread && (
-                        <span className="overflow-unread-dot-modern" />
-                      )}
-                      <span className="overflow-item-title-modern">{session.title}</span>
-                      {relativeTime && (
-                        <span className="overflow-item-time-modern">{relativeTime}</span>
-                      )}
-                      {session.id === activeSessionId && (
-                        <svg className="overflow-check-modern" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
       )}
 
       {contextMenu && (
@@ -411,122 +308,6 @@ export function SessionTabBar({
           color: var(--text-primary, #fafafa);
         }
 
-        .session-tab-overflow-modern {
-          position: relative;
-          margin-left: 4px;
-        }
-
-        .session-tab-overflow-btn-modern {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          height: 28px;
-          padding: 0 10px;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-subtle, #1e1e21);
-          color: var(--text-secondary, #a1a1aa);
-          border-radius: 6px;
-          font-size: 11px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: all 0.2s ease;
-        }
-
-        .session-tab-overflow-btn-modern:hover {
-          background: var(--bg-elevated, #1e1e21);
-          color: var(--text-primary, #fafafa);
-        }
-
-        .session-tab-overflow-menu-modern {
-          position: absolute;
-          top: calc(100% + 8px);
-          right: 0;
-          width: 200px;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          border-radius: 8px;
-          box-shadow: var(--shadow-lg);
-          z-index: 1000;
-          padding: 6px;
-          animation: session-tabbar-dropdown-fade-in 0.2s ease-out;
-        }
-
-        @keyframes session-tabbar-dropdown-fade-in {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        .session-tab-overflow-header-modern {
-          padding: 8px 12px;
-          font-size: 11px;
-          font-weight: 700;
-          color: var(--text-muted, #71717a);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          border-bottom: 1px solid var(--border-subtle, #1e1e21);
-          margin-bottom: 4px;
-        }
-
-        .session-tab-overflow-list-modern {
-          max-height: 300px;
-          overflow-y: auto;
-        }
-
-        .session-tab-overflow-item-modern {
-          width: 100%;
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 8px 12px;
-          background: transparent;
-          border: none;
-          color: var(--text-primary, #fafafa);
-          font-size: 13px;
-          text-align: left;
-          border-radius: 4px;
-          cursor: pointer;
-          transition: background 0.15s ease;
-        }
-
-        .session-tab-overflow-item-modern:hover {
-          background: var(--bg-elevated, #1e1e21);
-        }
-
-        .session-tab-overflow-item-modern.active {
-          color: var(--accent-primary, #f59e0b);
-          background: var(--accent-primary-dim);
-        }
-
-        .overflow-unread-dot-modern {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--accent-primary, #f59e0b);
-          box-shadow: var(--shadow-glow);
-        }
-
-        .overflow-item-title-modern {
-          flex: 1;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .overflow-item-time-modern {
-          font-size: 11px;
-          color: var(--text-muted, #71717a);
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-
-        .session-tab-overflow-item-modern.active .overflow-item-time-modern {
-          color: var(--accent-primary, #f59e0b);
-          opacity: 0.7;
-        }
-
-        .overflow-check-modern {
-          opacity: 0.8;
-        }
       `}</style>
     </div>
   );
