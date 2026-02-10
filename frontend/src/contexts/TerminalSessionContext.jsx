@@ -189,6 +189,12 @@ export function TerminalSessionProvider({ children }) {
       } else if (recentFolders.length > 0) {
         requestBody.cwd = recentFolders[0];
       }
+      if (options.title) {
+        requestBody.title = options.title;
+      }
+      if (options.initialCommand) {
+        requestBody.initialCommand = options.initialCommand;
+      }
 
       const response = await apiFetch('/api/terminal', {
         method: 'POST',

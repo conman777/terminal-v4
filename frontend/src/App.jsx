@@ -124,6 +124,28 @@ const SystemResourcesView = lazyWithChunkRecovery(
   (module) => module.SystemResourcesView
 );
 
+const NEW_TAB_AI_OPTIONS = [
+  { id: 'cli', label: 'CLI' },
+  {
+    id: 'claude',
+    label: 'Claude Code',
+    title: 'Claude Code',
+    command: 'claude --dangerously-skip-permissions'
+  },
+  {
+    id: 'codex',
+    label: 'Codex',
+    title: 'Codex',
+    command: 'codex --yolo'
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    title: 'Gemini CLI',
+    command: 'gemini --yolo'
+  }
+];
+
 function AppContent() {
   const { logout, user } = useAuth();
   const { setTheme } = useTheme();
@@ -645,10 +667,18 @@ function AppContent() {
     setShowNewSessionModal(false);
   }, []);
 
-  const handleCreateSessionFromFolder = useCallback((path) => {
+  const handleCreateSessionFromFolder = useCallback((path, aiOptionId = 'cli') => {
     setShowNewSessionModal(false);
     if (!path) return;
-    createSession({ cwd: path });
+    const selectedAi = NEW_TAB_AI_OPTIONS.find((option) => option.id === aiOptionId) || NEW_TAB_AI_OPTIONS[0];
+    const request = { cwd: path };
+    if (selectedAi.command) {
+      request.initialCommand = selectedAi.command;
+    }
+    if (selectedAi.title) {
+      request.title = selectedAi.title;
+    }
+    createSession(request);
   }, [createSession]);
 
   // Keyboard shortcuts (desktop only)
@@ -886,6 +916,9 @@ function AppContent() {
         currentPath={projectInfo?.cwd || recentFolders[0] || ''}
         recentFolders={recentFolders}
         onSelect={handleCreateSessionFromFolder}
+        showAiSelector={true}
+        aiOptions={NEW_TAB_AI_OPTIONS}
+        defaultAiOptionId="cli"
       />
 
       {isMobile && (

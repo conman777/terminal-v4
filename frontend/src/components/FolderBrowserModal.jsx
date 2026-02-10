@@ -1,13 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../utils/api';
 
-export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders, onSelect }) {
+const DEFAULT_AI_OPTIONS = [
+  { id: 'cli', label: 'CLI' },
+  { id: 'claude', label: 'Claude Code', command: 'claude --dangerously-skip-permissions' },
+  { id: 'codex', label: 'Codex', command: 'codex --yolo' },
+  { id: 'gemini', label: 'Gemini CLI', command: 'gemini --yolo' }
+];
+
+function resolveInitialAiOptionId(options, preferredId) {
+  if (preferredId && options.some((option) => option.id === preferredId)) {
+    return preferredId;
+  }
+  return options[0]?.id || 'cli';
+}
+
+export function FolderBrowserModal({
+  isOpen,
+  onClose,
+  currentPath,
+  recentFolders,
+  onSelect,
+  showAiSelector = false,
+  aiOptions = DEFAULT_AI_OPTIONS,
+  defaultAiOptionId = 'cli'
+}) {
+  const resolvedAiOptions = showAiSelector && aiOptions.length > 0 ? aiOptions : DEFAULT_AI_OPTIONS;
   const [path, setPath] = useState(currentPath || '');
   const [folders, setFolders] = useState([]);
   const [parent, setParent] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
+  const [selectedAiOptionId, setSelectedAiOptionId] = useState(() => (
+    resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)
+  ));
 
   const loadDirectory = useCallback(async (dirPath) => {
     setLoading(true);
@@ -36,8 +63,9 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
     if (isOpen) {
       loadDirectory(currentPath);
       setQuery('');
+      setSelectedAiOptionId(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId));
     }
-  }, [isOpen, currentPath, loadDirectory]);
+  }, [isOpen, currentPath, loadDirectory, resolvedAiOptions, defaultAiOptionId]);
 
   const handleFolderClick = (folderName) => {
     const separator = path.includes('\\') ? '\\' : '/';
@@ -53,7 +81,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
   };
 
   const handleSelect = () => {
-    onSelect(path);
+    onSelect(path, showAiSelector ? selectedAiOptionId : undefined);
     onClose();
   };
 
@@ -67,6 +95,7 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
   const visibleFolders = normalizedQuery
     ? folders.filter((folder) => folder.toLowerCase().includes(normalizedQuery))
     : folders;
+  const selectedAiOption = resolvedAiOptions.find((option) => option.id === selectedAiOptionId) || null;
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -84,6 +113,26 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
             <span className="folder-icon">📁</span>
             <span className="path-text">{path}</span>
           </div>
+
+          {showAiSelector && (
+            <div className="folder-browser-ai">
+              <label htmlFor="folder-browser-ai-select">AI to launch</label>
+              <select
+                id="folder-browser-ai-select"
+                value={selectedAiOptionId}
+                onChange={(e) => setSelectedAiOptionId(e.target.value)}
+              >
+                {resolvedAiOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {selectedAiOption?.command && (
+                <small className="folder-browser-ai-command">{selectedAiOption.command}</small>
+              )}
+            </div>
+          )}
 
           <div className="folder-browser-search">
             <input
@@ -162,6 +211,43 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
           padding: 8px 16px 10px;
         }
 
+        .folder-browser-ai {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 4px 16px 2px;
+        }
+
+        .folder-browser-ai label {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
+        }
+
+        .folder-browser-ai select {
+          width: 100%;
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
+          color: var(--text-primary, #fafafa);
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          outline: none;
+        }
+
+        .folder-browser-ai select:focus {
+          border-color: var(--accent-primary, #f59e0b);
+          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+        }
+
+        .folder-browser-ai-command {
+          color: var(--text-muted, #71717a);
+          font-size: 12px;
+          font-family: 'JetBrains Mono', monospace;
+        }
+
         .folder-browser-search input {
           width: 100%;
           background: var(--bg-surface, #141416);
@@ -181,6 +267,10 @@ export function FolderBrowserModal({ isOpen, onClose, currentPath, recentFolders
         @media (max-width: 768px) {
           .folder-browser-search {
             padding: 10px 14px 12px;
+          }
+
+          .folder-browser-ai {
+            padding: 6px 14px 2px;
           }
 
           .folder-browser-search input {
