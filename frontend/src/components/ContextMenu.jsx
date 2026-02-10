@@ -20,11 +20,11 @@ export function ContextMenu({ x, y, items, onClose }) {
       }
     };
 
-    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
     document.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('pointerdown', handleClickOutside);
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [onClose]);
@@ -33,18 +33,20 @@ export function ContextMenu({ x, y, items, onClose }) {
   useEffect(() => {
     if (menuRef.current) {
       const rect = menuRef.current.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
+      const viewport = window.visualViewport;
+      const viewportLeft = viewport?.offsetLeft ?? 0;
+      const viewportTop = viewport?.offsetTop ?? 0;
+      const viewportWidth = viewport?.width ?? window.innerWidth;
+      const viewportHeight = viewport?.height ?? window.innerHeight;
+      const inset = 8;
 
-      let adjustedX = x;
-      let adjustedY = y;
+      const minX = viewportLeft + inset;
+      const minY = viewportTop + inset;
+      const maxX = viewportLeft + viewportWidth - rect.width - inset;
+      const maxY = viewportTop + viewportHeight - rect.height - inset;
 
-      if (x + rect.width > viewportWidth) {
-        adjustedX = viewportWidth - rect.width - 8;
-      }
-      if (y + rect.height > viewportHeight) {
-        adjustedY = viewportHeight - rect.height - 8;
-      }
+      const adjustedX = Math.min(Math.max(x, minX), Math.max(minX, maxX));
+      const adjustedY = Math.min(Math.max(y, minY), Math.max(minY, maxY));
 
       menuRef.current.style.left = `${adjustedX}px`;
       menuRef.current.style.top = `${adjustedY}px`;

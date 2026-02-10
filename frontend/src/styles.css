@@ -254,6 +254,7 @@ button {
 .layout {
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   background: var(--bg-base);
   background-image: var(--bg-gradient);
@@ -937,6 +938,12 @@ button {
   min-width: 400px;
 }
 
+@media (max-width: 1024px) {
+  .main-content.with-preview .terminal-pane {
+    min-width: 0;
+  }
+}
+
 .main-pane {
   flex: 1;
   display: flex;
@@ -1250,6 +1257,7 @@ button {
   top: 0 !important;
   width: 100vw !important;
   height: 100vh !important;
+  height: 100dvh !important;
   opacity: 0.01 !important;
   z-index: 10 !important;
   pointer-events: auto !important;
@@ -1459,10 +1467,6 @@ button {
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
   touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
-}
-
-.xterm-screen {
-  /* Allow native touch scrolling on mobile */
 }
 
 /* Mobile terminal scrollbar - visible and touch-friendly */
@@ -5651,7 +5655,7 @@ button {
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35);
   --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.45);
-  --mobile-preview-url-height: 34px;
+  --mobile-preview-url-height: 50px;
   --mobile-preview-url-offset: 0px;
   position: fixed;
   top: var(--mobile-header-height, 0);
@@ -5668,6 +5672,7 @@ button {
   flex: 1;
   position: relative;
   overflow: hidden;
+  overscroll-behavior: contain;
   /* Reserve exactly the URL bar footprint to avoid black gaps on mobile. */
   padding-top: calc(var(--mobile-preview-url-height) + var(--mobile-preview-url-offset));
 }
@@ -5676,6 +5681,7 @@ button {
   width: 100%;
   height: 100%;
   border: none;
+  touch-action: manipulation;
 }
 
 .preview-content-mobile .preview-empty,
@@ -5708,6 +5714,7 @@ button {
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   padding: 2px 4px 2px 8px;
+  box-sizing: border-box;
   box-shadow: var(--shadow-md);
   z-index: 100; /* Above mobile terminal overlay (z-index: 99) */
   transition: opacity 0.2s ease, transform 0.2s ease;
@@ -5715,8 +5722,8 @@ button {
 
 /* Flush URL bar - no gap on mobile */
 .preview-panel-mobile .preview-floating-url {
-  left: 0;
-  right: 0;
+  left: env(safe-area-inset-left, 0px);
+  right: env(safe-area-inset-right, 0px);
   border-radius: 0;
   border-left: none;
   border-right: none;
@@ -5732,8 +5739,8 @@ button {
 }
 
 .preview-panel-mobile .preview-floating-url .preview-floating-btn {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
 }
 
 .preview-floating-url.hidden {
@@ -5773,6 +5780,7 @@ button {
   font-size: 16px;
   padding: 8px 0;
   outline: none;
+  touch-action: manipulation;
 }
 
 .preview-url-input-mobile::placeholder {
@@ -5825,6 +5833,8 @@ button {
     align-items: center;
     gap: 8px;
     padding: 4px 8px;
+    padding-left: calc(8px + env(safe-area-inset-left, 0px));
+    padding-right: calc(8px + env(safe-area-inset-right, 0px));
     padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px));
     background: rgba(18, 18, 18, 0.95);
     backdrop-filter: blur(20px) saturate(180%);
@@ -5891,8 +5901,8 @@ button {
 
   /* Overflow (more tools) button */
   .preview-mobile-overflow-btn {
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
     flex-shrink: 0;
     display: flex;
     align-items: center;
@@ -5920,8 +5930,8 @@ button {
   .preview-mobile-tools-sheet {
     position: fixed;
     bottom: calc(var(--mobile-footer-height, 68px) + var(--mobile-keyboard-inset, 0px) + env(safe-area-inset-bottom, 0px) + 8px);
-    right: 12px;
-    width: 220px;
+    right: max(12px, env(safe-area-inset-right, 0px));
+    width: min(220px, calc(100vw - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px) - 24px));
     background: rgba(30, 30, 30, 0.98);
     backdrop-filter: blur(20px) saturate(180%);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -5955,8 +5965,11 @@ button {
     color: var(--text-secondary);
     font-size: 18px;
     cursor: pointer;
-    padding: 0 4px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
     line-height: 1;
+    border-radius: 8px;
   }
 
   .preview-mobile-tools-sheet-items {
@@ -5969,6 +5982,7 @@ button {
     display: flex;
     align-items: center;
     gap: 12px;
+    min-height: 44px;
     padding: 12px 8px;
     background: transparent;
     border: none;
@@ -6151,6 +6165,8 @@ button {
 
   .preview-mobile-terminal-btn {
     padding: 4px 8px;
+    min-width: 44px;
+    min-height: 44px;
     background: transparent;
     border: none;
     color: var(--text-secondary);
@@ -6220,8 +6236,8 @@ button {
 /* Console bottom sheet */
 .preview-console-sheet {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: env(safe-area-inset-left, 0px);
+  right: env(safe-area-inset-right, 0px);
   bottom: calc(var(--mobile-footer-height, 68px) + var(--mobile-keyboard-inset, 0px) + env(safe-area-inset-bottom, 0px));
   max-height: 60vh;
   background: #1f1f1f;
@@ -6399,14 +6415,14 @@ button {
 .preview-port-sheet {
   position: absolute;
   top: calc(var(--mobile-preview-url-height) + var(--mobile-preview-url-offset) + 4px);
-  left: 8px;
-  right: 8px;
-  max-height: 60vh;
+  left: max(8px, env(safe-area-inset-left, 0px));
+  right: max(8px, env(safe-area-inset-right, 0px));
+  max-height: calc(100dvh - var(--mobile-preview-url-height) - var(--mobile-footer-height, 68px) - var(--mobile-keyboard-inset, 0px) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 28px);
   background: #1f1f1f;
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
-  z-index: 15;
+  z-index: 130;
   overflow: hidden;
 }
 
@@ -6422,8 +6438,8 @@ button {
 }
 
 .preview-port-sheet-close {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   background: transparent;
   border: none;
   color: var(--text-muted);
@@ -6459,13 +6475,13 @@ button {
 
 .preview-port-sheet-search {
   width: 100%;
-  min-height: 40px;
+  min-height: 44px;
   border-radius: 8px;
   border: 1px solid var(--border-subtle);
   background: rgba(0, 0, 0, 0.24);
   color: var(--text-primary);
   padding: 0 12px;
-  font-size: 13px;
+  font-size: 16px;
   outline: none;
 }
 
@@ -6542,14 +6558,14 @@ button {
 /* Element inspector sheet for mobile */
 .preview-inspector-sheet {
   position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 80px;
+  left: max(8px, env(safe-area-inset-left, 0px));
+  right: max(8px, env(safe-area-inset-right, 0px));
+  bottom: calc(var(--mobile-footer-height, 68px) + var(--mobile-keyboard-inset, 0px) + env(safe-area-inset-bottom, 0px) + 12px);
   background: #111827;
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
-  z-index: 15;
+  z-index: 125;
   overflow: hidden;
   max-height: 160px;
 }
@@ -6575,8 +6591,8 @@ button {
 }
 
 .preview-inspector-sheet-close {
-  width: 24px;
-  height: 24px;
+  width: 40px;
+  height: 40px;
   background: transparent;
   border: none;
   color: var(--text-muted);
@@ -7222,7 +7238,7 @@ button {
   right: 0;
   background: var(--bg-primary, #09090b);
   border-bottom: 1px solid var(--border-default, #3f3f46);
-  z-index: 1000;
+  z-index: 1200;
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -7235,26 +7251,33 @@ button {
   height: 48px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 8px;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
 }
 
 .mobile-header.preview-mode .mobile-header-top-row {
-  height: 36px;
-  padding: 0 6px;
+  height: 44px;
+  gap: 4px;
+  padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 0 calc(8px + env(safe-area-inset-left, 0px));
 }
 
 .mobile-header.preview-mode .mobile-header-btn-modern {
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
 }
 
 .mobile-header.preview-mode .mobile-view-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
   padding: 1px;
 }
 
 .mobile-header.preview-mode .mobile-view-tab {
-  padding: 4px 16px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 4px 10px;
   font-size: 11px;
 }
 
@@ -7290,8 +7313,8 @@ button {
 
 /* Header icon buttons */
 .mobile-header-btn-modern {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7310,8 +7333,23 @@ button {
 }
 
 .mobile-header-actions-right {
+  margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 4px;
+  flex-shrink: 0;
+}
+
+.mobile-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 2px;
+  color: var(--text-primary, #fafafa);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Second row: session tabs or view tabs */
@@ -7320,7 +7358,7 @@ button {
   border-top: 1px solid var(--border-subtle, #27272a);
   display: flex;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 calc(4px + env(safe-area-inset-right, 0px)) 0 calc(4px + env(safe-area-inset-left, 0px));
   background: var(--bg-primary, #09090b);
 }
 
@@ -7343,8 +7381,8 @@ button {
 /* Individual session tab pill */
 .mobile-header-tab {
   flex-shrink: 0;
-  height: 36px;
-  min-height: 36px;
+  height: 44px;
+  min-height: 44px;
   padding: 0 12px;
   background: var(--bg-surface, #18181b);
   border: 1px solid var(--border-subtle, #27272a);
@@ -7353,7 +7391,7 @@ button {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  max-width: 100px;
+  max-width: min(130px, 34vw);
   overflow: hidden;
   text-overflow: ellipsis;
   transition: all 0.2s ease;
@@ -7436,10 +7474,10 @@ button {
 }
 
 .mobile-header-tab-input {
-  height: 36px;
+  height: 44px;
   background: var(--bg-primary, #09090b);
   border: 1px solid var(--accent-primary, #f59e0b);
-  border-radius: 18px;
+  border-radius: 22px;
   color: var(--text-primary, #fafafa);
   padding: 0 12px;
   font-size: 16px;
@@ -7449,8 +7487,10 @@ button {
 
 .mobile-header-tab-add {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 50%;
   background: var(--bg-elevated, #27272a);
   border: 1px solid var(--border-default, #3f3f46);
@@ -7464,16 +7504,20 @@ button {
 
 /* Terminal / Preview view tabs (compact segmented control) */
 .mobile-view-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   background: var(--bg-surface, #18181b);
   padding: 2px;
   border-radius: 8px;
   border: 1px solid var(--border-subtle, #27272a);
-  margin: 0 4px;
+  margin: 0;
 }
 
 .mobile-view-tab {
-  padding: 6px 20px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 12px;
   border-radius: 6px;
   border: none;
   background: transparent;
@@ -8195,9 +8239,27 @@ button {
     width: 100%;
     max-width: 100%;
     height: 100vh;
+    height: 100dvh;
     max-height: 100vh;
+    max-height: 100dvh;
     margin: 0;
     border-radius: 0;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .modal-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .modal-body {
+    padding: 20px;
+    padding-left: calc(20px + env(safe-area-inset-left, 0px));
+    padding-right: calc(20px + env(safe-area-inset-right, 0px));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+    max-height: calc(100vh - 140px);
+    max-height: calc(100dvh - 140px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
   }
 
   .bookmark-categories {
@@ -8217,8 +8279,12 @@ button {
 
   .bookmark-edit-btn,
   .bookmark-delete-btn {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .empty-state {
+    padding: 40px 20px;
   }
 
   .terminal-chat {
@@ -8245,19 +8311,14 @@ button {
 
   .preview-url-input {
     font-size: 16px;
-    padding: 8px 12px;
-    min-height: 40px;
+    padding: 10px 12px;
+    min-height: 44px;
   }
 
   .preview-action-btn {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     font-size: 14px;
-  }
-
-  /* Keep terminal split toggle visible - opens session switcher bar on mobile */
-  .preview-action-btn[aria-label="Toggle terminal split"] {
-    /* Button stays visible to toggle session switcher */
   }
 
   /* Make session buttons more touch-friendly */
@@ -8274,6 +8335,11 @@ button {
 
   .preview-empty {
     padding: 36px 24px;
+  }
+
+  .folder-browser-list {
+    min-height: 140px;
+    max-height: min(300px, 50vh);
   }
 
   .preview-empty-icon {
@@ -11373,6 +11439,13 @@ textarea:focus-visible {
   text-align: left;
   cursor: pointer;
   transition: all var(--transition-fast);
+}
+
+@media (max-width: 768px) {
+  .context-menu-item {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
 }
 
 .context-menu-item:hover:not(:disabled) {

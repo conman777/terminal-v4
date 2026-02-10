@@ -433,13 +433,6 @@ function AppContent() {
     previousActiveSessionRef.current = activeSessionId || null;
   }, [activeSessionId, sessionActivity, markSessionActivity]);
 
-  // Auto-switch back to terminal if preview URL gets cleared while viewing preview
-  useEffect(() => {
-    if (mobileView === 'preview' && !previewUrl) {
-      handleMobileViewChange('terminal');
-    }
-  }, [mobileView, previewUrl, handleMobileViewChange]);
-
   // Settings loaded from server (with localStorage fallback)
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 

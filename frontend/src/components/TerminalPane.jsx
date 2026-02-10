@@ -481,6 +481,14 @@ export const TerminalPane = memo(function TerminalPane({
           border-color: var(--error);
           color: var(--error);
         }
+
+        @media (max-width: 768px) {
+          .ph-btn {
+            min-width: 44px;
+            min-height: 44px;
+            padding: 10px;
+          }
+        }
       `}</style>
     </div>
   );

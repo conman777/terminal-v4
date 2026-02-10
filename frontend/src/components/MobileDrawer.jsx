@@ -415,7 +415,7 @@ export function MobileDrawer({
 
         .mobile-drawer-header-modern {
           height: 52px;
-          padding: 0 16px;
+          padding: 0 calc(16px + env(safe-area-inset-right, 0px)) 0 calc(16px + env(safe-area-inset-left, 0px));
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -431,8 +431,8 @@ export function MobileDrawer({
         }
 
         .mobile-drawer-close-modern {
-          width: 36px;
-          height: 36px;
+          width: 44px;
+          height: 44px;
           border-radius: 50%;
           background: var(--bg-surface, #141416);
           border: 1px solid var(--border-default, #2a2a2e);
@@ -446,7 +446,7 @@ export function MobileDrawer({
         .mobile-drawer-content-modern {
           flex: 1;
           overflow-y: auto;
-          padding: 14px 0 18px;
+          padding: 14px 0 calc(18px + env(safe-area-inset-bottom, 0px));
         }
 
         .mobile-drawer-section-modern {
@@ -475,6 +475,7 @@ export function MobileDrawer({
           flex-direction: column;
           align-items: center;
           gap: 8px;
+          min-height: 52px;
           padding: 10px 4px;
           background: var(--bg-surface, #141416);
           border: 1px solid var(--border-subtle, #1e1e21);
@@ -518,6 +519,7 @@ export function MobileDrawer({
           display: flex;
           align-items: center;
           gap: 12px;
+          min-height: 44px;
           padding: 8px 10px;
           background: transparent;
           border: none;
@@ -579,6 +581,7 @@ export function MobileDrawer({
           display: flex;
           align-items: center;
           gap: 12px;
+          min-height: 44px;
           padding: 10px 0;
           background: transparent;
           border: none;
@@ -656,6 +659,7 @@ export function MobileDrawer({
           align-items: center;
           justify-content: space-between;
           gap: 8px;
+          min-height: 44px;
           padding: 7px 9px;
           background: var(--bg-surface, #141416);
           border: 1px solid var(--border-subtle, #1e1e21);
@@ -704,7 +708,7 @@ export function MobileDrawer({
 
         .mobile-drawer-search-input-modern {
           width: 100%;
-          height: 40px;
+          height: 44px;
           background: var(--bg-surface, #141416);
           border: 1px solid var(--border-subtle, #1e1e21);
           border-radius: 10px;
@@ -781,7 +785,7 @@ export function MobileDrawer({
         @media (max-width: 480px) {
           .mobile-drawer-header-modern {
             height: 48px;
-            padding: 0 14px;
+            padding: 0 calc(14px + env(safe-area-inset-right, 0px)) 0 calc(14px + env(safe-area-inset-left, 0px));
           }
 
           .mobile-drawer-header-modern h2 {
@@ -789,7 +793,7 @@ export function MobileDrawer({
           }
 
           .mobile-drawer-content-modern {
-            padding: 12px 0 14px;
+            padding: 12px 0 calc(14px + env(safe-area-inset-bottom, 0px));
           }
 
           .mobile-drawer-section-modern {

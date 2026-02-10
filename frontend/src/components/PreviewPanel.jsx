@@ -297,6 +297,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return 320;
     }
   });
+  const mobileModeInitializedRef = useRef(false);
   const [isDraggingMobileSplit, setIsDraggingMobileSplit] = useState(false);
   const mobileSplitStartY = useRef(0);
   const mobileSplitStartHeight = useRef(0);
@@ -329,7 +330,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const previewPort = hostMatch ? parseInt(hostMatch[1], 10) : (pathMatch ? parseInt(pathMatch[1], 10) : null);
         const isLocalUiHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
         if (previewPort === uiPort || (isLocalUiHost && hostPort === uiPort && !pathMatch && !hostMatch)) {
-          console.warn(`[Preview] Cannot view Terminal V4 (port ${uiPort}) in its own preview panel`);
+          if (import.meta.env.DEV) {
+            console.warn(`[Preview] Cannot view Terminal V4 (port ${uiPort}) in its own preview panel`);
+          }
           return null;
         }
       } catch {
@@ -337,7 +340,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       }
     }
     const result = toPreviewUrl(cleanUrl);
-    console.log('[Preview] URL conversion:', url, '->', result);
+    if (import.meta.env.DEV) {
+      console.log('[Preview] URL conversion:', url, '->', result);
+    }
     return result;
   }, [uiPort, url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
@@ -541,8 +546,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         setShowPortDropdown(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [showPortDropdown]);
 
   useEffect(() => {
@@ -552,8 +557,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         setShowToolsMenu(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('pointerdown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [showToolsMenu]);
 
   const handleSelectPort = useCallback((port) => {
@@ -1086,7 +1091,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (!isLoading || !iframeSrc) return;
     const timeout = setTimeout(() => {
       if (isLoading) {
-        console.log('[Preview] Load timeout - showing iframe anyway');
+        if (import.meta.env.DEV) {
+          console.log('[Preview] Load timeout - showing iframe anyway');
+        }
         setIsLoading(false);
       }
     }, 5000);
@@ -1922,6 +1929,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [activeSessions, clampMobileSplitHeight, isMobile, mobileViewMode]);
 
   useEffect(() => {
+    if (!isMobile || mobileModeInitializedRef.current) return;
+    mobileModeInitializedRef.current = true;
+    if (!url && mobileViewMode !== 'preview') {
+      setMobileViewMode('preview');
+      try {
+        localStorage.setItem(MOBILE_VIEW_MODE_KEY, 'preview');
+      } catch {
+        // Ignore localStorage failures
+      }
+    }
+  }, [isMobile, mobileViewMode, url]);
+
+  useEffect(() => {
     if (!isMobile) return;
     try {
       localStorage.setItem(MOBILE_VIEW_MODE_KEY, mobileViewMode);
@@ -1954,38 +1974,62 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   useEffect(() => {
     if (!isMobile) return;
 
+    let frameId = null;
     const updateFooterHeight = () => {
       const measured = mobileFooterRef.current?.getBoundingClientRect().height || 0;
       const nextHeight = Math.max(48, Math.round(measured || 68));
       setMobileFooterHeight((previous) => (previous === nextHeight ? previous : nextHeight));
     };
+    const scheduleFooterHeightUpdate = () => {
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        updateFooterHeight();
+      });
+    };
 
-    updateFooterHeight();
-    window.addEventListener('resize', updateFooterHeight);
+    scheduleFooterHeightUpdate();
+    window.addEventListener('resize', scheduleFooterHeightUpdate);
 
     const viewport = window.visualViewport;
     if (viewport) {
-      viewport.addEventListener('resize', updateFooterHeight);
-      viewport.addEventListener('scroll', updateFooterHeight);
+      viewport.addEventListener('resize', scheduleFooterHeightUpdate);
+      viewport.addEventListener('scroll', scheduleFooterHeightUpdate);
     }
 
     let observer = null;
     if (typeof ResizeObserver !== 'undefined' && mobileFooterRef.current) {
-      observer = new ResizeObserver(updateFooterHeight);
+      observer = new ResizeObserver(scheduleFooterHeightUpdate);
       observer.observe(mobileFooterRef.current);
     }
 
     return () => {
-      window.removeEventListener('resize', updateFooterHeight);
+      window.removeEventListener('resize', scheduleFooterHeightUpdate);
       if (viewport) {
-        viewport.removeEventListener('resize', updateFooterHeight);
-        viewport.removeEventListener('scroll', updateFooterHeight);
+        viewport.removeEventListener('resize', scheduleFooterHeightUpdate);
+        viewport.removeEventListener('scroll', scheduleFooterHeightUpdate);
       }
       if (observer) {
         observer.disconnect();
       }
+      if (frameId !== null) {
+        window.cancelAnimationFrame(frameId);
+      }
     };
   }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || mobileViewMode !== 'terminal') return;
+    if (showPortDropdown) {
+      setShowPortDropdown(false);
+      setMobilePortSearch('');
+    }
+    if (showUrlInput) {
+      setShowUrlInput(false);
+    }
+  }, [isMobile, mobileViewMode, showPortDropdown, showUrlInput]);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -3211,7 +3255,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 startCommand={projectInfo?.startCommand || 'npm run dev'}
                 onStatusChange={(status, message) => setWebContainerStatus({ status, message })}
                 onServerReady={(url, port) => {
-                  console.log('[WebContainer] Server ready:', url, port);
+                  if (import.meta.env.DEV) {
+                    console.log('[WebContainer] Server ready:', url, port);
+                  }
                 }}
                 onError={(error, phase) => {
                   console.error('[WebContainer] Error:', phase, error);

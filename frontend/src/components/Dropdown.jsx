@@ -18,9 +18,9 @@ export function Dropdown({
     };
 
     if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('pointerdown', handleClickOutside);
     }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('pointerdown', handleClickOutside);
   }, [isOpen]);
 
   const toggleDropdown = () => setIsOpen(!isOpen);
@@ -79,7 +79,10 @@ export function Dropdown({
           border-radius: 8px;
           min-width: 180px;
           box-shadow: var(--shadow-lg);
-          z-index: 1000;
+          z-index: 2000;
+          max-height: min(60vh, 340px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
           padding: 6px;
           animation: dropdownFadeIn 0.2s ease-out;
         }
@@ -158,6 +161,13 @@ export function Dropdown({
           height: 1px;
           background: var(--border-subtle, #1e1e21);
           margin: 6px 0;
+        }
+
+        @media (max-width: 768px) {
+          .dropdown-item {
+            min-height: 44px;
+            padding: 10px 12px;
+          }
         }
       `}</style>
     </div>

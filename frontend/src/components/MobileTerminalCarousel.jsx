@@ -92,11 +92,17 @@ export function MobileTerminalCarousel({
     setReconnectTerminal(() => (typeof trigger === 'function' ? trigger : null));
   }, []);
 
+  const currentSession = sessions[currentIndex] || null;
+
   useEffect(() => {
     try {
       localStorage.setItem('mobileTerminalViewMode', viewMode);
     } catch {}
   }, [viewMode]);
+
+  useEffect(() => {
+    setReconnectTerminal(null);
+  }, [currentSession?.id]);
 
   // No sessions - show empty state
   if (sessions.length === 0) {
@@ -109,12 +115,6 @@ export function MobileTerminalCarousel({
       </div>
     );
   }
-
-  const currentSession = sessions[currentIndex];
-
-  useEffect(() => {
-    setReconnectTerminal(null);
-  }, [currentSession?.id]);
 
   return (
     <div className="mobile-terminal-carousel">
