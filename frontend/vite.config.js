@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+if (process.env.VITEST) {
+  // Keep React in test/dev mode even if shell exports NODE_ENV=production.
+  process.env.NODE_ENV = 'test';
+}
+
 export default defineConfig({
   plugins: [react()],
   build: {

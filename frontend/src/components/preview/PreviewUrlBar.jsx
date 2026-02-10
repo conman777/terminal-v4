@@ -198,7 +198,7 @@ export function PreviewUrlBar({
               <div className="preview-port-dropdown-list">
                 {visiblePorts.map(({ port, process, cwd, frontendLikely, reachable, probeStatus }) => {
                   const cwdLabel = typeof cwd === 'string' && cwd.length > 0
-                    ? cwd.split('/').filter(Boolean).slice(-2).join('/')
+                    ? cwd.replace(/\\/g, '/').split('/').filter(Boolean).slice(-2).join('/')
                     : '';
                   const hasMeta = Boolean(process || cwdLabel);
                   const statusLabel = frontendLikely || probeStatus === 'html' || probeStatus === 'redirect'

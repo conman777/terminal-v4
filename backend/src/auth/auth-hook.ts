@@ -21,6 +21,10 @@ declare module 'fastify' {
     userId?: string;
     username?: string;
   }
+
+  interface FastifyContextConfig {
+    skipAuth?: boolean;
+  }
 }
 
 // Match preview subdomain pattern (preview-{port}.*)
@@ -31,6 +35,12 @@ export function registerAuthHook(app: FastifyInstance): void {
     // Skip auth for preview subdomain requests (they're proxied to other apps)
     const host = request.headers.host || '';
     if (PREVIEW_SUBDOMAIN_REGEX.test(host)) {
+      return;
+    }
+
+    // Respect route-level auth overrides.
+    const routeConfig = request.routeOptions?.config as { skipAuth?: boolean } | undefined;
+    if (routeConfig?.skipAuth) {
       return;
     }
 

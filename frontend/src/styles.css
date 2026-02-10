@@ -5862,7 +5862,7 @@ button {
 
   .preview-mobile-segmented-btn {
     flex: 1;
-    min-height: 34px;
+    min-height: 44px;
     background: transparent;
     border: none;
     color: var(--text-secondary);
@@ -9611,6 +9611,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
+  min-height: 40px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: 16px;
@@ -9645,6 +9646,7 @@ textarea:focus-visible {
   color: var(--text-primary);
   font-size: 14px;
   outline: none;
+  appearance: none;
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
 }
@@ -9725,8 +9727,8 @@ textarea:focus-visible {
 }
 
 .status-bar-btn {
-  width: 32px;
-  height: 32px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   border: none;
   background: var(--bg-elevated);

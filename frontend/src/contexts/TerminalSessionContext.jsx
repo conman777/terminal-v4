@@ -54,7 +54,8 @@ export function TerminalSessionProvider({ children }) {
     // Helper to get project name from path
     const getProjectName = (path) => {
       if (!path) return 'Unknown';
-      const parts = path.replace(/\/$/, '').split('/');
+      const normalizedPath = String(path).replace(/[\\/]+$/, '').replace(/\\/g, '/');
+      const parts = normalizedPath.split('/').filter(Boolean);
       return parts[parts.length - 1] || 'Unknown';
     };
 

@@ -373,7 +373,7 @@ export function MobileDrawer({
         </div>
       </div>
 
-      <style jsx>{`
+      <style>{`
         .mobile-drawer-modern {
           position: fixed;
           top: 0;

@@ -14,7 +14,8 @@ export function DesktopStatusBar({
   onToggleViewMode
 }) {
   // Extract folder name from cwd, fall back to session title
-  const folderName = cwd ? cwd.split('/').pop() || cwd : '';
+  const normalizedCwd = typeof cwd === 'string' ? cwd.replace(/\\/g, '/') : '';
+  const folderName = normalizedCwd ? normalizedCwd.split('/').filter(Boolean).pop() || normalizedCwd : '';
   const displayName = folderName || sessionTitle || '';
 
   return (

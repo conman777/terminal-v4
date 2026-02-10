@@ -1,20 +1,29 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './test-helpers';
+
+async function ensureMobileTerminalView(page) {
+  const readerView = page.locator('.reader-view').first();
+  const readerVisible = await readerView.isVisible({ timeout: 1000 }).catch(() => false);
+  if (!readerVisible) return;
+
+  const switchToTerminal = page.getByRole('button', { name: /Switch to Terminal View/i }).first();
+  if (await switchToTerminal.count()) {
+    await switchToTerminal.click();
+    await expect(readerView).not.toBeVisible({ timeout: 10000 });
+  }
+}
+
+async function openReaderView(page) {
+  const switchToReader = page.getByRole('button', { name: /Switch to Reader View/i }).first();
+  if (!(await switchToReader.count())) return false;
+  await switchToReader.click();
+  await expect(page.locator('.reader-view').first()).toBeVisible({ timeout: 10000 });
+  return true;
+}
 
 test.describe('Terminal Scroll Behavior', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/');
-
-    // Login if we see the login form
-    const loginForm = page.locator('text=Sign In').first();
-    if (await loginForm.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await page.fill('input[placeholder="Enter username"]', 'conor');
-      await page.fill('input[placeholder="Enter password"]', 'P@ssw0rd213@');
-      await page.click('button:has-text("Sign In")');
-      // Wait for login to complete and terminal to load
-      await page.waitForTimeout(3000);
-    }
-
-    // Wait for terminal to initialize
+  test.beforeEach(async ({ page, request }) => {
+    await loginIfNeeded(page, request);
     await page.waitForTimeout(2000);
   });
 
@@ -153,6 +162,124 @@ test.describe('Terminal Scroll Behavior', () => {
       });
 
       expect(isAtBottom).toBe(true);
+    }
+  });
+
+  test('mobile status controls should remain touch-friendly', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+
+    const mobileStatusBar = page.locator('.mobile-status-bar').first();
+    if (await mobileStatusBar.count() === 0) {
+      return;
+    }
+    await expect(mobileStatusBar).toBeVisible();
+
+    const statusButton = page.getByRole('button', { name: 'Reconnect terminal' }).first();
+    if (await statusButton.count() === 0) {
+      return;
+    }
+    await expect(statusButton).toBeVisible();
+
+    const bounds = await statusButton.boundingBox();
+    expect(bounds).toBeTruthy();
+    expect((bounds?.width || 0) >= 39).toBe(true);
+    expect((bounds?.height || 0) >= 39).toBe(true);
+  });
+
+  test('mobile type input should be discoverable and openable', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+    await ensureMobileTerminalView(page);
+
+    const typeButton = page.getByRole('button', { name: 'Open text input' }).first();
+    if (await typeButton.count() === 0) {
+      return;
+    }
+    await expect(typeButton).toBeVisible();
+    await typeButton.click();
+
+    const input = page.locator('.mobile-terminal-input').first();
+    if (await input.count() === 0) {
+      return;
+    }
+    await expect(input).toBeVisible();
+    await input.fill('echo mobile ux');
+
+    const sendButton = page.getByRole('button', { name: 'Send to terminal' }).first();
+    await expect(sendButton).toBeEnabled();
+  });
+
+  test('mobile status input sends command output to terminal', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+    await ensureMobileTerminalView(page);
+
+    const typeButton = page.getByRole('button', { name: 'Open text input' }).first();
+    if (!(await typeButton.count())) {
+      return;
+    }
+    await typeButton.click();
+
+    const input = page.locator('.mobile-terminal-input').first();
+    await expect(input).toBeVisible();
+
+    const marker = `MOBILE_STATUS_${Date.now()}`;
+    await input.fill(`echo ${marker}`);
+    await page.getByRole('button', { name: 'Send to terminal' }).first().click();
+
+    const readerOpened = await openReaderView(page);
+    if (!readerOpened) return;
+    await expect(page.locator('.reader-view').first()).toContainText(marker, { timeout: 20000 });
+  });
+
+  test('mobile keyboard overlay input executes commands', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+    await ensureMobileTerminalView(page);
+
+    const overlayInput = page.locator('.mobile-keyboard-input').first();
+    if (!(await overlayInput.count())) {
+      return;
+    }
+
+    const marker = `MOBILE_OVERLAY_${Date.now()}`;
+    await overlayInput.fill(`echo ${marker}`);
+    await overlayInput.press('Enter');
+
+    const readerOpened = await openReaderView(page);
+    if (!readerOpened) return;
+    await expect(page.locator('.reader-view').first()).toContainText(marker, { timeout: 20000 });
+  });
+
+  test('mobile session actions should be visible without long-press', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+
+    const sessionActionsButton = page.getByRole('button', { name: 'Session actions' }).first();
+    if (await sessionActionsButton.count()) {
+      await expect(sessionActionsButton).toBeVisible();
+      await sessionActionsButton.click();
+      await expect(page.locator('text=Rename').first()).toBeVisible();
+    }
+  });
+
+  test('mobile preview segmented controls should meet touch target size', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(1000);
+
+    const previewButton = page.getByRole('button', { name: 'Preview' }).first();
+    if (await previewButton.count()) {
+      await previewButton.click();
+      await page.waitForTimeout(600);
+    }
+
+    const segmentedButton = page.locator('.preview-mobile-segmented-btn').first();
+    if (await segmentedButton.count()) {
+      await expect(segmentedButton).toBeVisible();
+      const bounds = await segmentedButton.boundingBox();
+      expect(bounds).toBeTruthy();
+      expect((bounds?.height || 0) >= 43).toBe(true);
     }
   });
 });

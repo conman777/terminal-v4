@@ -1,46 +1,36 @@
 import { useState, useRef, useCallback } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
-import { apiFetch, uploadScreenshot } from '../utils/api';
+import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
+import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
 export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true, onRefreshTerminal }) {
   const [inputText, setInputText] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const inputRef = useRef(null);
+  const { sendToSession } = useTerminalSession();
 
   const sendToTerminal = useCallback(async (text) => {
     if (!sessionId || !text.trim()) return;
     const payload = text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`;
 
     try {
-      const response = await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        body: { command: payload }
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to send input (${response.status})`);
-      }
+      await sendToSession?.(sessionId, payload);
       setInputText('');
       setIsExpanded(false);
     } catch (error) {
       console.error('Failed to send input to terminal:', error);
     }
-  }, [sessionId]);
+  }, [sendToSession, sessionId]);
 
   const sendRawToTerminal = useCallback(async (text) => {
     if (!sessionId || !text) return;
     try {
-      const response = await apiFetch(`/api/terminal/${sessionId}/input`, {
-        method: 'POST',
-        body: { command: text }
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to send input (${response.status})`);
-      }
+      await sendToSession?.(sessionId, text);
     } catch (error) {
       console.error('Failed to send raw input to terminal:', error);
     }
-  }, [sessionId]);
+  }, [sendToSession, sessionId]);
 
   const handleSubmit = useCallback((e) => {
     e.preventDefault();

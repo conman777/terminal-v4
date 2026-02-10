@@ -41,7 +41,7 @@ const TERMINAL_THEMES = {
   }
 };
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onRegisterReconnect, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -773,6 +773,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onRegisterFocusTerminal(() => setMobileInputEnabled(true));
     }
   }, [onRegisterFocusTerminal, setMobileInputEnabled]);
+
+  // Register reconnect trigger for external mobile controls.
+  useEffect(() => {
+    if (!onRegisterReconnect) return;
+    onRegisterReconnect(() => {
+      reconnectSocketRef.current?.();
+    });
+    return () => {
+      onRegisterReconnect(null);
+    };
+  }, [onRegisterReconnect]);
 
   // Update document.title with active session name
   useEffect(() => {

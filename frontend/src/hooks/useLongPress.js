@@ -16,7 +16,8 @@ export function useLongPress(onLongPress, delay = LONG_PRESS_DELAY) {
   }, []);
 
   const onTouchStart = useCallback((e) => {
-    const touch = e.touches[0];
+    const touch = e.touches?.[0];
+    if (!touch) return;
     touchStartRef.current = {
       x: touch.clientX,
       y: touch.clientY
@@ -36,7 +37,8 @@ export function useLongPress(onLongPress, delay = LONG_PRESS_DELAY) {
   const onTouchMove = useCallback((e) => {
     if (!touchStartRef.current) return;
 
-    const touch = e.touches[0];
+    const touch = e.touches?.[0];
+    if (!touch) return;
     const deltaX = Math.abs(touch.clientX - touchStartRef.current.x);
     const deltaY = Math.abs(touch.clientY - touchStartRef.current.y);
 

@@ -171,7 +171,7 @@ export const SessionTab = memo(function SessionTab({
         </svg>
       </button>
 
-      <style jsx>{`
+      <style>{`
         .session-tab-item {
           display: flex;
           align-items: center;

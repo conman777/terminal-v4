@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } from 'react';
 import { TerminalChat } from './components/TerminalChat';
+import ClaudeCodePanel from './components/ClaudeCodePanel';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileKeybar } from './components/MobileKeybar';
@@ -152,7 +153,8 @@ function AppContent() {
     unpinSession,
     archiveSession,
     unarchiveSession,
-    updateSessionTopic
+    updateSessionTopic,
+    sendToSession
   } = useTerminalSession();
 
   const {
@@ -244,16 +246,52 @@ function AppContent() {
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
 
+  const activeClaudeSession = useMemo(() => (
+    activeSessions.find((session) => {
+      const shell = (session?.shell || '').toLowerCase();
+      const title = (session?.title || '').toLowerCase();
+      return shell === 'claude' || title.includes('claude');
+    }) || null
+  ), [activeSessions]);
+
+  const mobileVisibleSessionId = useMemo(() => {
+    if (!isMobile) return null;
+    const session = activeSessions[mobileTerminalIndex];
+    return session?.id || null;
+  }, [activeSessions, isMobile, mobileTerminalIndex]);
+
+  const mobileKeybarSessionId = useMemo(() => {
+    if (!isMobile) return activeSessionId;
+
+    if (mobileView === 'claude') {
+      return activeClaudeSession?.id || activeSessionId || mobileVisibleSessionId;
+    }
+    if (mobileView === 'terminal') {
+      return mobileVisibleSessionId || activeSessionId || activeClaudeSession?.id || null;
+    }
+
+    return activeSessionId || mobileVisibleSessionId || activeClaudeSession?.id || null;
+  }, [
+    activeClaudeSession?.id,
+    activeSessionId,
+    isMobile,
+    mobileView,
+    mobileVisibleSessionId
+  ]);
+
   // Handle mobile view change - when switching to terminal, jump to active terminal
   const handleMobileViewChange = useCallback((view) => {
-    if (view === 'terminal' && activeSessionId) {
+    const normalizedView = view === 'preview' || view === 'claude' || view === 'terminal'
+      ? view
+      : 'terminal';
+    if (normalizedView === 'terminal' && activeSessionId) {
       // When switching to terminal view, jump to the currently active terminal
       const index = activeSessions.findIndex(s => s.id === activeSessionId);
       if (index !== -1) {
         setMobileTerminalIndex(index);
       }
     }
-    setMobileView(view);
+    setMobileView(normalizedView);
   }, [activeSessionId, activeSessions]);
 
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
@@ -669,6 +707,28 @@ function AppContent() {
     }
   }, [activeSessionId]);
 
+  // Send text to Claude Code (prefers an active Claude session, falls back to current terminal)
+  const handleSendToClaudeCode = useCallback(async (text) => {
+    if (!text) return;
+
+    const targetSessionId = activeClaudeSession?.id || activeSessionId || activeSessions[0]?.id;
+    if (!targetSessionId) return;
+
+    if (targetSessionId !== activeSessionId) {
+      selectSession(targetSessionId);
+    }
+
+    const payload = text.endsWith('\n') || text.endsWith('\r') ? text : `${text}\r`;
+    try {
+      await sendToSession(targetSessionId, payload);
+      if (isMobile) {
+        handleMobileViewChange('terminal');
+      }
+    } catch (error) {
+      console.error('Failed to send to Claude Code', error);
+    }
+  }, [activeClaudeSession?.id, activeSessionId, activeSessions, handleMobileViewChange, isMobile, selectSession, sendToSession]);
+
   const handleNavigateToPath = useCallback(async (path) => {
     if (!activeSessionId || !path) return;
 
@@ -858,7 +918,7 @@ function AppContent() {
             }}
           />
           <MobileKeybar
-            sessionId={activeSessionId}
+            sessionId={mobileKeybarSessionId}
             isOpen={keybarOpen}
             onHeightChange={handleKeybarHeightChange}
           />
@@ -989,6 +1049,7 @@ function AppContent() {
                           projectInfo={projectInfo}
                           onStartProject={handleStartProject}
                           onSendToTerminal={handleSendToTerminal}
+                          onSendToClaudeCode={handleSendToClaudeCode}
 
                           activeSessions={activeSessions}
                           activeSessionId={activeSessionId}
@@ -1044,6 +1105,23 @@ function AppContent() {
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
+                />
+              </div>
+            )}
+
+            {/* Mobile Claude Code pane */}
+            {mobileView === 'claude' && (
+              <div className="terminal-pane claude-code-pane">
+                <ClaudeCodePanel
+                  sessionId={activeClaudeSession?.id || null}
+                  keybarOpen={keybarOpen}
+                  viewportHeight={viewportHeight}
+                  onUrlDetected={handleUrlDetected}
+                  fontSize={terminalFontSize}
+                  webglEnabled={terminalWebglEnabled}
+                  onScrollDirection={handleScrollDirectionSafe}
+                  onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                  usesTmux={activeClaudeSession?.usesTmux}
                 />
               </div>
             )}

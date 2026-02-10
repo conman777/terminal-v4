@@ -128,7 +128,7 @@ export function PreviewInspector({
             <div className="preview-inspector-value">
               <span className="preview-inspector-component">&lt;{selectedElement.react.componentName}&gt;</span>
               {selectedElement.react.filePath && (
-                <span className="preview-inspector-muted"> {selectedElement.react.filePath.split('/').pop()}</span>
+                <span className="preview-inspector-muted"> {selectedElement.react.filePath.replace(/\\/g, '/').split('/').pop()}</span>
               )}
             </div>
             {Object.keys(selectedElement.react.props || {}).length > 0 && (

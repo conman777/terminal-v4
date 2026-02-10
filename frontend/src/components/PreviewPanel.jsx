@@ -271,6 +271,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileChromeTimerRef = useRef(null);
   const mobileSplitModeRef = useRef(null);
   const mobileToolsMenuRef = useRef(null);
+  const mobileFooterRef = useRef(null);
   const [terminalControlSize, setTerminalControlSize] = useState(() => {
     const base = Number.isFinite(fontSize) ? fontSize : 14;
     return Math.max(28, Math.min(42, Math.round(base * 2.2)));
@@ -301,6 +302,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileSplitStartHeight = useRef(0);
   const mobileSplitRafRef = useRef(null);
   const [mobileKeyboardInset, setMobileKeyboardInset] = useState(0);
+  const [mobileFooterHeight, setMobileFooterHeight] = useState(68);
   const [mobileChromeHidden, setMobileChromeHidden] = useState(false);
 
   const baseIframeSrc = useMemo(() => {
@@ -1039,7 +1041,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Apply styles via Claude
   const handleStyleApply = useCallback((styles) => {
-    if (!selectedElement || !onSendToClaudeCode) return;
+    if (!selectedElement) return;
+    const dispatch = onSendToClaudeCode || onSendToTerminal;
+    if (!dispatch) return;
 
     const el = selectedElement;
     const styleChanges = Object.entries(styles)
@@ -1063,8 +1067,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     // Revert preview before sending to Claude
     handleStyleRevert();
     setShowStyleEditor(false);
-    onSendToClaudeCode(context);
-  }, [selectedElement, onSendToClaudeCode, handleStyleRevert]);
+    dispatch(context);
+  }, [selectedElement, onSendToClaudeCode, onSendToTerminal, handleStyleRevert]);
 
   useEffect(() => {
     setInputUrl(url || '');
@@ -1949,6 +1953,42 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   useEffect(() => {
     if (!isMobile) return;
+
+    const updateFooterHeight = () => {
+      const measured = mobileFooterRef.current?.getBoundingClientRect().height || 0;
+      const nextHeight = Math.max(48, Math.round(measured || 68));
+      setMobileFooterHeight((previous) => (previous === nextHeight ? previous : nextHeight));
+    };
+
+    updateFooterHeight();
+    window.addEventListener('resize', updateFooterHeight);
+
+    const viewport = window.visualViewport;
+    if (viewport) {
+      viewport.addEventListener('resize', updateFooterHeight);
+      viewport.addEventListener('scroll', updateFooterHeight);
+    }
+
+    let observer = null;
+    if (typeof ResizeObserver !== 'undefined' && mobileFooterRef.current) {
+      observer = new ResizeObserver(updateFooterHeight);
+      observer.observe(mobileFooterRef.current);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateFooterHeight);
+      if (viewport) {
+        viewport.removeEventListener('resize', updateFooterHeight);
+        viewport.removeEventListener('scroll', updateFooterHeight);
+      }
+      if (observer) {
+        observer.disconnect();
+      }
+    };
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile) return;
     // Chrome is only hidden in terminal mode
     setMobileChromeHidden(mobileViewMode === 'terminal');
     if (mobileChromeTimerRef.current) {
@@ -2202,7 +2242,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }), [terminalControlSize]);
   const mobilePanelStyle = {
     '--mobile-keyboard-inset': `${mobileKeyboardInset}px`,
-    '--mobile-footer-height': '48px',
+    '--mobile-footer-height': `${mobileFooterHeight}px`,
     '--mobile-terminal-sheet-height': `${Math.round(mobileOverlayHeight)}px`
   };
 
@@ -2912,7 +2952,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         )}
 
         {/* Footer with segmented control + overflow */}
-        <div className="preview-mobile-footer">
+        <div className="preview-mobile-footer" ref={mobileFooterRef}>
           <div className="preview-mobile-segmented" role="tablist">
             <div
               className="preview-mobile-segmented-indicator"

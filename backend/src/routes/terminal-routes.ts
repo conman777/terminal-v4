@@ -472,33 +472,61 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
 
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
     let isBuffering = true;
+    let cleaned = false;
+    let unsubscribe: (() => void) | null = null;
 
-    const unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearInterval(heartbeatTimer);
+      if (unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
+      }
+      // Remove this client's dimensions when WebSocket disconnects
+      deps.terminalManager.removeClient(userId, request.params.id, clientId);
+    };
+
+    const closeSocket = (code: number, reason: string) => {
+      cleanup();
+      try {
+        socket.close(code, reason);
+      } catch {
+        // Ignore close race errors.
+      }
+    };
+
+    unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
       if (isBuffering) {
         bufferedEvents.push(event);
         return;
       }
       if (event === null) {
-        socket.close(1000, 'Session ended');
+        closeSocket(1000, 'Session ended');
         return;
       }
       if (useFramedProtocol && event.text.startsWith('{')) {
         try {
           const parsed = JSON.parse(event.text);
           if (parsed && parsed.__terminal_meta) {
-            sendMeta(parsed);
+            if (!sendMeta(parsed)) {
+              cleanup();
+            }
             return;
           }
         } catch {
           // Treat as output
         }
       }
-      sendOutput(event.text);
+      if (!sendOutput(event.text)) {
+        cleanup();
+      }
     });
 
     if (sendHistory) {
       for (const entry of snapshot.history) {
         if (!sendOutput(entry.text)) {
+          cleanup();
           return;
         }
       }
@@ -507,7 +535,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     isBuffering = false;
     for (const event of bufferedEvents) {
       if (event === null) {
-        socket.close(1000, 'Session ended');
+        closeSocket(1000, 'Session ended');
         return;
       }
       if (useFramedProtocol && event.text.startsWith('{')) {
@@ -515,6 +543,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
           const parsed = JSON.parse(event.text);
           if (parsed && parsed.__terminal_meta) {
             if (!sendMeta(parsed)) {
+              cleanup();
               return;
             }
             continue;
@@ -524,6 +553,7 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         }
       }
       if (!sendOutput(event.text)) {
+        cleanup();
         return;
       }
     }
@@ -546,16 +576,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       try {
         deps.terminalManager.write(userId, request.params.id, data);
       } catch {
-        socket.close(1011, 'Write failed');
+        closeSocket(1011, 'Write failed');
       }
     });
-
-    const cleanup = () => {
-      clearInterval(heartbeatTimer);
-      unsubscribe();
-      // Remove this client's dimensions when WebSocket disconnects
-      deps.terminalManager.removeClient(userId, request.params.id, clientId);
-    };
 
     socket.on('close', cleanup);
     socket.on('error', cleanup);

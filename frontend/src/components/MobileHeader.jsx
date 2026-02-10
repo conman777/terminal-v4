@@ -106,6 +106,7 @@ export function MobileHeader({
   const headerRef = useRef(null);
   const renameInputRef = useRef(null);
   const overflowRef = useRef(null);
+  const sessionActionsButtonRef = useRef(null);
   // Track user scrolling to prevent auto-scroll interruption
   const userScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef(null);
@@ -201,6 +202,16 @@ export function MobileHeader({
     onCloseSession(sessionId);
     setTabContextMenu(null);
   }, [onCloseSession]);
+
+  const handleOpenActiveSessionMenu = useCallback(() => {
+    if (!activeSessionId) return;
+    const rect = sessionActionsButtonRef.current?.getBoundingClientRect();
+    const fallbackX = typeof window !== 'undefined' ? window.innerWidth - 12 : 12;
+    const fallbackY = typeof window !== 'undefined' ? 56 : 56;
+    const x = rect ? Math.round(rect.left + (rect.width / 2)) : fallbackX;
+    const y = rect ? Math.round(rect.bottom + 6) : fallbackY;
+    setTabContextMenu({ sessionId: activeSessionId, x, y });
+  }, [activeSessionId]);
 
   // Handle user manual scrolling to prevent auto-scroll interruption
   const handleUserScroll = useCallback(() => {
@@ -378,12 +389,29 @@ export function MobileHeader({
               onClick={onToggleKeybar}
               aria-label="Keyboard"
               title="Keyboard"
+              type="button"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
                 <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
               </svg>
             </button>
+            {activeSessionId && (
+              <button
+                ref={sessionActionsButtonRef}
+                className="mobile-header-btn-modern"
+                onClick={handleOpenActiveSessionMenu}
+                aria-label="Session actions"
+                title="Session actions"
+                type="button"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="12" cy="5" r="2" />
+                  <circle cx="12" cy="12" r="2" />
+                  <circle cx="12" cy="19" r="2" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 

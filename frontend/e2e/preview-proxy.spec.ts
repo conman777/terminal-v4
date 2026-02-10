@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { loginIfNeeded } from './test-helpers';
 
 const previewTarget = process.env.PREVIEW_TARGET_URL;
 const uiBaseUrl = process.env.BASE_URL || 'http://localhost:3020';
@@ -17,7 +18,7 @@ test.describe('Preview proxy', () => {
     const targetUrl = new URL(previewTarget!);
     const uiUrl = new URL(uiBaseUrl);
 
-    await page.goto('/');
+    await loginIfNeeded(page, page.request);
 
     const previewPanel = page.locator('.preview-panel');
     if (!(await previewPanel.isVisible())) {

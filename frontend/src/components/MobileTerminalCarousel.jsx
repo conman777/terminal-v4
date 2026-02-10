@@ -50,9 +50,14 @@ export function MobileTerminalCarousel({
 
   // Refresh token to force terminal reconnection
   const [refreshToken, setRefreshToken] = useState(0);
+  const [reconnectTerminal, setReconnectTerminal] = useState(null);
   const handleRefreshTerminal = useCallback(() => {
+    if (typeof reconnectTerminal === 'function') {
+      reconnectTerminal();
+      return;
+    }
     setRefreshToken((value) => value + 1);
-  }, []);
+  }, [reconnectTerminal]);
 
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
@@ -83,6 +88,10 @@ export function MobileTerminalCarousel({
     setIsConnected(connected);
   }, []);
 
+  const handleRegisterReconnect = useCallback((trigger) => {
+    setReconnectTerminal(() => (typeof trigger === 'function' ? trigger : null));
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem('mobileTerminalViewMode', viewMode);
@@ -103,6 +112,10 @@ export function MobileTerminalCarousel({
 
   const currentSession = sessions[currentIndex];
 
+  useEffect(() => {
+    setReconnectTerminal(null);
+  }, [currentSession?.id]);
+
   return (
     <div className="mobile-terminal-carousel">
       {/* Terminal content - swipe to change sessions */}
@@ -121,6 +134,7 @@ export function MobileTerminalCarousel({
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
+          onRegisterReconnect={handleRegisterReconnect}
           onConnectionChange={handleConnectionChange}
           onActivityChange={(isBusy) => onSessionBusyChange?.(currentSession.id, isBusy)}
         />

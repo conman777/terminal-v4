@@ -233,7 +233,7 @@ export function SessionTabBar({
         />
       )}
 
-      <style jsx>{`
+      <style>{`
         .session-tab-bar-container-modern {
           display: flex;
           align-items: center;
