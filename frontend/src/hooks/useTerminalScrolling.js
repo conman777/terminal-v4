@@ -110,9 +110,10 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
   const scrollUp = useCallback(() => scrollInTmux('up'), [scrollInTmux]);
   const scrollDown = useCallback(() => scrollInTmux('down'), [scrollInTmux]);
 
-  const scrollByLines = useCallback((direction, lines) => {
+  const scrollByLines = useCallback((direction, lines, options = {}) => {
     const term = xtermRef.current;
     if (!term) return;
+    const { allowTmuxCopyMode = false } = options;
 
     setScrollingActive();
 
@@ -125,12 +126,17 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
     }
 
     if (!usesTmuxRef || usesTmuxRef.current) {
+      // Avoid entering tmux copy-mode from passive gestures (wheel/touch).
+      // Copy-mode remains available via explicit scroll controls.
+      if (!inCopyModeRef.current && !allowTmuxCopyMode) {
+        return;
+      }
       const key = direction === 'up' ? '\x1b[A' : '\x1b[B';
       sendCopyModeKeys(key.repeat(safeLines));
     }
   }, [xtermRef, sendCopyModeKeys, setScrollingActive, usesTmuxRef]);
 
-  const scrollByWheel = useCallback((deltaY, deltaMode, rows) => {
+  const scrollByWheel = useCallback((deltaY, deltaMode, rows, options = {}) => {
     if (!deltaY) return;
     const term = xtermRef.current;
     if (!term) return;
@@ -147,7 +153,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
     const lines = Math.max(1, Math.min(10, Math.round(Math.abs(pixels) / lineHeight)));
     const direction = pixels < 0 ? 'up' : 'down';
 
-    scrollByLines(direction, lines);
+    scrollByLines(direction, lines, options);
   }, [scrollByLines, xtermRef]);
 
   // Jump to live output - exits tmux copy-mode and scrolls xterm to bottom

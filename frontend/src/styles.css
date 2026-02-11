@@ -8293,10 +8293,10 @@ button {
 
   .xterm-container {
     position: absolute;
-    top: 2px;
+    top: 0;
     left: env(safe-area-inset-left, 0px);
     right: env(safe-area-inset-right, 0px);
-    bottom: 2px;
+    bottom: 0;
     overflow: hidden;
   }
 

@@ -78,6 +78,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [readerScrollToken, setReaderScrollToken] = useState(0);
   const sendTerminalInputRef = useRef(null);
   const fitTimeoutRef = useRef(null);
+  const fitRafRef = useRef(null);
+  const pendingFitOptionsRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
@@ -101,6 +103,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const SCROLLBACK_DESKTOP = 100000;
   const SCROLLBACK_MOBILE = 10000;
   const READER_MAX_LINES_MOBILE = 2000;
+  const MIN_FIT_CONTAINER_WIDTH = 50;
+  const MIN_FIT_CONTAINER_HEIGHT = 30;
   const HISTORY_WRITE_CHUNK_DESKTOP = 120000;
   const HISTORY_WRITE_CHUNK_MOBILE = 20000;
   const historyStateRef = useRef({
@@ -736,6 +740,100 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
   }, []);
 
+  const refreshTerminalViewport = useCallback(({ fit = false, preserveBottom = false, clearAtlas = false } = {}) => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    const container = terminalRef.current;
+    const canRender = (() => {
+      if (!container) return false;
+      if (container.getClientRects().length === 0) return false;
+      const { width, height } = container.getBoundingClientRect();
+      if (width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT) return false;
+      if (typeof window !== 'undefined' && window.getComputedStyle) {
+        const computed = window.getComputedStyle(container);
+        if (computed.display === 'none' || computed.visibility === 'hidden') return false;
+      }
+      return true;
+    })();
+
+    if (fit && fitAddonRef.current && canRender) {
+      let wasAtBottom = true;
+      if (preserveBottom) {
+        const buffer = term.buffer?.active;
+        wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
+      }
+      fitAddonRef.current.fit();
+      if (preserveBottom && wasAtBottom) {
+        term.scrollToBottom();
+      }
+    }
+
+    if (clearAtlas && webglAddonRef.current?.clearTextureAtlas) {
+      try {
+        webglAddonRef.current.clearTextureAtlas();
+      } catch {
+        // Ignore WebGL atlas refresh failures and keep canvas fallback behavior.
+      }
+    }
+
+    if (canRender) {
+      try {
+        const rows = term.rows || 0;
+        if (rows > 0) {
+          term.refresh(0, rows - 1);
+        }
+      } catch {
+        // Ignore transient refresh failures during rapid mount/unmount.
+      }
+    }
+  }, [MIN_FIT_CONTAINER_HEIGHT, MIN_FIT_CONTAINER_WIDTH]);
+
+  const scheduleViewportRefresh = useCallback(({
+    delay,
+    immediate = false,
+    fit = true,
+    preserveBottom = true,
+    clearAtlas = false
+  } = {}) => {
+    const resolvedDelay = delay ?? (isMobile ? 60 : 120);
+    const previous = pendingFitOptionsRef.current || { fit: false, preserveBottom: false, clearAtlas: false };
+    pendingFitOptionsRef.current = {
+      fit: previous.fit || fit,
+      preserveBottom: previous.preserveBottom || preserveBottom,
+      clearAtlas: previous.clearAtlas || clearAtlas
+    };
+
+    const flushPendingRefresh = () => {
+      fitTimeoutRef.current = null;
+      if (fitRafRef.current) cancelAnimationFrame(fitRafRef.current);
+      fitRafRef.current = requestAnimationFrame(() => {
+        fitRafRef.current = null;
+        const options = pendingFitOptionsRef.current;
+        pendingFitOptionsRef.current = null;
+        if (!options) return;
+        refreshTerminalViewport(options);
+      });
+    };
+
+    if (fitTimeoutRef.current) {
+      clearTimeout(fitTimeoutRef.current);
+      fitTimeoutRef.current = null;
+    }
+
+    if (immediate || resolvedDelay <= 0) {
+      flushPendingRefresh();
+      return;
+    }
+
+    fitTimeoutRef.current = setTimeout(flushPendingRefresh, resolvedDelay);
+  }, [isMobile, refreshTerminalViewport]);
+
+  useEffect(() => {
+    if (viewMode !== 'terminal') return;
+    scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
+  }, [viewMode, scheduleViewportRefresh]);
+
   // Reset loading state when session changes
   useEffect(() => {
     shouldReplayHistoryRef.current = !skipHistory;
@@ -804,8 +902,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let openRetryTimeout = null;
     let iosRefreshRaf = null;
     const MAX_OPEN_RETRIES = 20;
-    const MIN_CONTAINER_WIDTH = 50;
-    const MIN_CONTAINER_HEIGHT = 30;
 
     const scrollback = performanceMode
       ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
@@ -999,7 +1095,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!container) return;
 
       const { width, height } = container.getBoundingClientRect();
-      if (width < MIN_CONTAINER_WIDTH || height < MIN_CONTAINER_HEIGHT) {
+      if (width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT) {
         openRetryCount++;
         if (openRetryCount === MAX_OPEN_RETRIES) {
           console.warn('[Terminal] Container never reached viable size after', MAX_OPEN_RETRIES, 'retries');
@@ -1022,14 +1118,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       term.open(container);
 
       const requestPostOpenFit = () => {
-        if (disposed || !fitAddonRef.current || !xtermRef.current) return;
-        try {
-          fitAddonRef.current.fit();
-          const rows = xtermRef.current.rows || 0;
-          if (rows > 0) {
-            xtermRef.current.refresh(0, rows - 1);
-          }
-        } catch {}
+        if (disposed || !xtermRef.current) return;
+        scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
       };
 
       if (typeof document !== 'undefined' && document.fonts?.ready) {
@@ -1046,7 +1136,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }, 200);
 
       const initWebglAddon = () => {
-        const shouldEnableWebgl = webglEnabledRef.current && !(isMobile && isIOS);
+        const shouldEnableWebgl = webglEnabledRef.current && !isMobile;
         if (!shouldEnableWebgl || webglAddonRef.current) {
           return;
         }
@@ -1060,6 +1150,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (webglAddonRef.current === webglAddon) {
               webglAddonRef.current = null;
             }
+            scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
           });
           term.loadAddon(webglAddon);
           webglAddonRef.current = webglAddon;
@@ -1134,10 +1225,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           return true;
         }
 
-        // baseY === 0 and scrolling UP: xterm scrollback exhausted → tmux copy-mode
+        // baseY === 0 and scrolling UP: prefer loading local history.
+        // Avoid auto-entering tmux copy-mode from passive wheel gestures.
         if (event.deltaY < 0) {
           event.preventDefault();
-          scrollByWheel(event.deltaY, event.deltaMode, term.rows);
           triggerLoadMoreIfAtTop();
           return false;
         }
@@ -1380,7 +1471,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             scrollThrottleTimer = setTimeout(() => { scrollThrottleTimer = null; }, 100);
           }
         }
-        if (newPos === 0) {
+        const reachedTopFromAbove = newPos === 0 && lastScrollPos > 0;
+        if (reachedTopFromAbove) {
           loadMoreHistory();
         }
         lastScrollPos = newPos;
@@ -1388,7 +1480,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       rafId = requestAnimationFrame(() => {
         if (!disposed && fitAddonRef.current) {
-          fitAddonRef.current.fit();
+          scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
           const { cols, rows } = term;
           if (syncPtySizeRef.current && cols && rows) {
             apiFetch(`/api/terminal/${sessionId}/resize`, {
@@ -1399,26 +1491,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
       });
 
-      const debouncedFit = () => {
+      const debouncedFit = (delay = 120) => {
         if (disposed) return;
-        if (fitTimeoutRef.current) {
-          clearTimeout(fitTimeoutRef.current);
-        }
-        fitTimeoutRef.current = setTimeout(() => {
-          if (disposed || !fitAddonRef.current || !xtermRef.current) return;
-          const container = terminalRef.current;
-          if (!container) return;
-          const { width, height } = container.getBoundingClientRect();
-          if (width < MIN_CONTAINER_WIDTH || height < MIN_CONTAINER_HEIGHT) return;
-          try {
-            const buffer = xtermRef.current.buffer?.active;
-            const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
-            fitAddonRef.current.fit();
-            if (wasAtBottom) {
-              xtermRef.current.scrollToBottom();
-            }
-          } catch { /* Ignore errors during rapid resizing */ }
-        }, 150);
+        scheduleViewportRefresh({ delay, fit: true, preserveBottom: true });
       };
 
       resizeObserver = new ResizeObserver(() => debouncedFit());
@@ -1427,7 +1502,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const handleFocus = () => debouncedFit();
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
-          debouncedFit();
+          debouncedFit(80);
           // Trigger reconnect if socket is closed and we're online
           if (navigator.onLine && socketRef.current?.readyState !== WebSocket.OPEN) {
             reconnectSocketRef.current?.();
@@ -1908,7 +1983,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         queueTerminalInput(data);
       });
 
-      const handleResize = () => debouncedFit();
+      const handleResize = () => debouncedFit(100);
       window.addEventListener('resize', handleResize);
 
       let resizeTimeout = null;
@@ -1931,8 +2006,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }, 100);
       });
 
+      const VIEWPORT_JITTER_THRESHOLD = 8;
+      let lastViewportWidth = null;
+      let lastViewportHeight = null;
       const viewport = window.visualViewport;
-      if (viewport) viewport.addEventListener('resize', handleResize);
+      const handleViewportResize = () => {
+        if (!viewport) return;
+        const nextWidth = Math.round(viewport.width);
+        const nextHeight = Math.round(viewport.height);
+        if (lastViewportWidth !== null && lastViewportHeight !== null) {
+          const widthDelta = Math.abs(nextWidth - lastViewportWidth);
+          const heightDelta = Math.abs(nextHeight - lastViewportHeight);
+          if (widthDelta < VIEWPORT_JITTER_THRESHOLD && heightDelta < VIEWPORT_JITTER_THRESHOLD) {
+            return;
+          }
+        }
+        lastViewportWidth = nextWidth;
+        lastViewportHeight = nextHeight;
+        debouncedFit(100);
+      };
+      if (viewport) {
+        lastViewportWidth = Math.round(viewport.width);
+        lastViewportHeight = Math.round(viewport.height);
+        viewport.addEventListener('resize', handleViewportResize);
+      }
 
       const handleContextMenu = async (e) => {
         e.preventDefault();
@@ -2024,7 +2121,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         scrollDisposer?.dispose();
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
-        if (viewport) viewport.removeEventListener('resize', handleResize);
+        if (viewport) viewport.removeEventListener('resize', handleViewportResize);
         if (openRetryTimeout) {
           clearTimeout(openRetryTimeout);
           openRetryTimeout = null;
@@ -2033,6 +2130,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           cancelAnimationFrame(iosRefreshRaf);
           iosRefreshRaf = null;
         }
+        if (fitTimeoutRef.current) {
+          clearTimeout(fitTimeoutRef.current);
+          fitTimeoutRef.current = null;
+        }
+        if (fitRafRef.current) {
+          cancelAnimationFrame(fitRafRef.current);
+          fitRafRef.current = null;
+        }
+        pendingFitOptionsRef.current = null;
         if (webglAddonRef.current) {
           try {
             webglAddonRef.current.dispose();
@@ -2069,6 +2175,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         clearTimeout(fitTimeoutRef.current);
         fitTimeoutRef.current = null;
       }
+      if (fitRafRef.current) {
+        cancelAnimationFrame(fitRafRef.current);
+        fitRafRef.current = null;
+      }
+      pendingFitOptionsRef.current = null;
       cleanupIdle();
       cleanupScrolling();
       if (resizeObserver) resizeObserver.disconnect();
@@ -2099,8 +2210,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
+    if (!term.element) return;
 
-    const shouldEnableWebgl = webglEnabledRef.current && !(isMobile && isIOS);
+    const shouldEnableWebgl = webglEnabledRef.current && !isMobile;
     if (shouldEnableWebgl) {
       if (!webglAddonRef.current) {
         try {
@@ -2113,9 +2225,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (webglAddonRef.current === webglAddon) {
               webglAddonRef.current = null;
             }
+            scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
           });
           term.loadAddon(webglAddon);
           webglAddonRef.current = webglAddon;
+          scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
         } catch (error) {
           console.warn('[WebGL] Failed to initialize, using canvas fallback:', error);
         }
@@ -2128,8 +2242,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         webglAddonRef.current.dispose();
       } catch {}
       webglAddonRef.current = null;
+      scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
     }
-  }, [webglEnabled, isMobile, isIOS]);
+  }, [webglEnabled, isMobile, scheduleViewportRefresh]);
 
   // Handle font size changes without recreating terminal
   useEffect(() => {
@@ -2138,52 +2253,81 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const newSize = fontSize || (isMobile ? 16 : 14);
     if (term.options.fontSize !== newSize) {
       term.options.fontSize = newSize;
-      fitAddonRef.current.fit();
+      scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
     }
-  }, [fontSize, isMobile]);
+  }, [fontSize, isMobile, scheduleViewportRefresh]);
 
   // Handle keybar/viewport changes with debounced fit
   // Use shorter debounce on mobile for faster keyboard response
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
-
-    if (fitTimeoutRef.current) clearTimeout(fitTimeoutRef.current);
-
-    const debounceTime = isMobile ? 50 : 150;
-    fitTimeoutRef.current = setTimeout(() => {
-      if (!fitAddonRef.current || !xtermRef.current) return;
-      try {
-        const term = xtermRef.current;
-        const buffer = term.buffer?.active;
-        const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
-        fitAddonRef.current.fit();
-        if (wasAtBottom) term.scrollToBottom();
-      } catch (error) {
-        console.error('[Terminal Fit] Failed to resize terminal:', error);
-      }
-    }, debounceTime);
-  }, [keybarOpen, viewportHeight, isMobile]);
+    const debounceTime = 100;
+    scheduleViewportRefresh({ delay: debounceTime, fit: true, preserveBottom: true });
+  }, [keybarOpen, viewportHeight, isMobile, scheduleViewportRefresh]);
 
   // External fit signal (e.g., preview split resize)
   useEffect(() => {
     if (fitSignal === undefined || fitSignal === null) return;
     if (!fitAddonRef.current || !xtermRef.current) return;
-    const rafId = requestAnimationFrame(() => {
-      if (!fitAddonRef.current || !xtermRef.current) return;
-      try {
-        const term = xtermRef.current;
-        const buffer = term.buffer?.active;
-        const wasAtBottom = buffer ? buffer.baseY === buffer.viewportY : true;
-        fitAddonRef.current.fit();
-        if (wasAtBottom) {
-          term.scrollToBottom();
-        }
-      } catch (error) {
-        console.error('[Terminal Fit] Failed to apply fit signal:', error);
+    scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
+  }, [fitSignal, scheduleViewportRefresh]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    if (typeof window === 'undefined') return;
+
+    let dprMediaQuery = null;
+    let orientationTimer = null;
+
+    const scheduleStrongRefresh = (delay = 100) => {
+      scheduleViewportRefresh({ delay, fit: true, preserveBottom: true, clearAtlas: true });
+    };
+
+    const removeDprListener = () => {
+      if (!dprMediaQuery) return;
+      if (typeof dprMediaQuery.removeEventListener === 'function') {
+        dprMediaQuery.removeEventListener('change', handleDprChange);
+      } else if (typeof dprMediaQuery.removeListener === 'function') {
+        dprMediaQuery.removeListener(handleDprChange);
       }
-    });
-    return () => cancelAnimationFrame(rafId);
-  }, [fitSignal]);
+      dprMediaQuery = null;
+    };
+
+    const bindDprListener = () => {
+      removeDprListener();
+      if (typeof window.matchMedia !== 'function') return;
+      dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      if (typeof dprMediaQuery.addEventListener === 'function') {
+        dprMediaQuery.addEventListener('change', handleDprChange);
+      } else if (typeof dprMediaQuery.addListener === 'function') {
+        dprMediaQuery.addListener(handleDprChange);
+      }
+    };
+
+    function handleDprChange() {
+      bindDprListener();
+      scheduleStrongRefresh(80);
+    }
+
+    const handleOrientationChange = () => {
+      scheduleStrongRefresh(120);
+      if (orientationTimer) clearTimeout(orientationTimer);
+      orientationTimer = setTimeout(() => {
+        scheduleStrongRefresh(240);
+      }, 180);
+    };
+
+    bindDprListener();
+    window.addEventListener('orientationchange', handleOrientationChange);
+    return () => {
+      window.removeEventListener('orientationchange', handleOrientationChange);
+      if (orientationTimer) {
+        clearTimeout(orientationTimer);
+        orientationTimer = null;
+      }
+      removeDprListener();
+    };
+  }, [isMobile, scheduleViewportRefresh]);
 
   // On mobile, control keyboard by moving textarea on/off screen
   useEffect(() => {

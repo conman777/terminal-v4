@@ -2431,6 +2431,12 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             }
             style={mobileViewMode === 'split' ? { height: `${mobileOverlayHeight}px` } : undefined}
             aria-hidden={mobileViewMode === 'split' && !mobileTerminalVisible}
+            onTransitionEnd={(event) => {
+              if (event.target !== event.currentTarget) return;
+              if (event.propertyName === 'transform' || event.propertyName === 'height' || event.propertyName === 'bottom') {
+                setPreviewTerminalFitToken((token) => token + 1);
+              }
+            }}
           >
             {/* Drag handle (split mode only) */}
             {mobileViewMode === 'split' && (
@@ -2511,6 +2517,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   viewportHeight={null}
                   fontSize={fontSize}
                   webglEnabled={webglEnabled}
+                  fitSignal={previewTerminalFitToken}
                   onUrlDetected={onUrlDetected || (() => {})}
                   usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                   onRegisterImageUpload={() => {}}
