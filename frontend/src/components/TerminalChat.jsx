@@ -1225,10 +1225,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           return true;
         }
 
-        // baseY === 0 and scrolling UP: prefer loading local history.
-        // Avoid auto-entering tmux copy-mode from passive wheel gestures.
+        // baseY === 0 and scrolling UP: xterm scrollback exhausted → tmux copy-mode
         if (event.deltaY < 0) {
           event.preventDefault();
+          scrollByWheel(event.deltaY, event.deltaMode, term.rows);
           triggerLoadMoreIfAtTop();
           return false;
         }
