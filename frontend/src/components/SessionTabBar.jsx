@@ -16,7 +16,8 @@ export function SessionTabBar({
   onCloseSession,
   onRenameSession,
   onReorderSessions,
-  inHeader = false
+  inHeader = false,
+  showStatusLabels = false
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
@@ -171,19 +172,21 @@ export function SessionTabBar({
       >
         {sessions.map((session) => {
           const activityState = sessionActivity?.[session.id];
-          const isBusy = typeof activityState?.isBusy === 'boolean'
-            ? activityState.isBusy
-            : Boolean(session.isBusy);
+          const isActive = session.id === activeSessionId;
+          const backendBusy = typeof session?.isBusy === 'boolean'
+            ? session.isBusy
+            : Boolean(activityState?.isBusy);
+          const isBusy = isActive ? backendBusy : false;
 
           return (
             <SessionTab
               key={session.id}
               session={session}
-              isActive={session.id === activeSessionId}
+              isActive={isActive}
               hasUnread={Boolean(activityState?.hasUnread)}
               isBusy={isBusy}
               isReady={!isBusy}
-              isDone={Boolean(activityState?.isDone)}
+              showStatusLabels={showStatusLabels}
               onSelect={onSelectSession}
               onClose={onCloseSession}
               onRename={onRenameSession}

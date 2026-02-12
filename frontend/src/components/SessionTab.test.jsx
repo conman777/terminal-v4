@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { SessionTab } from './SessionTab';
 
 function buildProps(overrides = {}) {
@@ -9,7 +9,6 @@ function buildProps(overrides = {}) {
     hasUnread: false,
     isBusy: false,
     isReady: true,
-    isDone: false,
     onSelect: vi.fn(),
     onClose: vi.fn(),
     onRename: vi.fn(),
@@ -37,9 +36,26 @@ describe('SessionTab', () => {
     expect(container.querySelector('.tab-unread-dot-modern')).not.toBeInTheDocument();
   });
 
-  it('applies done class when command completed in background', () => {
-    const { container } = render(<SessionTab {...buildProps({ isDone: true })} />);
+  it('applies busy class when session is busy', () => {
+    const { container } = render(<SessionTab {...buildProps({ isBusy: true, isReady: false })} />);
 
-    expect(container.querySelector('.session-tab-item')?.className).toContain('done');
+    expect(container.querySelector('.session-tab-item')?.className).toContain('busy');
+  });
+
+  it('shows idle status when not busy', () => {
+    const { container } = render(<SessionTab {...buildProps({ isBusy: false })} />);
+
+    expect(container.querySelector('.session-tab-item')?.className).not.toContain('busy');
+    expect(container.querySelector('.tab-status-dot-modern')?.className).toContain('idle');
+  });
+
+  it('renders explicit status labels when enabled', () => {
+    render(<SessionTab {...buildProps({ showStatusLabels: true, isBusy: true, isReady: false })} />);
+    expect(screen.getByText('Busy')).toBeInTheDocument();
+  });
+
+  it('shows Idle label when not busy and status labels enabled', () => {
+    render(<SessionTab {...buildProps({ showStatusLabels: true })} />);
+    expect(screen.getByText('Idle')).toBeInTheDocument();
   });
 });

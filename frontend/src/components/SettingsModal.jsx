@@ -2,11 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange }) {
+export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, showTabStatusLabels, onTabStatusLabelsChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const resolvedWebglEnabled = terminalWebglEnabled !== false;
+  const resolvedShowTabStatusLabels = showTabStatusLabels !== false;
   const dropdownRef = useRef(null);
 
   // Update local state when modal opens
@@ -194,6 +195,26 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
               </button>
             </div>
             <small>Use WebGL for GPU acceleration; switch to Canvas if you see glitches.</small>
+          </div>
+          <div className="form-group">
+            <label>Tab Status Labels</label>
+            <div className="mode-toggle" role="group" aria-label="Tab status labels">
+              <button
+                type="button"
+                className={`mode-btn ${resolvedShowTabStatusLabels ? 'active' : ''}`}
+                onClick={() => onTabStatusLabelsChange?.(true)}
+              >
+                Show
+              </button>
+              <button
+                type="button"
+                className={`mode-btn ${!resolvedShowTabStatusLabels ? 'active' : ''}`}
+                onClick={() => onTabStatusLabelsChange?.(false)}
+              >
+                Compact
+              </button>
+            </div>
+            <small>Show explicit Busy/Done/Idle labels in tab chips.</small>
           </div>
 
         </div>

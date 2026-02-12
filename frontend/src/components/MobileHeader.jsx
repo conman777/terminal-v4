@@ -11,8 +11,8 @@ function MobileTab({
   session,
   isActive,
   isBusy,
-  isDone,
   hasUnread,
+  showStatusLabels,
   onSelect,
   onLongPress,
   isRenaming,
@@ -45,7 +45,6 @@ function MobileTab({
     'mobile-header-tab',
     isActive && 'active',
     isBusy && 'busy',
-    isDone && !isBusy && 'done',
     hasUnread && !isActive && 'unread'
   ].filter(Boolean).join(' ');
 
@@ -56,8 +55,13 @@ function MobileTab({
       onClick={() => onSelect(session.id)}
       {...longPressHandlers}
     >
-      <span className={`mobile-header-tab-status${isBusy ? ' busy' : isDone ? ' done' : ' ready'}`} />
+      <span className={`mobile-header-tab-status${isBusy ? ' busy' : ' idle'}`} />
       <span className="mobile-header-tab-label">{session.title || 'Terminal'}</span>
+      {showStatusLabels && (
+        <span className={`mobile-header-tab-status-label ${isBusy ? 'busy' : 'idle'}`} aria-hidden="true">
+          {isBusy ? 'Busy' : 'Idle'}
+        </span>
+      )}
       {hasUnread && !isActive && <span className="mobile-header-tab-unread-dot" aria-hidden="true" />}
     </button>
   );
@@ -93,7 +97,8 @@ export function MobileHeader({
   onNavigateToPath,
   isNavCollapsed = false,
   sessionActivity,
-  sessionsGroupedByProject
+  sessionsGroupedByProject,
+  showTabStatusLabels = false
 }) {
   const { theme, toggleTheme } = useTheme();
   const [showDrawer, setShowDrawer] = useState(false);
@@ -424,13 +429,21 @@ export function MobileHeader({
           <div className="mobile-header-tabs-row">
             <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
               {activeSessions.map((session) => (
+                (() => {
+                  const activityState = sessionActivity?.[session.id];
+                  const isActive = session.id === activeSessionId;
+                  const backendBusy = typeof session?.isBusy === 'boolean'
+                    ? session.isBusy
+                    : Boolean(activityState?.isBusy);
+                  const isBusy = isActive ? backendBusy : false;
+                  return (
                 <MobileTab
                   key={session.id}
                   session={session}
-                  isActive={session.id === activeSessionId}
-                  isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
-                  isDone={Boolean(sessionActivity?.[session.id]?.isDone)}
-                  hasUnread={Boolean(sessionActivity?.[session.id]?.hasUnread)}
+                  isActive={isActive}
+                  isBusy={isBusy}
+                  hasUnread={Boolean(activityState?.hasUnread)}
+                  showStatusLabels={showTabStatusLabels}
                   onSelect={onSelectSession}
                   onLongPress={handleTabLongPress}
                   isRenaming={renamingSessionId === session.id}
@@ -440,6 +453,8 @@ export function MobileHeader({
                   onRenameKeyDown={handleRenameKeyDown}
                   inputRef={renameInputRef}
                 />
+                  );
+                })()
               ))}
               <button
                 type="button"

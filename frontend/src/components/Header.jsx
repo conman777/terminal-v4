@@ -26,7 +26,7 @@ export function Header({
     onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession,
     onReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad,
-    sessionActivity, sessionsGroupedByProject,
+    sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
   } = sessionProps;
 
   const {
@@ -75,6 +75,7 @@ export function Header({
         isNavCollapsed={isNavCollapsed}
         sessionActivity={sessionActivity}
         sessionsGroupedByProject={sessionsGroupedByProject}
+        showTabStatusLabels={showTabStatusLabels}
       />
     );
   }
@@ -173,6 +174,7 @@ export function Header({
             onRenameSession={onRenameSession}
             onReorderSessions={onReorderSessions}
             inHeader
+            showStatusLabels={showTabStatusLabels}
           />
         </div>
       )}

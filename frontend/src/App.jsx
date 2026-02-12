@@ -26,7 +26,6 @@ import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { SESSION_BUSY_WINDOW_MS } from './constants/sessionActivity';
 import { apiFetch } from './utils/api';
 
 function isDynamicImportFetchError(error) {
@@ -357,22 +356,21 @@ function AppContent() {
     if (isBusy && sessionId && sessionId !== activeSessionId) {
       markSessionActivity(sessionId);
     }
-    setSessionBusy(sessionId, isBusy);
+    setSessionBusy(sessionId, Boolean(isBusy));
   }, [activeSessionId, markSessionActivity, setSessionBusy]);
 
   useEffect(() => {
     if (!Array.isArray(sessions) || sessions.length === 0) return;
-    const now = Date.now();
 
     sessions.forEach((session) => {
+      // Only trust explicit backend busy state to avoid UI color flapping.
+      if (typeof session?.isBusy !== 'boolean') {
+        return;
+      }
       const parsedLastActivity = Date.parse(session.lastActivityAt || '');
       const snapshotTs = Number.isFinite(parsedLastActivity) ? parsedLastActivity : 0;
-      // Fallback inference when backend process has not been restarted and
-      // does not yet provide `isBusy`.
-      const inferredBusy = snapshotTs > 0 && now - snapshotTs <= SESSION_BUSY_WINDOW_MS;
-      const busy = typeof session.isBusy === 'boolean' ? session.isBusy : inferredBusy;
 
-      setSessionBusy(session.id, busy, { lastActivityAt: snapshotTs });
+      setSessionBusy(session.id, session.isBusy, { lastActivityAt: snapshotTs });
     });
   }, [sessions, setSessionBusy]);
 
@@ -488,6 +486,15 @@ function AppContent() {
       return true;
     }
   });
+  const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
+    try {
+      const stored = localStorage.getItem('showTabStatusLabels');
+      if (stored === null) return true;
+      return stored === 'true';
+    } catch {
+      return true;
+    }
+  });
 
   // Fetch settings from server on mount
   useEffect(() => {
@@ -574,6 +581,15 @@ function AppContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalWebglEnabled: enabled })
     }).catch(e => console.error('Failed to save terminal WebGL setting to server', e));
+  }, []);
+
+  const updateShowTabStatusLabels = useCallback((enabled) => {
+    setShowTabStatusLabels(enabled);
+    try {
+      localStorage.setItem('showTabStatusLabels', String(enabled));
+    } catch (e) {
+      console.error('Failed to save tab status label setting to localStorage', e);
+    }
   }, []);
 
   const toggleSidebar = useCallback(() => {
@@ -844,7 +860,7 @@ function AppContent() {
     onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
-    sessionActivity, sessionsGroupedByProject,
+    sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
   };
 
   const headerModalProps = {
@@ -869,6 +885,8 @@ function AppContent() {
             onFontSizeChange={updateTerminalFontSize}
             terminalWebglEnabled={terminalWebglEnabled}
             onWebglChange={updateTerminalWebglEnabled}
+            showTabStatusLabels={showTabStatusLabels}
+            onTabStatusLabelsChange={updateShowTabStatusLabels}
           />
           <BookmarkModal
             isOpen={showBookmarks}
@@ -1086,6 +1104,7 @@ function AppContent() {
                           onUrlDetected={handlePreviewUrlChange}
                           mainTerminalMinimized={mainTerminalMinimized}
                           onToggleMainTerminal={handleToggleMainTerminal}
+                          showStatusLabels={showTabStatusLabels}
                         />
                       </Suspense>
                     </ErrorBoundary>
@@ -1170,6 +1189,7 @@ function AppContent() {
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
                   onUrlDetected={handlePreviewUrlChange}
+                  showStatusLabels={showTabStatusLabels}
                 />
               </Suspense>
             )}

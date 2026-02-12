@@ -9,7 +9,7 @@ export const SessionTab = memo(function SessionTab({
   hasUnread,
   isBusy,
   isReady,
-  isDone,
+  showStatusLabels = false,
   onSelect,
   onClose,
   onRename,
@@ -113,10 +113,11 @@ export const SessionTab = memo(function SessionTab({
     hasUnread && !isActive && 'has-unread',
     isBusy && 'busy',
     isReady && 'ready',
-    isDone && !isBusy && !isActive && 'done',
     isDragging && 'dragging',
     isDragOver && 'drag-over'
   ].filter(Boolean).join(' ');
+  const statusClass = isBusy ? 'busy' : 'idle';
+  const statusLabel = isBusy ? 'Busy' : 'Idle';
 
   return (
     <div
@@ -137,7 +138,7 @@ export const SessionTab = memo(function SessionTab({
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
     >
-      <span className={`tab-status-dot-modern ${isBusy ? 'busy' : 'ready'}`} />
+      <span className={`tab-status-dot-modern ${statusClass}`} />
 
       {isRenaming ? (
         <input
@@ -152,6 +153,12 @@ export const SessionTab = memo(function SessionTab({
         />
       ) : (
         <span className="tab-title-modern">{session.title}</span>
+      )}
+
+      {showStatusLabels && (
+        <span className={`tab-status-label-modern ${statusClass}`} aria-hidden="true">
+          {statusLabel}
+        </span>
       )}
 
       {hasUnread && !isActive && (
@@ -226,14 +233,6 @@ export const SessionTab = memo(function SessionTab({
           100% { transform: translateX(520%); opacity: 0; }
         }
 
-        .session-tab-item.done:not(.active) {
-          background: var(--tab-done-bg, rgba(34, 197, 94, 0.24));
-          border-top-color: var(--success, #10b981);
-          color: var(--tab-done-text, #ecfdf5);
-          box-shadow: var(--tab-done-shadow, 0 0 0 1px rgba(34, 197, 94, 0.42), 0 0 14px rgba(34, 197, 94, 0.24));
-          font-weight: 600;
-        }
-
         .session-tab-item.has-unread:not(.active) {
           color: var(--text-primary, #fafafa);
         }
@@ -278,25 +277,39 @@ export const SessionTab = memo(function SessionTab({
           50% { box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.5), 0 0 14px rgba(59, 130, 246, 0.5); }
         }
 
-        .tab-status-dot-modern.ready {
-          background: var(--tab-dot-ready-active, #4ade80);
-          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.3), 0 0 6px rgba(34, 197, 94, 0.25);
-        }
-
-        .session-tab-item:not(.active) .tab-status-dot-modern.ready {
+        .tab-status-dot-modern.idle {
           background: var(--tab-dot-ready-inactive, #52525b);
           box-shadow: none;
-        }
-
-        .session-tab-item.done:not(.active) .tab-status-dot-modern.ready {
-          background: var(--tab-dot-ready-active, #4ade80);
-          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 0 8px rgba(34, 197, 94, 0.25);
         }
 
         .tab-title-modern {
           max-width: 140px;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+
+        .tab-status-label-modern {
+          font-size: 10px;
+          line-height: 1;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          padding: 3px 5px;
+          border-radius: 999px;
+          border: 1px solid transparent;
+          margin-left: 2px;
+          flex-shrink: 0;
+        }
+
+        .tab-status-label-modern.idle {
+          color: var(--text-muted, #71717a);
+          background: rgba(113, 113, 122, 0.14);
+          border-color: rgba(113, 113, 122, 0.24);
+        }
+
+        .tab-status-label-modern.busy {
+          color: #dbeafe;
+          background: rgba(59, 130, 246, 0.2);
+          border-color: rgba(96, 165, 250, 0.5);
         }
 
         .tab-unread-dot-modern {

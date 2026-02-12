@@ -130,7 +130,7 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal }) {
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal, showStatusLabels = false }) {
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
     if (typeof window === 'undefined') return 3020;
@@ -2455,19 +2455,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {activeSessions.map(session => (
                   (() => {
                     const isActive = selectedTerminalSession === session.id;
-                    const isBusy = Boolean(sessionActivity?.[session.id]?.isBusy);
-                    const isReady = !isBusy;
+                    const activityState = sessionActivity?.[session.id];
+                    const backendBusy = typeof session?.isBusy === 'boolean'
+                      ? session.isBusy
+                      : Boolean(activityState?.isBusy);
+                    const isBusy = isActive ? backendBusy : false;
+                    const statusClass = isBusy ? 'busy' : 'idle';
                     return (
                   <button
                     key={session.id}
-                    className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}${isReady ? ' ready' : ''}`}
+                    className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}`}
                     onClick={() => setSelectedTerminalSession(session.id)}
                     type="button"
                   >
-                    <span className={`session-indicator ${isBusy ? 'busy' : 'ready'}`} />
+                    <span className={`session-indicator ${statusClass}`} />
                     <span className="session-name">
                       {session.title || `Session ${session.id.slice(0, 8)}`}
                     </span>
+                    {showStatusLabels && (
+                      <span className={`session-status-label ${statusClass}`} aria-hidden="true">
+                        {isBusy ? 'Busy' : 'Idle'}
+                      </span>
+                    )}
                   </button>
                     );
                   })()
@@ -3307,19 +3316,28 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     {activeSessions.map(session => (
                       (() => {
                         const isActive = selectedTerminalSession === session.id;
-                        const isBusy = Boolean(sessionActivity?.[session.id]?.isBusy);
-                        const isReady = !isBusy;
+                        const activityState = sessionActivity?.[session.id];
+                        const backendBusy = typeof session?.isBusy === 'boolean'
+                          ? session.isBusy
+                          : Boolean(activityState?.isBusy);
+                        const isBusy = isActive ? backendBusy : false;
+                        const statusClass = isBusy ? 'busy' : 'idle';
                         return (
                       <button
                         key={session.id}
-                        className={`preview-session-btn ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}${isReady ? ' ready' : ''}`}
+                        className={`preview-session-btn ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}`}
                         onClick={() => setSelectedTerminalSession(session.id)}
                         title={session.title || `Session ${session.id.slice(0, 8)}`}
                       >
-                        <span className={`session-indicator ${isBusy ? 'busy' : 'ready'}`} />
+                        <span className={`session-indicator ${statusClass}`} />
                         <span className="session-name">
                           {session.title || `Session ${session.id.slice(0, 8)}`}
                         </span>
+                        {showStatusLabels && (
+                          <span className={`session-status-label ${statusClass}`} aria-hidden="true">
+                            {isBusy ? 'Busy' : 'Idle'}
+                          </span>
+                        )}
                       </button>
                         );
                       })()
