@@ -198,6 +198,7 @@ export const SessionTab = memo(function SessionTab({
           position: relative;
           user-select: none;
           overflow: hidden;
+          flex-shrink: 0;
         }
 
         .session-tab-item:hover:not(.active) {
@@ -283,6 +284,7 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .tab-title-modern {
+          min-width: 28px;
           max-width: 140px;
           overflow: hidden;
           text-overflow: ellipsis;

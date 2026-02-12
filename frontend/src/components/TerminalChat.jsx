@@ -1500,11 +1500,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       resizeObserver.observe(container);
 
       const handleFocus = () => debouncedFit();
+      const isSocketDead = () => {
+        const s = socketRef.current;
+        return !s || s.readyState === WebSocket.CLOSED || s.readyState === WebSocket.CLOSING;
+      };
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
           debouncedFit(80);
-          // Trigger reconnect if socket is closed and we're online
-          if (navigator.onLine && socketRef.current?.readyState !== WebSocket.OPEN) {
+          // Trigger reconnect only if socket is dead, not if still connecting
+          if (navigator.onLine && isSocketDead()) {
             reconnectSocketRef.current?.();
           } else {
             scheduleIncrementalResync(0);
@@ -1513,8 +1517,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       const handleOnline = () => {
         pausedForOfflineRef.current = false;
-        // Attempt reconnect when coming back online
-        if (socketRef.current?.readyState !== WebSocket.OPEN) {
+        // Attempt reconnect only if socket is dead, not if still connecting
+        if (isSocketDead()) {
           reconnectSocketRef.current?.();
         } else {
           scheduleIncrementalResync(0);

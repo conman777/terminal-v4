@@ -45,19 +45,21 @@ export default function Sidebar({
       {!isCollapsed && (
         <div className="es-toolbar">
           <div className="es-toolbar-left">
-            {onToggleSidebarMode && (
-              <button
-                className="es-view-toggle"
-                onClick={onToggleSidebarMode}
-                title="Switch to Threads"
-                type="button"
-              >
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
-                </svg>
-              </button>
+            {onToggleSidebarMode ? (
+              <div className="es-mode-toggle">
+                <button
+                  className="es-mode-btn"
+                  onClick={onToggleSidebarMode}
+                  type="button"
+                >Threads</button>
+                <button
+                  className="es-mode-btn active"
+                  type="button"
+                >Explorer</button>
+              </div>
+            ) : (
+              <span className="es-toolbar-label">Explorer</span>
             )}
-            <span className="es-toolbar-label">Explorer</span>
           </div>
           {onCreateSession && (
             <button
@@ -227,23 +229,38 @@ export default function Sidebar({
           gap: 6px;
         }
 
-        .es-view-toggle {
-          width: 24px;
-          height: 24px;
+        .es-mode-toggle {
           display: flex;
-          align-items: center;
-          justify-content: center;
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
+          border-radius: 6px;
+          padding: 2px;
+          gap: 1px;
+        }
+
+        .es-mode-btn {
+          height: 22px;
+          padding: 0 10px;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          border-radius: 5px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
+          border-radius: 4px;
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
-        .es-view-toggle:hover {
-          background: var(--bg-surface, #141416);
+        .es-mode-btn:hover:not(.active) {
           color: var(--text-primary, #fafafa);
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .es-mode-btn.active {
+          background: var(--bg-elevated, #1e1e21);
+          color: var(--accent-primary, #f59e0b);
+          cursor: default;
         }
 
         .es-toolbar-label {

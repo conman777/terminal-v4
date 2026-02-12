@@ -1712,7 +1712,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1300;
   animation: fadeIn var(--transition-base) ease-out;
 }
 
@@ -7409,7 +7409,7 @@ button {
   font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
-  max-width: min(130px, 34vw);
+  max-width: min(180px, 48vw);
   overflow: hidden;
   text-overflow: ellipsis;
   transition: all 0.2s ease;
@@ -7460,7 +7460,7 @@ button {
 }
 
 .mobile-header-tab-label {
-  min-width: 0;
+  min-width: 28px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

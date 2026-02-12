@@ -100,6 +100,12 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN theme TEXT DEFAULT 'dark';
       `
+    },
+    {
+      name: '008_add_tab_order',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN tab_order TEXT;
+      `
     }
   ];
 

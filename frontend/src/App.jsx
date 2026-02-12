@@ -275,11 +275,21 @@ function AppContent() {
     }) || null
   ), [activeSessions]);
 
+  // Derive the effective carousel index synchronously to avoid a stale-index render
+  // when activeSessions reorders between loadSessions calls.
+  const effectiveMobileIndex = useMemo(() => {
+    if (activeSessionId) {
+      const idx = activeSessions.findIndex(s => s.id === activeSessionId);
+      if (idx !== -1) return idx;
+    }
+    return Math.min(mobileTerminalIndex, Math.max(0, activeSessions.length - 1));
+  }, [activeSessionId, activeSessions, mobileTerminalIndex]);
+
   const mobileVisibleSessionId = useMemo(() => {
     if (!isMobile) return null;
-    const session = activeSessions[mobileTerminalIndex];
+    const session = activeSessions[effectiveMobileIndex];
     return session?.id || null;
-  }, [activeSessions, isMobile, mobileTerminalIndex]);
+  }, [activeSessions, isMobile, effectiveMobileIndex]);
 
   const mobileKeybarSessionId = useMemo(() => {
     if (!isMobile) return activeSessionId;
@@ -383,8 +393,9 @@ function AppContent() {
     });
   }, [sessions, sessionActivity, removeSessionActivity]);
 
-  // Tab reorder state - stores session IDs in user-defined order
+  // Tab reorder state - stores session IDs in user-defined order, persisted server-side
   const [tabOrder, setTabOrder] = useState([]);
+  const tabOrderSaveRef = useRef(null);
 
   // Keep tabOrder in sync: add new sessions, remove deleted ones
   useEffect(() => {
@@ -396,6 +407,20 @@ function AppContent() {
       return [...existing, ...newIds];
     });
   }, [activeSessions]);
+
+  // Persist tab order to server (debounced to avoid excessive API calls)
+  useEffect(() => {
+    if (tabOrder.length === 0) return;
+    clearTimeout(tabOrderSaveRef.current);
+    tabOrderSaveRef.current = setTimeout(() => {
+      apiFetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabOrder })
+      }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(tabOrderSaveRef.current);
+  }, [tabOrder]);
 
   // Ordered sessions respects user drag reorder
   const orderedSessions = useMemo(() => {
@@ -541,6 +566,10 @@ function AppContent() {
             if (!hasLocalTheme) {
               setTheme(data.theme);
             }
+          }
+          // Apply server tab order
+          if (Array.isArray(data.tabOrder) && data.tabOrder.length > 0) {
+            setTabOrder(data.tabOrder);
           }
         }
       } catch (e) {
@@ -1140,7 +1169,7 @@ function AppContent() {
               <div className="terminal-pane">
                 <MobileTerminalCarousel
                   sessions={activeSessions}
-                  currentIndex={mobileTerminalIndex}
+                  currentIndex={effectiveMobileIndex}
                   onIndexChange={handleMobileTerminalIndexChange}
                   keybarOpen={keybarOpen}
                   viewportHeight={viewportHeight}

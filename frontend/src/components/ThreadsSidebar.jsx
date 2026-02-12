@@ -65,27 +65,21 @@ export default function ThreadsSidebar({
       {!isCollapsed && (
         <div className="ts-toolbar">
           <div className="ts-toolbar-left">
-            {onToggleSidebarMode && (
-              <button
-                className={`ts-view-toggle ${sidebarMode === 'threads' ? 'active' : ''}`}
-                onClick={onToggleSidebarMode}
-                title={sidebarMode === 'threads' ? 'Switch to Explorer' : 'Switch to Threads'}
-                type="button"
-              >
-                {sidebarMode === 'threads' ? (
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z" />
-                  </svg>
-                ) : (
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
-                  </svg>
-                )}
-              </button>
+            {onToggleSidebarMode ? (
+              <div className="ts-mode-toggle">
+                <button
+                  className="ts-mode-btn active"
+                  type="button"
+                >Threads</button>
+                <button
+                  className="ts-mode-btn"
+                  onClick={onToggleSidebarMode}
+                  type="button"
+                >Explorer</button>
+              </div>
+            ) : (
+              <span className="ts-toolbar-label">Threads</span>
             )}
-            <span className="ts-toolbar-label">
-              {sidebarMode === 'threads' ? 'Threads' : 'Explorer'}
-            </span>
           </div>
           <button
             className="ts-new-btn"
@@ -310,27 +304,38 @@ export default function ThreadsSidebar({
           gap: 6px;
         }
 
-        .ts-view-toggle {
-          width: 24px;
-          height: 24px;
+        .ts-mode-toggle {
           display: flex;
-          align-items: center;
-          justify-content: center;
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-subtle, #1e1e21);
+          border-radius: 6px;
+          padding: 2px;
+          gap: 1px;
+        }
+
+        .ts-mode-btn {
+          height: 22px;
+          padding: 0 10px;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          border-radius: 5px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.3px;
+          border-radius: 4px;
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
-        .ts-view-toggle:hover {
-          background: var(--bg-surface, #141416);
+        .ts-mode-btn:hover:not(.active) {
           color: var(--text-primary, #fafafa);
+          background: rgba(255, 255, 255, 0.04);
         }
 
-        .ts-view-toggle.active {
+        .ts-mode-btn.active {
+          background: var(--bg-elevated, #1e1e21);
           color: var(--accent-primary, #f59e0b);
+          cursor: default;
         }
 
         .ts-toolbar-label {

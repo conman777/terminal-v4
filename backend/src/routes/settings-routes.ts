@@ -8,6 +8,7 @@ interface UserSettings {
   sidebarCollapsed: boolean | null;
   terminalWebglEnabled: boolean | null;
   theme: string | null;
+  tabOrder: string[] | null;
 }
 
 interface UpdateSettingsBody {
@@ -17,6 +18,7 @@ interface UpdateSettingsBody {
   sidebarCollapsed?: boolean | null;
   terminalWebglEnabled?: boolean | null;
   theme?: string | null;
+  tabOrder?: string[] | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -29,11 +31,16 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null; tab_order: string | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
     const maskedKey = groqApiKey ? `${'*'.repeat(Math.max(0, groqApiKey.length - 4))}${groqApiKey.slice(-4)}` : null;
+
+    let tabOrder: string[] | null = null;
+    if (row?.tab_order) {
+      try { tabOrder = JSON.parse(row.tab_order); } catch { tabOrder = null; }
+    }
 
     return {
       groqApiKey: maskedKey,
@@ -44,7 +51,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       terminalWebglEnabled: row?.terminal_webgl_enabled === null || row?.terminal_webgl_enabled === undefined
         ? null
         : row?.terminal_webgl_enabled === 1,
-      theme: row?.theme || 'dark'
+      theme: row?.theme || 'dark',
+      tabOrder
     };
   });
 
@@ -56,7 +64,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme } = request.body || {};
+    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -90,6 +98,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     if (theme !== undefined && theme !== null && theme !== 'dark' && theme !== 'light') {
       reply.code(400).send({ error: 'Theme must be "dark" or "light"' });
+      return;
+    }
+
+    if (tabOrder !== undefined && tabOrder !== null && !Array.isArray(tabOrder)) {
+      reply.code(400).send({ error: 'Tab order must be an array of session IDs' });
       return;
     }
 
@@ -128,11 +141,15 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('theme = ?');
         values.push(theme);
       }
+      if (tabOrder !== undefined) {
+        updates.push('tab_order = ?');
+        values.push(tabOrder ? JSON.stringify(tabOrder) : null);
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
@@ -140,6 +157,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         sidebarCollapsed ? 1 : 0,
         terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
         theme || 'dark',
+        tabOrder ? JSON.stringify(tabOrder) : null,
         now
       );
     }
