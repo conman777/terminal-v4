@@ -35,6 +35,7 @@ Backend configuration (set in `backend/.env` or your shell):
 | `CLAUDE_ASSUME_YES` | If `true`, uses `--dangerously-skip-permissions` | `false` |
 | `CLAUDE_DEBUG` | If `true`, logs Claude CLI I/O | `false` |
 | `ANTHROPIC_API_KEY` | Passed to Claude CLI as env | *(unset)* |
+| `OPENAI_API_KEY` | Fallback API key for OpenAI routes | *(unset)* |
 | `GROQ_API_KEY` | Fallback API key for voice transcription | *(unset)* |
 | `JWT_SECRET` | JWT signing secret | *(dev default if unset)* |
 | `REFRESH_SECRET` | Refresh token signing secret | *(dev default if unset)* |

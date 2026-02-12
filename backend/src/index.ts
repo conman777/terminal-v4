@@ -12,6 +12,8 @@ import { registerNoteRoutes } from './routes/note-routes';
 import { registerPreviewRoutes } from './routes/preview-routes';
 import { registerTranscribeRoutes } from './routes/transcribe-routes';
 import { registerSettingsRoutes } from './routes/settings-routes';
+import { registerOpenAIRoutes } from './routes/openai-routes';
+import { registerVaultRoutes } from './routes/vault-routes';
 import { registerDevProxyRoutes } from './routes/dev-proxy-routes';
 import { registerPreviewSubdomainRoutes } from './routes/preview-subdomain-routes';
 import { registerPreviewLogsRoutes } from './routes/preview-logs-routes';
@@ -98,6 +100,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   await registerPreviewLogsRoutes(app);
   await registerTranscribeRoutes(app);
   await registerSettingsRoutes(app);
+  await registerOpenAIRoutes(app);
+  await registerVaultRoutes(app);
   await registerDevProxyRoutes(app);
   await registerClaudeCodeRoutes(app, claudeCodeManager);
   await registerFileRoutes(app);

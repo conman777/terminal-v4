@@ -106,6 +106,25 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN tab_order TEXT;
       `
+    },
+    {
+      name: '009_add_openai_api_key_to_settings',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN openai_api_key TEXT;
+      `
+    },
+    {
+      name: '010_create_api_key_vault',
+      sql: `
+        CREATE TABLE IF NOT EXISTS api_key_vault (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          key_name TEXT NOT NULL,
+          key_value TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_user_name ON api_key_vault(user_id, key_name);
+      `
     }
   ];
 

@@ -3,6 +3,7 @@ import { getDatabase } from '../database/db';
 
 interface UserSettings {
   groqApiKey: string | null;
+  openaiApiKey: string | null;
   previewUrl: string | null;
   terminalFontSize: number | null;
   sidebarCollapsed: boolean | null;
@@ -13,6 +14,7 @@ interface UserSettings {
 
 interface UpdateSettingsBody {
   groqApiKey?: string | null;
+  openaiApiKey?: string | null;
   previewUrl?: string | null;
   terminalFontSize?: number | null;
   sidebarCollapsed?: boolean | null;
@@ -31,11 +33,13 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null; tab_order: string | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; openai_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null; tab_order: string | null } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
     const maskedKey = groqApiKey ? `${'*'.repeat(Math.max(0, groqApiKey.length - 4))}${groqApiKey.slice(-4)}` : null;
+    const openaiApiKey = row?.openai_api_key;
+    const maskedOpenAIKey = openaiApiKey ? `${'*'.repeat(Math.max(0, openaiApiKey.length - 4))}${openaiApiKey.slice(-4)}` : null;
 
     let tabOrder: string[] | null = null;
     if (row?.tab_order) {
@@ -45,6 +49,8 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     return {
       groqApiKey: maskedKey,
       hasGroqApiKey: !!groqApiKey,
+      openaiApiKey: maskedOpenAIKey,
+      hasOpenAIApiKey: !!openaiApiKey,
       previewUrl: row?.preview_url || null,
       terminalFontSize: row?.terminal_font_size ?? null,
       sidebarCollapsed: row?.sidebar_collapsed === 1,
@@ -64,7 +70,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder } = request.body || {};
+    const { groqApiKey, openaiApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -79,6 +85,23 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       }
       if (groqApiKey.length < 20) {
         reply.code(400).send({ error: 'Groq API key is too short' });
+        return;
+      }
+    }
+
+    if (openaiApiKey !== undefined && openaiApiKey !== null && typeof openaiApiKey !== 'string') {
+      reply.code(400).send({ error: 'Invalid OpenAI API key format' });
+      return;
+    }
+
+    // Validate API key format if provided (OpenAI keys usually start with sk-)
+    if (openaiApiKey !== undefined && openaiApiKey !== null && openaiApiKey !== '') {
+      if (!openaiApiKey.startsWith('sk-')) {
+        reply.code(400).send({ error: 'Invalid OpenAI API key format (should start with sk-)' });
+        return;
+      }
+      if (openaiApiKey.length < 20) {
+        reply.code(400).send({ error: 'OpenAI API key is too short' });
         return;
       }
     }
@@ -121,6 +144,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('groq_api_key = ?');
         values.push(groqApiKey === '' ? null : groqApiKey);
       }
+      if (openaiApiKey !== undefined) {
+        updates.push('openai_api_key = ?');
+        values.push(openaiApiKey === '' ? null : openaiApiKey);
+      }
       if (previewUrl !== undefined) {
         updates.push('preview_url = ?');
         values.push(previewUrl === '' ? null : previewUrl);
@@ -149,9 +176,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
+        openaiApiKey || null,
         previewUrl || null,
         terminalFontSize ?? null,
         sidebarCollapsed ? 1 : 0,
@@ -171,4 +199,10 @@ export function getUserGroqApiKey(userId: string): string | null {
   const db = getDatabase();
   const row = db.prepare('SELECT groq_api_key FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null } | undefined;
   return row?.groq_api_key || null;
+}
+
+export function getUserOpenAIApiKey(userId: string): string | null {
+  const db = getDatabase();
+  const row = db.prepare('SELECT openai_api_key FROM user_settings WHERE user_id = ?').get(userId) as { openai_api_key: string | null } | undefined;
+  return row?.openai_api_key || null;
 }
