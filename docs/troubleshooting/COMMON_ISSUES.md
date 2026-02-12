@@ -80,9 +80,11 @@ This guide covers common issues and their solutions for Terminal v4.
 1. Check browser console for errors (in preview iframe context)
 2. Verify the dev server is running: `lsof -i :<port>`
 3. Check preview URL is correct - use the port dropdown to select active ports
-4. Restart the backend server: `~/terminal-v4/restart.sh`
-5. Check CORS settings on dev server
-6. Verify port is in allowed list (if `UNRESTRICTED_PREVIEW=false`)
+4. If previewing another LAN machine (e.g. `192.168.x.x`), keep that host in the URL.
+   It should not be rewritten to `/preview/:port`.
+5. Restart the backend server: `~/terminal-v4/restart.sh`
+6. Check CORS settings on dev server
+7. Verify port is in allowed list (if `UNRESTRICTED_PREVIEW=false`)
 
 **Root Causes**:
 - Dev server not running

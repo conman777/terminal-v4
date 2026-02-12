@@ -5,6 +5,21 @@ const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
+const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+const PRIVATE_IPV4_PATTERN = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/;
+
+function normalizeHost(host) {
+  return typeof host === 'string' ? host.trim().toLowerCase() : '';
+}
+
+function isLoopbackHost(hostname) {
+  return LOOPBACK_HOSTS.has(normalizeHost(hostname));
+}
+
+function isPrivateIpv4Host(hostname) {
+  return PRIVATE_IPV4_PATTERN.test(normalizeHost(hostname));
+}
 
 function getPreviewDefaultMode() {
   if (typeof window === 'undefined') return 'subdomain-first';
@@ -93,6 +108,29 @@ function getPreviewSubdomainBase() {
     }
   } catch {}
   return 'localhost';
+}
+
+function getPreviewProxyHosts() {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored = localStorage.getItem(PREVIEW_PROXY_HOSTS_KEY);
+    if (!stored) return [];
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((host) => normalizeHost(String(host)))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function isLocalPreviewTarget(hostname, uiHost, proxyHosts) {
+  const normalizedTarget = normalizeHost(hostname);
+  if (!normalizedTarget) return false;
+  if (isLoopbackHost(normalizedTarget)) return true;
+  if (normalizedTarget === normalizeHost(uiHost)) return true;
+  return proxyHosts.includes(normalizedTarget);
 }
 
 function getEffectiveSubdomainBase() {
@@ -214,19 +252,21 @@ export function toPreviewUrl(inputUrl) {
       return `${parsed.pathname}${parsed.search}${parsed.hash}`;
     }
     const hostname = parsed.hostname;
-    const isLoopback = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(hostname);
-    const isPrivateIP = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostname);
+    const isLoopback = isLoopbackHost(hostname);
+    const isPrivateIP = isPrivateIpv4Host(hostname);
     const uiProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
     const uiHost = typeof window !== 'undefined' ? window.location.hostname : '';
-    const uiIsLoopback = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(uiHost);
+    const uiIsLoopback = isLoopbackHost(uiHost);
     const uiIsIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost);
     const canUseLocalSubdomain = uiProtocol === 'http:';
     const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
     const subdomainBase = getEffectiveSubdomainBase();
+    const proxyHosts = getPreviewProxyHosts();
+    const targetIsLocalPreview = isLocalPreviewTarget(hostname, uiHost, proxyHosts);
     const preferPathBased = shouldPreferPathBased();
     const defaultMode = getPreviewDefaultMode();
 
-    if ((isLoopback || isPrivateIP) && parsed.port) {
+    if ((isLoopback || (isPrivateIP && targetIsLocalPreview)) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
       const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
       const loopbackSubdomainCapable = !uiIsLoopback || isResolvableLoopbackSubdomainBase(subdomainBase);
@@ -238,6 +278,12 @@ export function toPreviewUrl(inputUrl) {
         return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
       }
       return `/preview/${parsed.port}${path}`;
+    }
+
+    // Keep remote private-network URLs as direct iframe targets so they are not
+    // incorrectly routed to the local-machine preview proxy.
+    if (isPrivateIP && !targetIsLocalPreview) {
+      return parsed.toString();
     }
   } catch {
     // Not a valid URL, fall through

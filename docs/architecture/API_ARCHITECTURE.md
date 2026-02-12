@@ -92,7 +92,7 @@ Preview subdomain routing:
 - Requests and websockets are forwarded to loopback hosts (e.g. `localhost:{port}`).
 Path-based preview routing:
 - `/preview/:port/*` is handled by the same proxy logic (HTTP + WebSocket).
-- Used when the UI is accessed from localhost or a private IP.
+- Used for localhost/same-host private targets. Different private LAN hosts are kept as direct URLs.
 
 ## Files + Projects
 

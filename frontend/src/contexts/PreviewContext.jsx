@@ -6,6 +6,7 @@ const PreviewContext = createContext(null);
 const PREVIEW_URL_KEY = 'terminal_preview_url';
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
+const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
 const PREVIEW_COOKIE_POLICY_KEY = 'terminal_preview_cookie_policy';
@@ -225,6 +226,11 @@ export function PreviewProvider({ children }) {
         if (Array.isArray(data?.subdomainBases)) {
           try {
             localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(data.subdomainBases));
+          } catch {}
+        }
+        if (Array.isArray(data?.proxyHosts)) {
+          try {
+            localStorage.setItem(PREVIEW_PROXY_HOSTS_KEY, JSON.stringify(data.proxyHosts));
           } catch {}
         }
         if (typeof data?.preferPathBased === 'boolean') {

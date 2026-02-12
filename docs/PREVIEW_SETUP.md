@@ -16,6 +16,9 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
   preview URL. `localhost` would point at the browser machine, not the server.
 - For LAN/hostname access, subdomain previews resolve back to the server using
   `nip.io` so the iframe points to the same box.
+- If you enter a **different private LAN host** (example:
+  `http://192.168.1.45:8889` while Terminal runs on `192.168.1.199`), preview
+  now keeps that URL direct instead of rewriting to `/preview/8889`.
 
 ## How Preview Routing Works
 
@@ -56,6 +59,7 @@ Set a resolvable subdomain base in `backend/.env`:
 ```
 PREVIEW_SUBDOMAIN_BASES=127.0.0.1.nip.io,lvh.me,localhost
 PREVIEW_SUBDOMAIN_BASE=127.0.0.1.nip.io
+PREVIEW_PROXY_HOSTS=localhost,127.0.0.1,::1
 
 # Optional: lock preview routing back to legacy dev-only ports (3000-9999)
 # UNRESTRICTED_PREVIEW=false
@@ -93,6 +97,9 @@ For localhost access:
 For LAN/remote access:
 - Iframe `src` should be:
   `http://preview-<port>.<server-ip>.nip.io:3020/`
+
+For private LAN app on another machine:
+- Iframe `src` should stay as entered (example: `http://192.168.1.45:8889/`)
 
 General:
 - Iframe content should match the running app.

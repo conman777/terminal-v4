@@ -296,6 +296,7 @@ Key files:
    - Static files -> `/api/preview`.
    - Local servers (localhost access) -> `/preview/{port}` (path-based).
    - Local servers (LAN/remote access) -> subdomain `preview-{port}.{ip}.nip.io`.
+   - Private LAN servers on different hosts stay direct (for example `http://192.168.x.x:port`).
    - External -> `/api/proxy-external`.
 3. Injected scripts send logs to `/api/preview/*/logs`.
 4. Port dropdown only shows ports with active listeners (validated via `ss -tlnp`).

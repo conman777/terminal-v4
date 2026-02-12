@@ -37,7 +37,7 @@ This document provides a comprehensive overview of all features in Terminal v4.
 ### Preview Panel
 - **Local Dev Server Preview**: Preview apps running on local ports
 - **Subdomain Routing**: `preview-{port}.{PREVIEW_SUBDOMAIN_BASE}` (or `.localhost` in local dev) for isolated previews. When accessing Terminal V4 via a LAN IP/hostname, use a resolvable base (e.g. `preview-{port}.{ip}.nip.io`).
-- **Path-Based Routing**: `/preview/{port}` fallback for localhost/private IP access. Note: SPAs may 404 if they assume `/` as base; subdomain preview avoids that.
+- **Path-Based Routing**: `/preview/{port}` fallback for localhost/same-host private IP access. Private LAN hosts on different machines stay direct (`http://192.168.x.x:port`) instead of being rewritten to local preview.
 - **Static File Serving**: Preview static HTML/JS/CSS files from project
 - **External Site Proxying**: Preview external websites with debugging
 - **Cache Busting**: Deep cache-busting for HTML, JS, CSS, and imports
