@@ -8213,7 +8213,6 @@ button {
     overflow: hidden;
     padding-top: var(--mobile-header-height);
     /* Safe area insets applied on .terminal-main instead to avoid duplication */
-    transition: padding-top 0.2s ease;
     /* Flex container for children */
     display: flex;
     flex-direction: column;
@@ -11078,7 +11077,10 @@ textarea:focus-visible {
 }
 
 .mobile-terminal-carousel .carousel-content .terminal-with-mic {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   position: relative;
 }
 

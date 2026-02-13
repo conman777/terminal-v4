@@ -65,7 +65,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const MAX_MESSAGE_QUEUE = 500;
   const DROP_NOTICE_INTERVAL_MS = 5000;
   const LARGE_PASTE_THRESHOLD = 5000;
-  const { activeSessionId, sessions, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
+  const { activeSessionId, sessions, restoreSession, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [isScrollMode, setIsScrollMode] = useState(false);
@@ -129,6 +129,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const shouldReplayHistoryRef = useRef(true);
   const reconnectSocketRef = useRef(null);
   const pausedForOfflineRef = useRef(false);
+  const sessionsRef = useRef(sessions);
+  const restoreSessionRef = useRef(restoreSession);
+  const restoreRetryAttemptedRef = useRef(false);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const getHistoryConfig = useCallback(() => ({
@@ -834,9 +837,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
   }, [viewMode, scheduleViewportRefresh]);
 
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => {
+    restoreSessionRef.current = restoreSession;
+  }, [restoreSession]);
+
   // Reset loading state when session changes
   useEffect(() => {
     shouldReplayHistoryRef.current = !skipHistory;
+    restoreRetryAttemptedRef.current = false;
     setIsLoadingMoreHistory(false);
     applyHistoryConfig();
     historyStateRef.current.exhausted = false;
@@ -1933,6 +1945,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             messageQueue.length = 0;
             if (event.reason === 'Session ended') {
+              const sessionSnapshot = sessionsRef.current.find((session) => session.id === sessionId);
+              const shouldTryRestore = !restoreRetryAttemptedRef.current
+                && typeof restoreSessionRef.current === 'function'
+                && (!sessionSnapshot || !sessionSnapshot.isActive);
+
+              if (shouldTryRestore) {
+                restoreRetryAttemptedRef.current = true;
+                writeTerminal('\r\n[Session inactive - restoring...]\r\n');
+                void restoreSessionRef.current(sessionId)
+                  .then(() => {
+                    if (disposed || pausedForOfflineRef.current) return;
+                    setTimeout(() => {
+                      if (!disposed) {
+                        connectSocket();
+                      }
+                    }, 120);
+                  })
+                  .catch(() => {
+                    shouldReconnect = false;
+                    setIsLoadingHistory(false);
+                    writeTerminal('\r\n[Terminal session ended]\r\n');
+                  });
+                return;
+              }
               shouldReconnect = false;
               setIsLoadingHistory(false);
               writeTerminal('\r\n[Terminal session ended]\r\n');
@@ -2267,6 +2303,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (!fitAddonRef.current || !xtermRef.current) return;
     const debounceTime = 100;
     scheduleViewportRefresh({ delay: debounceTime, fit: true, preserveBottom: true });
+    // Second fit after any CSS transitions settle (300ms max transition + buffer)
+    const safetyFit = setTimeout(() => {
+      scheduleViewportRefresh({ delay: 0, fit: true, preserveBottom: true });
+    }, 350);
+    return () => clearTimeout(safetyFit);
   }, [keybarOpen, viewportHeight, isMobile, scheduleViewportRefresh]);
 
   // External fit signal (e.g., preview split resize)

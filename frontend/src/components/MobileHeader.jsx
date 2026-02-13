@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { MobileDrawer } from './MobileDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Dropdown } from './Dropdown';
@@ -117,6 +117,16 @@ export function MobileHeader({
   const scrollTimeoutRef = useRef(null);
 
   // Update --mobile-header-height CSS variable
+  // Set initial header height synchronously before first paint to prevent
+  // the layout from starting with padding-top: 0 and then jumping.
+  useLayoutEffect(() => {
+    if (!headerRef.current) return;
+    const height = Math.round(headerRef.current.getBoundingClientRect().height || 0);
+    if (height > 0) {
+      document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
+    }
+  }, []);
+
   useEffect(() => {
     if (!headerRef.current) return;
 
