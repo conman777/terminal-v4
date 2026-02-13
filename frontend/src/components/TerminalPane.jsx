@@ -21,6 +21,7 @@ export const TerminalPane = memo(function TerminalPane({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  terminalFidelityMode,
   sessionActivity,
   projectInfo,
   onCwdChange,
@@ -274,6 +275,7 @@ export const TerminalPane = memo(function TerminalPane({
               onUrlDetected={onUrlDetected}
               fontSize={fontSize}
               webglEnabled={webglEnabled}
+              terminalFidelityMode={terminalFidelityMode}
               usesTmux={currentSession?.usesTmux}
               viewMode={viewMode}
               isPrimary={isActive}

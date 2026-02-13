@@ -77,6 +77,7 @@ export function PreviewUrlBar({
   onBack,
   onForward,
   onRefresh,
+  onHardRefresh,
   historyIndex,
   historyStackLength,
   isLoading,
@@ -294,6 +295,37 @@ export function PreviewUrlBar({
             {isLoading ? '\u22EF' : '\u21BB'}
           </button>
         </Tooltip>
+        <Tooltip text="Hard Reload" shortcut={'\u21E7\u2318R'}>
+          <button
+            type="button"
+            className="preview-action-btn"
+            onClick={onHardRefresh}
+            disabled={!iframeSrc}
+            aria-label="Hard reload preview"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              <line x1="5" y1="2" x2="19" y2="22" />
+            </svg>
+          </button>
+        </Tooltip>
+        {previewPort && (
+          <Tooltip text="Clear Cookies">
+            <button
+              type="button"
+              className="preview-action-btn"
+              onClick={onClearCookies}
+              aria-label="Clear cookies for this preview"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M8 12h8" />
+                <circle cx="12" cy="12" r="3" fill="currentColor" />
+              </svg>
+            </button>
+          </Tooltip>
+        )}
         <Tooltip text={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}>
           <button
             type="button"
@@ -385,6 +417,17 @@ export function PreviewUrlBar({
             </button>
             <button
               type="button"
+              className="preview-tools-menu-item"
+              onClick={() => {
+                onHardRefresh();
+                onToggleToolsMenu();
+              }}
+              disabled={!iframeSrc}
+            >
+              Hard Reload
+            </button>
+            <button
+              type="button"
               className={`preview-tools-menu-item ${useWebContainer ? 'active' : ''}`}
               onClick={() => {
                 onToggleWebContainer();
@@ -414,9 +457,8 @@ export function PreviewUrlBar({
                   onClearCookies();
                   onToggleToolsMenu();
                 }}
-                disabled={!hasCookies}
               >
-                {hasCookies ? 'Clear Cookies' : 'No Cookies'}
+                Clear Cookies
               </button>
             )}
             {onToggleMainTerminal && (

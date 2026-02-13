@@ -189,6 +189,16 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
   }
   const store = cookieStores.get(port)!;
 
+  function clearCookieVariants(cookieName: string): void {
+    // Clear all variants of this cookie name to avoid stale auth resurrection
+    // when apps emit delete cookies with different Domain/Path attributes.
+    for (const [existingKey, existingCookie] of store.entries()) {
+      if (existingCookie.name === cookieName) {
+        store.delete(existingKey);
+      }
+    }
+  }
+
   for (const header of setCookieHeaders) {
     const cookie = parseSetCookie(header);
     if (!cookie) {
@@ -207,7 +217,7 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
     if (cookie.value === '' ||
         (expiresTime && expiresTime < Date.now()) ||
         (cookie.maxAge !== undefined && cookie.maxAge <= 0)) {
-      store.delete(key);
+      clearCookieVariants(cookie.name);
     } else {
       store.set(key, cookie);
     }
@@ -259,6 +269,16 @@ export function clearCookies(port: number): void {
 }
 
 /**
+ * Clear all stored preview cookies across all ports
+ */
+export function clearAllCookies(): number {
+  const clearedPortCount = cookieStores.size;
+  cookieStores.clear();
+  saveCookiesToDisk();
+  return clearedPortCount;
+}
+
+/**
  * Get all stored cookies for a port (for debugging/display)
  */
 export function listCookies(port: number): Array<{ name: string; value: string; path?: string }> {
@@ -274,6 +294,27 @@ export function listCookies(port: number): Array<{ name: string; value: string; 
         value: cookie.value.length > 20 ? cookie.value.substring(0, 20) + '...' : cookie.value,
         path: cookie.path,
       });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Get all cookie names and paths for generating deletion Set-Cookie headers
+ */
+export function getCookieNamesForDeletion(port: number): Array<{ name: string; path: string }> {
+  const store = cookieStores.get(port);
+  if (!store) return [];
+
+  const seen = new Set<string>();
+  const result: Array<{ name: string; path: string }> = [];
+
+  for (const cookie of store.values()) {
+    const key = `${cookie.name}:${cookie.path || '/'}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push({ name: cookie.name, path: cookie.path || '/' });
     }
   }
 

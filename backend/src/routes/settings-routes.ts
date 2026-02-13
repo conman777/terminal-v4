@@ -8,6 +8,9 @@ interface UserSettings {
   terminalFontSize: number | null;
   sidebarCollapsed: boolean | null;
   terminalWebglEnabled: boolean | null;
+  terminalShellProfile: 'system' | 'cmd' | 'powershell' | 'pwsh' | 'bash' | 'zsh' | 'sh' | 'claude' | null;
+  terminalFidelityMode: 'balanced' | 'native';
+  terminalNativeLauncher: 'system' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'terminal' | 'x-terminal-emulator';
   theme: string | null;
   tabOrder: string[] | null;
 }
@@ -19,6 +22,9 @@ interface UpdateSettingsBody {
   terminalFontSize?: number | null;
   sidebarCollapsed?: boolean | null;
   terminalWebglEnabled?: boolean | null;
+  terminalShellProfile?: 'system' | 'cmd' | 'powershell' | 'pwsh' | 'bash' | 'zsh' | 'sh' | 'claude' | null;
+  terminalFidelityMode?: 'balanced' | 'native' | null;
+  terminalNativeLauncher?: 'system' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'terminal' | 'x-terminal-emulator' | null;
   theme?: string | null;
   tabOrder?: string[] | null;
 }
@@ -33,7 +39,21 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; openai_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null; tab_order: string | null } | undefined;
+    const row = db.prepare(
+      'SELECT groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, terminal_shell_profile, terminal_fidelity_mode, terminal_native_launcher, theme, tab_order FROM user_settings WHERE user_id = ?'
+    ).get(userId) as {
+      groq_api_key: string | null;
+      openai_api_key: string | null;
+      preview_url: string | null;
+      terminal_font_size: number | null;
+      sidebar_collapsed: number | null;
+      terminal_webgl_enabled: number | null;
+      terminal_shell_profile: string | null;
+      terminal_fidelity_mode: string | null;
+      terminal_native_launcher: string | null;
+      theme: string | null;
+      tab_order: string | null;
+    } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -57,6 +77,21 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       terminalWebglEnabled: row?.terminal_webgl_enabled === null || row?.terminal_webgl_enabled === undefined
         ? null
         : row?.terminal_webgl_enabled === 1,
+      terminalShellProfile: (() => {
+        const raw = String(row?.terminal_shell_profile || '').toLowerCase();
+        if (raw === 'system' || raw === 'cmd' || raw === 'powershell' || raw === 'pwsh' || raw === 'bash' || raw === 'zsh' || raw === 'sh' || raw === 'claude') {
+          return raw;
+        }
+        return null;
+      })(),
+      terminalFidelityMode: row?.terminal_fidelity_mode === 'native' ? 'native' : 'balanced',
+      terminalNativeLauncher: (() => {
+        const raw = String(row?.terminal_native_launcher || '').toLowerCase();
+        if (raw === 'wt' || raw === 'cmd' || raw === 'powershell' || raw === 'pwsh' || raw === 'terminal' || raw === 'x-terminal-emulator') {
+          return raw;
+        }
+        return 'system';
+      })(),
       theme: row?.theme || 'dark',
       tabOrder
     };
@@ -70,7 +105,19 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, openaiApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder } = request.body || {};
+    const {
+      groqApiKey,
+      openaiApiKey,
+      previewUrl,
+      terminalFontSize,
+      sidebarCollapsed,
+      terminalWebglEnabled,
+      terminalShellProfile,
+      terminalFidelityMode,
+      terminalNativeLauncher,
+      theme,
+      tabOrder
+    } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -119,6 +166,47 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
+    if (
+      terminalShellProfile !== undefined &&
+      terminalShellProfile !== null &&
+      terminalShellProfile !== 'system' &&
+      terminalShellProfile !== 'cmd' &&
+      terminalShellProfile !== 'powershell' &&
+      terminalShellProfile !== 'pwsh' &&
+      terminalShellProfile !== 'bash' &&
+      terminalShellProfile !== 'zsh' &&
+      terminalShellProfile !== 'sh' &&
+      terminalShellProfile !== 'claude'
+    ) {
+      reply.code(400).send({ error: 'Invalid terminal shell profile' });
+      return;
+    }
+
+    if (
+      terminalFidelityMode !== undefined &&
+      terminalFidelityMode !== null &&
+      terminalFidelityMode !== 'balanced' &&
+      terminalFidelityMode !== 'native'
+    ) {
+      reply.code(400).send({ error: 'Terminal fidelity mode must be "balanced" or "native"' });
+      return;
+    }
+
+    if (
+      terminalNativeLauncher !== undefined &&
+      terminalNativeLauncher !== null &&
+      terminalNativeLauncher !== 'system' &&
+      terminalNativeLauncher !== 'wt' &&
+      terminalNativeLauncher !== 'cmd' &&
+      terminalNativeLauncher !== 'powershell' &&
+      terminalNativeLauncher !== 'pwsh' &&
+      terminalNativeLauncher !== 'terminal' &&
+      terminalNativeLauncher !== 'x-terminal-emulator'
+    ) {
+      reply.code(400).send({ error: 'Invalid native terminal launcher' });
+      return;
+    }
+
     if (theme !== undefined && theme !== null && theme !== 'dark' && theme !== 'light') {
       reply.code(400).send({ error: 'Theme must be "dark" or "light"' });
       return;
@@ -164,6 +252,18 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('terminal_webgl_enabled = ?');
         values.push(terminalWebglEnabled ? 1 : 0);
       }
+      if (terminalShellProfile !== undefined) {
+        updates.push('terminal_shell_profile = ?');
+        values.push(terminalShellProfile);
+      }
+      if (terminalFidelityMode !== undefined) {
+        updates.push('terminal_fidelity_mode = ?');
+        values.push(terminalFidelityMode || 'balanced');
+      }
+      if (terminalNativeLauncher !== undefined) {
+        updates.push('terminal_native_launcher = ?');
+        values.push(terminalNativeLauncher || 'system');
+      }
       if (theme !== undefined) {
         updates.push('theme = ?');
         values.push(theme);
@@ -176,7 +276,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, terminal_shell_profile, terminal_fidelity_mode, terminal_native_launcher, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         openaiApiKey || null,
@@ -184,6 +284,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         terminalFontSize ?? null,
         sidebarCollapsed ? 1 : 0,
         terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
+        terminalShellProfile || null,
+        terminalFidelityMode || 'balanced',
+        terminalNativeLauncher || 'system',
         theme || 'dark',
         tabOrder ? JSON.stringify(tabOrder) : null,
         now

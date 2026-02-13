@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { SessionTabBar } from './SessionTabBar';
 
 function renderTabBar({ sessions, sessionActivity = {}, activeSessionId = sessions[0]?.id || null }) {
@@ -103,5 +103,29 @@ describe('SessionTabBar', () => {
       expect(dot).toHaveClass('idle');
       expect(dot).not.toHaveClass('busy');
     });
+  });
+
+  it('opens native terminal from tab context menu', () => {
+    const onOpenNativeTerminal = vi.fn();
+    const sessions = [{ id: 'session-1', title: 'Terminal 1', isBusy: false }];
+    const { container } = render(
+      <SessionTabBar
+        sessions={sessions}
+        activeSessionId="session-1"
+        sessionActivity={{}}
+        onSelectSession={vi.fn()}
+        onCreateSession={vi.fn()}
+        onCloseSession={vi.fn()}
+        onRenameSession={vi.fn()}
+        onOpenNativeTerminal={onOpenNativeTerminal}
+        onReorderSessions={vi.fn()}
+      />
+    );
+
+    const tab = container.querySelector('.session-tab-item');
+    expect(tab).toBeTruthy();
+    fireEvent.contextMenu(tab);
+    fireEvent.click(screen.getByText('Open in Native Terminal'));
+    expect(onOpenNativeTerminal).toHaveBeenCalledWith('session-1');
   });
 });

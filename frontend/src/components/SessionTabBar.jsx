@@ -15,6 +15,7 @@ export function SessionTabBar({
   onCreateSession,
   onCloseSession,
   onRenameSession,
+  onOpenNativeTerminal,
   onReorderSessions,
   inHeader = false,
   showStatusLabels = false
@@ -129,6 +130,11 @@ export function SessionTabBar({
           }
         }
       },
+      {
+        label: 'Open in Native Terminal',
+        onClick: () => onOpenNativeTerminal?.(sessionId),
+        disabled: typeof onOpenNativeTerminal !== 'function'
+      },
       { separator: true },
       {
         label: 'Close',
@@ -146,7 +152,7 @@ export function SessionTabBar({
         danger: true
       }
     ];
-  }, [sessions, onCloseSession, handleCloseOthers]);
+  }, [sessions, onCloseSession, handleCloseOthers, onOpenNativeTerminal]);
 
   return (
     <div className={`session-tab-bar-container-modern${inHeader ? ' in-header' : ''}`}>

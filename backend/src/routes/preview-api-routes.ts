@@ -1,8 +1,21 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { exec } from 'node:child_process';
-import { clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
+import { clearAllCookies, clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
 import { getProxyLogs, clearProxyLogs, getActivePreviewPorts } from '../preview/request-log-store';
 import { getProcessLogsByPort } from '../preview/process-log-store';
+import {
+  clearPerformanceMetrics,
+  getPerformanceMetrics,
+  ingestPerformanceMetrics,
+  subscribePerformanceMetrics
+} from '../preview/performance-store';
+import { clearWebSocketLogs, getWebSocketLogs } from '../preview/websocket-interceptor';
+import {
+  previewEvaluateRequestSchema,
+  previewPerformanceIngestRequestSchema,
+  previewStorageUpdateRequestSchema,
+  previewWebSocketQuerySchema
+} from './schemas';
 
 // Rate limiter for eval endpoint
 interface RateLimitEntry {
@@ -62,6 +75,18 @@ interface ActivePortInfo {
   cwd: string | null;
 }
 
+interface WindowsListeningPortEntry {
+  port: number;
+  pid: number | null;
+  process: string;
+}
+
+interface LinuxListeningPortEntry {
+  port: number;
+  pid: number | null;
+  process: string;
+}
+
 interface ActivePortResponse {
   port: number;
   listening: boolean;
@@ -104,6 +129,242 @@ function toCwdScope(cwdPath: string | null | undefined): string | null {
   return parts[parts.length - 1] || normalized;
 }
 
+function normalizeWindowsProcessName(processName: string): string {
+  const trimmed = processName.trim();
+  if (!trimmed) return '';
+  return trimmed.toLowerCase().endsWith('.exe')
+    ? trimmed.slice(0, -4)
+    : trimmed;
+}
+
+function parseWindowsPowerShellListeningEntries(stdout: string): WindowsListeningPortEntry[] {
+  if (!stdout || !stdout.trim()) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+  const entries: WindowsListeningPortEntry[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const localPortRaw = (row as Record<string, unknown>).LocalPort;
+    const owningProcessRaw = (row as Record<string, unknown>).OwningProcess;
+    const processNameRaw = (row as Record<string, unknown>).ProcessName;
+
+    const port = Number.parseInt(String(localPortRaw ?? ''), 10);
+    if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
+
+    const pidParsed = Number.parseInt(String(owningProcessRaw ?? ''), 10);
+    const pid = Number.isFinite(pidParsed) && pidParsed > 0 ? pidParsed : null;
+    const processName = typeof processNameRaw === 'string'
+      ? normalizeWindowsProcessName(processNameRaw)
+      : '';
+
+    entries.push({ port, pid, process: processName });
+  }
+  return entries;
+}
+
+function parseWindowsNetstatListeningEntries(stdout: string): WindowsListeningPortEntry[] {
+  if (!stdout || !stdout.trim()) return [];
+  const entries: WindowsListeningPortEntry[] = [];
+  const seenPorts = new Set<number>();
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)$/i);
+    if (!match) continue;
+
+    const port = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
+    if (seenPorts.has(port)) continue;
+    seenPorts.add(port);
+
+    const pidParsed = Number.parseInt(match[2], 10);
+    const pid = Number.isFinite(pidParsed) && pidParsed > 0 ? pidParsed : null;
+    entries.push({ port, pid, process: '' });
+  }
+  return entries;
+}
+
+function parseWindowsTasklistProcessMap(stdout: string): Map<number, string> {
+  const processByPid = new Map<number, string>();
+  if (!stdout || !stdout.trim()) return processByPid;
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^"([^"]+)","(\d+)"/);
+    if (!match) continue;
+    const pid = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(pid) || pid <= 0) continue;
+    processByPid.set(pid, normalizeWindowsProcessName(match[1]));
+  }
+  return processByPid;
+}
+
+function createActivePortMapFromWindowsEntries(entries: WindowsListeningPortEntry[]): Map<number, ActivePortInfo> {
+  const portMap = new Map<number, ActivePortInfo>();
+  for (const entry of entries) {
+    if (!Number.isFinite(entry.port) || entry.port < 1 || entry.port > 65535 || entry.port === APP_PORT) continue;
+    const processName = normalizeWindowsProcessName(entry.process || '');
+    const existing = portMap.get(entry.port);
+    if (!existing) {
+      portMap.set(entry.port, { process: processName, cwd: null });
+      continue;
+    }
+    if (!existing.process && processName) {
+      existing.process = processName;
+    }
+  }
+  return portMap;
+}
+
+async function lookupWindowsProcessNamesForPids(pids: number[]): Promise<Map<number, string>> {
+  if (pids.length === 0) return new Map();
+  return new Promise((resolve) => {
+    exec('tasklist /FO CSV /NH', { maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error || !stdout) {
+        resolve(new Map());
+        return;
+      }
+      const allProcesses = parseWindowsTasklistProcessMap(stdout);
+      const filtered = new Map<number, string>();
+      for (const pid of pids) {
+        const name = allProcesses.get(pid);
+        if (name) {
+          filtered.set(pid, name);
+        }
+      }
+      resolve(filtered);
+    });
+  });
+}
+
+async function scanWindowsListeningPorts(): Promise<Map<number, ActivePortInfo>> {
+  const powerShellCommand = [
+    'powershell',
+    '-NoProfile',
+    '-Command',
+    '"Get-NetTCPConnection -State Listen',
+    "| Select-Object LocalPort,OwningProcess,@{Name='ProcessName';Expression={(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName}}",
+    '| ConvertTo-Json -Compress"'
+  ].join(' ');
+
+  const powerShellEntries = await new Promise<WindowsListeningPortEntry[]>((resolve) => {
+    exec(powerShellCommand, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error || !stdout) {
+        resolve([]);
+        return;
+      }
+      resolve(parseWindowsPowerShellListeningEntries(stdout));
+    });
+  });
+
+  if (powerShellEntries.length > 0) {
+    return createActivePortMapFromWindowsEntries(powerShellEntries);
+  }
+
+  const netstatEntries = await new Promise<WindowsListeningPortEntry[]>((resolve) => {
+    exec('netstat -ano -p tcp', { maxBuffer: 10 * 1024 * 1024 }, (error, stdout) => {
+      if (error || !stdout) {
+        resolve([]);
+        return;
+      }
+      resolve(parseWindowsNetstatListeningEntries(stdout));
+    });
+  });
+
+  if (netstatEntries.length === 0) {
+    return new Map();
+  }
+
+  const missingProcessPids = Array.from(new Set(
+    netstatEntries
+      .map((entry) => entry.pid)
+      .filter((pid): pid is number => Number.isFinite(pid) && pid > 0)
+  ));
+  const processByPid = await lookupWindowsProcessNamesForPids(missingProcessPids);
+  const enrichedEntries = netstatEntries.map((entry) => {
+    if (entry.process) return entry;
+    const processName = entry.pid ? processByPid.get(entry.pid) || '' : '';
+    return { ...entry, process: processName };
+  });
+
+  return createActivePortMapFromWindowsEntries(enrichedEntries);
+}
+
+function parseLinuxSsListeningEntries(stdout: string): LinuxListeningPortEntry[] {
+  if (!stdout || !stdout.trim()) return [];
+  const entries: LinuxListeningPortEntry[] = [];
+  for (const line of stdout.trim().split('\n')) {
+    const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
+    if (!portMatch) continue;
+    const port = Number.parseInt(portMatch[1], 10);
+    if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
+
+    const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+    const processName = processMatch ? processMatch[1] : '';
+    const pidParsed = processMatch ? Number.parseInt(processMatch[2], 10) : Number.NaN;
+    const pid = Number.isFinite(pidParsed) && pidParsed > 0 ? pidParsed : null;
+    entries.push({ port, pid, process: processName });
+  }
+  return entries;
+}
+
+function parseLinuxNetstatListeningEntries(stdout: string): LinuxListeningPortEntry[] {
+  if (!stdout || !stdout.trim()) return [];
+  const entries: LinuxListeningPortEntry[] = [];
+  for (const line of stdout.trim().split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const portMatch = trimmed.match(/[:\s](\d+)\s+\S+\s+LISTEN/i);
+    if (!portMatch) continue;
+    const port = Number.parseInt(portMatch[1], 10);
+    if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
+
+    const pidProcessMatch = trimmed.match(/\s(\d+)\/([^\s]+)\s*$/);
+    const pidParsed = pidProcessMatch ? Number.parseInt(pidProcessMatch[1], 10) : Number.NaN;
+    const pid = Number.isFinite(pidParsed) && pidParsed > 0 ? pidParsed : null;
+    const process = pidProcessMatch ? pidProcessMatch[2] : '';
+    entries.push({ port, pid, process });
+  }
+  return entries;
+}
+
+async function buildLinuxPortMap(entries: LinuxListeningPortEntry[]): Promise<Map<number, ActivePortInfo>> {
+  const portMap = new Map<number, ActivePortInfo>();
+  const cwdPromises: Promise<void>[] = [];
+
+  for (const entry of entries) {
+    if (!portMap.has(entry.port)) {
+      portMap.set(entry.port, { process: entry.process, cwd: null });
+    }
+    if (entry.pid) {
+      const cwdPromise = (async () => {
+        try {
+          const { readlink } = await import('fs/promises');
+          const cwd = await readlink(`/proc/${entry.pid}/cwd`);
+          if (!cwd) return;
+          const dirName = toCwdScope(cwd);
+          if (!dirName) return;
+          const existing = portMap.get(entry.port);
+          if (existing) {
+            existing.cwd = dirName;
+          }
+        } catch {
+          // Process may exit while scanning.
+        }
+      })();
+      cwdPromises.push(cwdPromise);
+    }
+  }
+
+  await Promise.all(cwdPromises);
+  return portMap;
+}
+
 async function lookupDarwinProcessCwd(pid: number): Promise<string | null> {
   if (!Number.isFinite(pid) || pid <= 0) return null;
   return new Promise((resolve) => {
@@ -126,6 +387,10 @@ async function lookupDarwinProcessCwd(pid: number): Promise<string | null> {
 }
 
 async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
+  if (process.platform === 'win32') {
+    return scanWindowsListeningPorts();
+  }
+
   if (process.platform === 'darwin') {
     return new Promise((resolve) => {
       exec('lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null', (error, stdout) => {
@@ -166,50 +431,35 @@ async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
 
   return new Promise((resolve) => {
     exec('ss -tlnp 2>/dev/null | grep LISTEN', async (error, stdout) => {
-      const portMap = new Map<number, ActivePortInfo>();
-      if (error) {
-        resolve(portMap);
+      const ssEntries = error ? [] : parseLinuxSsListeningEntries(stdout);
+      if (ssEntries.length > 0) {
+        resolve(await buildLinuxPortMap(ssEntries));
         return;
       }
-      const lines = stdout.trim().split('\n');
-      const cwdPromises: Promise<void>[] = [];
 
-      for (const line of lines) {
-        const portMatch = line.match(/[:\s](\d+)\s+[\d\.\*:\[\]]+:\*/);
-        if (!portMatch) continue;
-        const port = Number.parseInt(portMatch[1], 10);
-        if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
-
-        const processMatch = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
-        const processName = processMatch ? processMatch[1] : '';
-        const pid = processMatch ? processMatch[2] : null;
-        portMap.set(port, { process: processName, cwd: null });
-
-        if (pid && /^\d+$/.test(pid)) {
-          const cwdPromise = (async () => {
-            try {
-              const { readlink } = await import('fs/promises');
-              const cwd = await readlink(`/proc/${pid}/cwd`);
-              if (!cwd) return;
-              const dirName = toCwdScope(cwd);
-              if (!dirName) return;
-              const existing = portMap.get(port);
-              if (existing) {
-                existing.cwd = dirName;
-              }
-            } catch {
-              // Process may exit while scanning.
-            }
-          })();
-          cwdPromises.push(cwdPromise);
+      exec('netstat -tlnp 2>/dev/null | grep LISTEN', async (netstatError, netstatStdout) => {
+        if (netstatError || !netstatStdout) {
+          resolve(new Map());
+          return;
         }
-      }
-
-      await Promise.all(cwdPromises);
-      resolve(portMap);
+        const netstatEntries = parseLinuxNetstatListeningEntries(netstatStdout);
+        if (netstatEntries.length === 0) {
+          resolve(new Map());
+          return;
+        }
+        resolve(await buildLinuxPortMap(netstatEntries));
+      });
     });
   });
 }
+
+export const __previewApiRoutesTestUtils = {
+  parseWindowsPowerShellListeningEntries,
+  parseWindowsNetstatListeningEntries,
+  parseWindowsTasklistProcessMap,
+  parseLinuxSsListeningEntries,
+  parseLinuxNetstatListeningEntries
+};
 
 async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
   const now = Date.now();
@@ -400,11 +650,43 @@ function isExcludedProcessForPreview(processName: string | null | undefined): bo
   return NON_PREVIEW_PROCESS_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
+function parsePreviewPort(portValue: string): number | null {
+  const port = Number.parseInt(portValue, 10);
+  if (!Number.isFinite(port) || port < 1 || port > 65535) {
+    return null;
+  }
+  return port;
+}
+
+function buildRequestId(prefix: string): string {
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now()}-${randomPart}`;
+}
+
+function applyPreviewCorsHeaders(request: FastifyRequest, reply: FastifyReply): void {
+  const origin = request.headers.origin;
+  if (!origin) return;
+  reply.header('Access-Control-Allow-Origin', origin);
+  reply.header('Access-Control-Allow-Credentials', 'true');
+  reply.header('Vary', 'Origin');
+}
+
 export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<void> {
+  // Preview: Clear stored cookies across all ports
+  app.delete('/api/preview/cookies', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const clearedPorts = clearAllCookies();
+    reply.send({ success: true, clearedPorts });
+  });
+
   // Preview: Get stored cookies for a port
   app.get<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
@@ -417,8 +699,8 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
 
   // Preview: Clear stored cookies for a port
   app.delete<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
@@ -433,12 +715,12 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
-    const since = request.query.since ? parseInt(request.query.since, 10) : undefined;
+    const since = request.query.since ? Number.parseInt(request.query.since, 10) : undefined;
     const logs = getProxyLogs(port, since);
     reply.send({ port, logs });
   });
@@ -450,8 +732,8 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
@@ -480,8 +762,8 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
         return;
       }
 
-      const port = Number.parseInt(request.params.port, 10);
-      if (!Number.isFinite(port) || port < 1 || port > 65535) {
+      const port = parsePreviewPort(request.params.port);
+      if (!port) {
         reply.code(400).send({ error: 'Invalid port number' });
         return;
       }
@@ -558,39 +840,186 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
     }
   );
 
-  // Preview: Evaluate JavaScript in preview context (REPL)
-  app.post<{ Params: { port: string }; Body: { expression: string } }>('/api/preview/:port/evaluate', async (request, reply) => {
+  app.options('/api/preview/:port/performance', {
+    config: { skipAuth: true }
+  }, async (request, reply) => {
+    applyPreviewCorsHeaders(request, reply);
+    reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'content-type, authorization');
+    reply.code(204).send();
+  });
+
+  app.post<{ Params: { port: string }; Body: unknown }>('/api/preview/:port/performance', {
+    config: { skipAuth: true },
+    preHandler: async (request, reply) => {
+      applyPreviewCorsHeaders(request, reply);
+    }
+  }, async (request, reply) => {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+
+    const parsedBody = previewPerformanceIngestRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      reply.code(400).send({
+        error: 'Invalid metrics payload',
+        issues: parsedBody.error.issues.map((issue) => issue.message)
+      });
+      return;
+    }
+
+    const result = ingestPerformanceMetrics(port, parsedBody.data.metrics);
+    reply.send({
+      success: true,
+      port,
+      accepted: result.accepted,
+      rejected: result.rejected
+    });
+  });
+
+  app.get<{ Params: { port: string } }>('/api/preview/:port/performance', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
-    const { expression } = request.body;
+    reply.send({
+      port,
+      metrics: getPerformanceMetrics(port)
+    });
+  });
 
-    // Input validation
-    if (!expression || typeof expression !== 'string') {
-      reply.code(400).send({ error: 'Invalid expression' });
+  app.delete<{ Params: { port: string } }>('/api/preview/:port/performance', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    const cleared = clearPerformanceMetrics(port);
+    reply.send({ success: true, port, cleared });
+  });
+
+  app.get('/api/preview/:port/performance/stream', { websocket: true }, (socket, request) => {
+    const userId = request.userId;
+    if (!userId) {
+      socket.close(4401, 'Unauthorized');
       return;
     }
 
-    // Length limit (10KB max)
-    if (expression.length > 10000) {
-      app.log.warn({
-        userId,
+    const port = parsePreviewPort((request.params as { port?: string }).port || '');
+    if (!port) {
+      socket.close(1008, 'Invalid preview port');
+      return;
+    }
+
+    const sendMessage = (payload: unknown): void => {
+      if (socket.readyState !== 1) return;
+      try {
+        socket.send(JSON.stringify(payload));
+      } catch {
+        // Best effort stream.
+      }
+    };
+
+    sendMessage({
+      type: 'performance-snapshot',
+      metrics: getPerformanceMetrics(port)
+    });
+
+    const unsubscribe = subscribePerformanceMetrics(port, (metrics) => {
+      sendMessage({
+        type: 'performance-update',
+        metrics
+      });
+    });
+
+    socket.on('close', unsubscribe);
+    socket.on('error', unsubscribe);
+  });
+
+  app.get<{ Params: { port: string }; Querystring: { connectionId?: string; direction?: string } }>(
+    '/api/preview/:port/websockets',
+    async (request, reply) => {
+      const userId = request.userId;
+      if (!userId) {
+        reply.code(401).send({ error: 'Unauthorized' });
+        return;
+      }
+      const port = parsePreviewPort(request.params.port);
+      if (!port) {
+        reply.code(400).send({ error: 'Invalid port number' });
+        return;
+      }
+
+      const parsedQuery = previewWebSocketQuerySchema.safeParse(request.query || {});
+      if (!parsedQuery.success) {
+        reply.code(400).send({
+          error: 'Invalid websocket query',
+          issues: parsedQuery.error.issues.map((issue) => issue.message)
+        });
+        return;
+      }
+
+      const { connections, messages } = getWebSocketLogs(port, parsedQuery.data);
+      reply.send({
         port,
-        expressionLength: expression.length,
-        clientIp: request.ip
-      }, 'Expression too long - rejected');
-      reply.code(400).send({ error: 'Expression too long (max 10KB)' });
+        connections,
+        messages
+      });
+    }
+  );
+
+  app.delete<{ Params: { port: string } }>('/api/preview/:port/websockets', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    const cleared = clearWebSocketLogs(port);
+    reply.send({ success: true, port, cleared });
+  });
 
-    // Rate limiting: 10 requests per minute per user
+  // Preview: Evaluate JavaScript in preview context (REPL)
+  app.post<{ Params: { port: string }; Body: unknown }>('/api/preview/:port/evaluate', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
+      reply.code(400).send({ error: 'Invalid port number' });
+      return;
+    }
+    const parsedBody = previewEvaluateRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      reply.code(400).send({
+        error: 'Invalid expression',
+        issues: parsedBody.error.issues.map((issue) => issue.message)
+      });
+      return;
+    }
+    const expression = parsedBody.data.expression;
+    const requestId = parsedBody.data.requestId || buildRequestId('eval');
+
+    // Rate limiting: 10 requests per minute per user.
     const clientId = `${userId}:${request.ip || 'unknown'}`;
     const now = Date.now();
     const limiter = evalRateLimiter.get(clientId);
@@ -620,12 +1049,11 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       expressionPreview: expression.substring(0, 100)
     }, 'REPL evaluation requested');
 
-    // Send evaluation request to preview page via postMessage
-    // The preview page's debug script will handle evaluation and send result back
-    // This endpoint queues the request; result is received via WebSocket/polling
     reply.send({
       success: true,
-      message: 'Evaluation request queued. Result will be sent via preview console logs.'
+      requestId,
+      port,
+      mode: 'client-runtime'
     });
   });
 
@@ -636,21 +1064,22 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
-    const port = parseInt(request.params.port, 10);
-    if (isNaN(port) || port < 1 || port > 65535) {
+    const port = parsePreviewPort(request.params.port);
+    if (!port) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
 
-    // Storage is managed client-side via postMessage
-    // This endpoint provides a way to request storage snapshot
     reply.send({
-      message: 'Storage snapshot requested. Data will be synced via preview page.'
+      success: true,
+      requestId: buildRequestId('storage-snapshot'),
+      port,
+      message: 'Storage snapshot should be requested from the preview runtime.'
     });
   });
 
   // Preview: Update storage (set/remove/clear)
-  app.post<{ Params: { port: string }; Body: { type: string; operation: string; key?: string; value?: string; entries?: Record<string, string> } }>(
+  app.post<{ Params: { port: string }; Body: unknown }>(
     '/api/preview/:port/storage',
     async (request, reply) => {
       const userId = request.userId;
@@ -658,126 +1087,28 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
         reply.code(401).send({ error: 'Unauthorized' });
         return;
       }
-      const port = parseInt(request.params.port, 10);
-      if (isNaN(port) || port < 1 || port > 65535) {
+      const port = parsePreviewPort(request.params.port);
+      if (!port) {
         reply.code(400).send({ error: 'Invalid port number' });
         return;
       }
-      const { type, operation, key, value, entries } = request.body;
-
-      // Type validation
-      if (!type || typeof type !== 'string') {
-        reply.code(400).send({ error: 'Missing or invalid type' });
+      const parsedBody = previewStorageUpdateRequestSchema.safeParse(request.body);
+      if (!parsedBody.success) {
+        reply.code(400).send({
+          error: 'Invalid storage operation',
+          issues: parsedBody.error.issues.map((issue) => issue.message)
+        });
         return;
       }
 
-      if (!operation || typeof operation !== 'string') {
-        reply.code(400).send({ error: 'Missing or invalid operation' });
-        return;
-      }
-
-      if (!['localStorage', 'sessionStorage', 'cookies'].includes(type)) {
-        reply.code(400).send({ error: 'Invalid storage type' });
-        return;
-      }
-
-      if (!['set', 'remove', 'clear', 'import'].includes(operation)) {
-        reply.code(400).send({ error: 'Invalid operation' });
-        return;
-      }
-
-      // Validate key/value for set operation
-      if (operation === 'set') {
-        if (!key || typeof key !== 'string') {
-          reply.code(400).send({ error: 'Missing or invalid key for set operation' });
-          return;
-        }
-        if (value === undefined || typeof value !== 'string') {
-          reply.code(400).send({ error: 'Missing or invalid value for set operation' });
-          return;
-        }
-
-        // Key length validation (max 256 chars)
-        if (key.length > 256) {
-          reply.code(400).send({ error: 'Key too long (max 256 characters)' });
-          return;
-        }
-
-        // Key character validation (alphanumeric, underscore, dash, dot only)
-        if (!/^[a-zA-Z0-9_\-\.]+$/.test(key)) {
-          reply.code(400).send({ error: 'Key contains invalid characters (allowed: alphanumeric, underscore, dash, dot)' });
-          return;
-        }
-
-        // Value length validation (max 100KB)
-        if (value.length > 100000) {
-          reply.code(400).send({ error: 'Value too long (max 100KB)' });
-          return;
-        }
-      }
-
-      // Validate key for remove operation
-      if (operation === 'remove') {
-        if (!key || typeof key !== 'string') {
-          reply.code(400).send({ error: 'Missing or invalid key for remove operation' });
-          return;
-        }
-
-        // Key length validation
-        if (key.length > 256) {
-          reply.code(400).send({ error: 'Key too long (max 256 characters)' });
-          return;
-        }
-
-        // Key character validation
-        if (!/^[a-zA-Z0-9_\-\.]+$/.test(key)) {
-          reply.code(400).send({ error: 'Key contains invalid characters (allowed: alphanumeric, underscore, dash, dot)' });
-          return;
-        }
-      }
-
-      // Validate entries for import operation
-      if (operation === 'import') {
-        if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
-          reply.code(400).send({ error: 'Missing or invalid entries for import operation' });
-          return;
-        }
-
-        const entryCount = Object.keys(entries).length;
-        if (entryCount > 1000) {
-          reply.code(400).send({ error: 'Too many entries for import (max 1000)' });
-          return;
-        }
-
-        // Validate each entry
-        for (const [entryKey, entryValue] of Object.entries(entries)) {
-          if (typeof entryKey !== 'string' || typeof entryValue !== 'string') {
-            reply.code(400).send({ error: 'All entries must have string keys and values' });
-            return;
-          }
-
-          if (entryKey.length > 256) {
-            reply.code(400).send({ error: `Entry key too long: ${entryKey.substring(0, 50)}... (max 256 characters)` });
-            return;
-          }
-
-          if (!/^[a-zA-Z0-9_\-\.]+$/.test(entryKey)) {
-            reply.code(400).send({ error: `Entry key contains invalid characters: ${entryKey.substring(0, 50)}... (allowed: alphanumeric, underscore, dash, dot)` });
-            return;
-          }
-
-          if (entryValue.length > 100000) {
-            reply.code(400).send({ error: `Entry value too long for key: ${entryKey} (max 100KB)` });
-            return;
-          }
-        }
-      }
-
-      // Storage updates are handled client-side via postMessage
-      // This endpoint queues the operation; the preview page will execute it
+      const requestId = parsedBody.data.requestId || buildRequestId('storage');
       reply.send({
         success: true,
-        message: 'Storage operation queued. Will be executed in preview context.'
+        requestId,
+        port,
+        operation: parsedBody.data.operation,
+        storageType: parsedBody.data.type,
+        mode: 'client-runtime'
       });
     }
   );

@@ -2,6 +2,25 @@ import type { EventEmitter } from 'node:events';
 import type { ThreadMetadata } from './session-store';
 import type { CwdSource } from './session-resolver';
 
+export type TerminalFidelityMode = 'balanced' | 'native';
+export type TerminalShellProfile =
+  | 'system'
+  | 'cmd'
+  | 'powershell'
+  | 'pwsh'
+  | 'bash'
+  | 'zsh'
+  | 'sh'
+  | 'claude';
+export type TerminalNativeLauncher =
+  | 'system'
+  | 'wt'
+  | 'cmd'
+  | 'powershell'
+  | 'pwsh'
+  | 'terminal'
+  | 'x-terminal-emulator';
+
 export interface TerminalStreamEvent {
   text: string;
   ts: number;
@@ -11,6 +30,9 @@ export interface TerminalSessionSummary {
   id: string;
   title: string;
   shell: string;
+  shellArgs?: string[] | null;
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode?: TerminalFidelityMode;
   cwd: string;
   cwdSource?: CwdSource;
   groupPath?: string | null;
@@ -28,6 +50,9 @@ export interface TerminalSessionSnapshot {
   id: string;
   title: string;
   shell: string;
+  shellArgs?: string[] | null;
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode?: TerminalFidelityMode;
   createdAt: string;
   updatedAt: string;
   history: TerminalStreamEvent[];
@@ -42,6 +67,9 @@ export interface TerminalCreateOptions {
   cols?: number;
   rows?: number;
   shell?: string;
+  shellArgs?: string[];
+  shellProfile?: TerminalShellProfile;
+  fidelityMode?: TerminalFidelityMode;
   /** Command to execute immediately after terminal starts */
   initialCommand?: string;
 }
@@ -54,6 +82,9 @@ export interface TerminalProcess extends EventEmitter {
 
 export interface TerminalSpawnOptions {
   shell: string;
+  shellArgs?: string[];
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode?: TerminalFidelityMode;
   cols: number;
   rows: number;
   cwd?: string;

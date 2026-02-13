@@ -12,6 +12,17 @@ import type {
 const TEST_USER_ID = 'test-user-123';
 const OTHER_TEST_USER_ID = 'test-user-456';
 
+function getExpectedDefaultCwd(): string {
+  if (process.platform === 'win32') {
+    if (process.env.USERPROFILE) return process.env.USERPROFILE;
+    if (process.env.HOMEDRIVE && process.env.HOMEPATH) {
+      return `${process.env.HOMEDRIVE}${process.env.HOMEPATH}`;
+    }
+  }
+  if (process.env.HOME) return process.env.HOME;
+  return process.cwd();
+}
+
 class FakeTerminalProcess extends EventEmitter implements TerminalProcess {
   writes: string[] = [];
   resized: Array<{ cols: number; rows: number }> = [];
@@ -115,13 +126,35 @@ describe('TerminalManager', () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn((options: TerminalSpawnOptions) => {
       // Assert from inside to keep expectations close to the behaviour.
-      expect(options.cwd).toBe(process.env.HOME || process.cwd());
+      expect(options.cwd).toBe(getExpectedDefaultCwd());
       return fakeProcess;
     });
     const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
 
     manager.createSession(TEST_USER_ID, { cwd: '/this/path/should/not/exist' });
     expect(spawnMock).toHaveBeenCalled();
+  });
+
+  it('disables output batching in native fidelity mode', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const spawnMock = vi.fn((_options: TerminalSpawnOptions) => fakeProcess);
+    const manager = new TerminalManager({ spawnTerminal: spawnMock, useTmux: false });
+    const expectedShellArgs = process.platform === 'win32' ? [] : ['-l'];
+    const snapshot = manager.createSession(TEST_USER_ID, {
+      shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/bash',
+      fidelityMode: 'native'
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(expect.objectContaining({
+      fidelityMode: 'native',
+      shellArgs: expectedShellArgs
+    }));
+
+    const subscriber = vi.fn();
+    manager.subscribe(TEST_USER_ID, snapshot.id, subscriber);
+    fakeProcess.emit('data', 'hello ');
+    fakeProcess.emit('data', 'world');
+    expect(subscriber).toHaveBeenCalledTimes(2);
   });
 
   it('updates stored cwd when receiving a full cd command payload (UI-driven navigation)', async () => {

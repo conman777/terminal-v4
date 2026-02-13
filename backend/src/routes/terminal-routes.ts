@@ -3,11 +3,14 @@ import { randomUUID } from 'node:crypto';
 import {
   terminalCreateRequestSchema,
   terminalInputRequestSchema,
+  terminalOpenNativeRequestSchema,
   terminalRenameRequestSchema,
   terminalResizeRequestSchema
 } from './schemas';
+import { getDatabase } from '../database/db';
 import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
+import { launchNativeTerminal } from '../terminal/native-terminal-launcher';
 
 const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_WS_MAX_BUFFERED_BYTES || '', 10);
@@ -15,6 +18,38 @@ const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
 })();
 
 export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
+  const getUserTerminalDefaults = (userId: string): {
+    shellProfile: 'system' | 'cmd' | 'powershell' | 'pwsh' | 'bash' | 'zsh' | 'sh' | 'claude' | null;
+    fidelityMode: 'balanced' | 'native';
+    nativeLauncher: 'system' | 'wt' | 'cmd' | 'powershell' | 'pwsh' | 'terminal' | 'x-terminal-emulator';
+  } => {
+    const db = getDatabase();
+    const row = db.prepare(
+      'SELECT terminal_shell_profile, terminal_fidelity_mode, terminal_native_launcher FROM user_settings WHERE user_id = ?'
+    ).get(userId) as {
+      terminal_shell_profile: string | null;
+      terminal_fidelity_mode: string | null;
+      terminal_native_launcher: string | null;
+    } | undefined;
+
+    const shellProfile = (() => {
+      const raw = String(row?.terminal_shell_profile || '').toLowerCase();
+      if (raw === 'cmd' || raw === 'powershell' || raw === 'pwsh' || raw === 'bash' || raw === 'zsh' || raw === 'sh' || raw === 'claude') {
+        return raw;
+      }
+      return null;
+    })();
+    const fidelityMode = row?.terminal_fidelity_mode === 'native' ? 'native' : 'balanced';
+    const nativeLauncher = (() => {
+      const raw = String(row?.terminal_native_launcher || '').toLowerCase();
+      if (raw === 'wt' || raw === 'cmd' || raw === 'powershell' || raw === 'pwsh' || raw === 'terminal' || raw === 'x-terminal-emulator') {
+        return raw;
+      }
+      return 'system';
+    })();
+    return { shellProfile, fidelityMode, nativeLauncher };
+  };
+
   const parseHistoryLimit = (request: { query?: unknown }) => {
     const query = (request.query || {}) as Record<string, string | undefined>;
     const historyChars = Number.parseInt(String(query.historyChars || ''), 10);
@@ -116,9 +151,17 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
 
+    const defaults = getUserTerminalDefaults(userId);
+    const hasExplicitShell = typeof result.data.shell === 'string' && result.data.shell.length > 0;
+    const createOptions = {
+      ...result.data,
+      shellProfile: result.data.shellProfile ?? (hasExplicitShell ? undefined : defaults.shellProfile ?? undefined),
+      fidelityMode: result.data.fidelityMode ?? defaults.fidelityMode
+    };
+
     const session = (() => {
       try {
-        return deps.terminalManager.createSession(userId, result.data);
+        return deps.terminalManager.createSession(userId, createOptions);
       } catch (error) {
         reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
         return null;
@@ -195,6 +238,46 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     reply.code(204).send();
+  });
+
+  app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/open-native', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const bodyResult = terminalOpenNativeRequestSchema.safeParse(request.body || {});
+    if (!bodyResult.success) {
+      reply.code(400).send({
+        error: 'Invalid native terminal request body',
+        details: bodyResult.error.flatten()
+      });
+      return;
+    }
+
+    await deps.terminalManager.loadUserSessions(userId);
+    const target = deps.terminalManager.listSessions(userId).find((session) => session.id === request.params.id);
+    if (!target) {
+      reply.code(404).send({ error: 'Terminal session not found' });
+      return;
+    }
+
+    const defaults = getUserTerminalDefaults(userId);
+    const launcher = bodyResult.data.launcher || defaults.nativeLauncher;
+    try {
+      const result = launchNativeTerminal({
+        cwd: target.cwd,
+        launcher,
+        shellProfile: target.shellProfile ?? defaults.shellProfile
+      });
+      reply.send({
+        success: true,
+        launcher: result.launcher
+      });
+    } catch (error) {
+      reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/resize', async (request, reply) => {

@@ -2,11 +2,36 @@ import { useState, useRef, useEffect } from 'react';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, showTabStatusLabels, onTabStatusLabelsChange }) {
+export function SettingsModal({
+  isOpen,
+  onClose,
+  sessionId,
+  sessionTitle,
+  currentCwd,
+  recentFolders,
+  onSave,
+  onAddRecentFolder,
+  terminalFontSize,
+  onFontSizeChange,
+  terminalWebglEnabled,
+  onWebglChange,
+  terminalShellProfile,
+  onShellProfileChange,
+  terminalFidelityMode,
+  onFidelityModeChange,
+  terminalNativeLauncher,
+  onNativeLauncherChange,
+  onOpenNativeTerminal,
+  showTabStatusLabels,
+  onTabStatusLabelsChange
+}) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const resolvedWebglEnabled = terminalWebglEnabled !== false;
+  const resolvedShellProfile = terminalShellProfile || 'system';
+  const resolvedFidelityMode = terminalFidelityMode === 'native' ? 'native' : 'balanced';
+  const resolvedNativeLauncher = terminalNativeLauncher || 'system';
   const resolvedShowTabStatusLabels = showTabStatusLabels !== false;
   const dropdownRef = useRef(null);
 
@@ -197,6 +222,63 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             <small>Use WebGL for GPU acceleration; switch to Canvas if you see glitches.</small>
           </div>
           <div className="form-group">
+            <label htmlFor="terminal-shell-profile">Default Shell Profile</label>
+            <select
+              id="terminal-shell-profile"
+              className="terminal-settings-select"
+              value={resolvedShellProfile}
+              onChange={(e) => onShellProfileChange?.(e.target.value)}
+            >
+              <option value="system">System Default</option>
+              <option value="cmd">Command Prompt (cmd)</option>
+              <option value="powershell">Windows PowerShell</option>
+              <option value="pwsh">PowerShell 7 (pwsh)</option>
+              <option value="bash">Bash</option>
+              <option value="zsh">Zsh</option>
+              <option value="sh">Sh</option>
+              <option value="claude">Claude Code CLI</option>
+            </select>
+            <small>Used for new terminal sessions unless a session overrides shell selection.</small>
+          </div>
+          <div className="form-group">
+            <label>Terminal Fidelity</label>
+            <div className="mode-toggle" role="group" aria-label="Terminal fidelity">
+              <button
+                type="button"
+                className={`mode-btn ${resolvedFidelityMode === 'balanced' ? 'active' : ''}`}
+                onClick={() => onFidelityModeChange?.('balanced')}
+              >
+                Balanced
+              </button>
+              <button
+                type="button"
+                className={`mode-btn ${resolvedFidelityMode === 'native' ? 'active' : ''}`}
+                onClick={() => onFidelityModeChange?.('native')}
+              >
+                Native
+              </button>
+            </div>
+            <small>Native reduces buffering/drop protections for a closer OS terminal feel.</small>
+          </div>
+          <div className="form-group">
+            <label htmlFor="terminal-native-launcher">Native Terminal Launcher</label>
+            <select
+              id="terminal-native-launcher"
+              className="terminal-settings-select"
+              value={resolvedNativeLauncher}
+              onChange={(e) => onNativeLauncherChange?.(e.target.value)}
+            >
+              <option value="system">System Default</option>
+              <option value="wt">Windows Terminal</option>
+              <option value="pwsh">PowerShell 7 (pwsh)</option>
+              <option value="powershell">Windows PowerShell</option>
+              <option value="cmd">Command Prompt (cmd)</option>
+              <option value="terminal">Terminal.app (macOS)</option>
+              <option value="x-terminal-emulator">x-terminal-emulator (Linux)</option>
+            </select>
+            <small>Used when opening the current session in your OS-native terminal app.</small>
+          </div>
+          <div className="form-group">
             <label>Tab Status Labels</label>
             <div className="mode-toggle" role="group" aria-label="Tab status labels">
               <button
@@ -221,6 +303,14 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>
             Cancel
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => onOpenNativeTerminal?.(sessionId)}
+            disabled={!sessionId}
+            title={sessionId ? 'Open current session in native terminal' : 'Select a session first'}
+          >
+            Open Native
           </button>
           <button
             className="btn-secondary"

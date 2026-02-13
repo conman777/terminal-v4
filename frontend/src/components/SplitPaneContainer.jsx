@@ -20,6 +20,7 @@ function LayoutNode({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  terminalFidelityMode,
   sessionActivity,
   onSessionBusyChange,
   projectInfo,
@@ -49,6 +50,7 @@ function LayoutNode({
         onUrlDetected={onUrlDetected}
         fontSize={fontSize}
         webglEnabled={webglEnabled}
+        terminalFidelityMode={terminalFidelityMode}
         sessionActivity={sessionActivity}
         onSessionBusyChange={onSessionBusyChange}
         projectInfo={projectInfo}
@@ -89,6 +91,7 @@ function LayoutNode({
             onUrlDetected={onUrlDetected}
             fontSize={fontSize}
             webglEnabled={webglEnabled}
+            terminalFidelityMode={terminalFidelityMode}
             sessionActivity={sessionActivity}
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
@@ -118,6 +121,7 @@ export function SplitPaneContainer({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  terminalFidelityMode,
   sessionActivity,
   onSessionBusyChange,
   projectInfo,
@@ -175,6 +179,7 @@ export function SplitPaneContainer({
             onUrlDetected={onUrlDetected}
             fontSize={fontSize}
             webglEnabled={webglEnabled}
+            terminalFidelityMode={terminalFidelityMode}
             sessionActivity={sessionActivity}
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
@@ -205,6 +210,7 @@ export function SplitPaneContainer({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           webglEnabled={webglEnabled}
+          terminalFidelityMode={terminalFidelityMode}
           sessionActivity={sessionActivity}
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
@@ -243,6 +249,7 @@ export function SplitPaneContainer({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           webglEnabled={webglEnabled}
+          terminalFidelityMode={terminalFidelityMode}
           sessionActivity={sessionActivity}
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}

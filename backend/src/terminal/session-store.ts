@@ -1,7 +1,11 @@
 import { readFile, writeFile, mkdir, readdir, unlink, rename } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import type { TerminalStreamEvent } from './terminal-types';
+import type {
+  TerminalFidelityMode,
+  TerminalShellProfile,
+  TerminalStreamEvent
+} from './terminal-types';
 import { ensureDataDir } from '../utils/data-dir';
 
 export interface ThreadGitStats {
@@ -23,6 +27,9 @@ export interface PersistedSession {
   id: string;
   title: string;
   shell: string;
+  shellArgs?: string[];
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode?: TerminalFidelityMode;
   cwd: string;
   createdAt: string;
   updatedAt: string;
@@ -32,6 +39,9 @@ export interface PersistedSession {
 
 // Stable base data directory (repo-relative or env override)
 const DATA_DIR = ensureDataDir();
+const RETRYABLE_RENAME_ERROR_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const MAX_RENAME_RETRIES = 4;
+const RENAME_RETRY_DELAY_MS = 25;
 
 function sanitizeId(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
@@ -64,6 +74,9 @@ function getSessionFilePath(userId: string, sessionId: string): string {
 export interface SessionMetadata {
   title: string;
   shell: string;
+  shellArgs?: string[];
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode?: TerminalFidelityMode;
   cwd: string;
   createdAt: string;
 }
@@ -75,6 +88,52 @@ export interface SessionMetadataIndex {
 function getMetadataIndexPath(userId: string): string {
   const safeUserId = sanitizeId(userId);
   return join(DATA_DIR, 'users', safeUserId, 'sessions-metadata.json');
+}
+
+function isRetryableRenameError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === 'string' && RETRYABLE_RENAME_ERROR_CODES.has(code);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function renameWithRetry(fromPath: string, toPath: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(fromPath, toPath);
+      return;
+    } catch (error) {
+      if (!isRetryableRenameError(error) || attempt >= MAX_RENAME_RETRIES) {
+        throw error;
+      }
+      await delay(RENAME_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+}
+
+async function writeJsonAtomicWithFallback(filePath: string, payload: string): Promise<void> {
+  const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    await writeFile(tempPath, payload, 'utf-8');
+    await renameWithRetry(tempPath, filePath);
+  } catch (error) {
+    try {
+      if (existsSync(tempPath)) {
+        await unlink(tempPath);
+      }
+    } catch {}
+    if (isRetryableRenameError(error)) {
+      // OneDrive/AV file locks on Windows can transiently break atomic rename.
+      await writeFile(filePath, payload, 'utf-8');
+      return;
+    }
+    throw error;
+  }
 }
 
 async function loadMetadataIndex(userId: string): Promise<SessionMetadataIndex> {
@@ -93,18 +152,13 @@ async function loadMetadataIndex(userId: string): Promise<SessionMetadataIndex> 
 async function saveMetadataIndex(userId: string, index: SessionMetadataIndex): Promise<void> {
   const indexPath = getMetadataIndexPath(userId);
   const parentDir = join(DATA_DIR, 'users', sanitizeId(userId));
-  const tempPath = `${indexPath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
   try {
     // Ensure parent directory exists
     if (!existsSync(parentDir)) {
       await mkdir(parentDir, { recursive: true });
     }
-    await writeFile(tempPath, JSON.stringify(index, null, 2), 'utf-8');
-    await rename(tempPath, indexPath);
+    await writeJsonAtomicWithFallback(indexPath, JSON.stringify(index, null, 2));
   } catch (error) {
-    try {
-      if (existsSync(tempPath)) await unlink(tempPath);
-    } catch {}
     // Non-fatal - index is just for recovery
     console.error('Failed to save metadata index:', error);
   }
@@ -113,7 +167,15 @@ async function saveMetadataIndex(userId: string, index: SessionMetadataIndex): P
 export async function updateSessionMetadata(
   userId: string,
   sessionId: string,
-  metadata: { title: string; shell: string; cwd: string; createdAt: string }
+  metadata: {
+    title: string;
+    shell: string;
+    shellArgs?: string[];
+    shellProfile?: TerminalShellProfile | null;
+    fidelityMode?: TerminalFidelityMode;
+    cwd: string;
+    createdAt: string;
+  }
 ): Promise<void> {
   const index = await loadMetadataIndex(userId);
   index[sessionId] = metadata;
@@ -141,18 +203,11 @@ export async function deleteSessionMetadata(userId: string, sessionId: string): 
 export async function saveSession(userId: string, session: PersistedSession): Promise<void> {
   await ensureUserSessionsDir(userId);
   const filePath = getSessionFilePath(userId, session.id);
-  // Use unique temp file to prevent corruption from concurrent saves
-  const tempPath = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`;
   try {
-    // Write to temp file first, then atomic rename to prevent corruption
-    await writeFile(tempPath, JSON.stringify(session, null, 2), 'utf-8');
-    await rename(tempPath, filePath);
+    // Best-effort atomic save with a Windows-safe fallback path.
+    await writeJsonAtomicWithFallback(filePath, JSON.stringify(session, null, 2));
   } catch (error) {
     console.error(`Failed to save session ${session.id}:`, error);
-    // Clean up temp file if it exists
-    try {
-      if (existsSync(tempPath)) await unlink(tempPath);
-    } catch {}
     throw error;
   }
 }

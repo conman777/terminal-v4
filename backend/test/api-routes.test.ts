@@ -5,9 +5,17 @@ import { register } from '../src/auth/auth-service';
 import type { TerminalManager } from '../src/terminal/terminal-manager';
 import type { TerminalSessionSnapshot } from '../src/terminal/terminal-types';
 
+const { launchNativeTerminalMock } = vi.hoisted(() => ({
+  launchNativeTerminalMock: vi.fn(() => ({ launcher: 'system', command: 'cmd.exe', args: [] }))
+}));
+
+vi.mock('../src/terminal/native-terminal-launcher', () => ({
+  launchNativeTerminal: launchNativeTerminalMock
+}));
+
 type TerminalManagerContract = Pick<
   TerminalManager,
-  'initialize' | 'listSessions' | 'createSession' | 'getSession' | 'write' | 'subscribe' | 'resize' | 'close' | 'renameSession'
+  'initialize' | 'loadUserSessions' | 'listSessions' | 'createSession' | 'getSession' | 'write' | 'subscribe' | 'resize' | 'close' | 'renameSession'
 >;
 
 async function withApp<T>(
@@ -23,11 +31,13 @@ async function withApp<T>(
     shell: 'bash',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    history: []
+    history: [],
+    usesTmux: false
   };
 
   class StubTerminalManager implements TerminalManagerContract {
     initialize = vi.fn(async () => {});
+    loadUserSessions = vi.fn(async () => {});
     listSessions = vi.fn(() => []);
     createSession = vi.fn(() => terminalSession);
     getSession = vi.fn(() => terminalSession);
@@ -160,6 +170,38 @@ describe('API routes', () => {
         .expect(404);
 
       expect(response.body.error).toBe('Terminal session not found');
+    });
+  });
+
+  it('opens a session in native terminal', async () => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
+      launchNativeTerminalMock.mockClear();
+      const listSessionsMock = terminalManager.listSessions as unknown as ReturnType<typeof vi.fn>;
+      listSessionsMock.mockReturnValueOnce([
+        {
+          id: 'term-1',
+          title: 'Terminal 1',
+          shell: 'bash',
+          cwd: process.cwd(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messageCount: 0,
+          isActive: true,
+          usesTmux: false
+        }
+      ]);
+
+      const response = await supertest(app.server)
+        .post('/api/terminal/term-1/open-native')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ launcher: 'system' })
+        .expect(200);
+
+      expect(response.body).toMatchObject({ success: true });
+      expect(launchNativeTerminalMock).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: process.cwd(),
+        launcher: 'system'
+      }));
     });
   });
 });

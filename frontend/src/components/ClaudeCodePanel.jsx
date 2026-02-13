@@ -7,6 +7,7 @@ export default function ClaudeCodePanel({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  terminalFidelityMode,
   onScrollDirection,
   onRegisterFocusTerminal,
   usesTmux
@@ -33,6 +34,7 @@ export default function ClaudeCodePanel({
         onUrlDetected={onUrlDetected}
         fontSize={fontSize}
         webglEnabled={webglEnabled}
+        terminalFidelityMode={terminalFidelityMode}
         usesTmux={usesTmux}
         onScrollDirection={onScrollDirection}
         onRegisterFocusTerminal={onRegisterFocusTerminal}

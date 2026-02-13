@@ -1,4 +1,9 @@
-import type { TerminalProcess, TerminalStreamEvent } from './terminal-types';
+import type {
+  TerminalFidelityMode,
+  TerminalProcess,
+  TerminalShellProfile,
+  TerminalStreamEvent
+} from './terminal-types';
 import type { PersistedSession, ThreadMetadata } from './session-store';
 
 // Terminal dimension constants
@@ -32,6 +37,9 @@ export interface ManagedTerminal {
   userId: string;
   title: string;
   shell: string;
+  shellArgs: string[];
+  shellProfile?: TerminalShellProfile | null;
+  fidelityMode: TerminalFidelityMode;
   cwd: string;
   createdAt: string;
   updatedAt: string;

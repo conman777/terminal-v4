@@ -20,6 +20,7 @@ const MAX_RESPONSE_SIZE = 10 * 1024 * 1024;
 
 // Request timeout: 30 seconds
 const REQUEST_TIMEOUT = 30000;
+const PREVIEW_LOCAL_ONLY = process.env.PREVIEW_LOCAL_ONLY === 'true';
 
 // Debug script for external sites - sends logs to /api/preview/external/logs
 const EXTERNAL_DEBUG_SCRIPT = `
@@ -304,6 +305,13 @@ export async function registerExternalProxyRoutes(app: FastifyInstance): Promise
 
   // Proxy external websites
   app.get('/api/proxy-external', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (PREVIEW_LOCAL_ONLY) {
+      return reply.code(403).send({
+        error: 'External proxy disabled',
+        message: 'External website proxying is disabled in local-only preview mode.'
+      });
+    }
+
     const query = request.query as { url?: string; token?: string };
     const targetUrl = query.url;
     const requestToken = getRequestToken(request);

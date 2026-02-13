@@ -69,6 +69,7 @@ function MobileTab({
 
 export function MobileHeader({
   activeSessions,
+  orderedSessions = [],
   inactiveSessions,
   activeSessionId,
   onSelectSession,
@@ -76,6 +77,7 @@ export function MobileHeader({
   onCreateSession,
   onRenameSession,
   onCloseSession,
+  onOpenNativeTerminal,
   onOpenSettings,
   onOpenApiSettings,
   onOpenBrowserSettings,
@@ -115,6 +117,7 @@ export function MobileHeader({
   // Track user scrolling to prevent auto-scroll interruption
   const userScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef(null);
+  const visibleSessions = orderedSessions.length > 0 ? orderedSessions : activeSessions;
 
   // Update --mobile-header-height CSS variable
   // Set initial header height synchronously before first paint to prevent
@@ -155,7 +158,7 @@ export function MobileHeader({
       document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
     });
     return () => cancelAnimationFrame(raf);
-  }, [mobileView, previewOpened, previewUrl, activeSessions.length, isNavCollapsed]);
+  }, [mobileView, previewOpened, previewUrl, visibleSessions.length, isNavCollapsed]);
 
   // Check if tabs overflow
   const updateOverflowState = useCallback(() => {
@@ -178,20 +181,20 @@ export function MobileHeader({
         window.removeEventListener('resize', updateOverflowState);
       };
     }
-  }, [activeSessions.length, updateOverflowState]);
+  }, [visibleSessions.length, updateOverflowState]);
 
   const handleTabLongPress = useCallback((sessionId, coords) => {
     setTabContextMenu({ sessionId, x: coords.x, y: coords.y });
   }, []);
 
   const handleStartRename = useCallback((sessionId) => {
-    const session = activeSessions.find(s => s.id === sessionId);
+    const session = visibleSessions.find(s => s.id === sessionId);
     if (session) {
       setRenameValue(session.title || 'Terminal');
       setRenamingSessionId(sessionId);
       setTabContextMenu(null);
     }
-  }, [activeSessions]);
+  }, [visibleSessions]);
 
   const handleRenameSubmit = useCallback(() => {
     if (renamingSessionId) {
@@ -438,7 +441,7 @@ export function MobileHeader({
         {(mobileView === 'terminal' || mobileView === 'preview') && !(previewUrl && previewOpened) && (
           <div className="mobile-header-tabs-row">
             <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
-              {activeSessions.map((session) => (
+              {visibleSessions.map((session) => (
                 (() => {
                   const activityState = sessionActivity?.[session.id];
                   const isActive = session.id === activeSessionId;
@@ -524,6 +527,18 @@ export function MobileHeader({
                 </svg>
               ),
               onClick: () => handleStartRename(tabContextMenu.sessionId)
+            },
+            {
+              label: 'Open in Native Terminal',
+              icon: (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="4" width="18" height="14" rx="2" />
+                  <line x1="8" y1="20" x2="16" y2="20" />
+                  <line x1="12" y1="18" x2="12" y2="20" />
+                </svg>
+              ),
+              onClick: () => onOpenNativeTerminal?.(tabContextMenu.sessionId),
+              disabled: typeof onOpenNativeTerminal !== 'function'
             },
             { separator: true },
             {

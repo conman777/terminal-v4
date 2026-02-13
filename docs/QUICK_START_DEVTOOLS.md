@@ -36,9 +36,8 @@ Quick reference for using the Preview DevTools features.
 ### Common Issues
 
 **No metrics appearing?**
-- The backend endpoints `/api/preview/:port/performance` and
-  `/api/preview/:port/performance/stream` are not implemented in the current
-  backend. The UI will stay empty until those routes are added.
+- Confirm the preview app is actively rendering and generating performance data.
+- If live mode fails to connect, verify your auth session is valid.
 - Reload the preview page
 - Check browser console for errors
 - Verify page fully loaded
@@ -70,8 +69,8 @@ Quick reference for using the Preview DevTools features.
 ### Common Issues
 
 **WebSocket not appearing?**
-- The backend endpoints `/api/preview/:port/websockets` are not implemented in
-  the current backend. The UI will stay empty until those routes are added.
+- Confirm the app actually opens non-HMR websocket connections.
+- Use Refresh or auto-refresh after initiating websocket traffic.
 - Verify it's not HMR (Vite hot reload)
 - Check connection URL matches preview
 - Look for errors in connection status

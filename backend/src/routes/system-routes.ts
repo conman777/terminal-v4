@@ -9,22 +9,33 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
+const PREVIEW_SUBDOMAIN_BASES_SOURCE = process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || '';
+const PREVIEW_SUBDOMAIN_BASES = (PREVIEW_SUBDOMAIN_BASES_SOURCE || 'conordart.com,localhost')
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
 const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'conordart.com';
-const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0.0.1,::1')
+const PREVIEW_PROXY_HOSTS_SOURCE = process.env.PREVIEW_PROXY_HOSTS || '';
+const PREVIEW_PROXY_HOSTS = (PREVIEW_PROXY_HOSTS_SOURCE || 'localhost,127.0.0.1,::1')
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
 type PreviewDefaultMode = 'subdomain-first' | 'adaptive' | 'path-first';
 type PreviewCookiePolicy = 'preserve-upstream' | 'compat-rewrite' | 'force-none';
 type PreviewRewriteScope = 'minimal' | 'hybrid' | 'legacy';
+type PreviewRequirementLevel = 'info' | 'warning';
+
+interface PreviewConfigRequirement {
+  id: string;
+  level: PreviewRequirementLevel;
+  message: string;
+  envVar?: string;
+  recommendedValue?: string;
+}
 
 function parsePreviewDefaultMode(value: string | undefined): PreviewDefaultMode {
-  if (value === 'adaptive' || value === 'path-first') return value;
-  return 'subdomain-first';
+  if (value === 'adaptive' || value === 'path-first' || value === 'subdomain-first') return value;
+  return process.env.NODE_ENV === 'production' ? 'path-first' : 'subdomain-first';
 }
 
 function parsePreviewCookiePolicy(value: string | undefined): PreviewCookiePolicy {
@@ -40,6 +51,46 @@ function parsePreviewRewriteScope(value: string | undefined): PreviewRewriteScop
 const PREVIEW_DEFAULT_MODE = parsePreviewDefaultMode(process.env.PREVIEW_DEFAULT_MODE);
 const PREVIEW_COOKIE_POLICY = parsePreviewCookiePolicy(process.env.PREVIEW_COOKIE_POLICY);
 const PREVIEW_REWRITE_SCOPE = parsePreviewRewriteScope(process.env.PREVIEW_REWRITE_SCOPE);
+const PREVIEW_IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const PREVIEW_UNRESTRICTED = process.env.UNRESTRICTED_PREVIEW !== 'false';
+const PREVIEW_LOCAL_ONLY = process.env.PREVIEW_LOCAL_ONLY === 'true';
+
+function getPreviewConfigRequirements(): PreviewConfigRequirement[] {
+  const requirements: PreviewConfigRequirement[] = [];
+
+  if (PREVIEW_IS_PRODUCTION && PREVIEW_DEFAULT_MODE === 'subdomain-first') {
+    requirements.push({
+      id: 'preview-subdomain-prod',
+      level: 'warning',
+      envVar: 'PREVIEW_DEFAULT_MODE',
+      recommendedValue: 'path-first',
+      message: 'Production is using subdomain-first preview mode. Configure wildcard DNS/TLS for preview-{port} hosts, or set PREVIEW_DEFAULT_MODE=path-first.'
+    });
+  }
+
+  if (PREVIEW_IS_PRODUCTION && !PREVIEW_SUBDOMAIN_BASES_SOURCE && PREVIEW_DEFAULT_MODE !== 'path-first') {
+    requirements.push({
+      id: 'preview-subdomain-bases-unset',
+      level: 'warning',
+      envVar: 'PREVIEW_SUBDOMAIN_BASES',
+      message: 'PREVIEW_SUBDOMAIN_BASES is not set. Default host bases may not match your production domain.'
+    });
+  }
+
+  if (PREVIEW_IS_PRODUCTION && PREVIEW_UNRESTRICTED) {
+    requirements.push({
+      id: 'preview-unrestricted',
+      level: 'info',
+      envVar: 'UNRESTRICTED_PREVIEW',
+      recommendedValue: 'false',
+      message: 'Preview is unrestricted to all ports. For internet-exposed deployments, set UNRESTRICTED_PREVIEW=false unless wide port access is required.'
+    });
+  }
+
+  return requirements;
+}
+
+const PREVIEW_CONFIG_REQUIREMENTS = getPreviewConfigRequirements();
 
 interface StatsHistoryPoint {
   timestamp: number;
@@ -328,6 +379,20 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
   // Start collecting stats history
   startHistoryCollection();
 
+  // Log preview requirements once at startup so production installs are self-diagnosing.
+  for (const requirement of PREVIEW_CONFIG_REQUIREMENTS) {
+    const context = {
+      requirementId: requirement.id,
+      envVar: requirement.envVar,
+      recommendedValue: requirement.recommendedValue
+    };
+    if (requirement.level === 'warning') {
+      app.log.warn(context, `[Preview config] ${requirement.message}`);
+    } else {
+      app.log.info(context, `[Preview config] ${requirement.message}`);
+    }
+  }
+
   // Clean up on server shutdown
   app.addHook('onClose', async () => {
     stopHistoryCollection();
@@ -346,7 +411,13 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       preferPathBased: PREVIEW_DEFAULT_MODE === 'path-first',
       defaultMode: PREVIEW_DEFAULT_MODE,
       cookiePolicy: PREVIEW_COOKIE_POLICY,
-      rewriteScope: PREVIEW_REWRITE_SCOPE
+      rewriteScope: PREVIEW_REWRITE_SCOPE,
+      localOnly: PREVIEW_LOCAL_ONLY,
+      requirements: PREVIEW_CONFIG_REQUIREMENTS,
+      runtime: {
+        platform: process.platform,
+        nodeEnv: process.env.NODE_ENV || 'development'
+      }
     });
   });
 

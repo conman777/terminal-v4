@@ -138,7 +138,8 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
         String(options.cols),
         '-y',
         String(options.rows),
-        options.shell
+        options.shell,
+        ...(options.shellArgs || [])
       ], {
         cwd: options.cwd || process.cwd(),
         env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
@@ -238,7 +239,8 @@ export function spawnTmuxWithPty(
         String(options.cols),
         '-y',
         String(options.rows),
-        options.shell
+        options.shell,
+        ...(options.shellArgs || [])
       ], {
         cwd: options.cwd || process.cwd(),
         env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,

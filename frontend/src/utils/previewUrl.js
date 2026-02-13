@@ -6,6 +6,7 @@ const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
 const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
+const PREVIEW_LOCAL_ONLY_KEY = 'terminal_preview_local_only';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 const PRIVATE_IPV4_PATTERN = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/;
 
@@ -110,6 +111,30 @@ function getPreviewSubdomainBase() {
   return 'localhost';
 }
 
+function getConfiguredPreviewSubdomainBases() {
+  if (typeof window === 'undefined') return [];
+  const configuredBases = new Set();
+  try {
+    const directBase = normalizeHost(localStorage.getItem(PREVIEW_SUBDOMAIN_BASE_KEY) || '');
+    if (directBase) {
+      configuredBases.add(directBase);
+    }
+  } catch {}
+  try {
+    const basesRaw = localStorage.getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
+    if (basesRaw) {
+      const parsed = JSON.parse(basesRaw);
+      if (Array.isArray(parsed)) {
+        for (const host of parsed) {
+          const normalized = normalizeHost(String(host));
+          if (normalized) configuredBases.add(normalized);
+        }
+      }
+    }
+  } catch {}
+  return Array.from(configuredBases);
+}
+
 function getPreviewProxyHosts() {
   if (typeof window === 'undefined') return [];
   try {
@@ -122,6 +147,16 @@ function getPreviewProxyHosts() {
       .filter(Boolean);
   } catch {
     return [];
+  }
+}
+
+function isPreviewLocalOnly() {
+  if (typeof window === 'undefined') return false;
+  try {
+    const stored = localStorage.getItem(PREVIEW_LOCAL_ONLY_KEY);
+    return stored === 'true' || stored === '1' || stored === 'yes';
+  } catch {
+    return false;
   }
 }
 
@@ -261,6 +296,7 @@ export function toPreviewUrl(inputUrl) {
     const canUseLocalSubdomain = uiProtocol === 'http:';
     const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
     const subdomainBase = getEffectiveSubdomainBase();
+    const configuredSubdomainBases = getConfiguredPreviewSubdomainBases();
     const proxyHosts = getPreviewProxyHosts();
     const targetIsLocalPreview = isLocalPreviewTarget(hostname, uiHost, proxyHosts);
     const preferPathBased = shouldPreferPathBased();
@@ -270,7 +306,14 @@ export function toPreviewUrl(inputUrl) {
       const path = parsed.pathname + parsed.search + parsed.hash;
       const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
       const loopbackSubdomainCapable = !uiIsLoopback || isResolvableLoopbackSubdomainBase(subdomainBase);
-      const canUseSubdomain = canUseLocalSubdomain && loopbackSubdomainCapable && (uiIsIp || hasConfiguredSubdomainBase);
+      const normalizedSubdomainBase = normalizeHost(subdomainBase);
+      const subdomainAllowedByBackend = configuredSubdomainBases.length > 0
+        && configuredSubdomainBases.includes(normalizedSubdomainBase);
+      const ipHostSubdomainCapable = !uiIsIp || subdomainAllowedByBackend;
+      const canUseSubdomain = canUseLocalSubdomain
+        && loopbackSubdomainCapable
+        && (uiIsIp || hasConfiguredSubdomainBase)
+        && ipHostSubdomainCapable;
       const shouldUseSubdomain = defaultMode === 'subdomain-first'
         ? canUseSubdomain
         : (!preferPathBased && canUseSubdomain);
@@ -293,6 +336,9 @@ export function toPreviewUrl(inputUrl) {
   try {
     const parsed = new URL(normalizedInput);
     if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      if (isPreviewLocalOnly()) {
+        return null;
+      }
       return withAuthToken(`/api/proxy-external?url=${encodeURIComponent(normalizedInput)}`);
     }
   } catch {

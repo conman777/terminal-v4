@@ -125,6 +125,14 @@ function runMigrations(db: Database.Database): void {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_user_name ON api_key_vault(user_id, key_name);
       `
+    },
+    {
+      name: '011_add_terminal_native_preferences',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN terminal_shell_profile TEXT;
+        ALTER TABLE user_settings ADD COLUMN terminal_fidelity_mode TEXT DEFAULT 'balanced';
+        ALTER TABLE user_settings ADD COLUMN terminal_native_launcher TEXT DEFAULT 'system';
+      `
     }
   ];
 

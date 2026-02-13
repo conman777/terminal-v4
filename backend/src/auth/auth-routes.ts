@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { register, login, refreshTokens, logout } from './auth-service.js';
 import { registerSchema, loginSchema, refreshSchema } from './auth-schemas.js';
 import { ZodError } from 'zod';
+import { clearAllCookies } from '../preview/cookie-store.js';
 
 export function registerAuthRoutes(app: FastifyInstance): void {
   // Register new user
@@ -79,7 +80,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
       return;
     }
     logout(userId);
-    reply.send({ success: true });
+    const clearedPreviewCookiePorts = clearAllCookies();
+    reply.send({ success: true, preview: { clearedCookiePorts: clearedPreviewCookiePorts } });
   });
 
   // Get current user (requires auth)

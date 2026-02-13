@@ -399,14 +399,14 @@ function AppContent() {
 
   // Keep tabOrder in sync: add new sessions, remove deleted ones
   useEffect(() => {
-    const activeIds = new Set(activeSessions.map(s => s.id));
+    const sessionIds = new Set((sessions || []).map(s => s.id));
     setTabOrder(prev => {
-      const existing = prev.filter(id => activeIds.has(id));
-      const newIds = activeSessions.filter(s => !prev.includes(s.id)).map(s => s.id);
+      const existing = prev.filter(id => sessionIds.has(id));
+      const newIds = (sessions || []).filter(s => !prev.includes(s.id)).map(s => s.id);
       if (newIds.length === 0 && existing.length === prev.length) return prev;
       return [...existing, ...newIds];
     });
-  }, [activeSessions]);
+  }, [sessions]);
 
   // Persist tab order to server (debounced to avoid excessive API calls)
   useEffect(() => {
@@ -424,9 +424,15 @@ function AppContent() {
 
   // Ordered sessions respects user drag reorder
   const orderedSessions = useMemo(() => {
-    const map = new Map(activeSessions.map(s => [s.id, s]));
-    return tabOrder.map(id => map.get(id)).filter(Boolean);
-  }, [activeSessions, tabOrder]);
+    const map = new Map((sessions || []).map(s => [s.id, s]));
+    const ordered = tabOrder.map(id => map.get(id)).filter(Boolean);
+    if (ordered.length >= (sessions || []).length) {
+      return ordered;
+    }
+    const existingIds = new Set(ordered.map((session) => session.id));
+    const missing = (sessions || []).filter((session) => !existingIds.has(session.id));
+    return [...ordered, ...missing];
+  }, [sessions, tabOrder]);
 
   const handleReorderSessions = useCallback((newOrder) => {
     setTabOrder(newOrder);
@@ -511,6 +517,36 @@ function AppContent() {
       return true;
     }
   });
+  const [terminalShellProfile, setTerminalShellProfile] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalShellProfile');
+      if (stored === 'cmd' || stored === 'powershell' || stored === 'pwsh' || stored === 'bash' || stored === 'zsh' || stored === 'sh' || stored === 'claude') {
+        return stored;
+      }
+      return 'system';
+    } catch {
+      return 'system';
+    }
+  });
+  const [terminalFidelityMode, setTerminalFidelityMode] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalFidelityMode');
+      return stored === 'native' ? 'native' : 'balanced';
+    } catch {
+      return 'balanced';
+    }
+  });
+  const [terminalNativeLauncher, setTerminalNativeLauncher] = useState(() => {
+    try {
+      const stored = localStorage.getItem('terminalNativeLauncher');
+      if (stored === 'wt' || stored === 'cmd' || stored === 'powershell' || stored === 'pwsh' || stored === 'terminal' || stored === 'x-terminal-emulator') {
+        return stored;
+      }
+      return 'system';
+    } catch {
+      return 'system';
+    }
+  });
   const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
     try {
       const stored = localStorage.getItem('showTabStatusLabels');
@@ -549,6 +585,37 @@ function AppContent() {
             setTerminalWebglEnabled(data.terminalWebglEnabled);
             try {
               localStorage.setItem('terminalWebglEnabled', String(data.terminalWebglEnabled));
+            } catch { /* ignore */ }
+          }
+          if (typeof data.terminalShellProfile === 'string') {
+            setTerminalShellProfile(data.terminalShellProfile);
+            try {
+              localStorage.setItem('terminalShellProfile', data.terminalShellProfile);
+            } catch { /* ignore */ }
+          } else if (data.terminalShellProfile === null) {
+            setTerminalShellProfile('system');
+            try {
+              localStorage.setItem('terminalShellProfile', 'system');
+            } catch { /* ignore */ }
+          }
+          if (data.terminalFidelityMode === 'native' || data.terminalFidelityMode === 'balanced') {
+            setTerminalFidelityMode(data.terminalFidelityMode);
+            try {
+              localStorage.setItem('terminalFidelityMode', data.terminalFidelityMode);
+            } catch { /* ignore */ }
+          }
+          if (
+            data.terminalNativeLauncher === 'wt' ||
+            data.terminalNativeLauncher === 'cmd' ||
+            data.terminalNativeLauncher === 'powershell' ||
+            data.terminalNativeLauncher === 'pwsh' ||
+            data.terminalNativeLauncher === 'terminal' ||
+            data.terminalNativeLauncher === 'x-terminal-emulator' ||
+            data.terminalNativeLauncher === 'system'
+          ) {
+            setTerminalNativeLauncher(data.terminalNativeLauncher);
+            try {
+              localStorage.setItem('terminalNativeLauncher', data.terminalNativeLauncher);
             } catch { /* ignore */ }
           }
           if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
@@ -610,6 +677,49 @@ function AppContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalWebglEnabled: enabled })
     }).catch(e => console.error('Failed to save terminal WebGL setting to server', e));
+  }, []);
+
+  const updateTerminalShellProfile = useCallback((profile) => {
+    setTerminalShellProfile(profile);
+    try {
+      localStorage.setItem('terminalShellProfile', String(profile));
+    } catch (e) {
+      console.error('Failed to save terminal shell profile to localStorage', e);
+    }
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terminalShellProfile: profile })
+    }).catch(e => console.error('Failed to save terminal shell profile to server', e));
+  }, []);
+
+  const updateTerminalFidelityMode = useCallback((mode) => {
+    const nextMode = mode === 'native' ? 'native' : 'balanced';
+    setTerminalFidelityMode(nextMode);
+    try {
+      localStorage.setItem('terminalFidelityMode', nextMode);
+    } catch (e) {
+      console.error('Failed to save terminal fidelity mode to localStorage', e);
+    }
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terminalFidelityMode: nextMode })
+    }).catch(e => console.error('Failed to save terminal fidelity mode to server', e));
+  }, []);
+
+  const updateTerminalNativeLauncher = useCallback((launcher) => {
+    setTerminalNativeLauncher(launcher);
+    try {
+      localStorage.setItem('terminalNativeLauncher', String(launcher));
+    } catch (e) {
+      console.error('Failed to save terminal launcher to localStorage', e);
+    }
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terminalNativeLauncher: launcher })
+    }).catch(e => console.error('Failed to save terminal launcher to server', e));
   }, []);
 
   const updateShowTabStatusLabels = useCallback((enabled) => {
@@ -709,7 +819,11 @@ function AppContent() {
     setShowNewSessionModal(false);
     if (!path) return;
     const selectedAi = NEW_TAB_AI_OPTIONS.find((option) => option.id === aiOptionId) || NEW_TAB_AI_OPTIONS[0];
-    const request = { cwd: path };
+    const request = {
+      cwd: path,
+      shellProfile: terminalShellProfile,
+      fidelityMode: terminalFidelityMode
+    };
     if (selectedAi.command) {
       request.initialCommand = selectedAi.command;
     }
@@ -717,7 +831,7 @@ function AppContent() {
       request.title = selectedAi.title;
     }
     createSession(request);
-  }, [createSession]);
+  }, [createSession, terminalFidelityMode, terminalShellProfile]);
 
   // Keyboard shortcuts (desktop only)
   useKeyboardShortcuts({
@@ -813,6 +927,21 @@ function AppContent() {
     }
   }, [activeSessionId]);
 
+  const handleOpenNativeTerminal = useCallback(async (sessionId = activeSessionId) => {
+    if (!sessionId) return;
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/open-native`, {
+        method: 'POST',
+        body: { launcher: terminalNativeLauncher }
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to open native terminal (${response.status})`);
+      }
+    } catch (error) {
+      console.error('Failed to open native terminal', error);
+    }
+  }, [activeSessionId, terminalNativeLauncher]);
+
   // Handle mobile terminal carousel index change - sync with activeSessionId
   const handleMobileTerminalIndexChange = useCallback((newIndex) => {
     setMobileTerminalIndex(newIndex);
@@ -887,6 +1016,7 @@ function AppContent() {
     orderedSessions,
     onSelectSession: handleSelectSession, onRestoreSession: handleRestoreSession,
     onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
+    onOpenNativeTerminal: handleOpenNativeTerminal,
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
@@ -914,6 +1044,13 @@ function AppContent() {
             onFontSizeChange={updateTerminalFontSize}
             terminalWebglEnabled={terminalWebglEnabled}
             onWebglChange={updateTerminalWebglEnabled}
+            terminalShellProfile={terminalShellProfile}
+            onShellProfileChange={updateTerminalShellProfile}
+            terminalFidelityMode={terminalFidelityMode}
+            onFidelityModeChange={updateTerminalFidelityMode}
+            terminalNativeLauncher={terminalNativeLauncher}
+            onNativeLauncherChange={updateTerminalNativeLauncher}
+            onOpenNativeTerminal={handleOpenNativeTerminal}
             showTabStatusLabels={showTabStatusLabels}
             onTabStatusLabelsChange={updateShowTabStatusLabels}
           />
@@ -1096,6 +1233,7 @@ function AppContent() {
                         onUrlDetected={handleUrlDetected}
                         fontSize={terminalFontSize}
                         webglEnabled={terminalWebglEnabled}
+                        terminalFidelityMode={terminalFidelityMode}
                         sessionActivity={sessionActivity}
                         onSessionBusyChange={handleSessionBusyChange}
                         projectInfo={projectInfo}
@@ -1130,6 +1268,7 @@ function AppContent() {
                           onSessionBusyChange={handleSessionBusyChange}
                           fontSize={terminalFontSize}
                           webglEnabled={terminalWebglEnabled}
+                          terminalFidelityMode={terminalFidelityMode}
                           onUrlDetected={handlePreviewUrlChange}
                           mainTerminalMinimized={mainTerminalMinimized}
                           onToggleMainTerminal={handleToggleMainTerminal}
@@ -1176,6 +1315,7 @@ function AppContent() {
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
+                  terminalFidelityMode={terminalFidelityMode}
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
@@ -1193,6 +1333,7 @@ function AppContent() {
                   onUrlDetected={handleUrlDetected}
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
+                  terminalFidelityMode={terminalFidelityMode}
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   usesTmux={activeClaudeSession?.usesTmux}
@@ -1217,6 +1358,7 @@ function AppContent() {
                   onSessionBusyChange={handleSessionBusyChange}
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
+                  terminalFidelityMode={terminalFidelityMode}
                   onUrlDetected={handlePreviewUrlChange}
                   showStatusLabels={showTabStatusLabels}
                 />

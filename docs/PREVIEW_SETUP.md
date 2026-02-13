@@ -63,10 +63,37 @@ PREVIEW_PROXY_HOSTS=localhost,127.0.0.1,::1
 
 # Optional: lock preview routing back to legacy dev-only ports (3000-9999)
 # UNRESTRICTED_PREVIEW=false
+
+# Optional: disable external URL proxying and allow only VM-local preview targets
+# PREVIEW_LOCAL_ONLY=true
 ```
 
 The frontend reads `/api/system/preview-config` and stores the base in
 localStorage, so the preview URL generator can pick the right host.
+
+## Production Install (Linux/VM) Checklist
+
+For production installs, use one of these modes:
+
+1. **Recommended (simplest): path-based preview**
+   - Set:
+     - `PREVIEW_DEFAULT_MODE=path-first`
+   - Optional hardening:
+     - `UNRESTRICTED_PREVIEW=false`
+   - Result: preview uses `/preview/<port>/...` and does not require wildcard DNS.
+
+2. **Subdomain preview (advanced)**
+   - Set:
+     - `PREVIEW_DEFAULT_MODE=subdomain-first`
+     - `PREVIEW_SUBDOMAIN_BASES=<your-preview-base>`
+   - Example:
+     - `PREVIEW_SUBDOMAIN_BASES=apps.example.com`
+   - Infrastructure requirement:
+     - wildcard DNS and TLS for `preview-*.apps.example.com` routing to Terminal V4.
+
+Runtime note:
+- `/api/system/preview-config` now exposes preview requirements and startup logs
+  warnings when production preview settings are likely incomplete.
 
 ## Common Failure Modes
 

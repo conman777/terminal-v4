@@ -12,6 +12,7 @@ export function MobileTerminalCarousel({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  terminalFidelityMode,
   onScrollDirection,
   onRegisterFocusTerminal,
   onSessionBusyChange
@@ -128,6 +129,7 @@ export function MobileTerminalCarousel({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           webglEnabled={webglEnabled}
+          terminalFidelityMode={terminalFidelityMode}
           usesTmux={currentSession?.usesTmux}
           viewMode={viewMode}
           onScrollDirection={onScrollDirection}

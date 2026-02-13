@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../../utils/api';
 
 /**
  * WebSocketTab Component
@@ -14,47 +15,54 @@ export function WebSocketTab({ port }) {
   const [refreshInterval, setRefreshInterval] = useState(null);
   const [notAvailable, setNotAvailable] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, [port, selectedConnectionId, directionFilter]);
-
-  useEffect(() => {
-    if (refreshInterval && !notAvailable) {
-      const id = setInterval(() => {
-        fetchData();
-      }, refreshInterval);
-      return () => clearInterval(id);
-    }
-  }, [refreshInterval, port, selectedConnectionId, directionFilter, notAvailable]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const params = new URLSearchParams();
       if (selectedConnectionId) params.set('connectionId', selectedConnectionId);
       if (directionFilter !== 'all') params.set('direction', directionFilter);
 
-      const response = await fetch(`/api/preview/${port}/websockets?${params}`);
+      const response = await apiFetch(`/api/preview/${port}/websockets?${params}`);
       if (response.status === 404) {
         setNotAvailable(true);
         return;
       }
-      if (response.ok) {
-        const data = await response.json();
-        setConnections(data.connections);
-        setMessages(data.messages);
+      if (!response.ok) {
+        throw new Error(`WebSocket logs request failed (${response.status})`);
       }
+      const data = await response.json();
+      setConnections(Array.isArray(data.connections) ? data.connections : []);
+      setMessages(Array.isArray(data.messages) ? data.messages : []);
+      setNotAvailable(false);
     } catch (err) {
-      setNotAvailable(true);
+      console.error('Error fetching websocket logs:', err);
     }
-  };
+  }, [directionFilter, port, selectedConnectionId]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
+
+  useEffect(() => {
+    if (!refreshInterval || notAvailable) return;
+    const id = setInterval(() => {
+      void fetchData();
+    }, refreshInterval);
+    return () => clearInterval(id);
+  }, [fetchData, notAvailable, refreshInterval]);
 
   const clearLogs = async () => {
     try {
-      await fetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Failed to clear websocket logs (${response.status})`);
+      }
       setConnections([]);
       setMessages([]);
       setSelectedConnectionId(null);
       setSelectedMessage(null);
+      if (response.status === 404) {
+        setNotAvailable(true);
+      }
     } catch (err) {
       console.error('Error clearing logs:', err);
     }
@@ -109,7 +117,7 @@ export function WebSocketTab({ port }) {
         </div>
         <div className="text-center py-12 text-gray-500">
           <p className="text-lg font-medium mb-2">WebSocket debugging not available</p>
-          <p>The backend endpoints for WebSocket inspection have not been implemented yet.</p>
+          <p>The backend websocket debugging endpoints are unavailable for this preview target.</p>
         </div>
       </div>
     );

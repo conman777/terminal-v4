@@ -11,6 +11,8 @@ const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
 const PREVIEW_COOKIE_POLICY_KEY = 'terminal_preview_cookie_policy';
 const PREVIEW_REWRITE_SCOPE_KEY = 'terminal_preview_rewrite_scope';
+const PREVIEW_LOCAL_ONLY_KEY = 'terminal_preview_local_only';
+const PREVIEW_REQUIREMENTS_KEY = 'terminal_preview_requirements';
 
 export function PreviewProvider({ children }) {
   function sanitizePreviewUrl(value) {
@@ -50,6 +52,7 @@ export function PreviewProvider({ children }) {
   const previewUrlRef = useRef(previewUrl);
   const previewUrlSourceRef = useRef(initialPreviewUrl ? 'user' : 'auto');
   const listeningPortsRef = useRef(new Set());
+  const refreshActivePortsRef = useRef(async () => false);
 
   useEffect(() => {
     previewUrlRef.current = previewUrl;
@@ -94,6 +97,7 @@ export function PreviewProvider({ children }) {
       }
       return true;
     };
+    refreshActivePortsRef.current = fetchAndValidate;
 
     const scheduleNextPoll = (succeeded = true) => {
       if (!isMounted) return;
@@ -127,6 +131,7 @@ export function PreviewProvider({ children }) {
 
     return () => {
       isMounted = false;
+      refreshActivePortsRef.current = async () => false;
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (pollTimer) {
         clearTimeout(pollTimer);
@@ -139,12 +144,13 @@ export function PreviewProvider({ children }) {
     const current = previewUrlRef.current || null;
     if (normalized === current) return;
 
-    // For auto-detected URLs, validate the new port is actually listening
+    // Auto-detected URLs should not be blocked by stale/empty port snapshots.
+    // Trigger a best-effort refresh instead.
     if (source === 'auto' && normalized) {
       const newPort = extractPortFromUrl(normalized);
       const isNewPortListening = newPort && listeningPortsRef.current.has(newPort);
-      if (!isNewPortListening) {
-        return; // Don't accept auto-detected URLs for non-listening ports
+      if (newPort && !isNewPortListening) {
+        void refreshActivePortsRef.current();
       }
     }
 
@@ -251,6 +257,26 @@ export function PreviewProvider({ children }) {
         if (typeof data?.rewriteScope === 'string') {
           try {
             localStorage.setItem(PREVIEW_REWRITE_SCOPE_KEY, data.rewriteScope);
+          } catch {}
+        }
+        if (typeof data?.localOnly === 'boolean') {
+          try {
+            localStorage.setItem(PREVIEW_LOCAL_ONLY_KEY, data.localOnly ? 'true' : 'false');
+          } catch {}
+        }
+        if (Array.isArray(data?.requirements)) {
+          try {
+            localStorage.setItem(PREVIEW_REQUIREMENTS_KEY, JSON.stringify(data.requirements));
+          } catch {}
+          const warnings = data.requirements
+            .filter((item) => item && item.level === 'warning' && typeof item.message === 'string')
+            .map((item) => item.message);
+          if (warnings.length > 0) {
+            console.warn('[Preview config requirements]', warnings.join(' | '));
+          }
+        } else {
+          try {
+            localStorage.removeItem(PREVIEW_REQUIREMENTS_KEY);
           } catch {}
         }
       } catch {

@@ -11,9 +11,11 @@ vi.mock('./api', () => ({
 import { toPathPreviewFallbackUrl, toPreviewUrl } from './previewUrl';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
+const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
+const PREVIEW_LOCAL_ONLY_KEY = 'terminal_preview_local_only';
 
 describe('toPreviewUrl', () => {
   beforeEach(() => {
@@ -92,6 +94,78 @@ describe('toPreviewUrl', () => {
     expect(result).toBe('http://192.168.1.45:8889/app');
   });
 
+  it('falls back to path mode on private-IP UI host when no backend subdomain bases are configured', () => {
+    const originalWindow = window;
+    const fakeWindow = Object.create(window);
+    Object.defineProperty(fakeWindow, 'location', {
+      value: {
+        ...window.location,
+        hostname: '192.168.1.199',
+        port: '3020',
+        protocol: 'http:',
+        origin: 'http://192.168.1.199:3020'
+      }
+    });
+    vi.stubGlobal('window', fakeWindow);
+
+    try {
+      localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+      const result = toPreviewUrl('http://localhost:5173/app');
+      expect(result).toBe('/preview/5173/app');
+    } finally {
+      vi.stubGlobal('window', originalWindow);
+    }
+  });
+
+  it('falls back to path mode when derived IP subdomain base is not in backend allowlist', () => {
+    const originalWindow = window;
+    const fakeWindow = Object.create(window);
+    Object.defineProperty(fakeWindow, 'location', {
+      value: {
+        ...window.location,
+        hostname: '192.168.1.199',
+        port: '3020',
+        protocol: 'http:',
+        origin: 'http://192.168.1.199:3020'
+      }
+    });
+    vi.stubGlobal('window', fakeWindow);
+
+    try {
+      localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+      localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(['conordart.com']));
+      localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, 'conordart.com');
+      const result = toPreviewUrl('http://localhost:5173/app');
+      expect(result).toBe('/preview/5173/app');
+    } finally {
+      vi.stubGlobal('window', originalWindow);
+    }
+  });
+
+  it('uses subdomain mode on private-IP UI host when backend allowlist includes derived base', () => {
+    const originalWindow = window;
+    const fakeWindow = Object.create(window);
+    Object.defineProperty(fakeWindow, 'location', {
+      value: {
+        ...window.location,
+        hostname: '192.168.1.199',
+        port: '3020',
+        protocol: 'http:',
+        origin: 'http://192.168.1.199:3020'
+      }
+    });
+    vi.stubGlobal('window', fakeWindow);
+
+    try {
+      localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+      localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(['192.168.1.199.nip.io']));
+      const result = toPreviewUrl('http://localhost:5173/app');
+      expect(result).toBe('http://preview-5173.192.168.1.199.nip.io:3020/app');
+    } finally {
+      vi.stubGlobal('window', originalWindow);
+    }
+  });
+
   it('keeps private IP URL without explicit port as direct URL', () => {
     const result = toPreviewUrl('http://192.168.1.45/path');
     expect(result).toBe('http://192.168.1.45/path');
@@ -136,5 +210,11 @@ describe('toPreviewUrl', () => {
 
   it('returns null for non-preview host URLs in path fallback helper', () => {
     expect(toPathPreviewFallbackUrl('http://localhost:5173/app')).toBeNull();
+  });
+
+  it('blocks external URL proxying when local-only mode is enabled', () => {
+    localStorage.setItem(PREVIEW_LOCAL_ONLY_KEY, 'true');
+    const result = toPreviewUrl('https://example.com');
+    expect(result).toBeNull();
   });
 });

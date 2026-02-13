@@ -195,6 +195,12 @@ export function TerminalSessionProvider({ children }) {
       if (options.initialCommand) {
         requestBody.initialCommand = options.initialCommand;
       }
+      if (options.shellProfile) {
+        requestBody.shellProfile = options.shellProfile;
+      }
+      if (options.fidelityMode) {
+        requestBody.fidelityMode = options.fidelityMode;
+      }
 
       const response = await apiFetch('/api/terminal', {
         method: 'POST',

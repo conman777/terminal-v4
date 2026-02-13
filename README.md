@@ -82,6 +82,9 @@ terminal-v4/
 - `JWT_SECRET` - JWT signing secret (required in production)
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
+- `PREVIEW_DEFAULT_MODE` - Preview routing mode: `path-first`, `subdomain-first`, or `adaptive` (production default is `path-first`)
+- `PREVIEW_SUBDOMAIN_BASES` - Allowed preview subdomain bases for `preview-{port}.<base>` routing
+- `PREVIEW_PROXY_HOSTS` - Upstream hosts the preview proxy can target (default: `localhost,127.0.0.1,::1`)
 - `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits (use with care on exposed deployments)
 
 ### Default Shell

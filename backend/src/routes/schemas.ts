@@ -6,10 +6,19 @@ export const terminalCreateRequestSchema = z.object({
   rows: z.number().int().positive().max(500).optional(),
   title: z.string().min(1).max(80).optional(),
   shell: z.string().min(1).optional(),
+  shellArgs: z.array(z.string().max(256)).max(20).optional(),
+  shellProfile: z.enum(['system', 'cmd', 'powershell', 'pwsh', 'bash', 'zsh', 'sh', 'claude']).optional(),
+  fidelityMode: z.enum(['balanced', 'native']).optional(),
   initialCommand: z.string().max(1000).optional()
 });
 
 export type TerminalCreateRequestBody = z.infer<typeof terminalCreateRequestSchema>;
+
+export const terminalOpenNativeRequestSchema = z.object({
+  launcher: z.enum(['system', 'wt', 'cmd', 'powershell', 'pwsh', 'terminal', 'x-terminal-emulator']).optional()
+});
+
+export type TerminalOpenNativeRequestBody = z.infer<typeof terminalOpenNativeRequestSchema>;
 
 // Maximum input size: 1MB (reasonable limit for terminal input while allowing large pastes)
 const MAX_TERMINAL_INPUT_SIZE = 1024 * 1024;
@@ -129,3 +138,72 @@ export const threadUpdateRequestSchema = z.object({
 });
 
 export type ThreadUpdateRequestBody = z.infer<typeof threadUpdateRequestSchema>;
+
+const previewRequestIdSchema = z.string().min(1).max(128).regex(/^[a-zA-Z0-9:_-]+$/);
+const previewStorageKeySchema = z.string().min(1).max(256).regex(/^[a-zA-Z0-9_\-\.]+$/);
+const previewStorageValueSchema = z.string().max(100_000);
+
+export const previewEvaluateRequestSchema = z.object({
+  expression: z.string().min(1).max(10_000),
+  requestId: previewRequestIdSchema.optional()
+});
+
+export type PreviewEvaluateRequestBody = z.infer<typeof previewEvaluateRequestSchema>;
+
+export const previewStorageUpdateRequestSchema = z.object({
+  type: z.enum(['localStorage', 'sessionStorage', 'cookies']),
+  operation: z.enum(['set', 'remove', 'clear', 'import']),
+  key: previewStorageKeySchema.optional(),
+  value: previewStorageValueSchema.optional(),
+  entries: z.record(previewStorageKeySchema, previewStorageValueSchema).optional(),
+  requestId: previewRequestIdSchema.optional()
+}).superRefine((value, ctx) => {
+  if (value.operation === 'set') {
+    if (!value.key) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Missing key for set operation', path: ['key'] });
+    }
+    if (value.value === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Missing value for set operation', path: ['value'] });
+    }
+  }
+
+  if (value.operation === 'remove' && !value.key) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Missing key for remove operation', path: ['key'] });
+  }
+
+  if (value.operation === 'import') {
+    const entries = value.entries || {};
+    const entryCount = Object.keys(entries).length;
+    if (entryCount === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Missing entries for import operation', path: ['entries'] });
+    }
+    if (entryCount > 1000) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Too many entries for import operation (max 1000)', path: ['entries'] });
+    }
+  }
+});
+
+export type PreviewStorageUpdateRequestBody = z.infer<typeof previewStorageUpdateRequestSchema>;
+
+const previewPerformanceMetricDataSchema = z.object({}).catchall(z.unknown());
+
+export const previewPerformanceMetricSchema = z.object({
+  type: z.enum(['coreWebVitals', 'loadMetrics', 'runtimeMetrics']),
+  timestamp: z.number().int().positive().optional(),
+  data: previewPerformanceMetricDataSchema
+});
+
+export type PreviewPerformanceMetric = z.infer<typeof previewPerformanceMetricSchema>;
+
+export const previewPerformanceIngestRequestSchema = z.object({
+  metrics: z.array(previewPerformanceMetricSchema).min(1).max(500)
+});
+
+export type PreviewPerformanceIngestRequestBody = z.infer<typeof previewPerformanceIngestRequestSchema>;
+
+export const previewWebSocketQuerySchema = z.object({
+  connectionId: z.string().min(1).max(128).optional(),
+  direction: z.enum(['sent', 'received']).optional()
+});
+
+export type PreviewWebSocketQuery = z.infer<typeof previewWebSocketQuerySchema>;

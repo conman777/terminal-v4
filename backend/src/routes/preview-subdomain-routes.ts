@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import WebSocket from 'ws';
 import { Readable } from 'node:stream';
 import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
-import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
+import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies, getCookieNamesForDeletion } from '../preview/cookie-store.js';
 import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
 import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
 import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocket-interceptor.js';
@@ -358,8 +358,9 @@ const PREVIEW_DEBUG_SCRIPT = `
     } catch (e) {}
   }
 
-  // In path-based preview (/preview/:port), localStorage shares the same origin
-  // as the Terminal UI. Namespace storage keys to avoid clobbering auth tokens.
+  // In path-based preview (/preview/:port), Web Storage shares the same origin
+  // as the Terminal UI. Namespace both localStorage and sessionStorage keys
+  // to avoid clobbering auth/session state outside the preview app.
   if (SHOULD_NAMESPACE_STORAGE && typeof Storage !== 'undefined') {
     (function() {
       var STORAGE_PREFIX = '__preview_' + PORT + '__';
@@ -368,6 +369,16 @@ const PREVIEW_DEBUG_SCRIPT = `
       var originalRemoveItem = Storage.prototype.removeItem;
       var originalClear = Storage.prototype.clear;
       var originalKey = Storage.prototype.key;
+
+      function shouldNamespaceStorage(storage) {
+        if (!storage) return false;
+        if (storage === localStorage) return true;
+        try {
+          return typeof sessionStorage !== 'undefined' && storage === sessionStorage;
+        } catch (e) {
+          return false;
+        }
+      }
 
       function getPrefixedKeys(storage) {
         var keys = [];
@@ -383,28 +394,28 @@ const PREVIEW_DEBUG_SCRIPT = `
       }
 
       Storage.prototype.getItem = function(key) {
-        if (this === localStorage) {
+        if (shouldNamespaceStorage(this)) {
           return originalGetItem.call(this, STORAGE_PREFIX + key);
         }
         return originalGetItem.call(this, key);
       };
 
       Storage.prototype.setItem = function(key, value) {
-        if (this === localStorage) {
+        if (shouldNamespaceStorage(this)) {
           return originalSetItem.call(this, STORAGE_PREFIX + key, value);
         }
         return originalSetItem.call(this, key, value);
       };
 
       Storage.prototype.removeItem = function(key) {
-        if (this === localStorage) {
+        if (shouldNamespaceStorage(this)) {
           return originalRemoveItem.call(this, STORAGE_PREFIX + key);
         }
         return originalRemoveItem.call(this, key);
       };
 
       Storage.prototype.clear = function() {
-        if (this === localStorage) {
+        if (shouldNamespaceStorage(this)) {
           var keys = getPrefixedKeys(this);
           for (var i = 0; i < keys.length; i++) {
             originalRemoveItem.call(this, STORAGE_PREFIX + keys[i]);
@@ -415,7 +426,7 @@ const PREVIEW_DEBUG_SCRIPT = `
       };
 
       Storage.prototype.key = function(index) {
-        if (this === localStorage) {
+        if (shouldNamespaceStorage(this)) {
           var keys = getPrefixedKeys(this);
           return keys[index] || null;
         }
@@ -563,62 +574,6 @@ const PREVIEW_DEBUG_SCRIPT = `
     } catch (e) {}
   }
 
-  var SESSION_STORAGE_KEY = '__preview_session_storage__' + PORT;
-  var sessionSaveTimeout = null;
-
-  function loadSessionStorage() {
-    try {
-      var raw = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (!raw) return;
-      var parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return;
-      Object.keys(parsed).forEach(function(key) {
-        if (sessionStorage.getItem(key) === null) {
-          sessionStorage.setItem(key, parsed[key]);
-        }
-      });
-    } catch (e) {}
-  }
-
-  function saveSessionStorage() {
-    try {
-      var data = {};
-      for (var i = 0; i < sessionStorage.length; i++) {
-        var key = sessionStorage.key(i);
-        if (key) {
-          data[key] = sessionStorage.getItem(key);
-        }
-      }
-      localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(data));
-    } catch (e) {}
-  }
-
-  function scheduleSessionStorageSave() {
-    if (sessionSaveTimeout) clearTimeout(sessionSaveTimeout);
-    sessionSaveTimeout = setTimeout(saveSessionStorage, 200);
-  }
-
-  function hookSessionStorageMethod(methodName) {
-    var original = sessionStorage[methodName];
-    if (typeof original !== 'function') return;
-    sessionStorage[methodName] = function() {
-      var result = original.apply(this, arguments);
-      scheduleSessionStorageSave();
-      return result;
-    };
-  }
-
-  try {
-    if (typeof sessionStorage !== 'undefined' && typeof localStorage !== 'undefined') {
-      loadSessionStorage();
-      hookSessionStorageMethod('setItem');
-      hookSessionStorageMethod('removeItem');
-      hookSessionStorageMethod('clear');
-      window.addEventListener('pagehide', saveSessionStorage);
-      window.addEventListener('beforeunload', saveSessionStorage);
-    }
-  } catch (e) {}
-
   var storageSyncTimeout = null;
 
   function readStorageSnapshot(storage) {
@@ -637,6 +592,27 @@ const PREVIEW_DEBUG_SCRIPT = `
   }
 
   function sendStorageSync() {
+    function readCookiesSnapshot() {
+      var cookies = {};
+      try {
+        var cookieString = document.cookie || '';
+        if (!cookieString) return cookies;
+        cookieString.split(';').forEach(function(part) {
+          var idx = part.indexOf('=');
+          if (idx <= 0) return;
+          var cookieKey = part.slice(0, idx).trim();
+          var cookieValue = part.slice(idx + 1).trim();
+          if (!cookieKey) return;
+          try {
+            cookies[cookieKey] = decodeURIComponent(cookieValue);
+          } catch (e) {
+            cookies[cookieKey] = cookieValue;
+          }
+        });
+      } catch (e) {}
+      return cookies;
+    }
+
     try {
       var localSnapshot = typeof localStorage !== 'undefined' ? readStorageSnapshot(localStorage) : null;
       var sessionSnapshot = typeof sessionStorage !== 'undefined' ? readStorageSnapshot(sessionStorage) : null;
@@ -644,7 +620,8 @@ const PREVIEW_DEBUG_SCRIPT = `
         type: 'preview-storage-sync',
         port: PORT,
         local: localSnapshot,
-        session: sessionSnapshot
+        session: sessionSnapshot,
+        cookies: readCookiesSnapshot()
       }, '*');
     } catch (e) {}
   }
@@ -678,33 +655,11 @@ const PREVIEW_DEBUG_SCRIPT = `
     } catch (e) {}
   }
 
-  function applyStorageSnapshot(storage, data) {
-    if (!data || typeof data !== 'object') return;
-    try {
-      Object.keys(data).forEach(function(key) {
-        if (storage.getItem(key) === null) {
-          storage.setItem(key, data[key]);
-        }
-      });
-    } catch (e) {}
-  }
-
   try {
     if (typeof window !== 'undefined') {
-      window.addEventListener('message', function(event) {
-        var payload = event.data || {};
-        if (payload.type !== 'preview-storage-restore' || String(payload.port) !== String(PORT)) {
-          return;
-        }
-        if (typeof localStorage !== 'undefined') {
-          applyStorageSnapshot(localStorage, payload.local);
-        }
-        if (typeof sessionStorage !== 'undefined') {
-          applyStorageSnapshot(sessionStorage, payload.session);
-        }
-      });
-
-      window.parent.postMessage({ type: 'preview-storage-request', port: PORT }, '*');
+      // Keep preview behavior aligned with native browser storage semantics:
+      // report snapshots for DevTools, but do not rehydrate storage from parent.
+      sendStorageSync();
 
       if (typeof localStorage !== 'undefined') {
         hookStorage(localStorage);
@@ -752,29 +707,40 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   function rewritePreviewUrl(rawUrl) {
     try {
-      if (typeof rawUrl === 'string' && rawUrl.startsWith('/api/preview')) {
+      var urlValue = rawUrl;
+      if (typeof urlValue !== 'string') {
+        try {
+          urlValue = String(rawUrl);
+        } catch (e) {
+          return rawUrl;
+        }
+      }
+      if (!urlValue) {
         return rawUrl;
       }
-      if (PREVIEW_BASE_PATH && isRootRelative(rawUrl)) {
-        return PREVIEW_ORIGIN + withPreviewBasePath(rawUrl);
+      if (urlValue.startsWith('/api/preview')) {
+        return urlValue;
       }
-      if (!/^(https?|wss?):/i.test(rawUrl) && !rawUrl.startsWith('//')) {
-        return rawUrl;
+      if (PREVIEW_BASE_PATH && isRootRelative(urlValue)) {
+        return PREVIEW_ORIGIN + withPreviewBasePath(urlValue);
       }
-      var parsed = new URL(rawUrl, PREVIEW_ORIGIN);
+      if (!/^(https?|wss?):/i.test(urlValue) && !urlValue.startsWith('//')) {
+        return urlValue;
+      }
+      var parsed = new URL(urlValue, PREVIEW_ORIGIN);
       if (parsed.pathname && parsed.pathname.startsWith('/api/preview')) {
-        return rawUrl;
+        return urlValue;
       }
       if (PREVIEW_BASE_PATH && parsed.origin === PREVIEW_ORIGIN) {
         var sameOriginPath = parsed.pathname || '/';
         if (sameOriginPath.startsWith('/api/preview')) {
-          return rawUrl;
+          return urlValue;
         }
         return PREVIEW_ORIGIN + withPreviewBasePath(sameOriginPath) + parsed.search + parsed.hash;
       }
       var hostname = parsed.hostname.toLowerCase();
-      if (!isLocalHost(hostname)) return rawUrl;
-      if (parsed.port && parsed.port !== String(PORT)) return rawUrl;
+      if (!isLocalHost(hostname)) return urlValue;
+      if (parsed.port && parsed.port !== String(PORT)) return urlValue;
       return PREVIEW_ORIGIN + withPreviewBasePath(parsed.pathname) + parsed.search + parsed.hash;
     } catch (e) {
       return rawUrl;
@@ -918,6 +884,8 @@ const PREVIEW_DEBUG_SCRIPT = `
       url = rewrittenUrl;
       if (typeof input === 'string') {
         input = rewrittenUrl;
+      } else if (typeof URL !== 'undefined' && input instanceof URL) {
+        input = rewrittenUrl;
       } else if (input && input instanceof Request) {
         input = new Request(rewrittenUrl, input);
       }
@@ -991,6 +959,32 @@ const PREVIEW_DEBUG_SCRIPT = `
       throw err;
     });
   };
+
+  // EventSource rewrite for localhost/dev URLs (SSE streams)
+  var OrigEventSource = window.EventSource;
+  if (OrigEventSource) {
+    window.EventSource = function(url, options) {
+      var rewrittenUrl = rewritePreviewUrl(url);
+      if (options !== undefined) {
+        return new OrigEventSource(rewrittenUrl, options);
+      }
+      return new OrigEventSource(rewrittenUrl);
+    };
+    for (var esKey in OrigEventSource) {
+      window.EventSource[esKey] = OrigEventSource[esKey];
+    }
+    window.EventSource.prototype = OrigEventSource.prototype;
+  }
+
+  // sendBeacon rewrite for localhost/dev URLs
+  if (navigator && typeof navigator.sendBeacon === 'function') {
+    try {
+      var origSendBeacon = navigator.sendBeacon.bind(navigator);
+      navigator.sendBeacon = function(url, data) {
+        return origSendBeacon(rewritePreviewUrl(url), data);
+      };
+    } catch (e) {}
+  }
 
   // WebSocket rewrite for local dev URLs (HMR, live reload, etc.)
   var OrigWebSocket = window.WebSocket;
@@ -1103,6 +1097,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   function captureStorage() {
     var localStorage_data = {};
     var sessionStorage_data = {};
+    var cookies_data = {};
 
     try {
       for (var i = 0; i < localStorage.length; i++) {
@@ -1118,15 +1113,171 @@ const PREVIEW_DEBUG_SCRIPT = `
       }
     } catch (e) {}
 
+    try {
+      var cookieString = document.cookie || '';
+      if (cookieString) {
+        cookieString.split(';').forEach(function(part) {
+          var idx = part.indexOf('=');
+          if (idx <= 0) return;
+          var cookieKey = part.slice(0, idx).trim();
+          var cookieValue = part.slice(idx + 1).trim();
+          if (cookieKey) {
+            try {
+              cookies_data[cookieKey] = truncateBody(decodeURIComponent(cookieValue));
+            } catch (e) {
+              cookies_data[cookieKey] = truncateBody(cookieValue);
+            }
+          }
+        });
+      }
+    } catch (e) {}
+
     queueLog({
       type: 'storage',
       localStorage: localStorage_data,
       sessionStorage: sessionStorage_data,
+      cookies: cookies_data,
       timestamp: Date.now()
     });
   }
 
   window.__captureStorage = captureStorage;
+
+  function serializeEvaluationValue(value) {
+    if (value === undefined) return 'undefined';
+    if (value === null) return 'null';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+    if (typeof value === 'function') return value.toString();
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (e) {
+      try {
+        return String(value);
+      } catch (stringifyError) {
+        return '[Unserializable value]';
+      }
+    }
+  }
+
+  function sendStorageResult(payload, success, errorMessage) {
+    try {
+      window.parent.postMessage({
+        type: 'preview-storage-result',
+        requestId: payload.requestId || null,
+        port: PORT,
+        storageType: payload.storageType || payload.type || null,
+        operation: payload.operation || null,
+        key: payload.key || null,
+        success: success,
+        error: errorMessage || null,
+        timestamp: Date.now()
+      }, '*');
+    } catch (e) {}
+  }
+
+  function applyStorageOperation(payload) {
+    var storageType = payload.storageType || payload.type;
+    var operation = payload.operation;
+    var key = payload.key;
+    var value = payload.value;
+    var entries = payload.entries;
+
+    try {
+      if (storageType === 'localStorage' || storageType === 'sessionStorage') {
+        var storage = storageType === 'sessionStorage' ? sessionStorage : localStorage;
+        if (operation === 'set') {
+          if (!key) throw new Error('Missing key for set operation');
+          storage.setItem(String(key), value === undefined ? '' : String(value));
+        } else if (operation === 'remove') {
+          if (!key) throw new Error('Missing key for remove operation');
+          storage.removeItem(String(key));
+        } else if (operation === 'clear') {
+          storage.clear();
+        } else if (operation === 'import') {
+          if (!entries || typeof entries !== 'object') throw new Error('Missing entries for import operation');
+          Object.keys(entries).forEach(function(entryKey) {
+            storage.setItem(String(entryKey), String(entries[entryKey]));
+          });
+        } else {
+          throw new Error('Unsupported storage operation');
+        }
+      } else if (storageType === 'cookies') {
+        if (operation === 'set') {
+          if (!key) throw new Error('Missing key for set operation');
+          document.cookie = String(key) + '=' + encodeURIComponent(value === undefined ? '' : String(value)) + '; path=/';
+        } else if (operation === 'remove') {
+          if (!key) throw new Error('Missing key for remove operation');
+          document.cookie = String(key) + '=; Max-Age=0; path=/';
+        } else if (operation === 'clear') {
+          document.cookie.split(';').forEach(function(part) {
+            var cookieName = part.split('=')[0];
+            if (cookieName) {
+              document.cookie = cookieName.trim() + '=; Max-Age=0; path=/';
+            }
+          });
+        } else if (operation === 'import') {
+          if (!entries || typeof entries !== 'object') throw new Error('Missing entries for import operation');
+          Object.keys(entries).forEach(function(entryKey) {
+            document.cookie = String(entryKey) + '=' + encodeURIComponent(String(entries[entryKey])) + '; path=/';
+          });
+        } else {
+          throw new Error('Unsupported storage operation');
+        }
+      } else {
+        throw new Error('Unsupported storage type');
+      }
+      sendStorageSync();
+      captureStorage();
+      sendStorageResult(payload, true, null);
+    } catch (error) {
+      var message = error && error.message ? error.message : String(error);
+      sendStorageResult(payload, false, message);
+    }
+  }
+
+  function evaluateInPreview(payload) {
+    var expression = typeof payload.expression === 'string' ? payload.expression : '';
+    var requestId = payload.requestId || null;
+
+    function sendEvaluateResult(success, resultValue, valueType, errorMessage) {
+      try {
+        window.parent.postMessage({
+          type: 'preview-evaluate-result',
+          requestId: requestId,
+          port: PORT,
+          expression: expression,
+          success: success,
+          result: resultValue,
+          valueType: valueType,
+          error: errorMessage || null,
+          timestamp: Date.now()
+        }, '*');
+      } catch (e) {}
+    }
+
+    if (!expression) {
+      sendEvaluateResult(false, null, null, 'Missing expression');
+      return;
+    }
+
+    try {
+      var value = (0, eval)(expression);
+      if (value && typeof value.then === 'function') {
+        value.then(function(resolvedValue) {
+          sendEvaluateResult(true, serializeEvaluationValue(resolvedValue), typeof resolvedValue, null);
+        }).catch(function(error) {
+          var message = error && error.message ? error.message : String(error);
+          sendEvaluateResult(false, null, null, message);
+        });
+        return;
+      }
+      sendEvaluateResult(true, serializeEvaluationValue(value), typeof value, null);
+    } catch (error) {
+      var message = error && error.message ? error.message : String(error);
+      sendEvaluateResult(false, null, null, message);
+    }
+  }
 
   // Capture storage on load and changes
   window.addEventListener('load', function() {
@@ -1137,11 +1288,18 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   // Listen for commands from parent
   window.addEventListener('message', function(event) {
-    if (event.data && event.data.type === 'preview-capture-dom') {
+    if (event.source && event.source !== window.parent) return;
+    var payload = event.data || {};
+    if (payload.port && String(payload.port) !== String(PORT)) return;
+
+    if (payload.type === 'preview-capture-dom') {
       window.__captureDOM();
-    }
-    if (event.data && event.data.type === 'preview-capture-storage') {
+    } else if (payload.type === 'preview-capture-storage') {
       window.__captureStorage();
+    } else if (payload.type === 'preview-storage-operation') {
+      applyStorageOperation(payload);
+    } else if (payload.type === 'preview-evaluate') {
+      evaluateInPreview(payload);
     }
   });
 
@@ -1161,16 +1319,27 @@ const PERFORMANCE_MONITOR_SCRIPT = `
 
   function getPreviewContext() {
     const hostMatch = location.hostname.match(/^preview-(\\d+)\\.(.+)$/i);
-    if (hostMatch) return { port: hostMatch[1] };
+    if (hostMatch) {
+      return { port: hostMatch[1], mainDomain: hostMatch[2], basePath: '' };
+    }
     const rawPath = (window.__previewGetRawPathname && window.__previewGetRawPathname()) || location.pathname;
     const pathMatch = rawPath.match(/^\\/preview\\/(\\d+)(\\/|$)/);
-    if (pathMatch) return { port: pathMatch[1] };
+    if (pathMatch) {
+      return { port: pathMatch[1], mainDomain: location.host, basePath: '/preview/' + pathMatch[1] };
+    }
     return null;
   }
 
   const ctx = getPreviewContext();
   if (!ctx) return;
   const PORT = ctx.port;
+  const MAIN_DOMAIN = ctx.mainDomain;
+  const PREVIEW_BASE_PATH = ctx.basePath;
+  const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
+  const API_BASE = (PREVIEW_BASE_PATH || MAIN_IS_LOCAL)
+    ? location.origin
+    : location.protocol + '//code.' + MAIN_DOMAIN;
+  const API_URL = API_BASE + '/api/preview/' + PORT + '/performance';
 
   const metricsBuffer = [];
   let flushTimer = null;
@@ -1179,10 +1348,11 @@ const PERFORMANCE_MONITOR_SCRIPT = `
     if (!metrics || metrics.length === 0) return;
 
     // Send to backend for storage
-    fetch('/api/preview/' + PORT + '/performance', {
+    fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metrics: metrics })
+      body: JSON.stringify({ metrics: metrics }),
+      keepalive: true
     }).catch(function(err) {
       console.debug('[perf-monitor] Failed to send metrics:', err);
     });
@@ -1646,6 +1816,57 @@ function rewriteLocalAbsoluteUrl(
   }
 }
 
+function toVirtualPreviewPath(pathname: string, previewBasePath: string): string {
+  if (!previewBasePath) {
+    return pathname || '/';
+  }
+  if (pathname === previewBasePath) {
+    return '/';
+  }
+  if (pathname.startsWith(`${previewBasePath}/`)) {
+    const stripped = pathname.slice(previewBasePath.length);
+    return stripped.length > 0 ? stripped : '/';
+  }
+  return pathname || '/';
+}
+
+function rewriteForwardedOriginHeader(
+  value: string,
+  port: number,
+  previewOrigin: string
+): string {
+  if (value === 'null') {
+    return value;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.origin !== previewOrigin) {
+      return value;
+    }
+    return `http://localhost:${port}`;
+  } catch {
+    return value;
+  }
+}
+
+function rewriteForwardedRefererHeader(
+  value: string,
+  port: number,
+  previewOrigin: string,
+  previewBasePath: string
+): string {
+  try {
+    const parsed = new URL(value);
+    if (parsed.origin !== previewOrigin) {
+      return value;
+    }
+    const virtualPath = toVirtualPreviewPath(parsed.pathname, previewBasePath);
+    return `http://localhost:${port}${virtualPath}${parsed.search}${parsed.hash}`;
+  } catch {
+    return value;
+  }
+}
+
 function getWebSocketProtocols(request: FastifyRequest): string[] | undefined {
   const protocolHeader = request.headers['sec-websocket-protocol'];
   if (typeof protocolHeader !== 'string') return undefined;
@@ -1694,8 +1915,10 @@ function proxyWebSocketConnection(
   previewHost: string
 ): void {
   const forwardHeaders = buildWebSocketForwardHeaders(request, port, previewHost);
+  const socketProtocols = getWebSocketProtocols(request);
   let upstreamWs: WebSocket | null = null;
   let connected = false;
+  let upstreamClosed = false;
   let connectIndex = 0;
 
   // Whitelist HMR/dev tool patterns to avoid logging noise
@@ -1706,8 +1929,13 @@ function proxyWebSocketConnection(
     targetPath.includes('/_hmr') ||
     targetPath.startsWith('/api/preview/');
 
-  // WebSocket logging removed
-  const connectionId = null;
+  const connectionId = !isDevToolWs
+    ? logWebSocketConnection(port, {
+      url: targetPath,
+      status: 'connecting',
+      protocols: socketProtocols
+    })
+    : null;
 
   const closeBoth = (code: number, reason: string) => {
     if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
@@ -1724,7 +1952,15 @@ function proxyWebSocketConnection(
 
       // Log sent messages (only non-dev tools)
       if (!isDevToolWs && connectionId) {
-        const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+        const size = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(String(data));
+        const dataStr = isBinary ? `<Buffer ${size} bytes>` : String(data);
+        logWebSocketMessage(port, {
+          connectionId,
+          direction: 'sent',
+          format: isBinary ? 'binary' : 'text',
+          size,
+          data: dataStr
+        });
       }
     }
   });
@@ -1740,7 +1976,15 @@ function proxyWebSocketConnection(
 
         // Log received messages (only non-dev tools)
         if (!isDevToolWs && connectionId) {
-          const dataStr = isBinary ? `<Buffer ${(data as Buffer).byteLength} bytes>` : String(data);
+          const size = Buffer.isBuffer(data) ? data.byteLength : Buffer.byteLength(String(data));
+          const dataStr = isBinary ? `<Buffer ${size} bytes>` : String(data);
+          logWebSocketMessage(port, {
+            connectionId,
+            direction: 'received',
+            format: isBinary ? 'binary' : 'text',
+            size,
+            data: dataStr
+          });
         }
       }
     });
@@ -1749,6 +1993,12 @@ function proxyWebSocketConnection(
       connected = true;
       // Update connection status
       if (!isDevToolWs && connectionId) {
+        logWebSocketConnection(port, {
+          id: connectionId,
+          url: targetPath,
+          status: 'connected',
+          protocols: socketProtocols
+        });
       }
     });
 
@@ -1764,14 +2014,28 @@ function proxyWebSocketConnection(
 
       // Log error
       if (!isDevToolWs && connectionId) {
+        logWebSocketConnection(port, {
+          id: connectionId,
+          url: targetPath,
+          status: 'error',
+          error: message
+        });
       }
 
       closeBoth(1011, 'Preview WebSocket upstream error');
     });
 
-    targetWs.on('close', () => {
+    targetWs.on('close', (code: number, reasonBuffer: Buffer) => {
+      upstreamClosed = true;
       // Log closure
       if (!isDevToolWs && connectionId) {
+        logWebSocketConnection(port, {
+          id: connectionId,
+          url: targetPath,
+          status: 'closed',
+          closeCode: Number.isFinite(code) ? code : undefined,
+          closeReason: reasonBuffer?.toString() || undefined
+        });
       }
 
       if (connected && socket.readyState === WebSocket.OPEN) {
@@ -1786,13 +2050,30 @@ function proxyWebSocketConnection(
   }
   connectToUpstream(PREVIEW_PROXY_HOSTS[connectIndex++]);
 
-  socket.on('close', () => {
+  socket.on('close', (code: number, reasonBuffer: Buffer) => {
+    if (!isDevToolWs && connectionId && !upstreamClosed) {
+      logWebSocketConnection(port, {
+        id: connectionId,
+        url: targetPath,
+        status: 'closed',
+        closeCode: Number.isFinite(code) ? code : undefined,
+        closeReason: reasonBuffer?.toString() || undefined
+      });
+    }
     if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
       upstreamWs.close();
     }
   });
 
   socket.on('error', () => {
+    if (!isDevToolWs && connectionId) {
+      logWebSocketConnection(port, {
+        id: connectionId,
+        url: targetPath,
+        status: 'error',
+        error: 'Preview WebSocket client socket error'
+      });
+    }
     if (upstreamWs && upstreamWs.readyState === WebSocket.OPEN) {
       upstreamWs.close();
     }
@@ -1908,6 +2189,60 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       return reply;
     }
 
+    // Intercept /__clear_session__ to expire browser cookies for this preview subdomain
+    if (requestPath === '/__clear_session__') {
+      const deletionHeaders: string[] = [];
+      const seen = new Set<string>();
+
+      // Parse cookie names from the browser's request header — the browser tells
+      // us exactly which cookies it has, regardless of server-side store state.
+      const browserCookieHeader = request.headers.cookie;
+      if (typeof browserCookieHeader === 'string') {
+        for (const pair of browserCookieHeader.split(';')) {
+          const name = pair.split('=')[0]?.trim();
+          if (name && !seen.has(name)) {
+            seen.add(name);
+            deletionHeaders.push(`${name}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`);
+            // Also try with the preview path prefix for path-based preview
+            if (isPathPreview) {
+              deletionHeaders.push(`${name}=; Path=/preview/${port}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`);
+            }
+          }
+        }
+      }
+
+      // Also include cookies from server-side store
+      for (const { name, path } of getCookieNamesForDeletion(port)) {
+        const key = `${name}:${path}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          deletionHeaders.push(`${name}=; Path=${path}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`);
+        }
+      }
+
+      // Clear the server-side store
+      clearCookies(port);
+
+      // Set deletion cookies on the response
+      if (deletionHeaders.length > 0) {
+        reply.header('Set-Cookie', deletionHeaders);
+      }
+
+      reply.header('Content-Type', 'text/html; charset=utf-8');
+      reply.header('Cache-Control', 'no-store');
+      // Include JavaScript to clear non-HttpOnly cookies via document.cookie
+      reply.code(200).send(`<!DOCTYPE html><html><body><p>Session cleared</p><script>
+document.cookie.split(';').forEach(function(c){
+  var name=c.split('=')[0].trim();
+  if(name){
+    document.cookie=name+'=;Max-Age=0;Path=/';
+    document.cookie=name+'=;Max-Age=0;Path=/;Expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  }
+});
+</script></body></html>`);
+      return reply;
+    }
+
     try {
       // Build headers to forward
       const forwardHeaders: Record<string, string> = {};
@@ -1919,30 +2254,43 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       // Set correct host for the target server
       forwardHeaders['host'] = `localhost:${port}`;
 
-      // Set X-Forwarded headers for apps that need to know the original request details
-      const originalHost = rawHost || originHost || request.headers.host || `preview-${port}.${PREVIEW_SUBDOMAIN_BASE}`;
-      forwardHeaders['x-forwarded-host'] = originalHost;
-      const forwardedProto = isSecureRequest(request) ? 'https' : 'http';
-      forwardHeaders['x-forwarded-proto'] = forwardedProto;
-      if (isPathPreview) {
-        const hostPort = typeof request.headers.host === 'string' && request.headers.host.includes(':')
-          ? request.headers.host.split(':')[1]
-          : (forwardedProto === 'https' ? '443' : '80');
-        forwardHeaders['x-forwarded-port'] = hostPort;
-      } else {
-        forwardHeaders['x-forwarded-port'] = forwardedProto === 'https' ? '443' : '80';
-      }
+      // Normalize forwarded metadata to the upstream app origin for compatibility.
+      // Many frameworks use these headers for CSRF and host validation, so keeping
+      // them aligned with Host/Origin/Referer avoids preview-only auth mismatches.
+      forwardHeaders['x-forwarded-host'] = `localhost:${port}`;
+      forwardHeaders['x-forwarded-proto'] = 'http';
+      forwardHeaders['x-forwarded-port'] = String(port);
       forwardHeaders['x-forwarded-for'] = request.ip || '127.0.0.1';
 
-      // Inject server-side stored cookies (browser-like cookie jar)
-      const cookiePath = new URL(requestPath, `http://localhost:${port}`).pathname;
-      const storedCookies = getCookieHeader(port, cookiePath);
-      if (storedCookies) {
-        // Merge with any cookies from the request (prefer browser cookies)
-        const existingCookies = forwardHeaders['cookie'] || '';
-        forwardHeaders['cookie'] = existingCookies
-          ? mergeCookieHeaders(existingCookies, storedCookies)
-          : storedCookies;
+      // Normalize request metadata to the app's virtual origin so upstream
+      // CSRF/origin checks behave like direct localhost browser access.
+      const originHeader = forwardHeaders['origin'];
+      if (typeof originHeader === 'string') {
+        forwardHeaders['origin'] = rewriteForwardedOriginHeader(originHeader, port, previewOrigin);
+      }
+      const refererHeader = forwardHeaders['referer'];
+      if (typeof refererHeader === 'string') {
+        forwardHeaders['referer'] = rewriteForwardedRefererHeader(
+          refererHeader,
+          port,
+          previewOrigin,
+          previewBasePath
+        );
+      }
+
+      // Inject server-side cookie jar for subdomain preview only.
+      // Path-based preview already has first-party browser cookie behavior, and
+      // merging persisted server cookies there can resurrect stale auth sessions.
+      if (!isPathPreview) {
+        const cookiePath = new URL(requestPath, `http://localhost:${port}`).pathname;
+        const storedCookies = getCookieHeader(port, cookiePath);
+        if (storedCookies) {
+          // Merge with any cookies from the request (prefer browser cookies)
+          const existingCookies = forwardHeaders['cookie'] || '';
+          forwardHeaders['cookie'] = existingCookies
+            ? mergeCookieHeaders(existingCookies, storedCookies)
+            : storedCookies;
+        }
       }
 
       // Buffer request body for non-GET requests (onRequest runs before body parsing)
@@ -2097,7 +2445,10 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
           rewrittenCookies = rewriteSetCookieHeaders(setCookieHeaders, rewriteOptions);
         }
-        // Store cookies server-side for browser-like behavior in iframe
+        // Store cookies server-side for both preview modes.
+        // For subdomain preview, stored cookies are injected into upstream requests.
+        // For path-based preview, cookies are only stored so the clear-session
+        // endpoint knows which cookie names to expire (no injection occurs).
         storeCookies(port, rewrittenCookies);
         // Forward rewritten cookies to browser for client-side access
         reply.header('set-cookie', rewrittenCookies);
@@ -2131,7 +2482,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           try {
             const resolved = new URL(location, `${previewOrigin}${previewBasePath}${requestPath}`);
             if (resolved.origin === previewOrigin) {
-              finalLocation = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+              const normalizedPath = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+              finalLocation = prefixPreviewBasePath(normalizedPath, previewBasePath);
             }
           } catch {
             // Keep original location
@@ -2543,8 +2895,36 @@ html[data-preview-force-anim="1"] :is(
 </style>`;
           // Only inject inspector script when explicitly requested via __inspect=1 parameter (lazy injection)
           const inspectorScriptTag = inspectModeEnabled ? '<script>' + INSPECTOR_SCRIPT + '</script>' : '';
+
+          // For path-based preview, inject a script that rewrites client-side
+          // fetch/XHR calls so absolute paths like /api/auth/signout get
+          // routed through the preview proxy instead of hitting Terminal V4.
+          const pathRewriteScript = isPathPreview && previewBasePath ? `<script>(function(){
+var P="${previewBasePath}";
+var _fetch=window.fetch;
+window.fetch=function(u,o){
+  if(typeof u==='string'&&u.startsWith('/')&&!u.startsWith(P+'/')&&!u.startsWith('/api/preview')&&!u.startsWith('/api/terminal')&&!u.startsWith('/api/auth')&&!u.startsWith('/api/state')&&!u.startsWith('/api/settings')){
+    u=P+u;
+  }else if(u instanceof Request){
+    var url=new URL(u.url);
+    if(url.origin===location.origin&&url.pathname.startsWith('/')&&!url.pathname.startsWith(P+'/')&&!url.pathname.startsWith('/api/preview')&&!url.pathname.startsWith('/api/terminal')&&!url.pathname.startsWith('/api/auth')&&!url.pathname.startsWith('/api/state')&&!url.pathname.startsWith('/api/settings')){
+      u=new Request(P+url.pathname+url.search+url.hash,u);
+    }
+  }
+  return _fetch.call(this,u,o);
+};
+var _open=XMLHttpRequest.prototype.open;
+XMLHttpRequest.prototype.open=function(m,u){
+  if(typeof u==='string'&&u.startsWith('/')&&!u.startsWith(P+'/')&&!u.startsWith('/api/preview')&&!u.startsWith('/api/terminal')&&!u.startsWith('/api/auth')&&!u.startsWith('/api/state')&&!u.startsWith('/api/settings')){
+    arguments[1]=P+u;
+  }
+  return _open.apply(this,arguments);
+};
+})();</script>` : '';
+
           const injectedScripts =
             (useLegacyPreviewFixes ? backdropFixCSS + animationFixCSS : '') +
+            pathRewriteScript +
             PREVIEW_DEBUG_SCRIPT +
             (includePerformanceMonitor ? PERFORMANCE_MONITOR_SCRIPT : '') +
             inspectorScriptTag;

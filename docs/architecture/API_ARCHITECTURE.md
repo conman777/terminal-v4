@@ -73,8 +73,14 @@ Session state notes:
 | DELETE | `/api/preview/:port/proxy-logs` | Yes | Clear proxy logs |
 | GET | `/api/preview/active-ports` | Yes | List active preview ports |
 | GET | `/api/preview/:port/storage` | Yes | Request storage snapshot (local/session/cookies) |
-| POST | `/api/preview/:port/storage` | Yes | Queue storage update (set/remove/clear/import) |
-| POST | `/api/preview/:port/evaluate` | Yes | Queue JS evaluation in preview context |
+| POST | `/api/preview/:port/storage` | Yes | Validate/authorize storage operation request |
+| POST | `/api/preview/:port/evaluate` | Yes | Validate/authorize JS evaluation request |
+| POST | `/api/preview/:port/performance` | Public | Receive injected performance metric batches |
+| GET | `/api/preview/:port/performance` | Yes | Read stored performance metrics |
+| DELETE | `/api/preview/:port/performance` | Yes | Clear stored performance metrics |
+| WS | `/api/preview/:port/performance/stream` | Yes | Stream live performance updates |
+| GET | `/api/preview/:port/websockets` | Yes | Read websocket connection/message logs |
+| DELETE | `/api/preview/:port/websockets` | Yes | Clear websocket logs |
 | POST | `/api/preview/:port/logs` | Public | Receive injected client logs |
 | GET | `/api/preview/:port/logs` | Public | Read preview logs |
 | DELETE | `/api/preview/:port/logs` | Yes | Clear preview logs |

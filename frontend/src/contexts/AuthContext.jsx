@@ -2,8 +2,25 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens } from '../utils/auth';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+const PREVIEW_STORAGE_KEY = 'terminal_preview_storage_v1';
+const PREVIEW_LOGOUT_EPOCH_KEY = 'terminal_preview_logout_epoch_v1';
 
 const AuthContext = createContext(null);
+
+function resetPreviewRuntimeStateOnLogout() {
+  try {
+    const logoutEpoch = Date.now();
+    localStorage.removeItem(PREVIEW_STORAGE_KEY);
+    localStorage.setItem(PREVIEW_LOGOUT_EPOCH_KEY, String(logoutEpoch));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('terminal-preview-runtime-reset', {
+        detail: { reason: 'logout', logoutEpoch }
+      }));
+    }
+  } catch {
+    // Best-effort cleanup only
+  }
+}
 
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(() => getUser());
@@ -164,6 +181,7 @@ export function AuthProvider({ children }) {
       // Ignore logout errors
     } finally {
       clearTokens();
+      resetPreviewRuntimeStateOnLogout();
       setUserState(null);
     }
   }, []);

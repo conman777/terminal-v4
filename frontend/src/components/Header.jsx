@@ -23,7 +23,7 @@ export function Header({
   const {
     activeSessions, inactiveSessions, activeSessionId,
     orderedSessions,
-    onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession,
+    onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession, onOpenNativeTerminal,
     onReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
@@ -46,6 +46,7 @@ export function Header({
     return (
       <MobileHeader
         activeSessions={activeSessions}
+        orderedSessions={orderedSessions}
         inactiveSessions={inactiveSessions}
         activeSessionId={activeSessionId}
         onSelectSession={onSelectSession}
@@ -53,6 +54,7 @@ export function Header({
         onCreateSession={onCreateSession}
         onRenameSession={onRenameSession}
         onCloseSession={onCloseSession}
+        onOpenNativeTerminal={onOpenNativeTerminal}
         onOpenSettings={onOpenSettings}
         onOpenApiSettings={() => setShowApiSettings(true)}
         onOpenBrowserSettings={() => {}} // Handle if needed
@@ -172,6 +174,7 @@ export function Header({
             onCreateSession={onCreateSession}
             onCloseSession={onCloseSession}
             onRenameSession={onRenameSession}
+            onOpenNativeTerminal={onOpenNativeTerminal}
             onReorderSessions={onReorderSessions}
             inHeader
             showStatusLabels={showTabStatusLabels}

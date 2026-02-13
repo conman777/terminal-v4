@@ -10,25 +10,25 @@ Phase 5 describes three DevTools features for the preview system:
 2. **WebSocket Debugging** - Inspect WebSocket connections and messages
 3. **Browser Settings** - Configure browser session timeouts, limits, and quality settings
 
-## Current Status (2026-01)
+## Current Status (2026-02)
 
 **Implemented**
 - Preview logs + proxy logs (Network/Console tabs) in `backend/src/routes/preview-logs-routes.ts`
   and `backend/src/routes/preview-api-routes.ts`.
 - Storage/evaluate endpoints for the Storage and Console tabs in
   `backend/src/routes/preview-api-routes.ts`.
+- Performance metrics ingestion/query/clear endpoints and live stream.
+- WebSocket connection/message query + clear endpoints and proxy capture store.
 
-**Not yet wired in the backend**
-- Performance metrics endpoints used by `frontend/src/components/devtools/PerformanceTab.jsx`.
-- WebSocket debug endpoints used by `frontend/src/components/devtools/WebSocketTab.jsx`.
+**Still pending**
 - Browser Settings endpoints used by `frontend/src/components/settings/BrowserSettings.jsx`.
 
 ## Performance Monitoring
 
 ### Architecture
 
-The frontend UI is present, and the preview subdomain injects a metrics script,
-but the backend endpoints are not implemented yet.
+The frontend UI is present, preview pages inject a metrics script, and backend
+routes now ingest/query/stream performance metrics.
 
 - **Client-side injection script** (`PERFORMANCE_MONITOR_SCRIPT` in
   `backend/src/routes/preview-subdomain-routes.ts`)
@@ -37,10 +37,10 @@ but the backend endpoints are not implemented yet.
 - **Frontend UI** (`frontend/src/components/devtools/PerformanceTab.jsx`)
   - Fetches `/api/preview/:port/performance`
   - Subscribes to `/api/preview/:port/performance/stream`
-- **Backend TODO**
-  - Add in-memory storage + trimming
-  - Add GET/DELETE `/api/preview/:port/performance`
-  - Add WS `/api/preview/:port/performance/stream`
+- **Backend routes**
+  - POST `/api/preview/:port/performance`
+  - GET/DELETE `/api/preview/:port/performance`
+  - WS `/api/preview/:port/performance/stream`
 
 ### Metrics Tracked
 
@@ -108,14 +108,14 @@ The monitoring script is designed to be lightweight:
 
 ### Architecture
 
-The WebSocket Debugger UI exists, but the backend routes are not implemented.
+The WebSocket Debugger UI is backed by server-side capture + query routes.
 
 - **Frontend UI** (`frontend/src/components/devtools/WebSocketTab.jsx`)
   - Fetches `/api/preview/:port/websockets`
   - Clears with `DELETE /api/preview/:port/websockets`
-- **Backend TODO**
-  - Implement a connection/message store
-  - Add GET/DELETE `/api/preview/:port/websockets`
+- **Backend routes**
+  - GET `/api/preview/:port/websockets`
+  - DELETE `/api/preview/:port/websockets`
 
 ### Features
 

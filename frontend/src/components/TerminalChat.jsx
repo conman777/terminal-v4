@@ -41,7 +41,7 @@ const TERMINAL_THEMES = {
   }
 };
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onRegisterReconnect, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, terminalFidelityMode = 'balanced', onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onRegisterReconnect, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -61,8 +61,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   );
   const performanceMode = true;
   const USE_FRAMED_PROTOCOL = true;
-  const MAX_PENDING_WRITE_CHARS = 1_000_000;
-  const MAX_MESSAGE_QUEUE = 500;
+  const resolvedFidelityMode = terminalFidelityMode === 'native' ? 'native' : 'balanced';
+  const MAX_PENDING_WRITE_CHARS = resolvedFidelityMode === 'native' ? 4_000_000 : 1_000_000;
+  const MAX_MESSAGE_QUEUE = resolvedFidelityMode === 'native' ? 2000 : 500;
+  const RESIZE_DEBOUNCE_MS = resolvedFidelityMode === 'native' ? 50 : 100;
+  const MIN_INCREMENTAL_RESYNC_GAP_MS = resolvedFidelityMode === 'native' ? 400 : 1000;
   const DROP_NOTICE_INTERVAL_MS = 5000;
   const LARGE_PASTE_THRESHOLD = 5000;
   const { activeSessionId, sessions, restoreSession, registerTerminalSender, unregisterTerminalSender } = useTerminalSession();
@@ -1461,7 +1464,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const scheduleIncrementalResync = (delay = 150) => {
         if (disposed) return;
         const now = Date.now();
-        if (now - lastIncrementalResyncAt < 1000) return;
+        if (now - lastIncrementalResyncAt < MIN_INCREMENTAL_RESYNC_GAP_MS) return;
         if (incrementalResyncTimer) return;
         incrementalResyncTimer = setTimeout(() => {
           incrementalResyncTimer = null;
@@ -2014,8 +2017,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (disposed) return;
         if (term._isComposing && term._isComposing()) return;
 
-        const isQueryResponse = /^\x1b\[[\?>\d;]*[cn]$/.test(data) || /^\x1b\]/.test(data);
-        if (isQueryResponse) return;
+        // Legacy mode keeps minimal query filtering to reduce protocol chatter from older clients.
+        if (resolvedFidelityMode !== 'native') {
+          const isLegacyQueryResponse = /^\x1b\[\?[0-9;]*[cn]$/.test(data);
+          if (isLegacyQueryResponse) return;
+        }
 
         exitCopyModeIfActive();
         markUserInput();
@@ -2043,7 +2049,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           }).catch((error) => {
             console.error('Failed to send resize:', error);
           });
-        }, 100);
+        }, RESIZE_DEBOUNCE_MS);
       });
 
       const VIEWPORT_JITTER_THRESHOLD = 8;
@@ -2245,7 +2251,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, onUrlDetected, isMobile]);
+  }, [sessionId, onUrlDetected, isMobile, terminalFidelityMode]);
 
   useEffect(() => {
     const term = xtermRef.current;
@@ -2314,7 +2320,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (fitSignal === undefined || fitSignal === null) return;
     if (!fitAddonRef.current || !xtermRef.current) return;
-    scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
+    scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
+    // Follow-up pass after layout settles to reduce canvas/link-layer artifacts.
+    const settleTimer = setTimeout(() => {
+      scheduleViewportRefresh({ delay: 0, fit: true, preserveBottom: true, clearAtlas: true });
+    }, 180);
+    return () => clearTimeout(settleTimer);
   }, [fitSignal, scheduleViewportRefresh]);
 
   useEffect(() => {

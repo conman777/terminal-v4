@@ -18,6 +18,7 @@ function formatTime(timestamp) {
 }
 
 const PREVIEW_STORAGE_KEY = 'terminal_preview_storage_v1';
+const PREVIEW_LOGOUT_EPOCH_KEY = 'terminal_preview_logout_epoch_v1';
 const PREVIEW_STORAGE_MAX_BYTES = 200 * 1024;
 const MOBILE_SPLIT_ENABLED_KEY = 'preview_mobile_split_enabled_v1';
 const MOBILE_VIEW_MODE_KEY = 'preview_mobile_view_mode_v1';
@@ -130,7 +131,27 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
-export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal, showStatusLabels = false }) {
+function parseEpoch(value) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function readPreviewLogoutEpoch() {
+  try {
+    return parseEpoch(localStorage.getItem(PREVIEW_LOGOUT_EPOCH_KEY));
+  } catch {
+    return 0;
+  }
+}
+
+function createPreviewRequestId(prefix = 'preview') {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, terminalFidelityMode = 'balanced', onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal, showStatusLabels = false }) {
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
     if (typeof window === 'undefined') return 3020;
@@ -214,6 +235,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const toolsMenuRef = useRef(null);
   const skipUrlSyncRef = useRef(false);
   const lastSyncedUrlRef = useRef(normalizePreviewUrl(url || ''));
+  const pendingEvaluateRef = useRef(new Map());
+  const pendingStorageRef = useRef(new Map());
 
   // Browser split view state (desktop) - enabled by default
   const [browserSplitEnabled, setBrowserSplitEnabled] = useState(!isMobile);
@@ -441,27 +464,59 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [previewPort, isDocumentVisible]);
 
   const handleClearCookies = useCallback(async () => {
-    if (!previewPort) return;
+    if (!previewPort || !baseIframeSrc) return;
     try {
-      // Capture iframe src before async to prevent stale state updates
       const currentIframeSrc = baseIframeSrc;
-      const token = getAccessToken();
-      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-      await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
 
-      // Only update state if iframe src hasn't changed during the async operation
-      if (currentIframeSrc === baseIframeSrcRef.current) {
+      // Build the clear-session URL on the same origin/path so the browser
+      // processes the Set-Cookie deletion headers for the correct domain.
+      let clearUrl;
+      try {
+        const parsed = new URL(baseIframeSrc, window.location.origin);
+        // Preserve path-based preview prefix (e.g. /preview/3000/)
+        const pathMatch = parsed.pathname.match(/^(\/preview\/\d+)\//);
+        parsed.pathname = pathMatch ? `${pathMatch[1]}/__clear_session__` : '/__clear_session__';
+        parsed.search = '';
+        clearUrl = parsed.toString();
+      } catch {
+        clearUrl = null;
+      }
+
+      if (clearUrl) {
+        // Load the clear-session page in the iframe — this makes the browser
+        // receive Set-Cookie headers with Max-Age=0 from the preview subdomain,
+        // actually deleting the cookies in the browser's cookie jar.
+        setIsLoading(true);
+        setError(null);
+        setLogs([]);
+        setProxyLogs([]);
+        setIframeKey(k => k + 1);
+        setIframeSrc(clearUrl);
         setHasCookies(false);
-        // Refresh the preview to apply cleared cookies
-        if (baseIframeSrc) {
-          setIsLoading(true);
-          setError(null);
-          setLogs([]);
-          setProxyLogs([]);
-          const cacheBuster = `_cb=${Date.now()}`;
-          const separator = baseIframeSrc.includes('?') ? '&' : '?';
-          setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
-        }
+
+        // After a short delay, reload the actual app page
+        setTimeout(() => {
+          if (currentIframeSrc === baseIframeSrcRef.current) {
+            setIframeKey(k => k + 1);
+            const cacheBuster = `_cb=${Date.now()}`;
+            const separator = currentIframeSrc.includes('?') ? '&' : '?';
+            setIframeSrc(`${currentIframeSrc}${separator}${cacheBuster}`);
+          }
+        }, 500);
+      } else {
+        // Fallback: just clear server-side and hard reload
+        const token = getAccessToken();
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
+        setHasCookies(false);
+        setIsLoading(true);
+        setError(null);
+        setLogs([]);
+        setProxyLogs([]);
+        setIframeKey(k => k + 1);
+        const cacheBuster = `_cb=${Date.now()}`;
+        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
       }
     } catch (err) {
       console.error('Failed to clear cookies:', err);
@@ -711,15 +766,32 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
         return;
       }
+      const currentIframeSrc = baseIframeSrcRef.current || iframeSrc;
+      if (currentIframeSrc) {
+        try {
+          const expectedOrigin = new URL(currentIframeSrc, window.location.origin).origin;
+          if (event.origin && event.origin !== 'null' && event.origin !== expectedOrigin) {
+            return;
+          }
+        } catch {
+          // Ignore origin parsing issues for malformed URLs.
+        }
+      }
+
+      const pushLogEntry = (entry) => {
+        setLogs((prev) => [...prev.slice(-199), {
+          id: Date.now() + Math.random(),
+          ...entry
+        }]);
+      };
 
       if (event.data?.type === 'preview-console') {
         const { level, message, timestamp } = event.data;
-        setLogs(prev => [...prev.slice(-199), { id: Date.now() + Math.random(), level, message, timestamp, type: 'console' }]);
+        pushLogEntry({ level, message, timestamp, type: 'console' });
       } else if (event.data?.type === 'preview-error') {
         // Capture runtime errors with full details like Chrome DevTools
         const { message, filename, lineno, colno, stack, timestamp } = event.data;
-        setLogs(prev => [...prev.slice(-199), {
-          id: Date.now() + Math.random(),
+        pushLogEntry({
           level: 'error',
           message,
           timestamp,
@@ -728,7 +800,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           lineno,
           colno,
           stack
-        }]);
+        });
       } else if (event.data?.type === 'preview-element-selected') {
         const element = event.data.element;
         setSelectedElement(null);
@@ -764,15 +836,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const requestedPort = parseInt(event.data.port, 10);
         if (!requestedPort || requestedPort !== previewPort) return;
         const allStorage = readPreviewStorage();
-        const stored = allStorage[requestedPort] || {};
-        const localSnapshot = normalizeStorageSnapshot(stored.local);
-        const sessionSnapshot = normalizeStorageSnapshot(stored.session);
+        const logoutEpoch = readPreviewLogoutEpoch();
+        if (allStorage[requestedPort]) {
+          delete allStorage[requestedPort];
+          writePreviewStorage(allStorage);
+        }
+        // Preserve native browser semantics across apps: do not rehydrate iframe
+        // storage from parent-side snapshots, which can resurrect stale auth state.
         if (iframeRef.current?.contentWindow) {
           iframeRef.current.contentWindow.postMessage({
             type: 'preview-storage-restore',
             port: requestedPort,
-            local: localSnapshot,
-            session: sessionSnapshot
+            local: {},
+            session: {},
+            snapshotEpoch: 0,
+            logoutEpoch
           }, '*');
         }
       } else if (event.data?.type === 'preview-storage-sync') {
@@ -780,14 +858,61 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         if (!syncPort || syncPort !== previewPort) return;
         const localSnapshot = normalizeStorageSnapshot(event.data.local);
         const sessionSnapshot = normalizeStorageSnapshot(event.data.session);
+        const cookieSnapshot = normalizeStorageSnapshot(event.data.cookies);
         setStorageData(prev => ({
           ...prev,
           localStorage: localSnapshot,
-          sessionStorage: sessionSnapshot
+          sessionStorage: sessionSnapshot,
+          cookies: cookieSnapshot
         }));
         const allStorage = readPreviewStorage();
-        allStorage[syncPort] = { local: localSnapshot, session: sessionSnapshot };
+        allStorage[syncPort] = {
+          local: localSnapshot,
+          session: sessionSnapshot,
+          epoch: Date.now()
+        };
         writePreviewStorage(allStorage);
+      } else if (event.data?.type === 'preview-storage-result') {
+        const { requestId, success, error: errorMessage, storageType, operation, key, timestamp } = event.data;
+        if (requestId && pendingStorageRef.current.has(requestId)) {
+          const pending = pendingStorageRef.current.get(requestId);
+          pendingStorageRef.current.delete(requestId);
+          clearTimeout(pending.timeoutId);
+          if (success) {
+            pending.resolve(event.data);
+          } else {
+            pending.reject(new Error(errorMessage || 'Storage operation failed'));
+          }
+        }
+        const opText = `${operation || 'operation'} ${key ? `"${key}"` : ''}`.trim();
+        pushLogEntry({
+          type: 'console',
+          level: success ? 'info' : 'error',
+          message: success
+            ? `[storage] ${storageType || 'storage'} ${opText} completed`
+            : `[storage] ${storageType || 'storage'} ${opText} failed: ${errorMessage || 'Unknown error'}`,
+          timestamp: timestamp || Date.now()
+        });
+      } else if (event.data?.type === 'preview-evaluate-result') {
+        const { requestId, success, expression, result, valueType, error: errorMessage, timestamp } = event.data;
+        if (requestId && pendingEvaluateRef.current.has(requestId)) {
+          const pending = pendingEvaluateRef.current.get(requestId);
+          pendingEvaluateRef.current.delete(requestId);
+          clearTimeout(pending.timeoutId);
+          if (success) {
+            pending.resolve(event.data);
+          } else {
+            pending.reject(new Error(errorMessage || 'Evaluation failed'));
+          }
+        }
+        pushLogEntry({
+          type: 'console',
+          level: success ? 'info' : 'error',
+          message: success
+            ? `[repl] ${expression || ''}\n=> ${result} (${valueType || 'unknown'})`
+            : `[repl] ${expression || ''}\n=> Error: ${errorMessage || 'Unknown error'}`,
+          timestamp: timestamp || Date.now()
+        });
       } else if (event.data?.type === 'preview-send-to-terminal') {
         if (event.data.element) {
           void sendElementToActiveTerminal(event.data.element);
@@ -796,7 +921,36 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [inspectMode, onUrlChange, previewPort, sendElementToActiveTerminal, url]);
+  }, [iframeSrc, inspectMode, onUrlChange, previewPort, sendElementToActiveTerminal, url]);
+
+  useEffect(() => {
+    const handlePreviewRuntimeReset = () => {
+      setStorageData({ localStorage: {}, sessionStorage: {}, cookies: {} });
+      if (!previewPort) return;
+      const allStorage = readPreviewStorage();
+      if (!allStorage[previewPort]) return;
+      delete allStorage[previewPort];
+      writePreviewStorage(allStorage);
+    };
+    window.addEventListener('terminal-preview-runtime-reset', handlePreviewRuntimeReset);
+    return () => window.removeEventListener('terminal-preview-runtime-reset', handlePreviewRuntimeReset);
+  }, [previewPort]);
+
+  useEffect(() => {
+    return () => {
+      for (const pending of pendingEvaluateRef.current.values()) {
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error('Evaluation request cancelled'));
+      }
+      pendingEvaluateRef.current.clear();
+
+      for (const pending of pendingStorageRef.current.values()) {
+        clearTimeout(pending.timeoutId);
+        pending.reject(new Error('Storage request cancelled'));
+      }
+      pendingStorageRef.current.clear();
+    };
+  }, []);
 
   // Track if user scrolled away from bottom in logs
   const handleLogsScroll = useCallback(() => {
@@ -880,46 +1034,80 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handleUpdateStorage = useCallback(async (storageType, operation, key, value) => {
     if (!previewPort) return;
+    if (!iframeRef.current?.contentWindow) return;
 
     try {
-      await apiFetch(`/api/preview/${previewPort}/storage`, {
+      const requestId = createPreviewRequestId('storage');
+      const response = await apiFetch(`/api/preview/${previewPort}/storage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: storageType, operation, key, value })
+        body: JSON.stringify({ type: storageType, operation, key, value, requestId })
+      });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({ error: 'Storage update request failed' }));
+        throw new Error(errorPayload.error || 'Storage update request failed');
+      }
+
+      const completion = new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          pendingStorageRef.current.delete(requestId);
+          reject(new Error('Storage operation timed out'));
+        }, 15000);
+        pendingStorageRef.current.set(requestId, { resolve, reject, timeoutId });
       });
 
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({
-          type: 'preview-storage-operation',
-          storageType,
-          operation,
-          key,
-          value
-        }, '*');
-      }
+      iframeRef.current.contentWindow.postMessage({
+        type: 'preview-storage-operation',
+        port: previewPort,
+        requestId,
+        storageType,
+        operation,
+        key,
+        value
+      }, '*');
+
+      await completion;
     } catch (error) {
       console.error('Storage operation failed:', error);
+      throw error;
     }
   }, [previewPort]);
 
   const handleEvaluate = useCallback(async (expression) => {
     if (!previewPort) return;
+    if (!iframeRef.current?.contentWindow) return;
 
     try {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage({
-          type: 'preview-evaluate',
-          expression
-        }, '*');
-      }
-
-      await apiFetch(`/api/preview/${previewPort}/evaluate`, {
+      const requestId = createPreviewRequestId('eval');
+      const response = await apiFetch(`/api/preview/${previewPort}/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expression })
+        body: JSON.stringify({ expression, requestId })
       });
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({ error: 'Evaluation request failed' }));
+        throw new Error(errorPayload.error || 'Evaluation request failed');
+      }
+
+      const completion = new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          pendingEvaluateRef.current.delete(requestId);
+          reject(new Error('Evaluation timed out'));
+        }, 15000);
+        pendingEvaluateRef.current.set(requestId, { resolve, reject, timeoutId });
+      });
+
+      iframeRef.current.contentWindow.postMessage({
+        type: 'preview-evaluate',
+        port: previewPort,
+        requestId,
+        expression
+      }, '*');
+
+      return await completion;
     } catch (error) {
       console.error('Evaluation failed:', error);
+      throw error;
     }
   }, [previewPort]);
 
@@ -1122,6 +1310,20 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setIsLoading(true);
       setError(null);
       setLogs([]);
+      const cacheBuster = `_cb=${Date.now()}`;
+      const separator = baseIframeSrc.includes('?') ? '&' : '?';
+      setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+    }
+  }, [baseIframeSrc]);
+
+  const [iframeKey, setIframeKey] = useState(0);
+
+  const handleHardRefresh = useCallback(() => {
+    if (baseIframeSrc) {
+      setIsLoading(true);
+      setError(null);
+      setLogs([]);
+      setIframeKey(k => k + 1);
       const cacheBuster = `_cb=${Date.now()}`;
       const separator = baseIframeSrc.includes('?') ? '&' : '?';
       setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
@@ -2087,6 +2289,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         }
       }
 
+      // Cmd/Ctrl + Shift + R: Hard reload preview
+      if (isCmdOrCtrl && e.shiftKey && e.key === 'r') {
+        e.preventDefault();
+        handleHardRefresh();
+        return;
+      }
+
       // Cmd/Ctrl + R: Refresh preview
       if (isCmdOrCtrl && e.key === 'r') {
         e.preventDefault();
@@ -2146,7 +2355,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     // Use document.addEventListener to avoid duplicate listeners
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isMobile, inspectMode, selectedElement, showLogs, showStyleEditor, showKeyboardHelp, activeSessions, handleRefresh, handleToggleInspect, handleToggleTerminalSplit, handleToggleMobileSplit]);
+  }, [isMobile, inspectMode, selectedElement, showLogs, showStyleEditor, showKeyboardHelp, activeSessions, handleRefresh, handleHardRefresh, handleToggleInspect, handleToggleTerminalSplit, handleToggleMobileSplit]);
 
   // Auto-expand logs when errors appear
   useEffect(() => {
@@ -2260,6 +2469,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const desktopVisiblePorts = useMemo(() => {
     return uniqueFrontendPorts;
   }, [uniqueFrontendPorts]);
+  const previewTerminalOwnsSize = useMemo(() => {
+    if (!selectedTerminalSession) return false;
+    // When preview terminal is visible, prioritize it for PTY sizing so the
+    // embedded terminal does not inherit stale dimensions from the main pane.
+    if (browserSplitEnabled || mobileViewMode === 'split' || mobileViewMode === 'terminal') {
+      return true;
+    }
+    return Boolean(mainTerminalMinimized || selectedTerminalSession !== activeSessionId);
+  }, [activeSessionId, browserSplitEnabled, mainTerminalMinimized, mobileViewMode, selectedTerminalSession]);
   const mobileVisiblePorts = useMemo(() => {
     const query = mobilePortSearch.trim().toLowerCase();
     if (!query) return mobileListeningPorts;
@@ -2407,6 +2625,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 </div>
               )}
               <iframe
+                key={iframeKey}
                 ref={iframeRef}
                 src={iframeSrc}
                 className="preview-iframe"
@@ -2526,6 +2745,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   viewportHeight={null}
                   fontSize={fontSize}
                   webglEnabled={webglEnabled}
+                  terminalFidelityMode={terminalFidelityMode}
+                  syncPtySize={previewTerminalOwnsSize}
+                  isPrimary={previewTerminalOwnsSize}
                   fitSignal={previewTerminalFitToken}
                   onUrlDetected={onUrlDetected || (() => {})}
                   usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
@@ -2590,8 +2812,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {displayUrl}
             </button>
           )}
-          {/* Cookie clear button - only shown when cookies exist */}
-          {previewPort && hasCookies && (
+          {/* Cookie clear button - always shown when preview is active */}
+          {previewPort && (
             <button
               type="button"
               className="preview-floating-btn preview-cookie-btn-mobile"
@@ -3085,6 +3307,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <button
                 type="button"
                 className="preview-mobile-tools-item"
+                onClick={() => { handleHardRefresh(); setShowMobileToolsMenu(false); }}
+                disabled={!iframeSrc}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 4 23 10 17 10" />
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                  <line x1="1" y1="1" x2="23" y2="23" strokeOpacity="0.4" />
+                </svg>
+                <span>Hard Reload</span>
+              </button>
+              <button
+                type="button"
+                className="preview-mobile-tools-item"
                 onClick={() => { handleOpenExternal(); setShowMobileToolsMenu(false); }}
                 disabled={!iframeSrc}
               >
@@ -3107,7 +3342,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <span>Console</span>
                 {totalLogCount > 0 && <span className="preview-mobile-tools-count">{totalLogCount}</span>}
               </button>
-              {previewPort && hasCookies && (
+              {previewPort && (
                 <button
                   type="button"
                   className="preview-mobile-tools-item"
@@ -3144,6 +3379,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         onBack={handleBack}
         onForward={handleForward}
         onRefresh={handleRefresh}
+        onHardRefresh={handleHardRefresh}
         historyIndex={historyIndex}
         historyStackLength={historyStack.length}
         isLoading={isLoading}
@@ -3289,6 +3525,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   </div>
                 )}
                 <iframe
+                  key={iframeKey}
                   ref={iframeRef}
                   src={iframeSrc}
                   className="preview-iframe"
@@ -3386,7 +3623,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     viewportHeight={null}
                     fontSize={previewTerminalFontSize}
                     webglEnabled={webglEnabled}
-                    syncPtySize={mainTerminalMinimized}
+                    terminalFidelityMode={terminalFidelityMode}
+                    syncPtySize={previewTerminalOwnsSize}
+                    isPrimary={previewTerminalOwnsSize}
                     fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
@@ -3462,6 +3701,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>I</kbd> <span>Toggle Inspector</span></div>
                 <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>K</kbd> <span>Toggle Terminal</span></div>
                 <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>R</kbd> <span>Refresh Preview</span></div>
+                <div className="shortcut"><kbd>⌘/Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> <span>Hard Reload</span></div>
                 <div className="shortcut"><kbd>Esc</kbd> <span>Close Inspector/Logs</span></div>
               </div>
               <div className="shortcut-group">

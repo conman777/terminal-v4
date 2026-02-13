@@ -1,7 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MetricCard } from './shared/MetricCard';
+import { apiFetch } from '../../utils/api';
+import { getAccessToken } from '../../utils/auth';
 
 const MAX_METRICS = 1000;
+const MAX_RECONNECT_DELAY_MS = 10000;
+const BASE_RECONNECT_DELAY_MS = 1000;
+const EMPTY_METRICS = {
+  coreWebVitals: [],
+  loadMetrics: [],
+  runtimeMetrics: []
+};
 
 /**
  * Limit array size to prevent unbounded growth
@@ -17,87 +26,148 @@ const limitArraySize = (arr, newItems, maxSize) => {
  * Displays performance metrics including Core Web Vitals, load metrics, and runtime metrics
  */
 export function PerformanceTab({ port }) {
-  const [metrics, setMetrics] = useState({
-    coreWebVitals: [],
-    loadMetrics: [],
-    runtimeMetrics: []
-  });
+  const [metrics, setMetrics] = useState(EMPTY_METRICS);
   const [isLive, setIsLive] = useState(false);
   const [notAvailable, setNotAvailable] = useState(false);
   const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
+  const reconnectAttemptRef = useRef(0);
+
+  const applyMetrics = useCallback((incomingMetrics, replace = false) => {
+    const incoming = incomingMetrics || EMPTY_METRICS;
+    const incomingCore = Array.isArray(incoming.coreWebVitals) ? incoming.coreWebVitals : [];
+    const incomingLoad = Array.isArray(incoming.loadMetrics) ? incoming.loadMetrics : [];
+    const incomingRuntime = Array.isArray(incoming.runtimeMetrics) ? incoming.runtimeMetrics : [];
+
+    setMetrics((prev) => {
+      if (replace) {
+        return {
+          coreWebVitals: incomingCore.slice(-MAX_METRICS),
+          loadMetrics: incomingLoad.slice(-MAX_METRICS),
+          runtimeMetrics: incomingRuntime.slice(-MAX_METRICS)
+        };
+      }
+      return {
+        coreWebVitals: limitArraySize(prev.coreWebVitals, incomingCore, MAX_METRICS),
+        loadMetrics: limitArraySize(prev.loadMetrics, incomingLoad, MAX_METRICS),
+        runtimeMetrics: limitArraySize(prev.runtimeMetrics, incomingRuntime, MAX_METRICS)
+      };
+    });
+  }, []);
+
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const response = await apiFetch(`/api/preview/${port}/performance`);
+      if (response.status === 404) {
+        setNotAvailable(true);
+        setIsLive(false);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch performance metrics (${response.status})`);
+      }
+      const data = await response.json();
+      applyMetrics(data.metrics, true);
+      setNotAvailable(false);
+    } catch (err) {
+      console.error('Error fetching performance metrics:', err);
+    }
+  }, [applyMetrics, port]);
+
+  const clearMetrics = useCallback(async () => {
+    try {
+      const response = await apiFetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Failed to clear performance metrics (${response.status})`);
+      }
+      setMetrics(EMPTY_METRICS);
+      if (response.status === 404) {
+        setNotAvailable(true);
+        setIsLive(false);
+      }
+    } catch (err) {
+      console.error('Error clearing metrics:', err);
+    }
+  }, [port]);
 
   // Fetch initial metrics
   useEffect(() => {
-    fetchMetrics();
-  }, [port]);
+    void fetchMetrics();
+  }, [fetchMetrics]);
 
   // WebSocket for live updates
   useEffect(() => {
     if (!isLive || notAvailable) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream`;
+    let isDisposed = false;
+    let ws = null;
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'performance-update' && data.metrics) {
-          setMetrics((prev) => ({
-            coreWebVitals: limitArraySize(prev.coreWebVitals, data.metrics.coreWebVitals, MAX_METRICS),
-            loadMetrics: limitArraySize(prev.loadMetrics, data.metrics.loadMetrics, MAX_METRICS),
-            runtimeMetrics: limitArraySize(prev.runtimeMetrics, data.metrics.runtimeMetrics, MAX_METRICS)
-          }));
-        }
-      } catch (err) {
-        console.error('Error parsing WebSocket message:', err);
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
 
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-      setIsLive(false);
+    const scheduleReconnect = () => {
+      if (isDisposed || !isLive) return;
+      clearReconnectTimer();
+      reconnectAttemptRef.current += 1;
+      const delay = Math.min(
+        MAX_RECONNECT_DELAY_MS,
+        BASE_RECONNECT_DELAY_MS * (2 ** (reconnectAttemptRef.current - 1))
+      );
+      reconnectTimerRef.current = setTimeout(connect, delay);
     };
 
-    ws.onclose = () => {
-      setIsLive(false);
+    const connect = () => {
+      if (isDisposed) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const token = getAccessToken();
+      const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+      const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream${tokenQuery}`;
+      ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        reconnectAttemptRef.current = 0;
+        clearReconnectTimer();
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'performance-snapshot' && data.metrics) {
+            applyMetrics(data.metrics, true);
+          } else if (data.type === 'performance-update' && data.metrics) {
+            applyMetrics(data.metrics, false);
+          }
+        } catch (err) {
+          console.error('Error parsing performance stream message:', err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('Performance stream WebSocket error:', err);
+      };
+
+      ws.onclose = () => {
+        if (!isDisposed) {
+          scheduleReconnect();
+        }
+      };
     };
+
+    connect();
 
     return () => {
-      ws.close();
+      isDisposed = true;
+      clearReconnectTimer();
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close();
+      }
     };
-  }, [isLive, port, notAvailable]);
-
-  const fetchMetrics = async () => {
-    try {
-      const response = await fetch(`/api/preview/${port}/performance`);
-      if (response.status === 404) {
-        setNotAvailable(true);
-        return;
-      }
-      if (response.ok) {
-        const data = await response.json();
-        setMetrics(data.metrics);
-      }
-    } catch (err) {
-      setNotAvailable(true);
-    }
-  };
-
-  const clearMetrics = async () => {
-    try {
-      await fetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
-      setMetrics({
-        coreWebVitals: [],
-        loadMetrics: [],
-        runtimeMetrics: []
-      });
-    } catch (err) {
-      console.error('Error clearing metrics:', err);
-    }
-  };
+  }, [applyMetrics, isLive, notAvailable, port]);
 
   const exportReport = () => {
     const report = {
@@ -155,7 +225,7 @@ export function PerformanceTab({ port }) {
         </div>
         <div className="text-center py-12 text-gray-500">
           <p className="text-lg font-medium mb-2">Performance monitoring not available</p>
-          <p>The backend endpoints for performance metrics have not been implemented yet.</p>
+          <p>The backend performance endpoints are unavailable for this preview target.</p>
         </div>
       </div>
     );

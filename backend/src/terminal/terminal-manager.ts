@@ -3,9 +3,12 @@ import { EventEmitter } from 'node:events';
 import { spawn as ptySpawn } from '@homebridge/node-pty-prebuilt-multiarch';
 import path from 'node:path';
 import fs from 'node:fs';
+import { homedir } from 'node:os';
 import type {
   TerminalCreateOptions,
+  TerminalFidelityMode,
   TerminalProcess,
+  TerminalShellProfile,
   TerminalSessionSnapshot,
   TerminalSessionSummary,
   TerminalSpawnOptions,
@@ -48,11 +51,139 @@ import {
 // Re-export types for external consumers
 export type { ProjectType, ProjectInfo } from './types';
 
+const WINDOWS_CMD = 'C:\\Windows\\System32\\cmd.exe';
+const WINDOWS_POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
+const DEFAULT_FIDELITY_MODE: TerminalFidelityMode =
+  process.env.TERMINAL_FIDELITY_MODE === 'native' ? 'native' : 'balanced';
+
+function normaliseShellName(shell: string): string {
+  const base = path.basename(shell).toLowerCase();
+  return base.endsWith('.exe') ? base.slice(0, -4) : base;
+}
+
 function detectShell(): string {
   if (process.platform === 'win32') {
-    return process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
+    const preferred = (process.env.TERMINAL_DEFAULT_WINDOWS_SHELL || '').toLowerCase();
+    if (preferred === 'pwsh') {
+      return process.env.TERMINAL_PWSH_PATH || 'pwsh.exe';
+    }
+    if (preferred === 'powershell') {
+      return process.env.TERMINAL_POWERSHELL_PATH || WINDOWS_POWERSHELL;
+    }
+    if (preferred === 'cmd') {
+      return process.env.ComSpec || WINDOWS_CMD;
+    }
+    return process.env.ComSpec || WINDOWS_CMD;
   }
   return process.env.SHELL || '/bin/bash';
+}
+
+function resolveUserHomeDirectory(env: NodeJS.ProcessEnv = process.env): string | null {
+  const candidates: string[] = [];
+  if (process.platform === 'win32') {
+    if (env.USERPROFILE) {
+      candidates.push(env.USERPROFILE);
+    }
+    if (env.HOMEDRIVE && env.HOMEPATH) {
+      candidates.push(`${env.HOMEDRIVE}${env.HOMEPATH}`);
+    }
+  }
+  if (env.HOME) {
+    candidates.push(env.HOME);
+  }
+  try {
+    const osHome = homedir();
+    if (osHome) {
+      candidates.push(osHome);
+    }
+  } catch {
+    // Ignore os.homedir() failures and continue with env fallbacks.
+  }
+  for (const candidate of candidates) {
+    const trimmed = String(candidate || '').trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function resolveDefaultCwd(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveUserHomeDirectory(env) || process.cwd();
+}
+
+function resolveShellForProfile(profile: TerminalShellProfile): string {
+  switch (profile) {
+    case 'cmd':
+      return process.env.ComSpec || WINDOWS_CMD;
+    case 'powershell':
+      return process.env.TERMINAL_POWERSHELL_PATH || WINDOWS_POWERSHELL;
+    case 'pwsh':
+      return process.env.TERMINAL_PWSH_PATH || 'pwsh.exe';
+    case 'bash':
+      return process.platform === 'win32' ? 'bash.exe' : '/bin/bash';
+    case 'zsh':
+      return process.platform === 'win32' ? 'zsh.exe' : '/bin/zsh';
+    case 'sh':
+      return process.platform === 'win32' ? 'sh.exe' : '/bin/sh';
+    case 'claude':
+      return 'claude';
+    case 'system':
+    default:
+      return detectShell();
+  }
+}
+
+function inferShellArgs(
+  shell: string,
+  profile: TerminalShellProfile | undefined,
+  fidelityMode: TerminalFidelityMode
+): string[] {
+  const shellName = normaliseShellName(shell);
+  const explicitProfile = profile && profile !== 'system' ? profile : null;
+
+  if (explicitProfile === 'bash' || explicitProfile === 'zsh' || explicitProfile === 'sh') {
+    return ['-l'];
+  }
+  if (explicitProfile === 'pwsh' || explicitProfile === 'powershell') {
+    return ['-NoLogo'];
+  }
+  if (explicitProfile === 'cmd' || explicitProfile === 'claude') {
+    return [];
+  }
+
+  if (fidelityMode !== 'native') {
+    return [];
+  }
+
+  if (shellName === 'bash' || shellName === 'zsh' || shellName === 'sh' || shellName === 'ksh') {
+    return ['-l'];
+  }
+  if (shellName === 'pwsh' || shellName === 'powershell') {
+    return ['-NoLogo'];
+  }
+  return [];
+}
+
+function resolveShellLaunch(options: {
+  shell?: string;
+  shellArgs?: string[];
+  shellProfile?: TerminalShellProfile;
+  fidelityMode: TerminalFidelityMode;
+  defaultShell: string;
+}): { shell: string; shellArgs: string[]; shellProfile: TerminalShellProfile | null } {
+  const profile = options.shellProfile ?? 'system';
+  const shell = profile === 'system'
+    ? (options.shell || options.defaultShell)
+    : resolveShellForProfile(profile);
+  const shellArgs = Array.isArray(options.shellArgs)
+    ? options.shellArgs.filter((value) => typeof value === 'string' && value.length > 0)
+    : inferShellArgs(shell, profile, options.fidelityMode);
+  return {
+    shell,
+    shellArgs,
+    shellProfile: profile === 'system' ? null : profile
+  };
 }
 
 function normaliseNewlines(input: string): string {
@@ -92,6 +223,7 @@ const DEFAULT_BUSY_WINDOW_MS = (() => {
 export interface TerminalManagerOptions {
   spawnTerminal?: TerminalSpawner;
   defaultShell?: string;
+  defaultFidelityMode?: TerminalFidelityMode;
   useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
   idleTimeoutMs?: number; // 0 disables idle timeout
   maxActiveSessions?: number; // 0 disables limit
@@ -184,12 +316,12 @@ class OutputBatcher {
 function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
   const emitter = new EventEmitter() as TerminalProcess;
 
-  const ptyProcess = ptySpawn(options.shell, [], {
+  const ptyProcess = ptySpawn(options.shell, options.shellArgs || [], {
     name: 'xterm-256color',
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd || process.cwd(),
-    env: { ...process.env, ...options.env } as Record<string, string>
+    env: { ...process.env, TERM: 'xterm-256color', ...options.env } as Record<string, string>
   });
 
   ptyProcess.onData((data: string) => {
@@ -223,6 +355,7 @@ export class TerminalManager {
   #lastTmuxRecoveryCheckByUser = new Map<string, number>();
   #spawnTerminal: TerminalSpawner;
   #defaultShell: string;
+  #defaultFidelityMode: TerminalFidelityMode;
   #counter = 0;
   #useTmux: boolean;
   #idleTimeoutMs: number;
@@ -231,6 +364,7 @@ export class TerminalManager {
   constructor(options: TerminalManagerOptions = {}) {
     this.#spawnTerminal = options.spawnTerminal ?? ptySpawner;
     this.#defaultShell = options.defaultShell ?? detectShell();
+    this.#defaultFidelityMode = options.defaultFidelityMode ?? DEFAULT_FIDELITY_MODE;
 
     // Auto-detect tmux availability if not explicitly specified
     if (options.useTmux !== undefined) {
@@ -297,7 +431,7 @@ export class TerminalManager {
           if (!metadata) {
             continue;
           }
-          const tmuxCwd = getTmuxSessionCwd(tmuxId) || metadata.cwd || process.cwd();
+          const tmuxCwd = getTmuxSessionCwd(tmuxId) || metadata.cwd || resolveDefaultCwd();
           const title = metadata.title || path.basename(tmuxCwd) || 'Recovered Terminal';
           console.log(`[TerminalManager] Recovering orphaned tmux session from metadata: ${tmuxId} -> ${title}`);
 
@@ -305,6 +439,9 @@ export class TerminalManager {
             id: tmuxId,
             title,
             shell: metadata.shell || this.#defaultShell,
+            shellArgs: metadata.shellArgs || [],
+            shellProfile: metadata.shellProfile ?? null,
+            fidelityMode: metadata.fidelityMode ?? this.#defaultFidelityMode,
             cwd: metadata.cwd || tmuxCwd,
             createdAt: metadata.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -437,20 +574,22 @@ export class TerminalManager {
         id: session.id,
         title: session.title,
         shell: session.shell,
+        shellArgs: [...session.shellArgs],
+        shellProfile: session.shellProfile ?? null,
+        fidelityMode: session.fidelityMode,
         cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         history,
         thread: session.thread
       };
-      await saveSession(session.userId, persisted);
-
       let userSessions = this.#persistedSessions.get(session.userId);
       if (!userSessions) {
         userSessions = new Map();
         this.#persistedSessions.set(session.userId, userSessions);
       }
       userSessions.set(session.id, persisted);
+      await saveSession(session.userId, persisted);
     } finally {
       session.saveInProgress = false;
 
@@ -530,8 +669,8 @@ export class TerminalManager {
 
   listSessions(userId: string): TerminalSessionSummary[] {
     const metadataIndex = this.#metadataIndexByUser.get(userId) || {};
-    const defaultCwd = process.env.HOME || process.cwd();
-    const homeDir = process.env.HOME || null;
+    const defaultCwd = resolveDefaultCwd();
+    const homeDir = resolveUserHomeDirectory();
     const now = Date.now();
 
     // Get active sessions for this user
@@ -549,6 +688,9 @@ export class TerminalManager {
           id: session.id,
           title: session.title,
           shell: session.shell,
+          shellArgs: session.shellArgs,
+          shellProfile: session.shellProfile ?? null,
+          fidelityMode: session.fidelityMode,
           cwd: resolved.cwd || session.cwd,
           cwdSource: resolved.cwdSource,
           groupPath: resolved.groupPath,
@@ -580,6 +722,9 @@ export class TerminalManager {
           id: session.id,
           title: session.title,
           shell: session.shell,
+          shellArgs: session.shellArgs ?? [],
+          shellProfile: session.shellProfile ?? null,
+          fidelityMode: session.fidelityMode ?? this.#defaultFidelityMode,
           cwd: resolved.cwd || session.cwd,
           cwdSource: resolved.cwdSource,
           groupPath: resolved.groupPath,
@@ -614,6 +759,9 @@ export class TerminalManager {
       updateSessionMetadata(userId, id, {
         title: trimmed,
         shell: session.shell,
+        shellArgs: session.shellArgs,
+        shellProfile: session.shellProfile ?? null,
+        fidelityMode: session.fidelityMode,
         cwd: session.cwd,
         createdAt: session.createdAt
       }).catch((error) => {
@@ -624,6 +772,9 @@ export class TerminalManager {
         id: session.id,
         title: session.title,
         shell: session.shell,
+        shellArgs: session.shellArgs,
+        shellProfile: session.shellProfile ?? null,
+        fidelityMode: session.fidelityMode,
         cwd: session.cwd,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
@@ -655,6 +806,9 @@ export class TerminalManager {
     await updateSessionMetadata(userId, id, {
       title: trimmed,
       shell: updated.shell,
+      shellArgs: updated.shellArgs ?? [],
+      shellProfile: updated.shellProfile ?? null,
+      fidelityMode: updated.fidelityMode ?? this.#defaultFidelityMode,
       cwd: updated.cwd,
       createdAt: updated.createdAt
     });
@@ -663,6 +817,9 @@ export class TerminalManager {
       id: updated.id,
       title: updated.title,
       shell: updated.shell,
+      shellArgs: updated.shellArgs ?? [],
+      shellProfile: updated.shellProfile ?? null,
+      fidelityMode: updated.fidelityMode ?? this.#defaultFidelityMode,
       cwd: updated.cwd,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
@@ -699,6 +856,9 @@ export class TerminalManager {
         id: session.id,
         title: session.title,
         shell: session.shell,
+        shellArgs: session.shellArgs,
+        shellProfile: session.shellProfile ?? null,
+        fidelityMode: session.fidelityMode,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         history,
@@ -715,6 +875,9 @@ export class TerminalManager {
         id: persisted.id,
         title: persisted.title,
         shell: persisted.shell,
+        shellArgs: persisted.shellArgs ?? [],
+        shellProfile: persisted.shellProfile ?? null,
+        fidelityMode: persisted.fidelityMode ?? this.#defaultFidelityMode,
         createdAt: persisted.createdAt,
         updatedAt: persisted.updatedAt,
         history,
@@ -897,9 +1060,19 @@ export class TerminalManager {
     const title = options.title ?? `Terminal ${++this.#counter}`;
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
-    const shell = options.shell ?? this.#defaultShell;
+    const fidelityMode = options.fidelityMode ?? this.#defaultFidelityMode;
+    const shellLaunch = resolveShellLaunch({
+      shell: options.shell,
+      shellArgs: options.shellArgs,
+      shellProfile: options.shellProfile,
+      fidelityMode,
+      defaultShell: this.#defaultShell
+    });
+    const shell = shellLaunch.shell;
+    const shellArgs = shellLaunch.shellArgs;
+    const shellProfile = shellLaunch.shellProfile;
     // Default to user's home directory instead of server's process.cwd()
-    const defaultCwd = process.env.HOME || process.cwd();
+    const defaultCwd = resolveDefaultCwd();
     let cwd = options.cwd ?? defaultCwd;
     try {
       cwd = path.resolve(cwd);
@@ -919,6 +1092,9 @@ export class TerminalManager {
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
         shell,
+        shellArgs,
+        shellProfile,
+        fidelityMode,
         cols,
         rows,
         cwd,
@@ -927,6 +1103,9 @@ export class TerminalManager {
     } else {
       ptyProcess = this.#spawnTerminal({
         shell,
+        shellArgs,
+        shellProfile,
+        fidelityMode,
         cols,
         rows,
         cwd,
@@ -944,6 +1123,9 @@ export class TerminalManager {
       userId,
       title,
       shell,
+      shellArgs,
+      shellProfile,
+      fidelityMode,
       cwd,
       createdAt,
       updatedAt: createdAt,
@@ -963,25 +1145,37 @@ export class TerminalManager {
       lastActivityAt: Date.now()
     };
 
-    // Create output batcher for this session
-    session.outputBatcher = new OutputBatcher((batchedData: string) => {
-      this.#handleData(session, batchedData);
-    });
+    if (fidelityMode === 'native') {
+      session.dataHandler = dataHandler;
+      ptyProcess.on('data', dataHandler);
+    } else {
+      // Create output batcher for this session
+      session.outputBatcher = new OutputBatcher((batchedData: string) => {
+        this.#handleData(session, batchedData);
+      });
 
-    // PTY data handler appends to batcher instead of calling #handleData directly
-    const batchedDataHandler = (data: string) => {
-      session.outputBatcher?.append(data);
-    };
-    session.dataHandler = batchedDataHandler;
-
-    ptyProcess.on('data', batchedDataHandler);
+      // PTY data handler appends to batcher instead of calling #handleData directly
+      const batchedDataHandler = (data: string) => {
+        session.outputBatcher?.append(data);
+      };
+      session.dataHandler = batchedDataHandler;
+      ptyProcess.on('data', batchedDataHandler);
+    }
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
     this.#resetIdleTimer(session);
 
     // Save metadata index entry (survives session file corruption)
-    updateSessionMetadata(userId, id, { title, shell, cwd, createdAt }).catch((error) => {
+    updateSessionMetadata(userId, id, {
+      title,
+      shell,
+      shellArgs,
+      shellProfile,
+      fidelityMode,
+      cwd,
+      createdAt
+    }).catch((error) => {
       console.error(`Failed to save session metadata for ${id}:`, error);
     });
     // Persist an initial session file so tmux sessions don't get "recovered" after restarts
@@ -1390,13 +1584,24 @@ export class TerminalManager {
 
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
+    const fidelityMode = persisted.fidelityMode ?? this.#defaultFidelityMode;
+    const shellLaunch = resolveShellLaunch({
+      shell: persisted.shell,
+      shellArgs: persisted.shellArgs,
+      shellProfile: persisted.shellProfile ?? undefined,
+      fidelityMode,
+      defaultShell: this.#defaultShell
+    });
+    const shell = shellLaunch.shell;
+    const shellArgs = shellLaunch.shellArgs;
+    const shellProfile = shellLaunch.shellProfile;
 
     // Check if tmux session exists (process survived server restart)
     const hasTmuxSession = this.#useTmux && tmuxSessionExists(id);
 
     // Validate cwd - fall back to user's home directory if invalid
     // If tmux session exists, try to get current working dir from it
-    const defaultCwd = process.env.HOME || process.cwd();
+    const defaultCwd = resolveDefaultCwd();
     let cwd = persisted.cwd;
     if (hasTmuxSession) {
       const tmuxCwd = getTmuxSessionCwd(id);
@@ -1421,7 +1626,10 @@ export class TerminalManager {
       console.log(`[TerminalManager] Reattaching to existing tmux session ${id}`);
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
-        shell: persisted.shell,
+        shell,
+        shellArgs,
+        shellProfile,
+        fidelityMode,
         cols,
         rows,
         cwd
@@ -1431,7 +1639,10 @@ export class TerminalManager {
       console.log(`[TerminalManager] Creating new tmux session for restored session ${id}`);
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
-        shell: persisted.shell,
+        shell,
+        shellArgs,
+        shellProfile,
+        fidelityMode,
         cols,
         rows,
         cwd
@@ -1439,7 +1650,10 @@ export class TerminalManager {
     } else {
       // Non-tmux fallback
       ptyProcess = this.#spawnTerminal({
-        shell: persisted.shell,
+        shell,
+        shellArgs,
+        shellProfile,
+        fidelityMode,
         cols,
         rows,
         cwd
@@ -1455,7 +1669,10 @@ export class TerminalManager {
       id: persisted.id,
       userId,
       title: persisted.title,
-      shell: persisted.shell,
+      shell,
+      shellArgs,
+      shellProfile,
+      fidelityMode,
       cwd,
       createdAt: persisted.createdAt,
       updatedAt: new Date().toISOString(),
@@ -1478,18 +1695,23 @@ export class TerminalManager {
       thread: persisted.thread
     };
 
-    // Create output batcher for this session
-    session.outputBatcher = new OutputBatcher((batchedData: string) => {
-      this.#handleData(session, batchedData);
-    });
+    if (fidelityMode === 'native') {
+      session.dataHandler = dataHandler;
+      ptyProcess.on('data', dataHandler);
+    } else {
+      // Create output batcher for this session
+      session.outputBatcher = new OutputBatcher((batchedData: string) => {
+        this.#handleData(session, batchedData);
+      });
 
-    // PTY data handler appends to batcher instead of calling #handleData directly
-    const batchedDataHandler = (data: string) => {
-      session.outputBatcher?.append(data);
-    };
-    session.dataHandler = batchedDataHandler;
+      // PTY data handler appends to batcher instead of calling #handleData directly
+      const batchedDataHandler = (data: string) => {
+        session.outputBatcher?.append(data);
+      };
+      session.dataHandler = batchedDataHandler;
 
-    ptyProcess.on('data', batchedDataHandler);
+      ptyProcess.on('data', batchedDataHandler);
+    }
     ptyProcess.on('exit', exitHandler);
 
     this.#sessions.set(id, session);
@@ -1575,7 +1797,7 @@ export class TerminalManager {
 
     // Handle bare 'cd' command (goes to home directory)
     if (trimmed === 'cd') {
-      const home = process.env.HOME;
+      const home = resolveUserHomeDirectory();
       if (home && fs.existsSync(home)) {
         session.cwd = home;
       }
@@ -1597,7 +1819,7 @@ export class TerminalManager {
 
     // Expand "~" on Unix-like systems.
     if (target === '~' || target.startsWith('~/')) {
-      const home = process.env.HOME;
+      const home = resolveUserHomeDirectory();
       if (home) {
         target = path.join(home, target.slice(1));
       }
