@@ -49,7 +49,7 @@ also serves the built frontend in production.
 │  - Screenshot service (Playwright screenshots & recordings)                │
 │  - Voice transcription (Groq Whisper API)                                  │
 │  - System monitoring (CPU, RAM, disk I/O, event loop, history tracking)    │
-│  - Settings (user preferences, browser automation config)                  │
+│  - Settings (user preferences)                                              │
 │  - Bookmarks & Notes storage (JSON files)                                  │
 │  - System rebuild API                                                      │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -65,7 +65,8 @@ also serves the built frontend in production.
 
 ### Auth (JWT)
 - Access tokens are JWTs; refresh tokens are stored hashed in SQLite.
-- Registration is disabled (`/api/auth/register` returns 403).
+- `/api/auth/register` is available for API-based user creation.
+- In non-production mode, backend can auto-create a bootstrap user when `users` is empty.
 - `ALLOWED_USERNAME` can restrict logins to a single username.
 - Auth hook applies to all `/api/*` routes except explicit public routes.
 - SSE and WebSocket clients can pass `?token=` when headers are unavailable.
@@ -149,15 +150,6 @@ Key files:
 - `backend/src/processes/process-service.ts`
 - `backend/src/preview/process-log-store.ts`
 
-### Browser Automation
-- Browser automation services exist under `backend/src/browser/*`.
-- Public `/api/browser/*` routes are not currently registered in `backend/src/index.ts`.
-- Preview screenshots/recording are available via screenshot routes instead.
-
-Key files:
-- `backend/src/browser/*`
-- `backend/src/routes/screenshot-routes.ts`
-
 ### Settings + Transcribe
 - User settings stored in SQLite (`user_settings`):
   - Groq API key for voice transcription
@@ -165,7 +157,6 @@ Key files:
   - Terminal font size (8-32)
   - Sidebar collapse state
 - `/api/transcribe` uses Groq Whisper for voice input with support for multiple audio formats.
-- Browser settings are persisted in the user settings table.
 
 Key files:
 - `backend/src/routes/settings-routes.ts`
@@ -248,7 +239,6 @@ Key files:
 **Settings & Configuration:**
 - `SettingsModal` user preferences (font size, theme, sidebar).
 - `ApiSettingsModal` Groq API key for voice transcription.
-- `BrowserSettingsModal` Playwright automation settings.
 
 **Utilities:**
 - `BookmarkModal` manage command bookmarks.
@@ -341,7 +331,7 @@ Stored in `backend/data/preview-cookies.json` by default (overridable via
 
 - JWT auth is required for most `/api/*` routes.
 - Public routes include health checks, preview logs, process logs, and
-  browser automation endpoints.
+  telemetry ingestion endpoints.
 - Preview file server is sandboxed to the project root.
 - File manager resolves paths safely but is not restricted to project root.
 - Dev proxy allows localhost ports across the valid TCP range (1-65535),

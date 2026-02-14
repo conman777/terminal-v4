@@ -40,8 +40,12 @@ Backend configuration (set in `backend/.env` or your shell):
 | `JWT_SECRET` | JWT signing secret | *(dev default if unset)* |
 | `REFRESH_SECRET` | Refresh token signing secret | *(dev default if unset)* |
 | `ALLOWED_USERNAME` | Restrict logins to a single username | *(unset)* |
+| `DEV_BOOTSTRAP_USER_ENABLED` | Auto-create first user in non-production when DB is empty | `true` |
+| `DEV_BOOTSTRAP_USERNAME` | Username for auto-created dev user | `dev` (or `ALLOWED_USERNAME`) |
+| `DEV_BOOTSTRAP_PASSWORD` | Password for auto-created dev user | `dev-password` |
 
 Notes:
+- `JWT_REFRESH_SECRET` is accepted as a legacy alias, but `REFRESH_SECRET` is preferred.
 - `TERMINAL_DATA_DIR` (or `DATA_DIR`) sets the base data directory for SQLite,
   terminal/Claude Code sessions, bookmarks, notes, and preview cookies.
   Default is `backend/data` (repo-relative) in dev; set it explicitly in prod.
@@ -78,16 +82,35 @@ Frontend configuration (set in `frontend/.env` or your shell):
 | Variable | Description | Default |
 | --- | --- | --- |
 | `VITE_API_URL` | API base URL for the frontend | *(empty = same origin)* |
+| `VITE_DEV_API_TARGET` | Vite dev proxy target for `/api` and `/preview` | `http://localhost:3020` |
 
 ## Authentication Setup
 
-Login is required and `/api/auth/register` is disabled.
-For local development, you can create a user by either:
-- Temporarily enabling registration in `backend/src/auth/auth-routes.ts`, or
-- Seeding the SQLite `users` table via a small script that calls
-  `createUser` from `backend/src/auth/user-store.ts`.
+Login is required.
+
+On a clean database in local/dev mode, backend startup now auto-creates a bootstrap
+user and logs the credentials. Defaults:
+- Username: `dev` (or `ALLOWED_USERNAME` if set)
+- Password: `dev-password`
+
+You can override with `DEV_BOOTSTRAP_USERNAME` / `DEV_BOOTSTRAP_PASSWORD`, or
+disable auto-bootstrap entirely by setting `DEV_BOOTSTRAP_USER_ENABLED=false`.
 
 ## Running the App
+
+Recommended (starts both apps, auto-selects free ports, wires frontend proxy to backend):
+
+```bash
+npm run dev
+```
+
+If your shell cannot run `npm` because `node` is missing from `PATH`, run:
+
+```bash
+./scripts/dev.sh
+```
+
+You can still run each app manually:
 
 Backend (Fastify + TypeScript):
 
@@ -106,6 +129,8 @@ npm run dev
 Defaults:
 - Backend: http://localhost:3020
 - Frontend: http://localhost:5173 (proxying `/api/*` to backend)
+- If either default port is occupied, root `npm run dev` automatically chooses the next free port.
+- Root `npm run dev` starts backend from port `4020` upward and frontend from `5173` upward.
 
 ## Preview Troubleshooting (Local Dev Servers)
 

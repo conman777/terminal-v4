@@ -6,6 +6,8 @@ if (process.env.VITEST) {
   process.env.NODE_ENV = 'test';
 }
 
+const DEV_API_TARGET = process.env.VITE_DEV_API_TARGET || 'http://localhost:3020';
+
 export default defineConfig({
   plugins: [react()],
   build: {
@@ -54,12 +56,12 @@ export default defineConfig({
     ],
     proxy: {
       '/api': {
-        target: 'http://localhost:3020',
+        target: DEV_API_TARGET,
         changeOrigin: true,
         ws: true
       },
       '/preview': {
-        target: 'http://localhost:3020',
+        target: DEV_API_TARGET,
         changeOrigin: true,
         ws: true
       }

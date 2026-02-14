@@ -23,14 +23,14 @@ function isPrivateIpv4Host(hostname) {
 }
 
 function getPreviewDefaultMode() {
-  if (typeof window === 'undefined') return 'subdomain-first';
+  if (typeof window === 'undefined') return 'path-first';
   try {
     const stored = localStorage.getItem(PREVIEW_DEFAULT_MODE_KEY);
     if (stored === 'adaptive' || stored === 'path-first' || stored === 'subdomain-first') {
       return stored;
     }
   } catch {}
-  return 'subdomain-first';
+  return 'path-first';
 }
 
 /**

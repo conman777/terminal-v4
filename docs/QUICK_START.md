@@ -27,6 +27,9 @@ REFRESH_SECRET=your-random-refresh-secret
 ALLOWED_USERNAME=yourusername
 
 # Optional
+DEV_BOOTSTRAP_USER_ENABLED=true
+DEV_BOOTSTRAP_USERNAME=dev
+DEV_BOOTSTRAP_PASSWORD=dev-password
 PORT=3020
 ANTHROPIC_API_KEY=your-api-key
 GROQ_API_KEY=your-groq-key
@@ -35,21 +38,27 @@ TERMINAL_DATA_DIR=/path/to/data
 
 ### 3. Create User Account
 
-Temporarily enable registration or seed a user directly in the database.
+On first local startup with an empty DB, backend auto-creates a bootstrap user.
+Default credentials:
+- Username: `dev` (or `ALLOWED_USERNAME` when set)
+- Password: `dev-password`
+
+Credentials are printed in backend logs on first run.
 
 ### 4. Start Development Servers
 
 ```bash
-# Terminal 1: Backend
-cd backend
-npm run dev
-
-# Terminal 2: Frontend
-cd frontend
 npm run dev
 ```
 
-Access at `http://localhost:5173`
+Open the frontend URL printed in logs (`http://localhost:5173` if free).
+The launcher auto-selects backend/frontend ports and wires frontend proxy to backend.
+
+If `npm run dev` fails with `env: node: No such file or directory`, use:
+
+```bash
+./scripts/dev.sh
+```
 
 ## Essential Features in 5 Minutes
 
@@ -251,7 +260,7 @@ Terminal sessions persist across backend restarts.
 | Terminal not responding | Refresh browser (`Ctrl+F5`) |
 | ANSI codes visible | Clear Vite cache and rebuild |
 | Preview blank | Verify dev server running on correct port |
-| Can't login | Check `ALLOWED_USERNAME` env var |
+| Can't login | Check backend logs for bootstrap credentials and `ALLOWED_USERNAME` |
 | High CPU | Close unused terminal sessions, enable WebGL |
 | WebSocket fails | Check firewall, verify backend running |
 | Mobile keyboard hidden | Enable mobile keybar in settings |

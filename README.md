@@ -31,9 +31,10 @@ See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 **TL;DR:**
 1. Install dependencies: `cd backend && npm install && cd ../frontend && npm install`
 2. Create `.env` with JWT secrets and optional API keys
-3. Start backend: `cd backend && npm run dev`
-4. Start frontend: `cd frontend && npm run dev`
-5. Open `http://localhost:5173` and create your first terminal!
+3. Start everything from root: `npm run dev`
+   - If `npm` cannot find `node` on your PATH, use: `./scripts/dev.sh`
+4. Open the frontend URL printed in logs (`http://localhost:5173` if free, otherwise next available port).  
+   Root launcher starts backend on the first free port from `4020` upward.
 
 ## Project Structure
 
@@ -82,10 +83,16 @@ terminal-v4/
 - `JWT_SECRET` - JWT signing secret (required in production)
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
+- `DEV_BOOTSTRAP_USER_ENABLED` - Auto-create first user in non-production when DB is empty (default: `true`)
+- `DEV_BOOTSTRAP_USERNAME` - Bootstrap username in non-production (default: `dev`, or `ALLOWED_USERNAME` if set)
+- `DEV_BOOTSTRAP_PASSWORD` - Bootstrap password in non-production (default: `dev-password`)
 - `PREVIEW_DEFAULT_MODE` - Preview routing mode: `path-first`, `subdomain-first`, or `adaptive` (production default is `path-first`)
 - `PREVIEW_SUBDOMAIN_BASES` - Allowed preview subdomain bases for `preview-{port}.<base>` routing
 - `PREVIEW_PROXY_HOSTS` - Upstream hosts the preview proxy can target (default: `localhost,127.0.0.1,::1`)
 - `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits (use with care on exposed deployments)
+
+On first local run with an empty database, backend logs bootstrap login credentials so you can sign in immediately.
+`JWT_REFRESH_SECRET` is also accepted for backward compatibility, but `REFRESH_SECRET` is preferred.
 
 ### Default Shell
 

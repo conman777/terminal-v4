@@ -7,6 +7,8 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
 
 - If you access Terminal V4 at `http://localhost:3020`, previews use **path-based
   routing** (`/preview/<port>/`). This is the most reliable method for local dev.
+- If `PREVIEW_SUBDOMAIN_BASES` is unset, subdomain routing defaults to
+  `localhost` only. Non-localhost access will fall back to path-based preview.
 - Preview supports **all valid local ports** (`1-65535`) except the Terminal V4
   UI port itself.
 - Port dropdowns prioritize ports that look like real web previews (HTML/SPA

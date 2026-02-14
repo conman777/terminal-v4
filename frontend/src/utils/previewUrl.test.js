@@ -30,6 +30,11 @@ describe('toPreviewUrl', () => {
     expect(toPreviewUrl('/preview/5173/app')).toBe('/preview/5173/app');
   });
 
+  it('defaults to path mode when preview mode is not configured', () => {
+    const result = toPreviewUrl('http://localhost:5173/app');
+    expect(result).toBe('/preview/5173/app');
+  });
+
   it('uses subdomain-first mode when base is loopback-resolvable', () => {
     localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
     localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, '127.0.0.1.nip.io');

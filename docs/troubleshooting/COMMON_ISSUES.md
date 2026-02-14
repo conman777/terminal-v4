@@ -227,11 +227,11 @@ This guide covers common issues and their solutions for Terminal v4.
 
 **Solutions**:
 1. Verify username and password are correct
-2. Check if `ALLOWED_USERNAME` restricts access
-3. Verify user exists in database: `sqlite3 backend/data/terminal.db "SELECT * FROM users;"`
-4. Check backend logs for auth errors
+2. Check backend startup logs for bootstrap credentials (`DEV_BOOTSTRAP_*`)
+3. Check if `ALLOWED_USERNAME` restricts access
+4. Verify user exists in database: `sqlite3 backend/data/terminal.db "SELECT * FROM users;"`
 5. Clear browser localStorage and cookies
-6. Verify JWT secrets are set in production
+6. Verify `JWT_SECRET` and `REFRESH_SECRET` are set in production
 
 **Root Causes**:
 - Wrong credentials

@@ -5,9 +5,12 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/ensure-native.cjs",
     "build": "tsup src/index.ts --format esm --sourcemap --dts --external ws",
     "dev": "tsx watch src/index.ts",
+    "prestart": "node scripts/ensure-native.cjs",
     "start": "node --enable-source-maps dist/index.js",
+    "pretest": "node scripts/ensure-native.cjs",
     "test": "vitest run",
     "test:watch": "vitest watch"
   },
@@ -22,7 +25,7 @@
     "@types/cross-spawn": "^6.0.6",
     "archiver": "^7.0.1",
     "bcrypt": "^6.0.0",
-    "better-sqlite3": "^12.5.0",
+    "better-sqlite3": "^12.6.2",
     "cross-spawn": "^7.0.6",
     "dotenv": "^17.2.3",
     "execa": "^9.6.1",

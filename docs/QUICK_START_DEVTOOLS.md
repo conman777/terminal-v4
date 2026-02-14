@@ -80,37 +80,30 @@ Quick reference for using the Preview DevTools features.
 - Filter by direction
 - Use manual refresh mode
 
-## Browser Settings
+## Preview Configuration
 
 ### Access
 
-- Mobile: Hamburger menu → Browser Settings
-- Desktop: Settings → Browser Settings
+- Open a preview panel from any detected app URL.
+- Use the integrated DevTools tabs in the preview panel.
 
-**Note:** The UI calls `/api/settings/browser` endpoints that are not currently
-implemented in the backend. The panel will not persist settings until those
-routes are added.
+Preview behavior and diagnostics are handled through the standard preview and
+DevTools routes (`/api/preview/*`).
 
 ### Common Adjustments
 
-**Faster cleanup** (development)
-- Idle timeout: 1-2 minutes
-- Cleanup interval: 30 seconds
+**Faster debugging loops**
+- Keep only one preview tab active
+- Clear logs/metrics between runs
 
-**Longer sessions** (demos)
-- Idle timeout: 30-60 minutes
-- Max lifetime: 120-240 minutes
-
-**Smaller storage** (limited resources)
-- Screenshot format: JPEG
-- JPEG quality: 60-70
-- Log retention: 10-30 minutes
+**Lower resource usage**
+- Disable live monitoring when not needed
+- Use filtering in Network/WebSocket tabs
 
 ### Tips
 
-- Changes affect new sessions immediately
-- Existing sessions use old settings
-- Use reset to restore defaults
+- Refresh the preview after significant app changes
+- Clear stale logs before comparing behavior
 
 ## Keyboard Shortcuts
 

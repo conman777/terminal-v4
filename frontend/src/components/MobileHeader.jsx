@@ -80,7 +80,6 @@ export function MobileHeader({
   onOpenNativeTerminal,
   onOpenSettings,
   onOpenApiSettings,
-  onOpenBrowserSettings,
   onOpenBookmarks,
   onOpenNotes,
   onOpenProcessManager,
@@ -492,7 +491,6 @@ export function MobileHeader({
         onCreateSession={onCreateSession}
         onOpenSettings={onOpenSettings}
         onOpenApiSettings={onOpenApiSettings}
-        onOpenBrowserSettings={onOpenBrowserSettings}
         onOpenBookmarks={onOpenBookmarks}
         onOpenNotes={onOpenNotes}
         onOpenProcessManager={onOpenProcessManager}

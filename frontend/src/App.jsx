@@ -107,11 +107,6 @@ const ApiSettingsModal = lazyWithChunkRecovery(
   () => import('./components/ApiSettingsModal'),
   'ApiSettingsModal'
 );
-const BrowserSettingsModal = lazyWithChunkRecovery(
-  () => import('./components/BrowserSettingsModal'),
-  'BrowserSettingsModal',
-  (module) => module.BrowserSettingsModal
-);
 const ProcessManagerModal = lazyWithChunkRecovery(
   () => import('./components/ProcessManagerModal'),
   'ProcessManagerModal',
@@ -227,7 +222,6 @@ function AppContent() {
   const {
     showSettings, setShowSettings,
     showApiSettings, setShowApiSettings,
-    showBrowserSettings, setShowBrowserSettings,
     showBookmarks, setShowBookmarks,
     showNotes, setShowNotes,
     showProcessManager, setShowProcessManager,
@@ -1074,10 +1068,6 @@ function AppContent() {
           <ApiSettingsModal
             isOpen={showApiSettings}
             onClose={() => setShowApiSettings(false)}
-          />
-          <BrowserSettingsModal
-            isOpen={showBrowserSettings}
-            onClose={() => setShowBrowserSettings(false)}
           />
           <ProcessManagerModal
             isOpen={showProcessManager}

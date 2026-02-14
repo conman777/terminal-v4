@@ -57,7 +57,6 @@ export function Header({
         onOpenNativeTerminal={onOpenNativeTerminal}
         onOpenSettings={onOpenSettings}
         onOpenApiSettings={() => setShowApiSettings(true)}
-        onOpenBrowserSettings={() => {}} // Handle if needed
         onOpenBookmarks={() => setShowBookmarks(true)}
         onOpenNotes={() => setShowNotes(true)}
         onOpenProcessManager={() => setShowProcessManager(true)}

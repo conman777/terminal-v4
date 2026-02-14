@@ -167,75 +167,11 @@ Planned behavior once WebSocket logging is implemented:
 5. Click a message to see full details
 6. Use "Clear" to reset all logs
 
-## Browser Settings
+## Preview Settings
 
-### Architecture
-
-The Browser Settings UI expects backend endpoints that are not implemented in
-the current backend. If you want this feature, add a settings service and
-routes, then wire them into `backend/src/routes/settings-routes.ts` or a new
-routes module.
-
-- **Frontend UI**: `frontend/src/components/settings/BrowserSettings.jsx`
-- **Expected endpoints**:
-  - GET `/api/settings/browser`
-  - PUT `/api/settings/browser`
-  - POST `/api/settings/browser/reset`
-
-These settings describe the intended surface for the UI; they are not applied
-until the backend endpoints are implemented.
-
-### Settings
-
-#### Session Timeouts
-
-- **Idle Timeout** (1-60 minutes, default: 5 min)
-  - How long before idle sessions are cleaned up
-  - Affects all browser sessions
-
-- **Max Lifetime** (10-240 minutes, default: 30 min)
-  - Maximum session duration regardless of activity
-  - Prevents resource exhaustion
-
-#### Session Limits
-
-- **Max Concurrent Sessions** (1-20, default: 10)
-  - Maximum number of active browser sessions
-  - Prevents resource exhaustion
-
-#### Cleanup Settings
-
-- **Cleanup Interval** (30-600 seconds, default: 60s)
-  - How often to check for expired sessions
-  - Lower = more responsive cleanup, higher = less overhead
-
-- **Log Retention** (10-1440 minutes, default: 60 min)
-  - How long to keep browser session logs
-  - Affects network logs, console logs, etc.
-
-#### Screenshot Settings
-
-- **Format** (PNG/JPEG, default: PNG)
-  - PNG: Lossless, larger files
-  - JPEG: Lossy, smaller files
-
-- **JPEG Quality** (1-100, default: 80)
-  - Only applies to JPEG format
-  - Higher = better quality, larger files
-
-### Usage
-
-1. Open the mobile drawer (hamburger menu) or settings panel
-2. Click "Browser Settings"
-3. Adjust sliders or inputs as needed
-4. Click "Save Settings" to apply
-5. Click "Reset to Defaults" to restore defaults
-6. Changes take effect immediately for new sessions
-
-### Access Points
-
-- **Mobile**: Drawer menu → Browser Settings
-- **Desktop**: Settings menu → Browser Settings (if integrated)
+Browser-automation-specific settings and endpoints were removed from the
+backend and frontend. Use the regular preview/devtools routes under
+`/api/preview/*` for debugging and diagnostics.
 
 ## API Endpoints
 
@@ -267,10 +203,6 @@ WS   /api/preview/:port/performance/stream
 
 GET  /api/preview/:port/websockets
 DELETE /api/preview/:port/websockets
-
-GET  /api/settings/browser
-PUT  /api/settings/browser
-POST /api/settings/browser/reset
 ```
 
 ### WebSocket Debugging
@@ -283,23 +215,6 @@ GET /api/preview/:port/websockets?connectionId&direction
 
 DELETE /api/preview/:port/websockets
 - Clear all WebSocket logs for port
-```
-
-### Browser Settings
-
-```
-GET /api/settings/browser
-- Get current settings and defaults
-- Returns: { settings, defaults }
-
-PUT /api/settings/browser
-Body: Partial<BrowserSettings>
-- Update settings
-- Returns: { success, settings }
-
-POST /api/settings/browser/reset
-- Reset to defaults
-- Returns: { success, settings }
 ```
 
 ## Testing
@@ -353,37 +268,6 @@ POST /api/settings/browser/reset
    - HMR WebSockets should NOT appear in list
    - Only application WebSockets should be tracked
 
-### Browser Settings
-
-1. **Test All Controls**
-   - Adjust idle timeout slider
-   - Adjust max lifetime slider
-   - Change max sessions input
-   - Change cleanup interval
-   - Change log retention
-   - Change screenshot format
-   - Adjust JPEG quality (when format=JPEG)
-
-2. **Verify Validation**
-   - Try values outside range (should be clamped)
-   - Verify current vs default display updates
-
-3. **Test Persistence**
-   - Change settings and save
-   - Refresh page
-   - Verify settings persisted
-
-4. **Test Reset**
-   - Change multiple settings
-   - Click "Reset to Defaults"
-   - Verify all settings return to defaults
-
-5. **Verify Effects**
-   - Change idle timeout to 1 minute
-   - Create browser session
-   - Wait 1 minute idle
-   - Verify session is cleaned up
-
 ## Performance Tips
 
 ### For Performance Monitoring
@@ -400,13 +284,6 @@ POST /api/settings/browser/reset
 - HMR whitelist reduces noise automatically
 - Auto-refresh increases network usage
 
-### For Browser Sessions
-
-- Lower idle timeout to free resources faster
-- Lower cleanup interval for more responsive cleanup
-- Use JPEG screenshots for smaller storage
-- Reduce log retention for lower memory usage
-
 ## Troubleshooting
 
 ### Performance Metrics Not Appearing
@@ -422,11 +299,6 @@ POST /api/settings/browser/reset
 - Check proxy is intercepting WebSocket upgrade
 - Verify `/api/preview/:port/websockets` endpoint
 - Check connection URL matches preview port
-
-### Settings Not Saving
-
-- This UI is not wired to backend endpoints yet. Implement
-  `/api/settings/browser` before troubleshooting further.
 
 ### Performance Impact
 

@@ -3,7 +3,6 @@ import { useState } from 'react';
 export function useModalState() {
   const [showSettings, setShowSettings] = useState(false);
   const [showApiSettings, setShowApiSettings] = useState(false);
-  const [showBrowserSettings, setShowBrowserSettings] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
   const [showProcessManager, setShowProcessManager] = useState(false);
@@ -14,7 +13,6 @@ export function useModalState() {
   return {
     showSettings, setShowSettings,
     showApiSettings, setShowApiSettings,
-    showBrowserSettings, setShowBrowserSettings,
     showBookmarks, setShowBookmarks,
     showNotes, setShowNotes,
     showProcessManager, setShowProcessManager,

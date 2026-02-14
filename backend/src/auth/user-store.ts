@@ -44,6 +44,12 @@ export function getUserById(id: string): User | undefined {
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as User | undefined;
 }
 
+export function getUserCount(): number {
+  const db = getDatabase();
+  const row = db.prepare('SELECT COUNT(*) as count FROM users').get() as { count: number } | undefined;
+  return row?.count ?? 0;
+}
+
 export function toPublicUser(user: User): UserPublic {
   return {
     id: user.id,

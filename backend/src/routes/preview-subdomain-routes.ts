@@ -7,11 +7,11 @@ import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
 import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
 import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocket-interceptor.js';
 
-const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
+const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'localhost')
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
-const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'conordart.com';
+const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'localhost';
 const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0.0.1,::1')
   .split(',')
   .map((host) => host.trim())
@@ -32,15 +32,17 @@ function parsePreviewRewriteScope(value: string | undefined): PreviewRewriteScop
 const PREVIEW_COOKIE_POLICY = parsePreviewCookiePolicy(process.env.PREVIEW_COOKIE_POLICY);
 const PREVIEW_REWRITE_SCOPE = parsePreviewRewriteScope(process.env.PREVIEW_REWRITE_SCOPE);
 
+// Pattern to match preview subdomains: preview-{port}.<base>
+// Validate that the hostname suffix matches one of the configured subdomain bases.
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-// Pattern to match preview subdomains: preview-{port}.<base>
-const PREVIEW_SUBDOMAIN_PATTERN = new RegExp(
-  `^preview-(\\d+)\\.(?:${PREVIEW_SUBDOMAIN_BASES.map(escapeRegExp).join('|')})$`,
-  'i'
-);
+const PREVIEW_SUBDOMAIN_PATTERN = PREVIEW_SUBDOMAIN_BASES.length > 0
+  ? new RegExp(
+      `^preview-(\\d+)\\.(?:${PREVIEW_SUBDOMAIN_BASES.map(escapeRegExp).join('|')})$`,
+      'i'
+    )
+  : /^preview-(\d+)\.localhost$/i;
 const PREVIEW_PATH_PATTERN = /^\/preview\/(\d+)(\/.*)?$/;
 const APP_PORT = (() => {
   const parsed = Number.parseInt(process.env.PORT || '3020', 10);
@@ -2117,8 +2119,8 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       : forwardedHost;
     const rawHost =
       (typeof forwardedHostValue === 'string' ? forwardedHostValue.split(',')[0].trim() : undefined) ||
-      (typeof request.headers[':authority'] === 'string' ? request.headers[':authority'] : undefined) ||
-      request.headers.host;
+      request.headers.host ||
+      (typeof request.headers[':authority'] === 'string' ? request.headers[':authority'] : undefined);
     let port = getPreviewPort(rawHost);
     let previewHost = port ? getPreviewHost(rawHost) : null;
     let previewBasePath = '';
@@ -2340,14 +2342,23 @@ document.cookie.split(';').forEach(function(c){
         redirectCount < MAX_INTERNAL_REDIRECTS
       ) {
         const redirectLocation = response.headers.get('location');
-        if (!redirectLocation) break;
+        if (!redirectLocation) {
+          try { await response.arrayBuffer(); } catch {}
+          break;
+        }
 
         // Check if redirect matches /preview/{port}/... pattern for the same port
         const internalRedirectMatch = redirectLocation.match(/^\/preview\/(\d+)(\/.*)?$/);
-        if (!internalRedirectMatch) break;
+        if (!internalRedirectMatch) {
+          try { await response.arrayBuffer(); } catch {}
+          break;
+        }
 
         const redirectPort = parseInt(internalRedirectMatch[1], 10);
-        if (redirectPort !== port) break;
+        if (redirectPort !== port) {
+          try { await response.arrayBuffer(); } catch {}
+          break;
+        }
 
         // Follow this redirect internally - use full redirect location since app expects it
 
@@ -2445,11 +2456,11 @@ document.cookie.split(';').forEach(function(c){
 
           rewrittenCookies = rewriteSetCookieHeaders(setCookieHeaders, rewriteOptions);
         }
-        // Store cookies server-side for both preview modes.
-        // For subdomain preview, stored cookies are injected into upstream requests.
-        // For path-based preview, cookies are only stored so the clear-session
-        // endpoint knows which cookie names to expire (no injection occurs).
-        storeCookies(port, rewrittenCookies);
+        // Only persist cookies for subdomain preview where we replay cookies
+        // server-side into upstream requests.
+        if (!isPathPreview) {
+          storeCookies(port, rewrittenCookies);
+        }
         // Forward rewritten cookies to browser for client-side access
         reply.header('set-cookie', rewrittenCookies);
       }

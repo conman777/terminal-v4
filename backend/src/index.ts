@@ -30,7 +30,8 @@ import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
 import { assertAuthConfig } from './auth/auth-service';
-import { stopCleanupInterval } from './preview/preview-logs-service';
+import { ensureDevBootstrapUser } from './auth/dev-bootstrap';
+import { stopCleanupInterval as stopPreviewLogCleanupInterval } from './preview/preview-logs-service';
 import { migrateOrphanedSessions } from './migrations/migrate-sessions';
 import { startMemoryMonitoring, stopMemoryMonitoring } from './utils/memory-monitor';
 
@@ -74,6 +75,13 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Fail fast on insecure auth configuration
   assertAuthConfig();
+
+  // Ensure first-run development installs can sign in immediately.
+  try {
+    await ensureDevBootstrapUser(app.log);
+  } catch (error) {
+    app.log.error({ err: error }, 'Failed to create development bootstrap user');
+  }
 
   // Register auth hook (must be before routes)
   registerAuthHook(app);
@@ -167,7 +175,7 @@ async function start() {
     server.log.info(`${signal} received, shutting down...`);
     try {
       stopMemoryMonitoring();
-      stopCleanupInterval();
+      stopPreviewLogCleanupInterval();
       await server.close();
       await terminalManager.closeAll();
       closeDatabase();

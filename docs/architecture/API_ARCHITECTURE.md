@@ -15,7 +15,7 @@
 | POST | `/api/auth/refresh` | Public | Refresh tokens |
 | POST | `/api/auth/logout` | Yes | Invalidate refresh tokens |
 | GET | `/api/auth/me` | Yes | Current user info |
-| POST | `/api/auth/register` | Public | Disabled (always 403) |
+| POST | `/api/auth/register` | Public | Register user, returns `{ user, tokens }` |
 
 ## Terminal Sessions
 
@@ -130,12 +130,6 @@ Path-based preview routing:
 | GET | `/api/process-logs/:pid` | Public | Logs for PID |
 | GET | `/api/process-logs` | Public | List tracked processes |
 | DELETE | `/api/process-logs/:pid` | Public | Clear logs |
-
-## Browser Automation (Status)
-
-| Method | Path | Auth | Description |
-| --- | --- | --- | --- |
-| N/A | `/api/browser/*` | N/A | Not currently exposed by registered backend routes |
 
 ## Settings + Transcribe
 

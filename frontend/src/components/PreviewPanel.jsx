@@ -1663,6 +1663,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     mobileKeyboardInset,
     mobileSplitEnabled,
     mobileSplitHeight,
+    mobileOverlayHeight,
     previewPort,
     processLogs.length,
     proxyLogs.length,

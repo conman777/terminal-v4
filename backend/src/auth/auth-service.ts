@@ -24,7 +24,7 @@ const DEV_REFRESH_SECRET = 'dev-refresh-secret-change-in-production';
 
 // Get secrets from environment or use defaults for development
 const JWT_SECRET = process.env.JWT_SECRET || DEV_JWT_SECRET;
-const REFRESH_SECRET = process.env.REFRESH_SECRET || DEV_REFRESH_SECRET;
+const REFRESH_SECRET = process.env.REFRESH_SECRET || process.env.JWT_REFRESH_SECRET || DEV_REFRESH_SECRET;
 const ALLOWED_USERNAME = process.env.ALLOWED_USERNAME?.trim();
 const REQUIRE_STRONG_SECRETS = process.env.NODE_ENV === 'production';
 
@@ -33,7 +33,7 @@ export function assertAuthConfig(): void {
     if (!process.env.JWT_SECRET || JWT_SECRET === DEV_JWT_SECRET) {
       throw new Error('JWT_SECRET must be set to a strong value in production');
     }
-    if (!process.env.REFRESH_SECRET || REFRESH_SECRET === DEV_REFRESH_SECRET) {
+    if (!(process.env.REFRESH_SECRET || process.env.JWT_REFRESH_SECRET) || REFRESH_SECRET === DEV_REFRESH_SECRET) {
       throw new Error('REFRESH_SECRET must be set to a strong value in production');
     }
   }
@@ -113,15 +113,18 @@ export async function register(username: string, password: string): Promise<Auth
   if (!isAllowedUsername(username)) {
     throw new Error('Invalid credentials');
   }
-  // Check if username already exists
-  const existing = getUserByUsername(username);
-  if (existing) {
-    throw new Error('Username already exists');
-  }
-
   // Create user
   const passwordHash = await hashPassword(password);
-  const user = createUser(username, passwordHash);
+  let user: User;
+  try {
+    user = createUser(username, passwordHash);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('UNIQUE constraint')) {
+      throw new Error('Username already exists');
+    }
+    throw err;
+  }
 
   // Generate tokens
   const tokens: TokenPair = {
@@ -191,14 +194,15 @@ export function refreshTokens(refreshToken: string): AuthResult {
     throw new Error('User not found');
   }
 
-  // Delete old refresh token (rotation)
-  deleteRefreshToken(storedToken.id);
-
-  // Generate new tokens
+  // Generate new tokens before deleting the old one, so a failure here
+  // doesn't leave the user without any refresh token.
   const tokens: TokenPair = {
     accessToken: generateAccessToken(user),
     refreshToken: generateRefreshToken(user.id)
   };
+
+  // Delete old refresh token (rotation) — safe now that the new one exists
+  deleteRefreshToken(storedToken.id);
 
   return {
     user: toPublicUser(user),

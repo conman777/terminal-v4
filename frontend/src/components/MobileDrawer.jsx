@@ -35,7 +35,6 @@ export function MobileDrawer({
   onCreateSession,
   onOpenSettings,
   onOpenApiSettings,
-  onOpenBrowserSettings,
   onOpenBookmarks,
   onOpenNotes,
   onOpenProcessManager,

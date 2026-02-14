@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 
@@ -10,11 +11,11 @@ const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PREVIEW_SUBDOMAIN_BASES_SOURCE = process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || '';
-const PREVIEW_SUBDOMAIN_BASES = (PREVIEW_SUBDOMAIN_BASES_SOURCE || 'conordart.com,localhost')
+const PREVIEW_SUBDOMAIN_BASES = (PREVIEW_SUBDOMAIN_BASES_SOURCE || 'localhost')
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
-const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'conordart.com';
+const PREVIEW_SUBDOMAIN_BASE = PREVIEW_SUBDOMAIN_BASES[0] || 'localhost';
 const PREVIEW_PROXY_HOSTS_SOURCE = process.env.PREVIEW_PROXY_HOSTS || '';
 const PREVIEW_PROXY_HOSTS = (PREVIEW_PROXY_HOSTS_SOURCE || 'localhost,127.0.0.1,::1')
   .split(',')
@@ -252,9 +253,11 @@ async function calculateDiskIO(): Promise<{ readMBps: number; writeMBps: number 
 function startHistoryCollection(): void {
   loadStatsHistory();
   // Collect immediately on startup
-  collectStatsPoint();
+  collectStatsPoint().catch(err => console.error('[system] Initial stats collection failed:', err));
   // Then collect every 5 minutes
-  historyInterval = setInterval(collectStatsPoint, HISTORY_INTERVAL_MS);
+  historyInterval = setInterval(() => {
+    collectStatsPoint().catch(err => console.error('[system] Stats collection failed:', err));
+  }, HISTORY_INTERVAL_MS);
 }
 
 function stopHistoryCollection(): void {
@@ -371,9 +374,10 @@ function getTopProcesses(): ProcessInfo[] {
   }
 }
 
-// Absolute path to rebuild script
-const REBUILD_SCRIPT = '/home/conor/terminal-v4/rebuild.sh';
-const PROJECT_ROOT = '/home/conor/terminal-v4';
+// Rebuild script and project root — configurable via env, falls back to repo root
+const PROJECT_ROOT = process.env.PROJECT_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const REBUILD_SCRIPT = process.env.REBUILD_SCRIPT || path.join(PROJECT_ROOT, 'rebuild.sh');
+let rebuildInProgress = false;
 
 export async function registerSystemRoutes(app: FastifyInstance): Promise<void> {
   // Start collecting stats history
@@ -455,7 +459,23 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       return;
     }
 
+    if (rebuildInProgress) {
+      reply.code(409).send({ error: 'Rebuild already in progress' });
+      return;
+    }
+    // Set flag immediately before any async work to prevent race
+    rebuildInProgress = true;
+
     return new Promise((resolve) => {
+      let resolved = false;
+      const finish = (statusCode: number, body: Record<string, unknown>) => {
+        if (resolved) return;
+        resolved = true;
+        rebuildInProgress = false;
+        if (statusCode !== 200) reply.code(statusCode);
+        resolve(body);
+      };
+
       const child = spawn('bash', [REBUILD_SCRIPT], {
         cwd: PROJECT_ROOT,
         stdio: ['ignore', 'pipe', 'pipe']
@@ -474,23 +494,20 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
 
       child.on('close', (code) => {
         if (code === 0) {
-          resolve({ success: true, message: 'Rebuild completed', output: stdout });
+          finish(200, { success: true, message: 'Rebuild completed', output: stdout });
         } else {
-          reply.code(500);
-          resolve({ success: false, error: 'Rebuild failed', output: stderr || stdout });
+          finish(500, { success: false, error: 'Rebuild failed', output: stderr || stdout });
         }
       });
 
       child.on('error', (err) => {
-        reply.code(500);
-        resolve({ success: false, error: err.message });
+        finish(500, { success: false, error: err.message });
       });
 
       // Timeout after 5 minutes
       setTimeout(() => {
         child.kill();
-        reply.code(500);
-        resolve({ success: false, error: 'Rebuild timed out' });
+        finish(500, { success: false, error: 'Rebuild timed out' });
       }, 5 * 60 * 1000);
     });
   });
