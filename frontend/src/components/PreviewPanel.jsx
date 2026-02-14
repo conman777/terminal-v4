@@ -1579,7 +1579,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         mobileKeyboardInset,
         mobileSplitEnabled,
         mobileSplitHeight: Math.round(mobileSplitHeight),
-        mobileOverlayHeight: Math.round(mobileOverlayHeight),
+        mobileOverlayHeight: Math.round(Math.min(mobileSplitHeight, Math.max(180, getViewportHeight() * 0.75))),
         mobileTerminalVisible
       },
       desktop: {
@@ -1663,7 +1663,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     mobileKeyboardInset,
     mobileSplitEnabled,
     mobileSplitHeight,
-    mobileOverlayHeight,
     previewPort,
     processLogs.length,
     proxyLogs.length,
