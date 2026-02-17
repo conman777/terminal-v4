@@ -108,8 +108,8 @@ export function MobileDrawer({
 
   return (
     <>
-      <div className={`mobile-drawer-overlay-modern${isOpen ? ' open' : ''}`} onClick={onClose}></div>
-      <div className={`mobile-drawer-modern${isOpen ? ' open' : ''}`}>
+      <div className={`mobile-drawer-overlay-modern${isOpen ? ' open' : ''}`} onClick={onClose} aria-hidden="true"></div>
+      <div className={`mobile-drawer-modern${isOpen ? ' open' : ''}`} aria-hidden={!isOpen}>
         <div className="mobile-drawer-header-modern">
           <h2>Menu</h2>
           <button className="mobile-drawer-close-modern" onClick={onClose} aria-label="Close menu">

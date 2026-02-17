@@ -132,6 +132,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const sessionsRef = useRef(sessions);
   const restoreSessionRef = useRef(restoreSession);
   const restoreRetryAttemptedRef = useRef(false);
+  const restoreAttempt2Ref = useRef(false);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const getHistoryConfig = useCallback(() => ({
@@ -657,19 +658,41 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     setMobileInputEnabled(true);
   }, [isMobile, setMobileInputEnabled, setScrollMode, viewMode]);
 
-  // Touch gesture handling
+  // Touch gesture handling - no scroll-mode on mobile (native scroll works better)
   const handleLongPress = useCallback(() => {
     if (!isMobile) return;
-    toggleScrollMode();
-  }, [isMobile, toggleScrollMode]);
+    // On mobile, don't enter scroll-mode (touch-action:none blocks all touch scrolling).
+    // Scroll buttons are always visible instead.
+  }, [isMobile]);
 
   const handleTouchMove = useCallback((info) => {
     const term = xtermRef.current;
     if (!term) return;
     const deltaY = info?.deltaY || 0;
-    const deltaX = info?.deltaX || 0;
     if (!deltaY) return;
 
+    // On mobile, scroll the xterm viewport directly via term.scrollLines().
+    // This moves the viewport without sending any input to the terminal.
+    // We can't rely on native scroll because the mobile keyboard textarea
+    // overlay covers the viewport and intercepts touch events.
+    if (isMobile) {
+      if (info?.event?.cancelable) {
+        info.event.preventDefault();
+      }
+
+      const lineHeight = 16;
+      const pixels = Math.abs(deltaY);
+      const lines = Math.max(1, Math.round(pixels / lineHeight));
+      // Touch drag up (positive deltaY) = scroll up (negative lines)
+      term.scrollLines(deltaY > 0 ? -lines : lines);
+
+      if (deltaY > 0) {
+        triggerLoadMoreIfAtTop();
+      }
+      return;
+    }
+
+    const deltaX = info?.deltaX || 0;
     // Ignore horizontal swipes so session switching keeps working.
     const isVerticalDrag = Math.abs(deltaY) >= Math.abs(deltaX);
     if (!isVerticalDrag) return;
@@ -683,7 +706,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (deltaY > 0) {
       triggerLoadMoreIfAtTop();
     }
-  }, [scrollByWheel, triggerLoadMoreIfAtTop]);
+  }, [isMobile, scrollByWheel, triggerLoadMoreIfAtTop]);
 
   const {
     touchStateRef,
@@ -849,6 +872,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     shouldReplayHistoryRef.current = !skipHistory;
     restoreRetryAttemptedRef.current = false;
+    restoreAttempt2Ref.current = false;
     setIsLoadingMoreHistory(false);
     applyHistoryConfig();
     historyStateRef.current.exhausted = false;
@@ -1203,7 +1227,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       // Custom wheel handling: let xterm handle scrolling natively for smooth
       // scroll, only intercept when xterm scrollback is exhausted (tmux copy-mode)
+      // On mobile, never intercept — let native touch scroll handle everything.
       term.attachCustomWheelEventHandler((event) => {
+        if (isMobile) {
+          // On mobile, always let xterm handle scroll natively
+          if (event.deltaY < 0) {
+            setTimeout(() => triggerLoadMoreIfAtTop(), 0);
+          }
+          return true;
+        }
+
         if (!usesTmuxRef.current) {
           return true;
         }
@@ -1594,6 +1627,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (disposed) return () => {};
         // Skip reconnect if we're offline
         if (pausedForOfflineRef.current) return () => {};
+        restoreRetryAttemptedRef.current = false;
+        restoreAttempt2Ref.current = false;
         const existing = socketRef.current;
         if (existing) existing.close();
         // Store reconnect function for visibility/online handlers
@@ -1963,9 +1998,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     }, 120);
                   })
                   .catch(() => {
-                    shouldReconnect = false;
-                    setIsLoadingHistory(false);
-                    writeTerminal('\r\n[Terminal session ended]\r\n');
+                    if (!restoreAttempt2Ref.current) {
+                      restoreAttempt2Ref.current = true;
+                      setTimeout(() => {
+                        void restoreSessionRef.current(sessionId)
+                          .then(() => {
+                            if (disposed || pausedForOfflineRef.current) return;
+                            setTimeout(() => { if (!disposed) connectSocket(); }, 120);
+                          })
+                          .catch(() => {
+                            shouldReconnect = false;
+                            setIsLoadingHistory(false);
+                            writeTerminal('\r\n[Terminal session ended]\r\n');
+                          });
+                      }, 2000);
+                    } else {
+                      shouldReconnect = false;
+                      setIsLoadingHistory(false);
+                      writeTerminal('\r\n[Terminal session ended]\r\n');
+                    }
                   });
                 return;
               }
@@ -1975,13 +2026,38 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               return;
             }
             if (event.reason === 'Terminal session not found' || event.code === 4404) {
-              shouldReconnect = false;
-              setIsLoadingHistory(false);
-              writeTerminal('\r\n[Terminal session not found]\r\n');
+              if (!restoreRetryAttemptedRef.current && typeof restoreSessionRef.current === 'function') {
+                restoreRetryAttemptedRef.current = true;
+                writeTerminal('\r\n[Session inactive - restoring...]\r\n');
+                void restoreSessionRef.current(sessionId)
+                  .then(() => {
+                    if (disposed || pausedForOfflineRef.current) return;
+                    setTimeout(() => { if (!disposed) connectSocket(); }, 120);
+                  })
+                  .catch(() => {
+                    shouldReconnect = false;
+                    setIsLoadingHistory(false);
+                    writeTerminal('\r\n[Terminal session not found]\r\n');
+                  });
+              } else {
+                shouldReconnect = false;
+                setIsLoadingHistory(false);
+                writeTerminal('\r\n[Terminal session not found]\r\n');
+              }
               return;
             }
             if (event.reason === 'Unauthorized' || event.code === 4401) {
-              handleAuthFailure('Session expired - please refresh');
+              refreshTokens()
+                .then(() => {
+                  if (!disposed && shouldReconnect) {
+                    wsRetryCount++;
+                    const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
+                    setTimeout(connectSocket, delay);
+                  }
+                })
+                .catch(() => {
+                  handleAuthFailure('Session expired - please refresh');
+                });
               return;
             }
             if (shouldReconnect && !pausedForOfflineRef.current) {
@@ -2431,7 +2507,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         />
       )}
 
-      {isMobile && isScrollMode && (
+      {!isMobile && isScrollMode && (
         <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>
       )}
       {viewMode === 'terminal' && isCopyMode && (
@@ -2486,7 +2562,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           <span>Loading more history...</span>
         </div>
       )}
-      {(!isMobile || isScrollMode || isCopyMode) && (
+      {(isMobile || isScrollMode || isCopyMode) && (
         <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"

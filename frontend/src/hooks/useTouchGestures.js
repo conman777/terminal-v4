@@ -44,7 +44,7 @@ export function useTouchGestures(isMobile, onTap, options = {}) {
     if (!state) return;
     const touch = event.touches?.[0];
     if (!touch) return;
-    if (Math.abs(touch.clientX - state.startX) > 8 || Math.abs(touch.clientY - state.startY) > 8) {
+    if (Math.abs(touch.clientX - state.startX) > 15 || Math.abs(touch.clientY - state.startY) > 15) {
       state.moved = true;
       clearLongPressTimer();
     }

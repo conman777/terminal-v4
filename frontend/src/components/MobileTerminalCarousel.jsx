@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSwipeGesture } from '../hooks/useSwipeGesture';
 import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
 
@@ -26,27 +25,6 @@ export function MobileTerminalCarousel({
       onIndexChange(sessions.length - 1);
     }
   }, [sessions.length, currentIndex, onIndexChange]);
-
-  const handleSwipeLeft = useCallback(() => {
-    // Go to next terminal
-    if (currentIndex < sessions.length - 1) {
-      onIndexChange(currentIndex + 1);
-    }
-  }, [currentIndex, sessions.length, onIndexChange]);
-
-  const handleSwipeRight = useCallback(() => {
-    // Go to previous terminal
-    if (currentIndex > 0) {
-      onIndexChange(currentIndex - 1);
-    }
-  }, [currentIndex, onIndexChange]);
-
-  // Swipe gesture for changing sessions
-  const { containerRef: swipeRef } = useSwipeGesture({
-    onSwipeLeft: handleSwipeLeft,
-    onSwipeRight: handleSwipeRight,
-    enabled: sessions.length > 1
-  });
 
   // Refresh token to force terminal reconnection
   const [refreshToken, setRefreshToken] = useState(0);
@@ -118,8 +96,8 @@ export function MobileTerminalCarousel({
 
   return (
     <div className="mobile-terminal-carousel">
-      {/* Terminal content - swipe to change sessions */}
-      <div className="carousel-content" ref={swipeRef}>
+      {/* Terminal content */}
+      <div className="carousel-content">
         <TerminalChat
           key={`${currentSession.id}-${refreshToken}`}
           sessionId={currentSession.id}

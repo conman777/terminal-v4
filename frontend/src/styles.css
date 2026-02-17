@@ -1076,6 +1076,13 @@ button {
   touch-action: none;
 }
 
+/* On mobile, never block touch scrolling even in scroll-mode */
+@media (max-width: 768px) {
+  .terminal-chat.scroll-mode {
+    touch-action: pan-y;
+  }
+}
+
 .terminal-chat:focus-within {
   box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.15);
 }
@@ -1502,7 +1509,12 @@ button {
 .terminal-scroll-buttons.mobile {
   bottom: 64px;
   right: 6px;
-  opacity: 0.88;
+  opacity: 0.7;
+}
+
+.terminal-scroll-buttons.mobile .scroll-btn {
+  width: 44px;
+  height: 48px;
 }
 
 .scroll-btn {
@@ -7388,7 +7400,7 @@ button {
   overflow-x: auto;
   scrollbar-width: none;
   gap: 6px;
-  padding: 0 4px;
+  padding: 0 8px 0 4px;
   -webkit-overflow-scrolling: touch;
 }
 
@@ -9682,7 +9694,7 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px));
   background: var(--bg-surface);
   border-top: 1px solid var(--border-subtle);
   min-height: 44px;
@@ -9691,7 +9703,7 @@ textarea:focus-visible {
 }
 
 .mobile-status-bar.expanded {
-  padding: 6px 8px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
 }
 
 /* Mobile Input Toggle Button */
@@ -9813,6 +9825,11 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.mobile-status-right.mic-recording-full {
+  flex: 1;
+  justify-content: center;
 }
 
 .status-bar-btn {
@@ -11060,7 +11077,6 @@ textarea:focus-visible {
   flex: 1;
   min-height: 0;
   position: relative;
-  touch-action: pan-y;
 }
 
 .mobile-terminal-carousel .carousel-content {
