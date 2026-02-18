@@ -1723,7 +1723,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       let wsRetryCount = 0;
       let authRetryCount = 0;
-      let restoreRetryDelay = 30000;
+      let restoreRetryDelay = 5000;
       const MAX_WS_RETRY_DELAY = 30000;
 
       const connectSocket = () => {
