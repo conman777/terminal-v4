@@ -734,6 +734,19 @@ function AppContent() {
     } catch { /* createSession already logs */ }
   }, [createSession]);
 
+  const handleSetSessionAiType = useCallback((sessionId, aiType) => {
+    setSessionAiTypes(prev => {
+      const next = { ...prev };
+      if (aiType) {
+        next[sessionId] = aiType;
+      } else {
+        delete next[sessionId];
+      }
+      localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
   // Keyboard shortcuts (desktop only)
   useKeyboardShortcuts({
     onToggleSidebar: toggleSidebar,
@@ -905,7 +918,7 @@ function AppContent() {
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
-    sessionAiTypes,
+    sessionAiTypes, onSetSessionAiType: handleSetSessionAiType,
   };
 
   const headerModalProps = {
@@ -1115,6 +1128,7 @@ function AppContent() {
                         sessionActivity={sessionActivity}
                         onSessionBusyChange={handleSessionBusyChange}
                         projectInfo={projectInfo}
+                        sessionAiTypes={sessionAiTypes}
                       />
                     </ErrorBoundary>
                   )}

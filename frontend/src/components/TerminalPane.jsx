@@ -23,6 +23,7 @@ export const TerminalPane = memo(function TerminalPane({
   webglEnabled,
   sessionActivity,
   projectInfo,
+  sessionAiTypes,
   onCwdChange,
   onSessionBusyChange
 }) {
@@ -109,7 +110,7 @@ export const TerminalPane = memo(function TerminalPane({
   return (
     <div
       ref={paneRef}
-      className={`split-terminal-pane ${isActive ? 'active' : ''} ${isFullscreen ? 'fullscreen' : ''} ${isDragOver ? 'drag-over' : ''}`}
+      className={`split-terminal-pane ${isActive ? 'active' : ''} ${isFullscreen ? 'fullscreen' : ''} ${isDragOver ? 'drag-over' : ''}${sessionAiTypes?.[pane.sessionId] ? ` pane-ai-${sessionAiTypes[pane.sessionId]}` : ''}`}
       onClick={handlePaneClick}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

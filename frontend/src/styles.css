@@ -11033,6 +11033,45 @@ textarea:focus-visible {
   flex-direction: column;
 }
 
+/* Per-AI terminal pane background tints */
+.pane-ai-claude .xterm-scrollable-element {
+  background-color: #1e1a10 !important;
+}
+.pane-ai-codex .xterm-scrollable-element {
+  background-color: #12151e !important;
+}
+.pane-ai-gemini .xterm-scrollable-element {
+  background-color: #12181a !important;
+}
+
+/* Per-AI pane header bar tints */
+.pane-ai-claude .ph-bar {
+  background: rgba(255, 107, 43, 0.06);
+  border-bottom-color: rgba(255, 107, 43, 0.22);
+}
+.pane-ai-codex .ph-bar {
+  background: rgba(59, 130, 246, 0.06);
+  border-bottom-color: rgba(59, 130, 246, 0.22);
+}
+.pane-ai-gemini .ph-bar {
+  background: rgba(34, 197, 94, 0.06);
+  border-bottom-color: rgba(34, 197, 94, 0.22);
+}
+
+/* Per-AI status bar tints */
+.pane-ai-claude .desktop-status-bar {
+  background: rgba(255, 107, 43, 0.06);
+  border-top-color: rgba(255, 107, 43, 0.22);
+}
+.pane-ai-codex .desktop-status-bar {
+  background: rgba(59, 130, 246, 0.06);
+  border-top-color: rgba(59, 130, 246, 0.22);
+}
+.pane-ai-gemini .desktop-status-bar {
+  background: rgba(34, 197, 94, 0.06);
+  border-top-color: rgba(34, 197, 94, 0.22);
+}
+
 /* Empty pane state */
 .pane-empty {
   display: flex;

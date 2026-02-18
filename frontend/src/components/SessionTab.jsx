@@ -217,18 +217,18 @@ export const SessionTab = memo(function SessionTab({
           font-weight: 600;
         }
 
-        /* Claude Code — Orange */
+        /* Claude Code — Vibrant Orange */
         .session-tab-item.ai-claude.active {
-          background: rgba(249, 115, 22, 0.08);
-          border-top-color: #f97316;
-          box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.4), 0 0 12px rgba(249, 115, 22, 0.25);
+          background: rgba(255, 107, 43, 0.08);
+          border-top-color: #ff6b2b;
+          box-shadow: 0 0 0 1px rgba(255, 107, 43, 0.4), 0 0 12px rgba(255, 107, 43, 0.25);
         }
         .session-tab-item.ai-claude .tab-status-dot-modern.idle {
-          background: rgba(249, 115, 22, 0.5);
+          background: rgba(255, 107, 43, 0.5);
         }
         .session-tab-item.ai-claude.drag-over {
-          background: rgba(249, 115, 22, 0.1);
-          border-top-color: #f97316;
+          background: rgba(255, 107, 43, 0.1);
+          border-top-color: #ff6b2b;
         }
 
         /* Codex — Blue */

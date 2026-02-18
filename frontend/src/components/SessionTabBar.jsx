@@ -2,6 +2,13 @@ import { useCallback, useState, useRef, useEffect } from 'react';
 import { SessionTab } from './SessionTab';
 import { ContextMenu } from './ContextMenu';
 
+const AI_TYPE_OPTIONS = [
+  { id: null,      label: 'CLI (default)', color: '#f59e0b' },
+  { id: 'claude',  label: 'Claude Code',   color: '#ff6b2b' },
+  { id: 'codex',   label: 'Codex',         color: '#3b82f6' },
+  { id: 'gemini',  label: 'Gemini',        color: '#22c55e' },
+];
+
 /**
  * Horizontal tab bar for session management.
  * Features: drag reorder, right-click menu, new tab button, activity indicators,
@@ -19,6 +26,7 @@ export function SessionTabBar({
   inHeader = false,
   showStatusLabels = false,
   sessionAiTypes,
+  onSetSessionAiType,
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
@@ -119,6 +127,8 @@ export function SessionTabBar({
     const session = sessions.find(s => s.id === sessionId);
     if (!session) return [];
 
+    const currentAiType = sessionAiTypes?.[sessionId] ?? null;
+
     return [
       {
         label: 'Rename',
@@ -130,6 +140,13 @@ export function SessionTabBar({
           }
         }
       },
+      { separator: true },
+      ...AI_TYPE_OPTIONS.map(opt => ({
+        label: opt.label,
+        icon: <span style={{ width: 8, height: 8, borderRadius: '50%', background: opt.color, display: 'inline-block', flexShrink: 0 }} />,
+        shortcut: currentAiType === opt.id ? '✓' : undefined,
+        onClick: () => onSetSessionAiType?.(sessionId, opt.id),
+      })),
       { separator: true },
       {
         label: 'Close',
@@ -147,7 +164,7 @@ export function SessionTabBar({
         danger: true
       }
     ];
-  }, [sessions, onCloseSession, handleCloseOthers]);
+  }, [sessions, sessionAiTypes, onSetSessionAiType, onCloseSession, handleCloseOthers]);
 
   return (
     <div className={`session-tab-bar-container-modern${inHeader ? ' in-header' : ''}`}>

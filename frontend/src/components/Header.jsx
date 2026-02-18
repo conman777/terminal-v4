@@ -27,7 +27,7 @@ export function Header({
     onReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
-    sessionAiTypes,
+    sessionAiTypes, onSetSessionAiType,
   } = sessionProps;
 
   const {
@@ -177,6 +177,7 @@ export function Header({
             inHeader
             showStatusLabels={showTabStatusLabels}
             sessionAiTypes={sessionAiTypes}
+            onSetSessionAiType={onSetSessionAiType}
           />
         </div>
       )}
