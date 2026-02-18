@@ -878,7 +878,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return true;
     })();
 
-    if (fit && fitAddonRef.current && canRender) {
+    // Block fit() while history is being loaded: the stored ANSI sequences were
+    // recorded at the PTY's original width. Resizing xterm mid-playback misaligns
+    // cursor positions and causes severe content garbling. fit() will be triggered
+    // explicitly once loadInitialHistory() completes.
+    if (fit && fitAddonRef.current && canRender && !historyReloadingRef.current) {
       let wasAtBottom = true;
       if (preserveBottom) {
         const buffer = term.buffer?.active;
@@ -1033,6 +1037,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const term = new Terminal({
       cursorBlink: false,
+      cols: 250,
       fontSize: defaultTerminalFontSize,
       fontFamily: terminalFontFamily,
       fontWeight: '400',
@@ -1236,6 +1241,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       hasOpened = true;
       term.open(container);
+
+      // Pre-block fit() until loadInitialHistory() finishes.
+      // xterm is initialised at cols=250 so that ANSI cursor-positioning sequences
+      // in the stored history (which may have been recorded at any PTY width up to
+      // 250) execute at their original column without being clamped. If fit() ran
+      // before history finished it would resize xterm to the (narrower) container
+      // width, clamping those positions and garbling the historical content.
+      // loadInitialHistory() clears this flag and schedules a fit() once playback
+      // is safe. The existing historyReloadingRef guard in refreshTerminalViewport
+      // ensures no fit() slips through between here and WS connect.
+      historyReloadingRef.current = true;
 
       const requestPostOpenFit = () => {
         if (disposed || !xtermRef.current) return;
@@ -1461,6 +1477,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           flushPendingSocketData();
           setIsLoadingHistory(false);
           shouldReplayHistoryRef.current = false;
+          // Now that history is fully written (at the PTY's original width), it is safe
+          // to fit xterm to the actual container size. This may soft-wrap historical
+          // content but keeps the cursor positions correct — avoids mid-playback garbling.
+          scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false });
         } catch {
           // Ignore load failures; retry on next reconnect.
         } finally {
@@ -1469,6 +1489,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             historyReloadingRef.current = false;
             flushPendingSocketData();
             setIsLoadingHistory(false);
+            scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false });
           }
         }
       };
@@ -1610,7 +1631,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       rafId = requestAnimationFrame(() => {
         if (!disposed && fitAddonRef.current) {
           scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
-          const { cols, rows } = term;
+          // proposeDimensions() reads the container's actual pixel size and returns the
+          // col/row count that fit() would use, without modifying the terminal. This lets
+          // us send the correct PTY size *before* the nested-RAF fit actually runs.
+          // Cols and rows are checked independently: a hidden/zero-height container
+          // (e.g. the mobile terminal sheet before it opens) has the correct width
+          // (left:0; right:0) but zero height — we still want to send the correct col count.
+          const proposed = fitAddonRef.current.proposeDimensions?.();
+          const cols = (proposed?.cols >= 20) ? proposed.cols : term.cols;
+          const rows = (proposed?.rows >= 3) ? proposed.rows : term.rows;
           if (syncPtySizeRef.current && cols && rows) {
             apiFetch(`/api/terminal/${sessionId}/resize`, {
               method: 'POST',

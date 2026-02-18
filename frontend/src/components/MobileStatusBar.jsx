@@ -3,6 +3,8 @@ import { TerminalMicButton } from './TerminalMicButton';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
+import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
+import { useAutocorrect } from '../contexts/AutocorrectContext';
 
 export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true }) {
   const [inputText, setInputText] = useState('');
@@ -10,6 +12,8 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
   const [isMicRecording, setIsMicRecording] = useState(false);
   const inputRef = useRef(null);
   const { sendToSession } = useTerminalSession();
+  const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
+  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(inputText, setInputText, autocorrectEnabled);
 
   const sendToTerminal = useCallback(async (text) => {
     if (!sessionId || !text.trim()) return;
@@ -39,6 +43,8 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
   }, [inputText, sendToTerminal]);
 
   const handleKeyDown = useCallback((e) => {
+    const handled = autocorrectKeyDown(e);
+    if (handled) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendToTerminal(inputText);
@@ -46,7 +52,7 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
       setIsExpanded(false);
       setInputText('');
     }
-  }, [inputText, sendToTerminal]);
+  }, [inputText, sendToTerminal, autocorrectKeyDown]);
 
   const handlePaste = useCallback(async (e) => {
     const clipboardData = e.clipboardData;
@@ -167,6 +173,17 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
                       <line x1="12" y1="19" x2="20" y2="19" />
                     </svg>
                   )}
+                </button>
+
+                {/* Autocorrect toggle button */}
+                <button
+                  type="button"
+                  className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
+                  onClick={toggleAutocorrect}
+                  aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
+                  title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
+                >
+                  <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
                 </button>
 
                 {/* Image upload button */}

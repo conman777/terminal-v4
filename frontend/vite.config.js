@@ -32,6 +32,7 @@ export default defineConfig({
             return 'vendor-markdown';
           }
           if (id.includes('/diff/')) return 'vendor-diff';
+          if (id.includes('nspell') || id.includes('dictionary-en')) return 'vendor-spellcheck';
           return 'vendor-misc';
         }
       }

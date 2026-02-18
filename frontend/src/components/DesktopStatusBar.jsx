@@ -1,4 +1,5 @@
 import { TerminalMicButton } from './TerminalMicButton';
+import { useAutocorrect } from '../contexts/AutocorrectContext';
 
 /**
  * Desktop status bar at the bottom of the terminal pane.
@@ -13,6 +14,8 @@ export function DesktopStatusBar({
   viewMode = 'terminal',
   onToggleViewMode
 }) {
+  const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
+
   // Extract folder name from cwd, fall back to session title
   const normalizedCwd = typeof cwd === 'string' ? cwd.replace(/\\/g, '/') : '';
   const folderName = normalizedCwd ? normalizedCwd.split('/').filter(Boolean).pop() || normalizedCwd : '';
@@ -43,6 +46,17 @@ export function DesktopStatusBar({
       </div>
 
       <div className="status-bar-right">
+        {/* Autocorrect toggle button */}
+        <button
+          type="button"
+          className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
+          onClick={toggleAutocorrect}
+          aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
+          title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
+        >
+          <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
+        </button>
+
         {/* Reader view toggle button */}
         <button
           type="button"

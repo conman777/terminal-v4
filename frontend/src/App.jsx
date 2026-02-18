@@ -19,6 +19,7 @@ import { NotesProvider, useNotes } from './contexts/NotesContext';
 import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext';
 import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
+import { AutocorrectProvider } from './contexts/AutocorrectContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useViewportHeight } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
@@ -1310,6 +1311,7 @@ function AuthenticatedApp() {
 
   return (
     <ThemeProvider>
+      <AutocorrectProvider>
       <NotesProvider>
         <FolderProvider>
           <TerminalSessionProvider>
@@ -1323,6 +1325,7 @@ function AuthenticatedApp() {
           </TerminalSessionProvider>
         </FolderProvider>
       </NotesProvider>
+      </AutocorrectProvider>
     </ThemeProvider>
   );
 }

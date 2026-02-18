@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
+import { useAutocorrect } from '../contexts/AutocorrectContext';
 
 const SLASH_COMMANDS = [
   { cmd: '/model', desc: 'Change AI model' },
@@ -18,6 +20,8 @@ export default function ClaudeCodeInput({
   onCommandPreview
 }) {
   const [text, setText] = useState('');
+  const { autocorrectEnabled } = useAutocorrect();
+  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(text, setText, autocorrectEnabled);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const textareaRef = useRef(null);
@@ -85,6 +89,9 @@ export default function ClaudeCodeInput({
   };
 
   const handleKeyDown = (e) => {
+    const handled = autocorrectKeyDown(e);
+    if (handled) return;
+
     // Escape to cancel when processing
     if (e.key === 'Escape') {
       if (isProcessing && onCancel) {

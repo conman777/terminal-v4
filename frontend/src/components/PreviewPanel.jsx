@@ -1123,11 +1123,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setIsLoading(true);
       setError(null);
       setLogs([]);
-      const cacheBuster = `_cb=${Date.now()}`;
-      const separator = baseIframeSrc.includes('?') ? '&' : '?';
-      setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+      try {
+        const url = new URL(baseIframeSrc, window.location.origin);
+        if (inspectMode) url.searchParams.set('__inspect', '1');
+        url.searchParams.set('_cb', Date.now().toString());
+        setIframeSrc(url.toString());
+      } catch {
+        const cacheBuster = `_cb=${Date.now()}`;
+        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        const inspectParam = inspectMode ? '__inspect=1&' : '';
+        setIframeSrc(`${baseIframeSrc}${separator}${inspectParam}${cacheBuster}`);
+      }
     }
-  }, [baseIframeSrc]);
+  }, [baseIframeSrc, inspectMode]);
 
   const handleUrlSubmit = useCallback((e) => {
     e.preventDefault();
@@ -1802,11 +1810,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (mode !== 'terminal') setShowMobileToolsMenu(false);
     // Keep view mode controls accessible when switching between mobile layouts.
     setShowLogs(false);
-    // Exit inspect if switching to terminal
-    if (mode === 'terminal' && inspectMode) setInspectMode(false);
+    // Exit inspect if switching to terminal — use handleToggleInspect so the iframe
+    // is also reloaded without __inspect=1 (just setInspectMode(false) would update
+    // the button but leave the inspector script running in the iframe).
+    if (mode === 'terminal' && inspectMode) handleToggleInspect();
     // Trigger terminal refit when entering terminal mode
     if (mode === 'terminal' || mode === 'split') setPreviewTerminalFitToken(t => t + 1);
-  }, [clampMobileSplitHeight, inspectMode]);
+  }, [clampMobileSplitHeight, handleToggleInspect, inspectMode]);
 
   // Toggle between preview/split (keeps Cmd+K shortcut working)
   const handleToggleMobileSplit = useCallback(() => {
