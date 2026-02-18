@@ -1835,6 +1835,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               } else {
                 void loadIncrementalHistory();
               }
+            } else {
+              // Reconnect after silent disconnect — fetch any output missed during the gap.
+              scheduleIncrementalResync(0);
             }
           };
 
