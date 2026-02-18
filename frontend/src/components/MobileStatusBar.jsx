@@ -4,7 +4,7 @@ import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
-export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true, onRefreshTerminal }) {
+export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewMode = 'terminal', onToggleViewMode, isConnected = true }) {
   const [inputText, setInputText] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMicRecording, setIsMicRecording] = useState(false);
@@ -129,21 +129,6 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
           <div className={`mobile-status-right ${isMicRecording ? 'mic-recording-full' : ''}`}>
             {!isMicRecording && (
               <>
-                {/* Refresh/reconnect button */}
-                <button
-                  type="button"
-                  className="status-bar-btn"
-                  onClick={onRefreshTerminal}
-                  disabled={!onRefreshTerminal}
-                  aria-label="Reconnect terminal"
-                  title="Reconnect terminal"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="23 4 23 10 17 10" />
-                    <path d="M20.49 15a9 9 0 1 1 2.13-9" />
-                  </svg>
-                </button>
-
                 {/* Type button */}
                 <button
                   type="button"

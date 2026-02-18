@@ -17,7 +17,8 @@ export function SessionTabBar({
   onRenameSession,
   onReorderSessions,
   inHeader = false,
-  showStatusLabels = false
+  showStatusLabels = false,
+  sessionAiTypes,
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [draggedId, setDraggedId] = useState(null);
@@ -195,6 +196,7 @@ export function SessionTabBar({
               onDragEnd={handleDragEnd}
               onDrop={handleDrop}
               onContextMenu={handleContextMenu}
+              aiType={sessionAiTypes?.[session.id]}
             />
           );
         })}

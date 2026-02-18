@@ -393,6 +393,12 @@ function AppContent() {
     });
   }, [sessions, sessionActivity, removeSessionActivity]);
 
+  // Per-session AI type mapping, persisted in localStorage for tab color restoration
+  const [sessionAiTypes, setSessionAiTypes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('sessionAiTypes') || '{}'); }
+    catch { return {}; }
+  });
+
   // Tab reorder state - stores session IDs in user-defined order, persisted server-side
   const [tabOrder, setTabOrder] = useState([]);
   const tabOrderSaveRef = useRef(null);
@@ -705,7 +711,7 @@ function AppContent() {
     setShowNewSessionModal(false);
   }, []);
 
-  const handleCreateSessionFromFolder = useCallback((path, aiOptionId = 'cli') => {
+  const handleCreateSessionFromFolder = useCallback(async (path, aiOptionId = 'cli', tabName = '') => {
     setShowNewSessionModal(false);
     if (!path) return;
     const selectedAi = NEW_TAB_AI_OPTIONS.find((option) => option.id === aiOptionId) || NEW_TAB_AI_OPTIONS[0];
@@ -713,10 +719,19 @@ function AppContent() {
     if (selectedAi.command) {
       request.initialCommand = selectedAi.command;
     }
-    if (selectedAi.title) {
-      request.title = selectedAi.title;
-    }
-    createSession(request);
+    // Custom name > AI default name > backend default
+    request.title = tabName || selectedAi.title || undefined;
+
+    try {
+      const session = await createSession(request);
+      if (session?.id && aiOptionId !== 'cli') {
+        setSessionAiTypes(prev => {
+          const next = { ...prev, [session.id]: aiOptionId };
+          localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+          return next;
+        });
+      }
+    } catch { /* createSession already logs */ }
   }, [createSession]);
 
   // Keyboard shortcuts (desktop only)
@@ -890,6 +905,7 @@ function AppContent() {
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
+    sessionAiTypes,
   };
 
   const headerModalProps = {

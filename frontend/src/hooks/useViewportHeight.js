@@ -52,7 +52,7 @@ export function useViewportHeight() {
     // Dynamic polling for mobile - faster during keyboard animations
     // iOS keyboard typically takes ~350ms to animate, poll fast during this time
     const FAST_POLL_INTERVAL = 100;   // Poll every 100ms during keyboard animation
-    const SLOW_POLL_INTERVAL = 500;   // Poll every 500ms otherwise
+    const SLOW_POLL_INTERVAL = 2000;  // Poll every 2000ms otherwise
     const KEYBOARD_ANIMATION_DURATION = 400;  // Wait 400ms before slowing down
 
     const startFastPolling = () => {

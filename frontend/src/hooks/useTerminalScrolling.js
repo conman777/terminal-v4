@@ -124,7 +124,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
       return;
     }
 
-    if (!usesTmuxRef || usesTmuxRef.current) {
+    if (usesTmuxRef?.current) {
       const key = direction === 'up' ? '\x1b[A' : '\x1b[B';
       sendCopyModeKeys(key.repeat(safeLines));
     }
@@ -256,6 +256,8 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
     isScrollingRef,
     scrollUp,
     scrollDown,
+    scrollInTmux,
+    sendCopyModeKeys,
     scrollByWheel,
     jumpToLive,
     startScrolling,

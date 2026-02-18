@@ -42,7 +42,6 @@ export function useMobileDetect() {
     const viewport = window.visualViewport;
     if (viewport) {
       viewport.addEventListener('resize', checkMobile);
-      viewport.addEventListener('scroll', checkMobile);
     }
 
     const pointerQuery = window.matchMedia?.('(pointer: coarse)');
@@ -55,7 +54,6 @@ export function useMobileDetect() {
       window.removeEventListener('orientationchange', checkMobile);
       if (viewport) {
         viewport.removeEventListener('resize', checkMobile);
-        viewport.removeEventListener('scroll', checkMobile);
       }
       pointerQuery?.removeEventListener?.('change', checkMobile);
       hoverQuery?.removeEventListener?.('change', checkMobile);

@@ -37,8 +37,9 @@ function isFrontendCandidatePort(portInfo, previewPort) {
   if (portInfo.port < 1024) return false;
   // If we have no process/cwd metadata, this is usually noisy/system traffic.
   if (!portInfo.process && !portInfo.cwd) return false;
-  if (portInfo.frontendLikely === true || portInfo.previewable === true) return true;
-  return portInfo.probeStatus === 'html' || portInfo.probeStatus === 'redirect';
+  // Exclude system services identified by the probe (postgres, redis, chrome, etc).
+  if (portInfo.probeStatus === 'excluded-process') return false;
+  return true;
 }
 
 function getPortAppKey(portInfo) {

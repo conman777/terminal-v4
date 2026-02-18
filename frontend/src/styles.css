@@ -1076,10 +1076,12 @@ button {
   touch-action: none;
 }
 
-/* On mobile, never block touch scrolling even in scroll-mode */
+/* On mobile, JS handles all scrolling via term.scrollLines() so we need
+   touch-action: none to prevent the browser from intercepting touches. */
 @media (max-width: 768px) {
+  .terminal-chat,
   .terminal-chat.scroll-mode {
-    touch-action: pan-y;
+    touch-action: none;
   }
 }
 

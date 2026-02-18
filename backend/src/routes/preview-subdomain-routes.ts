@@ -2177,6 +2177,16 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
         // Avoid cache-busting JS imports to prevent duplicate module graphs (React #321).
         const shouldBustScripts = false;
         const rewriteUrlValue = (value: string) => {
+          // For absolute http/https URLs, try rewriting local ones before deciding to skip.
+          // shouldSkipRewrite bails on all absolute URLs, but rewriteLocalAbsoluteUrl can
+          // convert http://localhost:<port>/path → previewOrigin/path for local targets.
+          if (value.startsWith('http://') || value.startsWith('https://')) {
+            const rewritten = rewriteLocalAbsoluteUrl(value, port, previewOrigin, previewBasePath);
+            if (rewritten !== value) {
+              return { url: rewritten, skip: false };
+            }
+            return { url: value, skip: true };
+          }
           // Check skip BEFORE normalization to catch framework paths like /_next/
           if (shouldSkipRewrite(value, isPathPreview)) {
             return { url: value, skip: true };

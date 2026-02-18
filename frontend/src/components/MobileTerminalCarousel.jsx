@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
 
@@ -26,16 +26,8 @@ export function MobileTerminalCarousel({
     }
   }, [sessions.length, currentIndex, onIndexChange]);
 
-  // Refresh token to force terminal reconnection
+  // Refresh token to force terminal remount (used by auto-remount watchdog)
   const [refreshToken, setRefreshToken] = useState(0);
-  const [reconnectTerminal, setReconnectTerminal] = useState(null);
-  const handleRefreshTerminal = useCallback(() => {
-    if (typeof reconnectTerminal === 'function') {
-      reconnectTerminal();
-      return;
-    }
-    setRefreshToken((value) => value + 1);
-  }, [reconnectTerminal]);
 
   // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
@@ -49,6 +41,10 @@ export function MobileTerminalCarousel({
     }
   }); // 'terminal' | 'reader'
   const [isConnected, setIsConnected] = useState(false);
+
+  // Auto-remount watchdog: if disconnected for 5 continuous minutes, force remount
+  const disconnectStartRef = useRef(null);
+  const autoRemountTimerRef = useRef(null);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -64,10 +60,24 @@ export function MobileTerminalCarousel({
 
   const handleConnectionChange = useCallback((connected) => {
     setIsConnected(connected);
+    if (connected) {
+      disconnectStartRef.current = null;
+      if (autoRemountTimerRef.current) {
+        clearTimeout(autoRemountTimerRef.current);
+        autoRemountTimerRef.current = null;
+      }
+    } else if (!disconnectStartRef.current) {
+      disconnectStartRef.current = Date.now();
+      autoRemountTimerRef.current = setTimeout(() => {
+        setRefreshToken(v => v + 1);
+        disconnectStartRef.current = null;
+      }, 5 * 60 * 1000);
+    }
   }, []);
 
-  const handleRegisterReconnect = useCallback((trigger) => {
-    setReconnectTerminal(() => (typeof trigger === 'function' ? trigger : null));
+  // Cleanup watchdog timer on unmount
+  useEffect(() => {
+    return () => clearTimeout(autoRemountTimerRef.current);
   }, []);
 
   const currentSession = sessions[currentIndex] || null;
@@ -77,10 +87,6 @@ export function MobileTerminalCarousel({
       localStorage.setItem('mobileTerminalViewMode', viewMode);
     } catch {}
   }, [viewMode]);
-
-  useEffect(() => {
-    setReconnectTerminal(null);
-  }, [currentSession?.id]);
 
   // No sessions - show empty state
   if (sessions.length === 0) {
@@ -112,7 +118,6 @@ export function MobileTerminalCarousel({
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
-          onRegisterReconnect={handleRegisterReconnect}
           onConnectionChange={handleConnectionChange}
           onActivityChange={(isBusy) => onSessionBusyChange?.(currentSession.id, isBusy)}
         />
@@ -126,7 +131,6 @@ export function MobileTerminalCarousel({
         viewMode={viewMode}
         onToggleViewMode={handleToggleViewMode}
         isConnected={isConnected}
-        onRefreshTerminal={handleRefreshTerminal}
       />
     </div>
   );

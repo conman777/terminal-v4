@@ -35,6 +35,7 @@ export function FolderBrowserModal({
   const [selectedAiOptionId, setSelectedAiOptionId] = useState(() => (
     resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)
   ));
+  const [tabName, setTabName] = useState('');
 
   const loadDirectory = useCallback(async (dirPath) => {
     setLoading(true);
@@ -63,6 +64,7 @@ export function FolderBrowserModal({
     if (isOpen) {
       loadDirectory(currentPath);
       setQuery('');
+      setTabName('');
       setSelectedAiOptionId(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId));
     }
   }, [isOpen, currentPath, loadDirectory, resolvedAiOptions, defaultAiOptionId]);
@@ -81,7 +83,7 @@ export function FolderBrowserModal({
   };
 
   const handleSelect = () => {
-    onSelect(path, showAiSelector ? selectedAiOptionId : undefined);
+    onSelect(path, showAiSelector ? selectedAiOptionId : undefined, showAiSelector ? tabName.trim() : undefined);
     onClose();
   };
 
@@ -120,7 +122,12 @@ export function FolderBrowserModal({
               <select
                 id="folder-browser-ai-select"
                 value={selectedAiOptionId}
-                onChange={(e) => setSelectedAiOptionId(e.target.value)}
+                onChange={(e) => {
+                  const newId = e.target.value;
+                  setSelectedAiOptionId(newId);
+                  const opt = resolvedAiOptions.find(o => o.id === newId);
+                  setTabName(opt?.label || '');
+                }}
               >
                 {resolvedAiOptions.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -131,6 +138,20 @@ export function FolderBrowserModal({
               {selectedAiOption?.command && (
                 <small className="folder-browser-ai-command">{selectedAiOption.command}</small>
               )}
+            </div>
+          )}
+
+          {showAiSelector && (
+            <div className="folder-browser-tabname">
+              <label htmlFor="folder-browser-tabname-input">Tab name</label>
+              <input
+                id="folder-browser-tabname-input"
+                type="text"
+                value={tabName}
+                onChange={(e) => setTabName(e.target.value)}
+                placeholder="Optional — defaults to AI name"
+                maxLength={60}
+              />
             </div>
           )}
 
@@ -238,6 +259,37 @@ export function FolderBrowserModal({
         }
 
         .folder-browser-ai select:focus {
+          border-color: var(--accent-primary, #f59e0b);
+          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
+        }
+
+        .folder-browser-tabname {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 2px 16px 8px;
+        }
+
+        .folder-browser-tabname label {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-muted, #71717a);
+          text-transform: uppercase;
+          letter-spacing: 0.6px;
+        }
+
+        .folder-browser-tabname input {
+          width: 100%;
+          background: var(--bg-surface, #141416);
+          border: 1px solid var(--border-default, #2a2a2e);
+          color: var(--text-primary, #fafafa);
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          outline: none;
+        }
+
+        .folder-browser-tabname input:focus {
           border-color: var(--accent-primary, #f59e0b);
           box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
         }

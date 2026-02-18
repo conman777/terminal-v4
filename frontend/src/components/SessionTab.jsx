@@ -17,7 +17,8 @@ export const SessionTab = memo(function SessionTab({
   onDragStart,
   onDragEnd,
   onDrop,
-  onContextMenu
+  onContextMenu,
+  aiType,
 }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(session.title);
@@ -114,7 +115,8 @@ export const SessionTab = memo(function SessionTab({
     isBusy && 'busy',
     isReady && 'ready',
     isDragging && 'dragging',
-    isDragOver && 'drag-over'
+    isDragOver && 'drag-over',
+    aiType && `ai-${aiType}`,
   ].filter(Boolean).join(' ');
   const statusClass = isBusy ? 'busy' : 'idle';
   const statusLabel = isBusy ? 'Busy' : 'Idle';
@@ -213,6 +215,48 @@ export const SessionTab = memo(function SessionTab({
           box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
           z-index: 5;
           font-weight: 600;
+        }
+
+        /* Claude Code — Orange */
+        .session-tab-item.ai-claude.active {
+          background: rgba(249, 115, 22, 0.08);
+          border-top-color: #f97316;
+          box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.4), 0 0 12px rgba(249, 115, 22, 0.25);
+        }
+        .session-tab-item.ai-claude .tab-status-dot-modern.idle {
+          background: rgba(249, 115, 22, 0.5);
+        }
+        .session-tab-item.ai-claude.drag-over {
+          background: rgba(249, 115, 22, 0.1);
+          border-top-color: #f97316;
+        }
+
+        /* Codex — Blue */
+        .session-tab-item.ai-codex.active {
+          background: rgba(59, 130, 246, 0.08);
+          border-top-color: #3b82f6;
+          box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.4), 0 0 12px rgba(59, 130, 246, 0.25);
+        }
+        .session-tab-item.ai-codex .tab-status-dot-modern.idle {
+          background: rgba(59, 130, 246, 0.5);
+        }
+        .session-tab-item.ai-codex.drag-over {
+          background: rgba(59, 130, 246, 0.1);
+          border-top-color: #3b82f6;
+        }
+
+        /* Gemini — Green */
+        .session-tab-item.ai-gemini.active {
+          background: rgba(34, 197, 94, 0.08);
+          border-top-color: #22c55e;
+          box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4), 0 0 12px rgba(34, 197, 94, 0.25);
+        }
+        .session-tab-item.ai-gemini .tab-status-dot-modern.idle {
+          background: rgba(34, 197, 94, 0.5);
+        }
+        .session-tab-item.ai-gemini.drag-over {
+          background: rgba(34, 197, 94, 0.1);
+          border-top-color: #22c55e;
         }
 
         .session-tab-item.busy:not(.active)::before {
