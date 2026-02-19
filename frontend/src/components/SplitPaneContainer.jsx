@@ -24,7 +24,8 @@ function LayoutNode({
   onSessionBusyChange,
   projectInfo,
   sessionAiTypes,
-  paneCount
+  paneCount,
+  currentDesktopId
 }) {
   if (!node) return null;
 
@@ -54,6 +55,7 @@ function LayoutNode({
         onSessionBusyChange={onSessionBusyChange}
         projectInfo={projectInfo}
         sessionAiTypes={sessionAiTypes}
+        currentDesktopId={currentDesktopId}
       />
     );
   }
@@ -96,6 +98,7 @@ function LayoutNode({
             projectInfo={projectInfo}
             sessionAiTypes={sessionAiTypes}
             paneCount={paneCount}
+            currentDesktopId={currentDesktopId}
           />
         ))}
       </div>
@@ -125,7 +128,8 @@ export function SplitPaneContainer({
   onSessionBusyChange,
   projectInfo,
   sessionAiTypes,
-  paneLayout
+  paneLayout,
+  currentDesktopId
 }) {
   // Use tree-based layout if available, fall back to legacy
   const root = paneLayout?.root;
@@ -183,6 +187,7 @@ export function SplitPaneContainer({
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
             sessionAiTypes={sessionAiTypes}
+            currentDesktopId={currentDesktopId}
           />
         </div>
       );
@@ -215,6 +220,7 @@ export function SplitPaneContainer({
           projectInfo={projectInfo}
           sessionAiTypes={sessionAiTypes}
           paneCount={paneCount}
+          currentDesktopId={currentDesktopId}
         />
       </div>
     );

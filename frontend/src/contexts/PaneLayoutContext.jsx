@@ -153,20 +153,76 @@ function migrateLayout(saved) {
   };
 }
 
-export function PaneLayoutProvider({ children }) {
-  // Tree-based layout state
-  const [paneLayout, setPaneLayout] = useState(() => {
-    try {
-      const saved = localStorage.getItem('paneLayout');
-      if (saved) {
-        return migrateLayout(JSON.parse(saved));
-      }
-    } catch {}
+function defaultPaneLayout() {
+  return {
+    root: { type: 'pane', id: 'pane-1', sessionId: null },
+    activePaneId: 'pane-1'
+  };
+}
+
+function loadDesktopsFromStorage() {
+  try {
+    const saved = localStorage.getItem('desktops');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // Migrate: add ownedSessionIds if not yet present (derived from pane assignments)
+      return {
+        ...parsed,
+        desktops: parsed.desktops.map(d => ({
+          ...d,
+          ownedSessionIds: d.ownedSessionIds || getAllPanes((d.paneLayout || defaultPaneLayout()).root).map(p => p.sessionId).filter(Boolean)
+        }))
+      };
+    }
+
+    // Migrate old single layout
+    const oldLayout = localStorage.getItem('paneLayout');
+    let paneLayout;
+    if (oldLayout) {
+      paneLayout = migrateLayout(JSON.parse(oldLayout));
+      localStorage.removeItem('paneLayout');
+    } else {
+      paneLayout = defaultPaneLayout();
+    }
+
     return {
-      root: { type: 'pane', id: 'pane-1', sessionId: null },
-      activePaneId: 'pane-1'
+      activeDesktopId: 'desktop-1',
+      desktops: [{
+        id: 'desktop-1',
+        name: 'Desktop 1',
+        paneLayout,
+        ownedSessionIds: getAllPanes(paneLayout.root).map(p => p.sessionId).filter(Boolean)
+      }]
     };
-  });
+  } catch {
+    return {
+      activeDesktopId: 'desktop-1',
+      desktops: [{
+        id: 'desktop-1',
+        name: 'Desktop 1',
+        paneLayout: defaultPaneLayout(),
+        ownedSessionIds: []
+      }]
+    };
+  }
+}
+
+// Helper to update active desktop's paneLayout immutably
+function updateActiveDesktopLayout(desktopsState, updater) {
+  const { activeDesktopId, desktops } = desktopsState;
+  return {
+    ...desktopsState,
+    desktops: desktops.map(d => {
+      if (d.id !== activeDesktopId) return d;
+      const newLayout = updater(d.paneLayout);
+      return { ...d, paneLayout: newLayout };
+    })
+  };
+}
+
+export function PaneLayoutProvider({ children }) {
+  // Multi-desktop state
+  const [desktopsState, setDesktopsState] = useState(() => loadDesktopsFromStorage());
 
   // Fullscreen pane state (not persisted - temporary)
   const [fullscreenPaneId, setFullscreenPaneId] = useState(null);
@@ -175,43 +231,79 @@ export function PaneLayoutProvider({ children }) {
   const [splitPosition, setSplitPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Save pane layout to localStorage when it changes
+  // Derive active desktop and its paneLayout
+  const activeDesktop = desktopsState.desktops.find(d => d.id === desktopsState.activeDesktopId)
+    || desktopsState.desktops[0];
+  const paneLayout = activeDesktop.paneLayout;
+
+  // Save desktops state to localStorage on every change
   useEffect(() => {
     try {
-      localStorage.setItem('paneLayout', JSON.stringify(paneLayout));
+      localStorage.setItem('desktops', JSON.stringify(desktopsState));
     } catch {}
-  }, [paneLayout]);
+  }, [desktopsState]);
 
   // Initialize first pane with active session if not set (called from App)
   const initializePaneWithSession = useCallback((sessionId) => {
     if (!sessionId) return;
 
-    setPaneLayout(prev => {
-      const newRoot = cloneNode(prev.root);
-      const found = findPaneInTree(newRoot, prev.activePaneId);
-      if (found) {
-        found.node.sessionId = sessionId;
-      }
-      return { ...prev, root: newRoot };
+    setDesktopsState(prev => {
+      const { activeDesktopId, desktops } = prev;
+      return {
+        ...prev,
+        desktops: desktops.map(d => {
+          if (d.id !== activeDesktopId) return d;
+          const layout = d.paneLayout;
+          const newRoot = cloneNode(layout.root);
+          const found = findPaneInTree(newRoot, layout.activePaneId);
+          if (found) found.node.sessionId = sessionId;
+          const owned = d.ownedSessionIds || [];
+          return {
+            ...d,
+            paneLayout: { ...layout, root: newRoot },
+            ownedSessionIds: owned.includes(sessionId) ? owned : [...owned, sessionId]
+          };
+        })
+      };
+    });
+  }, []);
+
+  // Add a session to the active desktop's owned list (without pane assignment)
+  const addSessionToDesktop = useCallback((sessionId) => {
+    if (!sessionId) return;
+    setDesktopsState(prev => {
+      const { activeDesktopId, desktops } = prev;
+      return {
+        ...prev,
+        desktops: desktops.map(d => {
+          if (d.id !== activeDesktopId) return d;
+          const owned = d.ownedSessionIds || [];
+          if (owned.includes(sessionId)) return d;
+          return { ...d, ownedSessionIds: [...owned, sessionId] };
+        })
+      };
     });
   }, []);
 
   // Handle session selection in a specific pane
   const setPaneSession = useCallback((paneId, sessionId) => {
-    setPaneLayout(prev => {
-      const newRoot = cloneNode(prev.root);
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
+      const newRoot = cloneNode(layout.root);
       const found = findPaneInTree(newRoot, paneId);
       if (found) {
         found.node.sessionId = sessionId;
       }
-      return { ...prev, root: newRoot };
-    });
+      return { ...layout, root: newRoot };
+    }));
     return sessionId;
   }, []);
 
   // Handle pane focus
   const focusPane = useCallback((paneId) => {
-    setPaneLayout(prev => ({ ...prev, activePaneId: paneId }));
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => ({
+      ...layout,
+      activePaneId: paneId
+    })));
     const panes = getAllPanes(paneLayout.root);
     const pane = panes.find(p => p.id === paneId);
     return pane?.sessionId || null;
@@ -219,21 +311,20 @@ export function PaneLayoutProvider({ children }) {
 
   // Handle pane split
   const splitPane = useCallback((paneId, direction) => {
-    setPaneLayout(prev => {
-      const paneCount = countPanes(prev.root);
-      if (paneCount >= MAX_PANES) return prev;
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
+      const paneCount = countPanes(layout.root);
+      if (paneCount >= MAX_PANES) return layout;
 
-      const newRoot = cloneNode(prev.root);
+      const newRoot = cloneNode(layout.root);
       const found = findPaneInTree(newRoot, paneId);
-      if (!found) return prev;
+      if (!found) return layout;
 
       const newPaneId = `pane-${Date.now()}`;
       const newPane = { type: 'pane', id: newPaneId, sessionId: null };
 
-      // If this is the root pane (no parent), create a new split
       if (!found.parent) {
         return {
-          ...prev,
+          ...layout,
           root: {
             type: 'split',
             direction,
@@ -242,11 +333,9 @@ export function PaneLayoutProvider({ children }) {
         };
       }
 
-      // If parent split direction matches, add sibling
       if (found.parent.direction === direction) {
         found.parent.children.splice(found.index + 1, 0, newPane);
       } else {
-        // Replace pane with a new split containing original + new pane
         found.parent.children[found.index] = {
           type: 'split',
           direction,
@@ -254,36 +343,31 @@ export function PaneLayoutProvider({ children }) {
         };
       }
 
-      return { ...prev, root: simplifyTree(newRoot) };
-    });
+      return { ...layout, root: simplifyTree(newRoot) };
+    }));
   }, []);
 
-  // Handle pane close
+  // Handle pane close (only on active desktop)
   const closePane = useCallback((paneId) => {
-    // Exit fullscreen if closing the fullscreen pane
     if (paneId === fullscreenPaneId) {
       setFullscreenPaneId(null);
     }
 
-    setPaneLayout(prev => {
-      const paneCount = countPanes(prev.root);
-      if (paneCount <= 1) return prev;
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
+      const paneCount = countPanes(layout.root);
+      if (paneCount <= 1) return layout;
 
-      const newRoot = removePaneFromTree(cloneNode(prev.root), paneId);
-      if (!newRoot) return prev;
+      const newRoot = removePaneFromTree(cloneNode(layout.root), paneId);
+      if (!newRoot) return layout;
 
-      // Update active pane if needed
-      let newActivePaneId = prev.activePaneId;
-      if (paneId === prev.activePaneId) {
+      let newActivePaneId = layout.activePaneId;
+      if (paneId === layout.activePaneId) {
         const panes = getAllPanes(newRoot);
         newActivePaneId = panes[0]?.id || 'pane-1';
       }
 
-      return {
-        root: newRoot,
-        activePaneId: newActivePaneId
-      };
-    });
+      return { root: newRoot, activePaneId: newActivePaneId };
+    }));
   }, [fullscreenPaneId]);
 
   // Handle pane fullscreen toggle
@@ -326,6 +410,114 @@ export function PaneLayoutProvider({ children }) {
     setIsDragging(false);
   }, []);
 
+  // ── Desktop management actions ──
+
+  const createDesktop = useCallback(() => {
+    const newId = `desktop-${Date.now()}`;
+    setDesktopsState(prev => {
+      const newDesktop = {
+        id: newId,
+        name: `Desktop ${prev.desktops.length + 1}`,
+        paneLayout: defaultPaneLayout(),
+        ownedSessionIds: []
+      };
+      return {
+        activeDesktopId: newId,
+        desktops: [...prev.desktops, newDesktop]
+      };
+    });
+  }, []);
+
+  const switchDesktop = useCallback((id) => {
+    setDesktopsState(prev => {
+      if (!prev.desktops.find(d => d.id === id)) return prev;
+      return { ...prev, activeDesktopId: id };
+    });
+    // Exit fullscreen when switching desktops
+    setFullscreenPaneId(null);
+  }, []);
+
+  const deleteDesktop = useCallback((id) => {
+    setDesktopsState(prev => {
+      if (prev.desktops.length <= 1) return prev;
+      const remaining = prev.desktops.filter(d => d.id !== id);
+      const newActiveId = prev.activeDesktopId === id ? remaining[0].id : prev.activeDesktopId;
+      return { activeDesktopId: newActiveId, desktops: remaining };
+    });
+    setFullscreenPaneId(null);
+  }, []);
+
+  const moveSessionToDesktop = useCallback((sessionId, sourcePaneId, targetDesktopId) => {
+    setDesktopsState(prev => {
+      const { activeDesktopId, desktops } = prev;
+      if (targetDesktopId === activeDesktopId) return prev;
+
+      // 1. Remove pane from source desktop (active desktop) and revoke ownership
+      let newDesktops = desktops.map(d => {
+        if (d.id !== activeDesktopId) return d;
+        const layout = d.paneLayout;
+        const paneCount = countPanes(layout.root);
+        const newOwned = (d.ownedSessionIds || []).filter(id => id !== sessionId);
+        if (paneCount <= 1) {
+          // Can't remove the last pane — just clear its session
+          const newRoot = cloneNode(layout.root);
+          const found = findPaneInTree(newRoot, sourcePaneId);
+          if (found) found.node.sessionId = null;
+          return { ...d, paneLayout: { ...layout, root: newRoot }, ownedSessionIds: newOwned };
+        }
+        const newRoot = removePaneFromTree(cloneNode(layout.root), sourcePaneId);
+        if (!newRoot) return d;
+        let newActivePaneId = layout.activePaneId;
+        if (sourcePaneId === layout.activePaneId) {
+          const panes = getAllPanes(newRoot);
+          newActivePaneId = panes[0]?.id || 'pane-1';
+        }
+        return { ...d, paneLayout: { root: newRoot, activePaneId: newActivePaneId }, ownedSessionIds: newOwned };
+      });
+
+      // 2. Add session to target desktop (pane + ownership)
+      newDesktops = newDesktops.map(d => {
+        if (d.id !== targetDesktopId) return d;
+        const layout = d.paneLayout;
+        const panes = getAllPanes(layout.root);
+        // Transfer ownership
+        const owned = d.ownedSessionIds || [];
+        const newOwned = owned.includes(sessionId) ? owned : [...owned, sessionId];
+        // If there's an empty pane, use it
+        const emptyPane = panes.find(p => !p.sessionId);
+        if (emptyPane) {
+          const newRoot = cloneNode(layout.root);
+          const found = findPaneInTree(newRoot, emptyPane.id);
+          if (found) found.node.sessionId = sessionId;
+          return { ...d, paneLayout: { ...layout, root: newRoot }, ownedSessionIds: newOwned };
+        }
+        // Otherwise split the active pane
+        const activePaneInTarget = panes.find(p => p.id === layout.activePaneId) || panes[0];
+        if (!activePaneInTarget) return { ...d, ownedSessionIds: newOwned };
+        const newPaneId = `pane-${Date.now()}`;
+        const newPane = { type: 'pane', id: newPaneId, sessionId };
+        const newRoot = cloneNode(layout.root);
+        const found = findPaneInTree(newRoot, activePaneInTarget.id);
+        if (!found) return { ...d, ownedSessionIds: newOwned };
+        if (!found.parent) {
+          return {
+            ...d,
+            paneLayout: {
+              root: { type: 'split', direction: 'horizontal', children: [found.node, newPane] },
+              activePaneId: newPaneId
+            },
+            ownedSessionIds: newOwned
+          };
+        }
+        found.parent.children.splice(found.index + 1, 0, newPane);
+        return { ...d, paneLayout: { root: simplifyTree(newRoot), activePaneId: newPaneId }, ownedSessionIds: newOwned };
+      });
+
+      return { activeDesktopId: targetDesktopId, desktops: newDesktops };
+    });
+    setFullscreenPaneId(null);
+  }, []);
+
   // Compute legacy-compatible layout object for components that need it
   const legacyLayout = {
     type: paneLayout.root.type === 'pane' ? 'single' : paneLayout.root.direction,
@@ -360,7 +552,16 @@ export function PaneLayoutProvider({ children }) {
 
     // Helpers
     getAllPanes: () => getAllPanes(paneLayout.root),
-    countPanes: () => countPanes(paneLayout.root)
+    countPanes: () => countPanes(paneLayout.root),
+
+    // Desktop management
+    desktops: desktopsState.desktops,
+    activeDesktopId: desktopsState.activeDesktopId,
+    createDesktop,
+    switchDesktop,
+    deleteDesktop,
+    moveSessionToDesktop,
+    addSessionToDesktop,
   };
 
   return (

@@ -25,12 +25,14 @@ export const TerminalPane = memo(function TerminalPane({
   projectInfo,
   sessionAiTypes,
   onCwdChange,
-  onSessionBusyChange
+  onSessionBusyChange,
+  currentDesktopId
 }) {
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
   const menuRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isHeaderDragging, setIsHeaderDragging] = useState(false);
   const [showSessionMenu, setShowSessionMenu] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [currentCwd, setCurrentCwd] = useState(null);
@@ -107,6 +109,21 @@ export const TerminalPane = memo(function TerminalPane({
     setRefreshToken((value) => value + 1);
   }, []);
 
+  const handleHeaderDragStart = useCallback((e) => {
+    if (!pane.sessionId) return;
+    e.dataTransfer.setData('pane-drag', JSON.stringify({
+      paneId: pane.id,
+      sessionId: pane.sessionId,
+      fromDesktopId: currentDesktopId
+    }));
+    e.dataTransfer.effectAllowed = 'move';
+    setIsHeaderDragging(true);
+  }, [pane.id, pane.sessionId, currentDesktopId]);
+
+  const handleHeaderDragEnd = useCallback(() => {
+    setIsHeaderDragging(false);
+  }, []);
+
   return (
     <div
       ref={paneRef}
@@ -116,7 +133,12 @@ export const TerminalPane = memo(function TerminalPane({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="ph-bar">
+      <div
+        className={`ph-bar${isHeaderDragging ? ' is-dragging-pane' : ''}`}
+        draggable={Boolean(pane.sessionId)}
+        onDragStart={handleHeaderDragStart}
+        onDragEnd={handleHeaderDragEnd}
+      >
         <div className="ph-left">
           {/* Session selector - only in split mode with multiple sessions */}
           {canClose && sessions.length > 1 && (
@@ -322,6 +344,9 @@ export const TerminalPane = memo(function TerminalPane({
           border-bottom: 1px solid var(--border-subtle);
           flex-shrink: 0;
         }
+
+        .ph-bar[draggable=true] { cursor: grab; }
+        .ph-bar.is-dragging-pane { opacity: 0.5; cursor: grabbing; }
 
         .ph-left {
           display: flex;

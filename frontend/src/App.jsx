@@ -8,6 +8,7 @@ import { MobileKeybar } from './components/MobileKeybar';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
+import { DesktopSwitcher } from './components/DesktopSwitcher';
 import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
@@ -210,7 +211,14 @@ function AppContent() {
     startDragging,
     updateSplitPosition,
     stopDragging,
-    setIsDragging
+    setIsDragging,
+    desktops,
+    activeDesktopId,
+    createDesktop,
+    switchDesktop,
+    deleteDesktop,
+    moveSessionToDesktop,
+    addSessionToDesktop,
   } = usePaneLayout();
 
   const {
@@ -469,6 +477,16 @@ function AppContent() {
     return tabOrder.map(id => map.get(id)).filter(Boolean);
   }, [activeSessions, tabOrder]);
 
+  // Sessions visible on the active desktop: owned by this desktop, or not yet owned by any desktop
+  const desktopOrderedSessions = useMemo(() => {
+    const activeDesktop = desktops.find(d => d.id === activeDesktopId);
+    const ownedByActive = new Set(activeDesktop?.ownedSessionIds || []);
+    const ownedByOthers = new Set(
+      desktops.filter(d => d.id !== activeDesktopId).flatMap(d => d.ownedSessionIds || [])
+    );
+    return orderedSessions.filter(s => ownedByActive.has(s.id) || !ownedByOthers.has(s.id));
+  }, [orderedSessions, desktops, activeDesktopId]);
+
   const handleReorderSessions = useCallback((newOrder) => {
     setTabOrder(newOrder);
   }, []);
@@ -702,8 +720,9 @@ function AppContent() {
 
   const handleRestoreSession = useCallback(async (sessionId) => {
     await restoreSession(sessionId);
+    addSessionToDesktop(sessionId);
     setShowPreview(false);
-  }, [restoreSession, setShowPreview]);
+  }, [restoreSession, addSessionToDesktop, setShowPreview]);
 
   const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
     // Ensure this pane is active before syncing global active session state.
@@ -759,12 +778,15 @@ function AppContent() {
 
     try {
       const session = await createSession(request);
-      if (session?.id && aiOptionId !== 'cli') {
-        setSessionAiTypes(prev => {
-          const next = { ...prev, [session.id]: aiOptionId };
-          localStorage.setItem('sessionAiTypes', JSON.stringify(next));
-          return next;
-        });
+      if (session?.id) {
+        addSessionToDesktop(session.id);
+        if (aiOptionId !== 'cli') {
+          setSessionAiTypes(prev => {
+            const next = { ...prev, [session.id]: aiOptionId };
+            localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+            return next;
+          });
+        }
       }
     } catch { /* createSession already logs */ }
   }, [createSession]);
@@ -974,7 +996,7 @@ function AppContent() {
   // Grouped props for Header
   const headerSessionProps = {
     activeSessions, inactiveSessions, activeSessionId,
-    orderedSessions,
+    orderedSessions: desktopOrderedSessions,
     onSelectSession: handleSelectSession, onRestoreSession: handleRestoreSession,
     onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
     onReorderSessions: handleReorderSessions,
@@ -1138,6 +1160,15 @@ function AppContent() {
             />
           )}
           <div className="main-container">
+            <DesktopSwitcher
+              desktops={desktops}
+              activeDesktopId={activeDesktopId}
+              sessions={activeSessions}
+              onSwitch={switchDesktop}
+              onCreate={createDesktop}
+              onDelete={deleteDesktop}
+              onMoveSession={moveSessionToDesktop}
+            />
             <Header
               isMobile={false}
               sessionProps={headerSessionProps}
@@ -1198,6 +1229,7 @@ function AppContent() {
                         onSessionBusyChange={handleSessionBusyChange}
                         projectInfo={projectInfo}
                         sessionAiTypes={sessionAiTypes}
+                        currentDesktopId={activeDesktopId}
                       />
                     </ErrorBoundary>
                   )}

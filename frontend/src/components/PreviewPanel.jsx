@@ -732,13 +732,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         }]);
       } else if (event.data?.type === 'preview-element-selected') {
         const element = event.data.element;
-        setSelectedElement(null);
+        setSelectedElement(element || null);
         setShowEditInput(false);
         setShowStyleEditor(false);
         setEditDescription('');
-        if (element) {
-          void sendElementToActiveTerminal(element);
-        }
       } else if (event.data?.type === 'preview-inspector-ready') {
         // Inspector is ready, sync inspect mode state
         if (inspectMode && iframeRef.current?.contentWindow) {

@@ -263,6 +263,137 @@ button {
 }
 
 /* ===========================================
+   Desktop Switcher
+   =========================================== */
+
+.desktop-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  height: 30px;
+  background: var(--bg-tertiary, var(--bg-surface));
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.desktop-switcher::-webkit-scrollbar {
+  display: none;
+}
+
+.desktop-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast, 0.15s ease), color var(--transition-fast, 0.15s ease), border-color var(--transition-fast, 0.15s ease);
+  border: 1px solid transparent;
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.desktop-btn:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+
+.desktop-btn.active {
+  color: var(--accent-primary);
+  background: var(--accent-primary-dim, rgba(99,102,241,0.12));
+  border-color: var(--accent-primary-glow, rgba(99,102,241,0.35));
+}
+
+.desktop-btn.drag-over {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-glow, rgba(99,102,241,0.35));
+  color: var(--accent-primary);
+}
+
+.desktop-btn-num {
+  font-size: 10px;
+  opacity: 0.6;
+  font-weight: 600;
+}
+
+.desktop-btn-name {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.desktop-btn-name-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: inherit;
+  font: inherit;
+  width: 80px;
+  min-width: 40px;
+  padding: 0;
+}
+
+.desktop-btn-count {
+  font-size: 10px;
+  opacity: 0.55;
+}
+
+.desktop-btn-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  padding: 1px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity var(--transition-fast, 0.15s ease), background var(--transition-fast, 0.15s ease);
+  margin-left: 1px;
+}
+
+.desktop-btn:hover .desktop-btn-delete {
+  opacity: 0.5;
+}
+
+.desktop-btn-delete:hover {
+  opacity: 1 !important;
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--error, #f43f5e);
+}
+
+.desktop-btn-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all var(--transition-fast, 0.15s ease);
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.desktop-btn-add:hover {
+  color: var(--accent-primary);
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-dim, rgba(99,102,241,0.12));
+}
+
+/* ===========================================
    Sidebar
    =========================================== */
 
