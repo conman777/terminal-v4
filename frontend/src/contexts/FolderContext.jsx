@@ -89,24 +89,37 @@ export function FolderProvider({ children }) {
   }, []);
 
   // Add scan folder
-  const handleAddScanFolder = useCallback(async () => {
-    const folderPath = prompt('Enter folder path to scan for git repositories:');
-    if (!folderPath || !folderPath.trim()) return;
-
+  const addScanFolder = useCallback(async (folderPath) => {
+    const normalizedPath = typeof folderPath === 'string' ? folderPath.trim() : '';
+    if (!normalizedPath) {
+      return { ok: false, error: 'Folder path is required' };
+    }
     setProjectsLoading(true);
     try {
       const response = await apiFetch('/api/projects/scan-dirs', {
         method: 'POST',
-        body: { path: folderPath.trim() }
+        body: { path: normalizedPath }
       });
       if (response.ok) {
         const data = await response.json();
         if (data.projects) {
           setProjects(data.projects);
         }
+        return { ok: true };
       }
+      let message = 'Failed to add scan folder';
+      try {
+        const data = await response.json();
+        if (typeof data?.error === 'string' && data.error.trim()) {
+          message = data.error.trim();
+        }
+      } catch {
+        // Keep default error.
+      }
+      return { ok: false, error: message };
     } catch (error) {
       console.error('Failed to add scan folder', error);
+      return { ok: false, error: 'Failed to add scan folder' };
     } finally {
       setProjectsLoading(false);
     }
@@ -125,7 +138,7 @@ export function FolderProvider({ children }) {
     projects,
     projectsLoading,
     loadProjects,
-    handleAddScanFolder,
+    addScanFolder,
   };
 
   return (

@@ -6,6 +6,7 @@ import { SplitPaneContainer } from './components/SplitPaneContainer';
 import { MobileKeybar } from './components/MobileKeybar';
 // SessionTabBar is now rendered inside Header
 import { FolderBrowserModal } from './components/FolderBrowserModal';
+import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
 import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
@@ -182,7 +183,7 @@ function AppContent() {
 
   const {
     recentFolders, pinnedFolders, addRecentFolder, pinFolder, unpinFolder,
-    projects, projectsLoading, handleAddScanFolder,
+    projects, projectsLoading, addScanFolder,
   } = useFolders();
 
   const {
@@ -241,6 +242,8 @@ function AppContent() {
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
+  const [showAddScanFolderModal, setShowAddScanFolderModal] = useState(false);
+  const [addScanFolderError, setAddScanFolderError] = useState('');
   const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
     try {
       return localStorage.getItem('mainTerminalMinimized') === 'true';
@@ -410,6 +413,20 @@ function AppContent() {
       }
     });
   }, [sessions, sessionActivity, removeSessionActivity]);
+
+  // On initial load, generate topics for sessions that already have history but no topic.
+  const hasInitializedTopicsRef = useRef(false);
+  useEffect(() => {
+    if (hasInitializedTopicsRef.current) return;
+    if (!Array.isArray(sessions) || sessions.length === 0) return;
+    hasInitializedTopicsRef.current = true;
+    sessions.forEach((session) => {
+      if (!session.thread?.topic && !topicGeneratedRef.current.has(session.id)) {
+        topicGeneratedRef.current.add(session.id);
+        generateSessionTopic(session.id);
+      }
+    });
+  }, [sessions, generateSessionTopic]);
 
   // Per-session AI type mapping, persisted in localStorage for tab color restoration
   const [sessionAiTypes, setSessionAiTypes] = useState(() => {
@@ -919,6 +936,33 @@ function AppContent() {
     });
   }, []);
 
+  const toggleFileManager = useCallback(() => {
+    setShowFileManager((prev) => !prev);
+  }, [setShowFileManager]);
+
+  const toggleSystemResources = useCallback(() => {
+    setShowSystemResources((prev) => !prev);
+  }, [setShowSystemResources]);
+
+  const openAddScanFolderModal = useCallback(() => {
+    setAddScanFolderError('');
+    setShowAddScanFolderModal(true);
+  }, []);
+
+  const closeAddScanFolderModal = useCallback(() => {
+    setShowAddScanFolderModal(false);
+    setAddScanFolderError('');
+  }, []);
+
+  const handleSubmitAddScanFolder = useCallback(async (folderPath) => {
+    const result = await addScanFolder(folderPath);
+    if (result?.ok) {
+      closeAddScanFolderModal();
+      return;
+    }
+    setAddScanFolderError(result?.error || 'Failed to add scan folder');
+  }, [addScanFolder, closeAddScanFolderModal]);
+
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
     isMobile && viewportHeight
@@ -1007,6 +1051,13 @@ function AppContent() {
         aiOptions={NEW_TAB_AI_OPTIONS}
         defaultAiOptionId="cli"
       />
+      <AddScanFolderModal
+        isOpen={showAddScanFolderModal}
+        isLoading={projectsLoading}
+        error={addScanFolderError}
+        onClose={closeAddScanFolderModal}
+        onSubmit={handleSubmitAddScanFolder}
+      />
 
       {isMobile && (
         <>
@@ -1017,9 +1068,9 @@ function AppContent() {
             showPreview={showPreview}
             onTogglePreview={togglePreview}
             showFileManager={showFileManager}
-            onToggleFileManager={() => setShowFileManager(!showFileManager)}
+            onToggleFileManager={toggleFileManager}
             showSystemResources={showSystemResources}
-            onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
+            onToggleSystemResources={toggleSystemResources}
             user={user}
             logout={logout}
             mobileProps={{
@@ -1030,7 +1081,7 @@ function AppContent() {
               projectsLoading,
               onFolderSelect: handleSidebarFolderSelect,
               currentPath: projectInfo?.cwd,
-              onAddScanFolder: handleAddScanFolder,
+              onAddScanFolder: openAddScanFolderModal,
               mobileView,
               onViewChange: handleMobileViewChange,
               previewUrl,
@@ -1080,7 +1131,7 @@ function AppContent() {
               onPinFolder={pinFolder}
               onUnpinFolder={unpinFolder}
               currentPath={projectInfo?.cwd}
-              onAddScanFolder={handleAddScanFolder}
+              onAddScanFolder={openAddScanFolderModal}
               sidebarMode={sidebarMode}
               onToggleSidebarMode={toggleSidebarMode}
               onCreateSession={handleRequestNewSession}
@@ -1094,9 +1145,9 @@ function AppContent() {
               showPreview={showPreview}
               onTogglePreview={togglePreview}
               showFileManager={showFileManager}
-              onToggleFileManager={() => setShowFileManager(!showFileManager)}
+              onToggleFileManager={toggleFileManager}
               showSystemResources={showSystemResources}
-              onToggleSystemResources={() => setShowSystemResources(!showSystemResources)}
+              onToggleSystemResources={toggleSystemResources}
               user={user}
               logout={logout}
             />

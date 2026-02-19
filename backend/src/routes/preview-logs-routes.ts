@@ -23,6 +23,9 @@ function isValidPort(port: number): boolean {
 }
 
 export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<void> {
+  const previewLogIngestKey = (process.env.PREVIEW_LOG_INGEST_KEY || '').trim();
+  const allowUnauthPreviewLogRead = process.env.ALLOW_UNAUTH_PREVIEW_LOG_READ === 'true';
+
   // Start cleanup interval when routes are registered
   startCleanupInterval();
   app.addHook('onClose', async () => {
@@ -39,7 +42,7 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     if (origin && origin.includes('preview-')) {
       reply.header('Access-Control-Allow-Origin', origin);
       reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      reply.header('Access-Control-Allow-Headers', 'Content-Type');
+      reply.header('Access-Control-Allow-Headers', 'Content-Type, X-Preview-Log-Key, Authorization');
       reply.header('Access-Control-Allow-Credentials', 'true');
     }
     return reply.code(204).send();
@@ -47,16 +50,27 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
 
   /**
    * POST /api/preview/:port/logs
-   * Receive logs from injected debug script (no auth - called from iframe)
+   * Receive logs from injected debug script.
+   * Auth is bypassed for iframe compatibility, but an optional shared key can be required.
    */
   app.post('/api/preview/:port/logs', {
-    config: { skipAuth: true }, // No auth required - called from iframe
+    config: { skipAuth: true },
     preHandler: async (request, reply) => {
       // Add CORS headers for cross-origin requests from preview subdomains
       const origin = request.headers.origin;
       if (origin && origin.includes('preview-')) {
         reply.header('Access-Control-Allow-Origin', origin);
         reply.header('Access-Control-Allow-Credentials', 'true');
+      }
+
+      if (previewLogIngestKey) {
+        const providedKey = Array.isArray(request.headers['x-preview-log-key'])
+          ? request.headers['x-preview-log-key'][0]
+          : request.headers['x-preview-log-key'];
+        if (!providedKey || providedKey !== previewLogIngestKey) {
+          reply.code(401).send({ error: 'Unauthorized preview log ingest' });
+          return;
+        }
       }
     }
   }, async (request: FastifyRequest<{
@@ -92,10 +106,10 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
 
   /**
    * GET /api/preview/:port/logs
-   * Get logs for Claude Code to read (with auth)
+   * Get logs for Claude Code to read.
    */
   app.get('/api/preview/:port/logs', {
-    config: { skipAuth: true } // Allow CLI/unauthenticated access for debugging
+    ...(allowUnauthPreviewLogRead ? { config: { skipAuth: true } } : {})
   }, async (request: FastifyRequest<{
     Params: { port: string };
     Querystring: {
@@ -105,6 +119,9 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
       limit?: string;
     };
   }>, reply: FastifyReply) => {
+    if (!allowUnauthPreviewLogRead && !request.userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
     const port = parseInt(request.params.port, 10);
 
     if (!isValidPort(port)) {

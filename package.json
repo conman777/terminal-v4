@@ -1,7 +1,7 @@
 {
   "name": "terminal-v4",
   "version": "1.0.0",
-  "description": "Browser-based interface that wraps the Claude Code CLI. The project mirrors the plan from `plan.md`: an Express backend streams JSON from the CLI, while a React client renders a chat-style UI with live tool activity.",
+  "description": "Browser-based terminal workspace with a React frontend and Fastify backend, providing PTY sessions, preview tooling, and Claude Code integration.",
   "main": "index.js",
   "scripts": {
     "test": "npm --prefix backend test",

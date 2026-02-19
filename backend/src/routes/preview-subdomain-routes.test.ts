@@ -15,6 +15,8 @@ const appPort = (() => {
   const parsed = Number.parseInt(process.env.PORT || '3020', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
 })();
+const isUnrestrictedPreview = process.env.UNRESTRICTED_PREVIEW === 'true';
+const minimumAllowedPreviewPort = isUnrestrictedPreview ? 80 : 3000;
 
 describe('preview-subdomain routes', () => {
   let app: Awaited<ReturnType<typeof createTestApp>> | null = null;
@@ -26,15 +28,15 @@ describe('preview-subdomain routes', () => {
     }
   });
 
-  it('handles low but valid preview ports instead of rejecting them', async () => {
+  it('handles the minimum allowed preview port instead of rejecting it', async () => {
     app = await createTestApp();
 
     const response = await app.inject({
       method: 'OPTIONS',
-      url: '/preview/80/'
+      url: `/preview/${minimumAllowedPreviewPort}/`
     });
 
-    // Without low-port support this falls through to 404.
+    // Without correct port-range handling this falls through to 404.
     expect(response.statusCode).toBe(204);
   });
 

@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NetworkTab } from './NetworkTab';
 import { ConsoleTab } from './ConsoleTab';
 import { StorageTab } from './StorageTab';
 import { PerformanceTab } from './PerformanceTab';
 import { WebSocketTab } from './WebSocketTab';
 import '../../devtools.css';
+
+const PERFORMANCE_TAB_ENABLED = import.meta.env.VITE_ENABLE_PERFORMANCE_TAB === 'true';
 
 /**
  * DevToolsPanel - Main container for DevTools tabs
@@ -22,11 +24,17 @@ export function DevToolsPanel({
 }) {
   const [activeTab, setActiveTab] = useState('network');
 
+  useEffect(() => {
+    if (!PERFORMANCE_TAB_ENABLED && activeTab === 'performance') {
+      setActiveTab('network');
+    }
+  }, [activeTab]);
+
   const tabs = [
     { id: 'network', label: 'Network', count: networkRequests.length },
     { id: 'console', label: 'Console', count: consoleLogs.length },
     { id: 'storage', label: 'Storage', count: Object.keys(storage.localStorage || {}).length },
-    { id: 'performance', label: 'Performance', count: null },
+    ...(PERFORMANCE_TAB_ENABLED ? [{ id: 'performance', label: 'Performance', count: null }] : []),
     { id: 'websocket', label: 'WebSocket', count: null }
   ];
 
@@ -69,7 +77,7 @@ export function DevToolsPanel({
             previewPort={previewPort}
           />
         )}
-        {activeTab === 'performance' && (
+        {PERFORMANCE_TAB_ENABLED && activeTab === 'performance' && (
           <PerformanceTab
             port={previewPort}
           />

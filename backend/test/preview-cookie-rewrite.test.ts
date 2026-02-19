@@ -11,6 +11,15 @@ class FakeTerminalProcess extends EventEmitter implements TerminalProcess {
   kill(): void {}
 }
 
+const PREVIEW_BASE_DOMAIN = (
+  process.env.PREVIEW_SUBDOMAIN_BASES ||
+  process.env.PREVIEW_SUBDOMAIN_BASE ||
+  'conordart.com'
+)
+  .split(',')[0]
+  ?.trim() || 'conordart.com';
+const PREVIEW_HOST = `preview-5173.${PREVIEW_BASE_DOMAIN}`;
+
 async function withApp<T>(fn: (app: Awaited<ReturnType<typeof createServer>>) => Promise<T>): Promise<T> {
   const spawnMock = (_options: TerminalSpawnOptions) => new FakeTerminalProcess();
   const app = await createServer({ logger: false, terminalOptions: { spawnTerminal: spawnMock } });
@@ -24,7 +33,7 @@ async function withApp<T>(fn: (app: Awaited<ReturnType<typeof createServer>>) =>
 
 describe('rewriteSetCookieHeader', () => {
   const options = {
-    previewHost: 'preview-5173.conordart.com',
+    previewHost: PREVIEW_HOST,
     isSecureRequest: true,
     defaultSameSite: 'lax' as const
   };
@@ -33,12 +42,12 @@ describe('rewriteSetCookieHeader', () => {
     const input = 'gb_session=abc; Path=/; Domain=localhost; SameSite=Lax';
     const output = rewriteSetCookieHeader(input, options);
     expect(output).toBe(
-      'gb_session=abc; Path=/; Domain=preview-5173.conordart.com; SameSite=Lax'
+      `gb_session=abc; Path=/; Domain=${PREVIEW_HOST}; SameSite=Lax`
     );
   });
 
   it('keeps a valid parent domain unchanged', () => {
-    const input = 'theme=dark; Domain=.conordart.com; Path=/';
+    const input = `theme=dark; Domain=.${PREVIEW_BASE_DOMAIN}; Path=/`;
     const output = rewriteSetCookieHeader(input, options);
     expect(output).toBe(input);
   });
@@ -86,12 +95,12 @@ describe('preview subdomain proxy', () => {
     await withApp(async (app) => {
       const res = await supertest(app.server)
         .get('/dashboard')
-        .set('Host', 'preview-5173.conordart.com')
+        .set('Host', PREVIEW_HOST)
         .set('x-forwarded-proto', 'https')
         .expect(200);
 
       expect(res.headers['set-cookie']).toEqual([
-        'gb_session=abc; Domain=preview-5173.conordart.com; Path=/; SameSite=Lax'
+        `gb_session=abc; Domain=${PREVIEW_HOST}; Path=/; SameSite=Lax`
       ]);
     });
   });
@@ -114,7 +123,7 @@ describe('preview subdomain proxy', () => {
     await withApp(async (app) => {
       const res = await supertest(app.server)
         .get('/login')
-        .set('Host', 'preview-5173.conordart.com')
+        .set('Host', PREVIEW_HOST)
         .set('x-forwarded-proto', 'https')
         .expect(200);
 

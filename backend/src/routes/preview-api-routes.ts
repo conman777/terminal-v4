@@ -22,6 +22,7 @@ const PREVIEW_PORT_PROBE_TIMEOUT_MS = (() => {
   const parsed = Number.parseInt(process.env.PREVIEW_PORT_PROBE_TIMEOUT_MS || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1500;
 })();
+const PREVIEW_EVAL_ENABLED = process.env.PREVIEW_EVAL_ENABLED === 'true';
 const NON_PREVIEW_PROCESS_PREFIXES = [
   'chrome',
   'chromium',
@@ -560,6 +561,10 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
 
   // Preview: Evaluate JavaScript in preview context (REPL)
   app.post<{ Params: { port: string }; Body: { expression: string } }>('/api/preview/:port/evaluate', async (request, reply) => {
+    if (!PREVIEW_EVAL_ENABLED) {
+      reply.code(403).send({ error: 'Preview eval endpoint is disabled' });
+      return;
+    }
     const userId = request.userId;
     if (!userId) {
       reply.code(401).send({ error: 'Unauthorized' });

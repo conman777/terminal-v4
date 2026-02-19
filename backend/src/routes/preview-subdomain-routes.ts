@@ -16,6 +16,8 @@ const PREVIEW_PROXY_HOSTS = (process.env.PREVIEW_PROXY_HOSTS || 'localhost,127.0
   .split(',')
   .map((host) => host.trim())
   .filter(Boolean);
+const PREVIEW_LOG_INGEST_KEY = (process.env.PREVIEW_LOG_INGEST_KEY || '').trim();
+const PREVIEW_PERFORMANCE_MONITOR_ENABLED = process.env.PREVIEW_PERFORMANCE_MONITOR_ENABLED === 'true';
 type PreviewCookiePolicy = 'preserve-upstream' | 'compat-rewrite' | 'force-none';
 type PreviewRewriteScope = 'minimal' | 'hybrid' | 'legacy';
 
@@ -46,7 +48,7 @@ const APP_PORT = (() => {
   const parsed = Number.parseInt(process.env.PORT || '3020', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
 })();
-const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW !== 'false';
+const UNRESTRICTED_PREVIEW = process.env.UNRESTRICTED_PREVIEW === 'true';
 const PREVIEW_PORT_RANGE = UNRESTRICTED_PREVIEW ? { min: 1, max: 65535 } : { min: 3000, max: 9999 };
 const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for response buffering
 const RESPONSE_READ_TIMEOUT = 30000; // 30 second timeout for reading responses
@@ -799,6 +801,9 @@ const PREVIEW_DEBUG_SCRIPT = `
     ? location.origin
     : location.protocol + '//code.' + MAIN_DOMAIN;
   const API_URL = API_BASE + '/api/preview/' + PORT + '/logs';
+  const LOG_AUTH_HEADERS = ${JSON.stringify(
+    PREVIEW_LOG_INGEST_KEY ? { 'x-preview-log-key': PREVIEW_LOG_INGEST_KEY } : {}
+  )};
   const pendingLogs = [];
   let flushTimeout = null;
 
@@ -806,17 +811,22 @@ const PREVIEW_DEBUG_SCRIPT = `
   function flushLogs() {
     if (pendingLogs.length === 0) return;
     const batch = pendingLogs.splice(0, pendingLogs.length);
-    try {
-      navigator.sendBeacon(API_URL, new Blob([JSON.stringify({ logs: batch })], { type: 'application/json' }));
-    } catch (e) {
-      // Fallback to fetch
-      fetch(API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logs: batch }),
-        keepalive: true
-      }).catch(() => {});
+    const payload = JSON.stringify({ logs: batch });
+    const canUseBeacon = Object.keys(LOG_AUTH_HEADERS || {}).length === 0;
+    if (canUseBeacon) {
+      try {
+        navigator.sendBeacon(API_URL, new Blob([payload], { type: 'application/json' }));
+        return;
+      } catch (e) {
+        // Fallback to fetch below.
+      }
     }
+    fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...LOG_AUTH_HEADERS },
+      body: payload,
+      keepalive: true
+    }).catch(() => {});
   }
 
   function queueLog(entry) {
@@ -2454,7 +2464,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           );
 
           const useLegacyPreviewFixes = isPathPreview || PREVIEW_REWRITE_SCOPE === 'legacy';
-          const includePerformanceMonitor = useLegacyPreviewFixes || PREVIEW_REWRITE_SCOPE === 'hybrid';
+          const includePerformanceMonitor = PREVIEW_PERFORMANCE_MONITOR_ENABLED && (useLegacyPreviewFixes || PREVIEW_REWRITE_SCOPE === 'hybrid');
 
           // Inject debug script and inspector script at start of <head> to run before app code
           // CSS fix for backdrop-filter in iframes - forces proper stacking context
