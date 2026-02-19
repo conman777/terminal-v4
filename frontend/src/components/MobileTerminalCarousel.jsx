@@ -13,7 +13,8 @@ export function MobileTerminalCarousel({
   webglEnabled,
   onScrollDirection,
   onRegisterFocusTerminal,
-  onSessionBusyChange
+  onSessionBusyChange,
+  sessionAiTypes,
 }) {
   // Clamp index to valid range when sessions change
   useEffect(() => {
@@ -81,6 +82,7 @@ export function MobileTerminalCarousel({
   }, []);
 
   const currentSession = sessions[currentIndex] || null;
+  const currentAiType = currentSession ? sessionAiTypes?.[currentSession.id] : null;
 
   useEffect(() => {
     try {
@@ -101,7 +103,7 @@ export function MobileTerminalCarousel({
   }
 
   return (
-    <div className="mobile-terminal-carousel">
+    <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
       {/* Terminal content */}
       <div className="carousel-content">
         <TerminalChat

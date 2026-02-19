@@ -1074,6 +1074,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
     };
 
+    const getBestTerminalDimensions = () => {
+      const proposed = fitAddonRef.current?.proposeDimensions?.();
+      const cols = proposed?.cols >= 20 ? proposed.cols : term.cols;
+      const rows = proposed?.rows >= 3 ? proposed.rows : term.rows;
+      return { cols, rows };
+    };
+
+    const syncPtySize = ({ clientId } = {}) => {
+      if (!syncPtySizeRef.current) return;
+      const { cols, rows } = getBestTerminalDimensions();
+      if (!cols || !rows) return;
+      const body = isPrimaryRef.current && !isMobile ? { cols, rows, priority: true } : { cols, rows };
+      if (clientId) body.clientId = clientId;
+      apiFetch(`/api/terminal/${sessionId}/resize`, {
+        method: 'POST',
+        body
+      }).catch(() => {});
+    };
+
     const writeTerminal = (text, callback) => {
       if (typeof callback === 'function') {
         term.write(text, () => {
@@ -1480,7 +1499,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           // Now that history is fully written (at the PTY's original width), it is safe
           // to fit xterm to the actual container size. This may soft-wrap historical
           // content but keeps the cursor positions correct — avoids mid-playback garbling.
-          scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false });
+          scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false, clearAtlas: true });
+          setTimeout(() => {
+            if (disposed) return;
+            syncPtySize({ clientId: clientIdRef.current || undefined });
+          }, 180);
         } catch {
           // Ignore load failures; retry on next reconnect.
         } finally {
@@ -1489,7 +1512,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             historyReloadingRef.current = false;
             flushPendingSocketData();
             setIsLoadingHistory(false);
-            scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false });
+            scheduleViewportRefresh({ delay: 50, fit: true, preserveBottom: false, clearAtlas: true });
+            setTimeout(() => {
+              if (disposed) return;
+              syncPtySize({ clientId: clientIdRef.current || undefined });
+            }, 180);
           }
         }
       };
@@ -1637,15 +1664,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           // Cols and rows are checked independently: a hidden/zero-height container
           // (e.g. the mobile terminal sheet before it opens) has the correct width
           // (left:0; right:0) but zero height — we still want to send the correct col count.
-          const proposed = fitAddonRef.current.proposeDimensions?.();
-          const cols = (proposed?.cols >= 20) ? proposed.cols : term.cols;
-          const rows = (proposed?.rows >= 3) ? proposed.rows : term.rows;
-          if (syncPtySizeRef.current && cols && rows) {
-            apiFetch(`/api/terminal/${sessionId}/resize`, {
-              method: 'POST',
-              body: isPrimaryRef.current && !isMobile ? { cols, rows, priority: true } : { cols, rows }
-            }).catch(() => {});
-          }
+          syncPtySize({ clientId: clientIdRef.current || undefined });
         }
       });
 
@@ -1665,19 +1684,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
       const handleVisibility = () => {
         if (document.visibilityState === 'visible') {
-          debouncedFit(80);
+          scheduleViewportRefresh({ delay: 80, fit: true, preserveBottom: true, clearAtlas: true });
           // Re-sync PTY size after fit completes in case it drifted while backgrounded.
           setTimeout(() => {
-            const term = xtermRef.current;
-            if (!disposed && term && syncPtySizeRef.current) {
-              const { cols, rows } = term;
-              if (cols && rows) {
-                apiFetch(`/api/terminal/${sessionId}/resize`, {
-                  method: 'POST',
-                  body: { cols, rows }
-                }).catch(() => {});
-              }
-            }
+            if (disposed) return;
+            syncPtySize({ clientId: clientIdRef.current || undefined });
           }, 300);
           const stale = socketRef.current?.readyState === WebSocket.OPEN
             && lastServerPingAtRef.current > 0
@@ -2001,15 +2012,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
-              const { cols, rows } = term;
-              if (syncPtySizeRef.current && cols && rows) {
-                apiFetch(`/api/terminal/${sessionId}/resize`, {
-                  method: 'POST',
-                  body: isPrimaryRef.current && !isMobile
-                    ? { cols, rows, clientId: msg.clientId, priority: true }
-                    : { cols, rows, clientId: msg.clientId }
-                }).catch(() => {});
-              }
+              syncPtySize({ clientId: msg.clientId });
               return true;
             }
             if (msg.type === 'serverPing') {
@@ -2550,7 +2553,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [fitSignal, scheduleViewportRefresh]);
 
   useEffect(() => {
-    if (!isMobile) return;
     if (typeof window === 'undefined') return;
 
     let dprMediaQuery = null;
@@ -2595,9 +2597,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     bindDprListener();
-    window.addEventListener('orientationchange', handleOrientationChange);
+    if (isMobile) {
+      window.addEventListener('orientationchange', handleOrientationChange);
+    }
     return () => {
-      window.removeEventListener('orientationchange', handleOrientationChange);
+      if (isMobile) {
+        window.removeEventListener('orientationchange', handleOrientationChange);
+      }
       if (orientationTimer) {
         clearTimeout(orientationTimer);
         orientationTimer = null;

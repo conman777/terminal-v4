@@ -1,31 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-
-// Module-level singleton — dictionary loads once, shared across all instances
-let spellInstance = null;
-let loadPromise = null;
-
-async function getSpellChecker() {
-  if (spellInstance) return spellInstance;
-  if (loadPromise) return loadPromise;
-  loadPromise = (async () => {
-    const [{ default: nspell }, { default: dict }] = await Promise.all([
-      import('nspell'),
-      import('dictionary-en')
-    ]);
-    spellInstance = nspell(dict);
-    return spellInstance;
-  })();
-  return loadPromise;
-}
-
-function shouldSkip(word) {
-  if (!word || word.length < 2) return true;
-  if (word.startsWith('/')) return true;           // slash commands
-  if (/[0-9]/.test(word)) return true;             // paths, versions
-  if (/\./.test(word)) return true;                // URLs, file paths
-  if (word === word.toUpperCase()) return true;    // ACRONYMS
-  return false;
-}
+import { getSpellChecker, getAutocorrectSuggestion } from '../utils/autocorrect';
 
 export function useAutocorrectInput(text, setText, enabled) {
   const spellRef = useRef(null);
@@ -71,12 +45,8 @@ export function useAutocorrectInput(text, setText, enabled) {
     const word = wordMatch[1];
     const wordStart = cursorPos - word.length;
 
-    if (shouldSkip(word) || spell.correct(word)) return false;
-
-    const suggestions = spell.suggest(word);
-    if (!suggestions?.length || suggestions[0] === word) return false;
-
-    const corrected = suggestions[0];
+    const corrected = getAutocorrectSuggestion(spell, word);
+    if (!corrected) return false;
     correctionRef.current = { original: word, corrected, atIndex: wordStart };
 
     setText(prev => prev.slice(0, wordStart) + corrected + ' ' + prev.slice(cursorPos));

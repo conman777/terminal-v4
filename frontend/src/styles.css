@@ -1077,8 +1077,11 @@ button {
 }
 
 /* On mobile, JS handles all scrolling via term.scrollLines() so we need
-   touch-action: none to prevent the browser from intercepting touches. */
-@media (max-width: 768px) {
+   touch-action: none to prevent the browser from intercepting touches.
+   Use pointer:coarse (touch screen) up to 1024px to match JS useMobileDetect
+   threshold (MOBILE_MAX_WIDTH_TOUCH=1024). Also cover narrow non-touch windows
+   up to 768px (MOBILE_MAX_WIDTH_NO_TOUCH=768). */
+@media (max-width: 768px), (pointer: coarse) and (max-width: 1024px) {
   .terminal-chat,
   .terminal-chat.scroll-mode {
     touch-action: none;
@@ -11070,6 +11073,43 @@ textarea:focus-visible {
 .pane-ai-gemini .desktop-status-bar {
   background: rgba(34, 197, 94, 0.06);
   border-top-color: rgba(34, 197, 94, 0.22);
+}
+
+/* Per-AI mobile status bar tints */
+.pane-ai-claude .mobile-status-bar {
+  background: rgba(255, 107, 43, 0.06);
+  border-top-color: rgba(255, 107, 43, 0.22);
+}
+.pane-ai-codex .mobile-status-bar {
+  background: rgba(59, 130, 246, 0.06);
+  border-top-color: rgba(59, 130, 246, 0.22);
+}
+.pane-ai-gemini .mobile-status-bar {
+  background: rgba(34, 197, 94, 0.06);
+  border-top-color: rgba(34, 197, 94, 0.22);
+}
+
+/* Per-AI mobile tab indicator colors */
+.mobile-header-tab.ai-claude.active {
+  border-color: #ff6b2b;
+  color: #ff6b2b;
+}
+.mobile-header-tab.ai-claude.active .mobile-header-tab-status.idle {
+  background: rgba(255, 107, 43, 0.5);
+}
+.mobile-header-tab.ai-codex.active {
+  border-color: #3b82f6;
+  color: #3b82f6;
+}
+.mobile-header-tab.ai-codex.active .mobile-header-tab-status.idle {
+  background: rgba(59, 130, 246, 0.5);
+}
+.mobile-header-tab.ai-gemini.active {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+.mobile-header-tab.ai-gemini.active .mobile-header-tab-status.idle {
+  background: rgba(34, 197, 94, 0.5);
 }
 
 /* Empty pane state */

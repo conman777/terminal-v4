@@ -77,6 +77,8 @@ export function Header({
         sessionActivity={sessionActivity}
         sessionsGroupedByProject={sessionsGroupedByProject}
         showTabStatusLabels={showTabStatusLabels}
+        sessionAiTypes={sessionAiTypes}
+        onSetSessionAiType={onSetSessionAiType}
       />
     );
   }

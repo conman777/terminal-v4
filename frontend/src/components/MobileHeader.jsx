@@ -6,6 +6,13 @@ import { useLongPress } from '../hooks/useLongPress';
 import { MobileViewTabs } from './MobileViewTabs';
 import { useTheme } from '../contexts/ThemeContext';
 
+const AI_TYPE_OPTIONS = [
+  { id: null,      label: 'CLI (default)', color: '#f59e0b' },
+  { id: 'claude',  label: 'Claude Code',   color: '#ff6b2b' },
+  { id: 'codex',   label: 'Codex',         color: '#3b82f6' },
+  { id: 'gemini',  label: 'Gemini',        color: '#22c55e' },
+];
+
 // Separate component for mobile tab to use hooks properly
 function MobileTab({
   session,
@@ -13,6 +20,7 @@ function MobileTab({
   isBusy,
   hasUnread,
   showStatusLabels,
+  aiType,
   onSelect,
   onLongPress,
   isRenaming,
@@ -45,7 +53,8 @@ function MobileTab({
     'mobile-header-tab',
     isActive && 'active',
     isBusy && 'busy',
-    hasUnread && !isActive && 'unread'
+    hasUnread && !isActive && 'unread',
+    aiType && `ai-${aiType}`,
   ].filter(Boolean).join(' ');
 
   return (
@@ -98,7 +107,9 @@ export function MobileHeader({
   isNavCollapsed = false,
   sessionActivity,
   sessionsGroupedByProject,
-  showTabStatusLabels = false
+  showTabStatusLabels = false,
+  sessionAiTypes,
+  onSetSessionAiType,
 }) {
   const { theme, toggleTheme } = useTheme();
   const [showDrawer, setShowDrawer] = useState(false);
@@ -454,6 +465,7 @@ export function MobileHeader({
                   isBusy={isBusy}
                   hasUnread={Boolean(activityState?.hasUnread)}
                   showStatusLabels={showTabStatusLabels}
+                  aiType={sessionAiTypes?.[session.id]}
                   onSelect={onSelectSession}
                   onLongPress={handleTabLongPress}
                   isRenaming={renamingSessionId === session.id}
@@ -525,6 +537,18 @@ export function MobileHeader({
               ),
               onClick: () => handleStartRename(tabContextMenu.sessionId)
             },
+            { separator: true },
+            ...AI_TYPE_OPTIONS.map(opt => ({
+              label: opt.label,
+              icon: (
+                <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: opt.color, flexShrink: 0 }} />
+              ),
+              active: (sessionAiTypes?.[tabContextMenu.sessionId] ?? null) === opt.id,
+              onClick: () => {
+                onSetSessionAiType?.(tabContextMenu.sessionId, opt.id);
+                setTabContextMenu(null);
+              }
+            })),
             { separator: true },
             {
               label: 'Close',

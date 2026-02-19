@@ -165,6 +165,16 @@ export const TerminalPane = memo(function TerminalPane({
               )}
             </div>
           )}
+
+          {/* Session topic summary */}
+          {currentSession?.thread?.topic && (
+            <>
+              {canClose && sessions.length > 1 && <span className="ph-topic-sep">·</span>}
+              <span className="ph-topic" title={currentSession.thread.topic}>
+                {currentSession.thread.topic}
+              </span>
+            </>
+          )}
         </div>
 
         <div className="ph-controls">
@@ -318,6 +328,25 @@ export const TerminalPane = memo(function TerminalPane({
           align-items: center;
           min-width: 0;
           flex: 1;
+        }
+
+        /* ── Topic summary ── */
+        .ph-topic-sep {
+          color: var(--text-muted);
+          opacity: 0.5;
+          padding: 0 6px;
+          flex-shrink: 0;
+          font-size: 12px;
+        }
+
+        .ph-topic {
+          font-size: 11px;
+          color: var(--text-muted);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 220px;
+          flex-shrink: 1;
         }
 
         /* ── Session selector ── */

@@ -176,6 +176,7 @@ function AppContent() {
     archiveSession,
     unarchiveSession,
     updateSessionTopic,
+    generateSessionTopic,
     sendToSession
   } = useTerminalSession();
 
@@ -363,12 +364,28 @@ function AppContent() {
     removeSession: removeSessionActivity
   } = useSessionActivity();
 
+  // Keep a stable ref to sessions so handleSessionBusyChange can read current
+  // session data without adding `sessions` to its dependency array.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
+  // Track which sessions have already had topic generation triggered so we
+  // only fire once per session (not on every busy→idle transition).
+  const topicGeneratedRef = useRef(new Set());
+
   const handleSessionBusyChange = useCallback((sessionId, isBusy) => {
     if (isBusy && sessionId && sessionId !== activeSessionId) {
       markSessionActivity(sessionId);
     }
     setSessionBusy(sessionId, Boolean(isBusy));
-  }, [activeSessionId, markSessionActivity, setSessionBusy]);
+    // Auto-generate topic once, on the first idle transition, if no topic yet
+    if (!isBusy && sessionId && !topicGeneratedRef.current.has(sessionId)) {
+      const session = sessionsRef.current?.find((s) => s.id === sessionId);
+      if (session && !session.thread?.topic) {
+        topicGeneratedRef.current.add(sessionId);
+        generateSessionTopic(sessionId);
+      }
+    }
+  }, [activeSessionId, markSessionActivity, setSessionBusy, generateSessionTopic]);
 
   useEffect(() => {
     if (!Array.isArray(sessions) || sessions.length === 0) return;
@@ -1210,6 +1227,7 @@ function AppContent() {
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
+                  sessionAiTypes={sessionAiTypes}
                 />
               </div>
             )}
