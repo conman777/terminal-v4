@@ -43,5 +43,5 @@ export function useAiAnalysis(chartData, timeRange) {
     }
   }, [chartData, timeRange, load]);
 
-  return { analysis, loading, error, refresh };
+  return { analysis, loading, error, refresh: load };
 }
