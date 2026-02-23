@@ -1,15 +1,11 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
-import { bitcoinRoutes } from './routes/bitcoin-routes.js';
-import { aiRoutes } from './routes/ai-routes.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { bitcoinRoutes } from './routes/bitcoin-routes';
+import { aiRoutes } from './routes/ai-routes';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 

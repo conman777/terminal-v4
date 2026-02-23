@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import { getCurrentPrice, getChartData } from '../services/coingecko.js';
-import { analyzeChart } from '../services/ai-analysis.js';
+import { getCurrentPrice, getChartData } from '../services/coingecko';
+import { analyzeChart } from '../services/ai-analysis';
 
 export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/api/analyze', async (request, reply) => {

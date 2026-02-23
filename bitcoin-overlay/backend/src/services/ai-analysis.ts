@@ -1,4 +1,4 @@
-import { PriceData, ChartData, ChartPoint, AiAnalysis, Annotation } from '../types.js';
+import { PriceData, ChartData, ChartPoint, AiAnalysis, Annotation } from '../types';
 
 interface CacheEntry {
   data: AiAnalysis;

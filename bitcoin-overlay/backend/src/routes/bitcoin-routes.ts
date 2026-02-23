@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getCurrentPrice, getChartData } from '../services/coingecko.js';
+import { getCurrentPrice, getChartData } from '../services/coingecko';
 
 export async function bitcoinRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/api/price', async (_request, reply) => {
