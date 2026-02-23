@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useBitcoinData } from './hooks/useBitcoinData';
 import { useAiAnalysis } from './hooks/useAiAnalysis';
+import { fetchSettings } from './utils/api';
 import PriceHeader from './components/PriceHeader';
 import TimeRangeSelector from './components/TimeRangeSelector';
 import PriceChart from './components/PriceChart';
@@ -10,6 +11,16 @@ export default function App() {
   const { price, chartData, timeRange, setTimeRange, loading, error } = useBitcoinData();
   const { analysis, loading: analysisLoading, error: analysisError, refresh: refreshAnalysis } = useAiAnalysis(chartData, timeRange);
   const [activeAnnotation, setActiveAnnotation] = useState(null);
+  const [hasApiKey, setHasApiKey] = useState(null);
+
+  useEffect(() => {
+    fetchSettings().then((s) => setHasApiKey(s.hasApiKey)).catch(() => setHasApiKey(false));
+  }, []);
+
+  const handleApiKeySaved = useCallback(() => {
+    setHasApiKey(true);
+    refreshAnalysis();
+  }, [refreshAnalysis]);
 
   return (
     <div className="app">
@@ -36,6 +47,8 @@ export default function App() {
         error={analysisError}
         onRefresh={refreshAnalysis}
         activeAnnotation={activeAnnotation}
+        hasApiKey={hasApiKey === true}
+        onApiKeySaved={handleApiKeySaved}
       />
     </div>
   );

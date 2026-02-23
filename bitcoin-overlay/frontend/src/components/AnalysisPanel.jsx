@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import LoadingSpinner from './LoadingSpinner';
 import { formatDate } from '../utils/formatters';
+import { saveApiKey } from '../utils/api';
 
 const DIRECTION_ICONS = {
   up: { arrow: '\u2191', className: 'bullish' },
@@ -71,7 +72,52 @@ function EventCard({ annotation, isActive }) {
   );
 }
 
-export default function AnalysisPanel({ analysis, loading, error, onRefresh, activeAnnotation }) {
+function ApiKeySetup({ onSaved }) {
+  const [key, setKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!key.trim()) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await saveApiKey(key.trim());
+      onSaved();
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="api-key-setup">
+      <div className="api-key-setup__icon">🔑</div>
+      <h3 className="api-key-setup__title">OpenRouter API Key Required</h3>
+      <p className="api-key-setup__desc">
+        Enter your <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer">OpenRouter API key</a> to enable AI-powered analysis.
+      </p>
+      <form onSubmit={handleSubmit} className="api-key-setup__form">
+        <input
+          type="password"
+          className="api-key-setup__input"
+          placeholder="sk-or-..."
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          autoFocus
+        />
+        <button type="submit" className="api-key-setup__btn" disabled={saving || !key.trim()}>
+          {saving ? <LoadingSpinner size="sm" /> : 'Save & Analyze'}
+        </button>
+      </form>
+      {err && <p className="api-key-setup__error">{err}</p>}
+    </div>
+  );
+}
+
+export default function AnalysisPanel({ analysis, loading, error, onRefresh, activeAnnotation, hasApiKey, onApiKeySaved }) {
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -108,7 +154,11 @@ export default function AnalysisPanel({ analysis, loading, error, onRefresh, act
         </div>
       )}
 
-      {loading && !analysis ? (
+      {!hasApiKey && (
+        <ApiKeySetup onSaved={onApiKeySaved} />
+      )}
+
+      {hasApiKey && loading && !analysis ? (
         <div className="analysis-panel__skeleton">
           <div className="analysis-section">
             <h3 className="analysis-section__title">Summary</h3>
@@ -125,7 +175,7 @@ export default function AnalysisPanel({ analysis, loading, error, onRefresh, act
             <SkeletonBlock lines={4} />
           </div>
         </div>
-      ) : analysis ? (
+      ) : hasApiKey && analysis ? (
         <>
           <div className="analysis-section">
             <h3 className="analysis-section__title">Summary</h3>

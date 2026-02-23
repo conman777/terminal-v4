@@ -24,3 +24,15 @@ export function fetchAnalysis(days = 30) {
     body: JSON.stringify({ days }),
   });
 }
+
+export function fetchSettings() {
+  return request('/api/settings');
+}
+
+export function saveApiKey(apiKey) {
+  return request('/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey }),
+  });
+}

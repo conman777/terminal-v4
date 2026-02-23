@@ -29,6 +29,22 @@ async function start(): Promise<void> {
     return reply.send({ ok: true, timestamp: new Date().toISOString() });
   });
 
+  fastify.get('/api/settings', async (_request, reply) => {
+    const key = process.env.OPENROUTER_API_KEY || '';
+    return reply.send({ hasApiKey: !!key && key !== 'your_key_here' });
+  });
+
+  fastify.post('/api/settings', async (request, reply) => {
+    const { apiKey } = (request.body as { apiKey?: string }) || {};
+    if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
+      return reply.status(400).send({ error: 'API key is required' });
+    }
+    const envPath = path.resolve(__dirname, '../../.env');
+    fs.writeFileSync(envPath, `OPENROUTER_API_KEY=${apiKey.trim()}\n`);
+    process.env.OPENROUTER_API_KEY = apiKey.trim();
+    return reply.send({ ok: true });
+  });
+
   await fastify.register(bitcoinRoutes);
   await fastify.register(aiRoutes);
 
