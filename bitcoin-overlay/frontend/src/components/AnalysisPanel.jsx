@@ -8,6 +8,8 @@ const DIRECTION_ICONS = {
   sideways: { arrow: '\u2192', className: 'neutral' },
 };
 
+const SKELETON_WIDTHS = [85, 100, 72, 95, 68];
+
 function SkeletonBlock({ lines = 3 }) {
   return (
     <div className="skeleton-block">
@@ -15,7 +17,7 @@ function SkeletonBlock({ lines = 3 }) {
         <div
           key={i}
           className="skeleton-text"
-          style={{ width: `${70 + Math.random() * 30}%`, height: 14, marginBottom: 8 }}
+          style={{ width: `${SKELETON_WIDTHS[i % SKELETON_WIDTHS.length]}%`, height: 14, marginBottom: 8 }}
         />
       ))}
     </div>
@@ -44,12 +46,13 @@ function PredictionCard({ prediction }) {
   );
 }
 
+const TYPE_LABELS = {
+  bullish: 'Bullish',
+  bearish: 'Bearish',
+  neutral: 'Neutral',
+};
+
 function EventCard({ annotation, isActive }) {
-  const TYPE_LABELS = {
-    bullish: 'Bullish',
-    bearish: 'Bearish',
-    neutral: 'Neutral',
-  };
 
   return (
     <div
@@ -73,9 +76,9 @@ export default function AnalysisPanel({ analysis, loading, error, onRefresh, act
 
   useEffect(() => {
     if (!activeAnnotation || !panelRef.current) return;
-    const target = panelRef.current.querySelector(
-      `[data-timestamp="${activeAnnotation.timestamp}"]`
-    );
+    const target = Array.from(
+      panelRef.current.querySelectorAll('[data-timestamp]')
+    ).find(el => el.dataset.timestamp === String(activeAnnotation.timestamp));
     if (target) {
       target.scrollIntoView({ behavior: 'smooth', block: 'center' });
       target.classList.add('event-card--highlight');
@@ -142,8 +145,8 @@ export default function AnalysisPanel({ analysis, loading, error, onRefresh, act
             <div className="analysis-section">
               <h3 className="analysis-section__title">Predictions</h3>
               <div className="predictions-grid">
-                {analysis.predictions.map((pred, idx) => (
-                  <PredictionCard key={idx} prediction={pred} />
+                {analysis.predictions.map((pred) => (
+                  <PredictionCard key={pred.timeframe} prediction={pred} />
                 ))}
               </div>
             </div>

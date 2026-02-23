@@ -6,7 +6,7 @@ export function useAiAnalysis(chartData, timeRange) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const mountedRef = useRef(true);
-  const hasFetchedRef = useRef(false);
+  const lastTimeRangeRef = useRef(null);
 
   const load = useCallback(async () => {
     try {
@@ -36,14 +36,12 @@ export function useAiAnalysis(chartData, timeRange) {
 
   useEffect(() => {
     if (chartData && chartData.prices && chartData.prices.length > 0) {
-      hasFetchedRef.current = true;
-      load();
+      if (lastTimeRangeRef.current !== timeRange) {
+        lastTimeRangeRef.current = timeRange;
+        load();
+      }
     }
-  }, [chartData, load]);
-
-  const refresh = useCallback(() => {
-    load();
-  }, [load]);
+  }, [chartData, timeRange, load]);
 
   return { analysis, loading, error, refresh };
 }

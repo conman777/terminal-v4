@@ -47,22 +47,19 @@ export function useBitcoinData() {
 
   useEffect(() => {
     mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  useEffect(() => {
     loadPrice();
     const priceInterval = setInterval(loadPrice, PRICE_POLL_INTERVAL);
-    return () => {
-      mountedRef.current = false;
-      clearInterval(priceInterval);
-    };
+    return () => clearInterval(priceInterval);
   }, [loadPrice]);
 
   useEffect(() => {
-    mountedRef.current = true;
     loadChart(timeRange);
     const chartInterval = setInterval(() => loadChart(timeRange), CHART_POLL_INTERVAL);
-    return () => {
-      mountedRef.current = false;
-      clearInterval(chartInterval);
-    };
+    return () => clearInterval(chartInterval);
   }, [timeRange, loadChart]);
 
   return { price, chartData, timeRange, setTimeRange, loading, error };
