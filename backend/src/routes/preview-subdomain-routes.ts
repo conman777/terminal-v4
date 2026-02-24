@@ -331,6 +331,33 @@ const PREVIEW_DEBUG_SCRIPT = `
         });
       }
     } catch (e) {}
+
+    // Chrome does not allow patching window.location.pathname via defineProperty.
+    // As a fallback, shadow window.location with a Proxy so frameworks like
+    // Next.js App Router see the stripped path during hydration.
+    try {
+      var pathnameNowStripped = typeof window.location.pathname === 'string' &&
+        window.location.pathname.indexOf(PREVIEW_BASE_PATH) !== 0;
+      if (!pathnameNowStripped) {
+        var locationProxy = new Proxy(window.location, {
+          get: function(target, prop) {
+            if (prop === 'pathname') {
+              return stripPreviewBasePath(getRawPathname());
+            }
+            if (prop === 'href') {
+              return VIRTUAL_ORIGIN + stripPreviewBasePath(getRawPathname()) + (target.search || '') + (target.hash || '');
+            }
+            if (prop === 'origin') return VIRTUAL_ORIGIN;
+            if (prop === 'host') return 'localhost:' + PORT;
+            if (prop === 'hostname') return 'localhost';
+            if (prop === 'port') return String(PORT);
+            var val = target[prop];
+            return typeof val === 'function' ? val.bind(target) : val;
+          }
+        });
+        try { Object.defineProperty(window, 'location', { get: function() { return locationProxy; }, configurable: true }); } catch(e) {}
+      }
+    } catch (e) {}
   }
 
   // Prevent preview apps from registering service workers with scope "/"
@@ -695,6 +722,11 @@ const PREVIEW_DEBUG_SCRIPT = `
     if (typeof window !== 'undefined') {
       window.addEventListener('message', function(event) {
         var payload = event.data || {};
+        if (payload.type === 'preview-clear-storage') {
+          try { if (typeof localStorage !== 'undefined') localStorage.clear(); } catch (e) {}
+          try { if (typeof sessionStorage !== 'undefined') sessionStorage.clear(); } catch (e) {}
+          return;
+        }
         if (payload.type !== 'preview-storage-restore' || String(payload.port) !== String(PORT)) {
           return;
         }
@@ -2463,6 +2495,26 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             }
           );
 
+          // Rewrite /_next/ URLs in inline script content for path-based preview.
+          // The RSC (React Server Component) flight payload is delivered as inline
+          // self.__next_f.push([1, "..."]) scripts. The payload contains /_next/ chunk
+          // URLs that React uses to preload CSS/fonts/JS via React's hint APIs (preinit,
+          // preload, etc.). These React hints insert <link> and <script> elements directly
+          // via internal DOM APIs, bypassing our createElement-based interception.
+          // By rewriting the URLs in the inline script source, React uses the correct
+          // /preview/PORT/_next/ paths and all preloaded resources load properly.
+          if (isPathPreview) {
+            html = html.replace(
+              /<script([^>]*)>([\s\S]*?)<\/script>/gi,
+              (match, attrs, scriptText) => {
+                if (/\bsrc\s*=/.test(attrs)) return match; // external scripts, don't touch
+                if (!scriptText.includes('/_next/')) return match; // no /_next/ to rewrite
+                const rewritten = scriptText.replace(/\/_next\//g, `${previewBasePath}/_next/`);
+                return `<script${attrs}>${rewritten}</script>`;
+              }
+            );
+          }
+
           const useLegacyPreviewFixes = isPathPreview || PREVIEW_REWRITE_SCOPE === 'legacy';
           const includePerformanceMonitor = PREVIEW_PERFORMANCE_MONITOR_ENABLED && (useLegacyPreviewFixes || PREVIEW_REWRITE_SCOPE === 'hybrid');
 
@@ -2586,7 +2638,34 @@ html[data-preview-force-anim="1"] :is(
           reply.raw.removeHeader('content-encoding');
           reply.send(css);
         } else if (isJs && isPathPreview) {
-          const js = rewriteJsImports(body.toString('utf-8'), cacheBuster, rewriteUrlValue, shouldBustScripts);
+          let js = rewriteJsImports(body.toString('utf-8'), cacheBuster, rewriteUrlValue, shouldBustScripts);
+          // Fix Turbopack chunk bootstrap for path-based preview: CHUNK_BASE_PATH is hardcoded
+          // as "/_next/" in the Turbopack runtime. When the proxy rewrites script srcs to
+          // /preview/PORT/_next/..., getPathFromScript fails to strip the prefix, chunks register
+          // under garbage keys, loadInitialChunk hangs forever, and hydrateRoot is never called.
+          // Rewriting CHUNK_BASE_PATH at serve time aligns it with the actual script src prefix
+          // so chunk resolvers complete correctly and React hydration succeeds.
+          if (js.includes('CHUNK_BASE_PATH')) {
+            js = js.replace(
+              /\bCHUNK_BASE_PATH\s*=\s*(["'])\/_next\//g,
+              (_match, q) => `CHUNK_BASE_PATH = ${q}${previewBasePath}/_next/`
+            );
+          }
+          // Fix RSC payload chunk URLs in loadChunkByUrl for path-based preview.
+          // The React Server Component flight payload contains hardcoded /_next/ chunk URLs
+          // (computed at build time by Turbopack). When the RSC client (react-server-dom-turbopack)
+          // processes module references, it calls context.L("/_next/static/chunks/...") directly.
+          // Without this fix, Turbopack's doLoadChunk creates new <script> tags with bare /_next/
+          // URLs that hit the Fastify backend (returning HTML instead of JS), causing
+          // "Unexpected token '<'" errors and preventing React hydration.
+          // By patching loadChunkByUrl to prepend the proxy base path, the corrected URL matches
+          // the existing registered resolver and the <script> already in the DOM.
+          if (js.includes('function loadChunkByUrl(chunkUrl)')) {
+            js = js.replace(
+              /function loadChunkByUrl\(chunkUrl\)\s*\{/,
+              (match) => `${match}\n    if(chunkUrl&&chunkUrl.startsWith("/_next/")){chunkUrl="${previewBasePath}"+chunkUrl;}`
+            );
+          }
           reply.header('content-length', String(Buffer.byteLength(js)));
           reply.raw.removeHeader('content-encoding');
           reply.send(js);
