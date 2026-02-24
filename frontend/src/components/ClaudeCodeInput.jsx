@@ -26,13 +26,21 @@ export default function ClaudeCodeInput({
   const [historyIndex, setHistoryIndex] = useState(-1);
   const textareaRef = useRef(null);
 
-  // Use the shared voice input hook
+  // Use the shared voice input hook - one per provider
   const handleTranscription = useCallback((transcribedText) => {
     setText(prev => prev + (prev ? ' ' : '') + transcribedText);
     textareaRef.current?.focus();
   }, []);
 
-  const { isRecording, isChecking, isRequesting, isTranscribing, error: recordingError, toggleRecording } = useVoiceInput(handleTranscription);
+  const localVoice = useVoiceInput(handleTranscription, { provider: 'local' });
+  const groqVoice = useVoiceInput(handleTranscription, { provider: 'groq' });
+
+  // Aggregate states from both providers
+  const isRecording = localVoice.isRecording || groqVoice.isRecording;
+  const isTranscribing = localVoice.isTranscribing || groqVoice.isTranscribing;
+  const isChecking = localVoice.isChecking || groqVoice.isChecking;
+  const isRequesting = localVoice.isRequesting || groqVoice.isRequesting;
+  const recordingError = localVoice.error || groqVoice.error;
 
   // Auto-resize textarea
   useEffect(() => {
@@ -158,12 +166,19 @@ export default function ClaudeCodeInput({
     }
   };
 
-  // Determine mic button classes
-  const micButtonClasses = [
+  // Determine mic button classes per provider
+  const localMicClasses = [
     'mic-button',
-    isRecording ? 'recording' : '',
-    isChecking ? 'checking' : '',
-    isRequesting ? 'requesting' : ''
+    localVoice.isRecording ? 'recording' : '',
+    localVoice.isChecking ? 'checking' : '',
+    localVoice.isRequesting ? 'requesting' : ''
+  ].filter(Boolean).join(' ');
+
+  const groqMicClasses = [
+    'mic-button',
+    groqVoice.isRecording ? 'recording' : '',
+    groqVoice.isChecking ? 'checking' : '',
+    groqVoice.isRequesting ? 'requesting' : ''
   ].filter(Boolean).join(' ');
 
   // Determine placeholder text
@@ -176,14 +191,9 @@ export default function ClaudeCodeInput({
     return 'Type a message... (/ for commands)';
   };
 
-  // Determine aria label for mic button
-  const micAriaLabel = isChecking
-    ? 'Checking API...'
-    : isRequesting
-      ? 'Requesting microphone access'
-      : isRecording
-        ? 'Stop recording'
-        : 'Start voice input';
+  // Determine aria labels for mic buttons
+  const localAriaLabel = localVoice.isChecking ? 'Checking local...' : localVoice.isRequesting ? 'Requesting mic...' : localVoice.isRecording ? 'Stop recording' : 'Voice input (local Whisper)';
+  const groqAriaLabel = groqVoice.isChecking ? 'Checking Groq...' : groqVoice.isRequesting ? 'Requesting mic...' : groqVoice.isRecording ? 'Stop recording' : 'Voice input (Groq cloud)';
 
   return (
     <div className="claude-code-input-wrapper">
@@ -218,42 +228,50 @@ export default function ClaudeCodeInput({
           disabled={disabled || isProcessing || isRecording || isTranscribing}
           rows={1}
         />
+        {/* Local Whisper mic button */}
         <button
           type="button"
-          onClick={toggleRecording}
+          onClick={localVoice.toggleRecording}
           disabled={disabled || isProcessing || isTranscribing || isRequesting || isChecking}
-          className={micButtonClasses}
-          aria-label={micAriaLabel}
-          title={micAriaLabel}
+          className={localMicClasses}
+          aria-label={localAriaLabel}
+          title={localAriaLabel}
         >
-          {isTranscribing ? '...' : isChecking ? (
-            // Pulsing mic icon while checking API
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          ) : isRequesting ? (
-            // Pulsing mic icon while requesting permission
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
-            </svg>
-          ) : isRecording ? (
-            // Filled circle when recording
+          {localVoice.isTranscribing ? '...' : localVoice.isRecording ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
               <circle cx="12" cy="12" r="8" />
             </svg>
           ) : (
-            // Mic icon when idle
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-              <line x1="12" y1="19" x2="12" y2="23"/>
-              <line x1="8" y1="23" x2="16" y2="23"/>
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+              <rect x="9" y="9" width="6" height="6" />
+              <line x1="9" y1="1" x2="9" y2="4" />
+              <line x1="15" y1="1" x2="15" y2="4" />
+              <line x1="9" y1="20" x2="9" y2="23" />
+              <line x1="15" y1="20" x2="15" y2="23" />
+              <line x1="20" y1="9" x2="23" y2="9" />
+              <line x1="20" y1="14" x2="23" y2="14" />
+              <line x1="1" y1="9" x2="4" y2="9" />
+              <line x1="1" y1="14" x2="4" y2="14" />
+            </svg>
+          )}
+        </button>
+        {/* Groq cloud mic button */}
+        <button
+          type="button"
+          onClick={groqVoice.toggleRecording}
+          disabled={disabled || isProcessing || isTranscribing || isRequesting || isChecking}
+          className={groqMicClasses}
+          aria-label={groqAriaLabel}
+          title={groqAriaLabel}
+        >
+          {groqVoice.isTranscribing ? '...' : groqVoice.isRecording ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="12" cy="12" r="8" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
             </svg>
           )}
         </button>

@@ -9,10 +9,12 @@ const HEALTH_ERROR_MESSAGES = {
   timeout: 'Groq API not responding',
   rate_limited: 'Rate limited - wait a moment',
   api_error: 'Groq API error - try again',
-  unauthorized: 'Not logged in'
+  unauthorized: 'Not logged in',
+  whisper_unavailable: 'Local Whisper server not available',
+  no_provider: 'No transcription provider available'
 };
 
-export function useVoiceInput(onTranscribed) {
+export function useVoiceInput(onTranscribed, { provider } = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isRequesting, setIsRequesting] = useState(false);
@@ -72,7 +74,8 @@ export function useVoiceInput(onTranscribed) {
   // Pre-flight API health check
   const checkApiHealth = useCallback(async () => {
     try {
-      const result = await apiGet('/api/transcribe/health');
+      const url = provider ? `/api/transcribe/health?provider=${provider}` : '/api/transcribe/health';
+      const result = await apiGet(url);
       if (result.ok) {
         return { ok: true };
       }
@@ -86,7 +89,7 @@ export function useVoiceInput(onTranscribed) {
         message: "Can't reach server - check connection"
       };
     }
-  }, []);
+  }, [provider]);
 
   const startRecording = useCallback(async () => {
     // Cleanup any existing recording first
@@ -152,7 +155,7 @@ export function useVoiceInput(onTranscribed) {
         audioChunksRef.current = [];
 
         // Skip if too small (likely no audio)
-        if (audioBlob.size < 1000) {
+        if (audioBlob.size < 100) {
           setError('No audio recorded');
           return;
         }
@@ -163,7 +166,8 @@ export function useVoiceInput(onTranscribed) {
           const formData = new FormData();
           formData.append('audio', audioBlob, `recording.${mimeType.split('/')[1]}`);
 
-          const result = await apiPost('/api/transcribe', formData);
+          const transcribeUrl = provider ? `/api/transcribe?provider=${provider}` : '/api/transcribe';
+          const result = await apiPost(transcribeUrl, formData);
 
           if (result.text) {
             onTranscribed?.(result.text);
@@ -201,7 +205,7 @@ export function useVoiceInput(onTranscribed) {
 
       // Start recording
       try {
-        mediaRecorder.start();
+        mediaRecorder.start(250);
         isRecordingRef.current = true;
         setIsRecording(true);
       } catch (startErr) {

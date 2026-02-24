@@ -218,8 +218,9 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
               </>
             )}
 
-            {/* Mic button */}
-            <TerminalMicButton sessionId={sessionId} inline onRecordingChange={setIsMicRecording} />
+            {/* Mic buttons - local Whisper + Groq cloud */}
+            <TerminalMicButton sessionId={sessionId} provider="local" inline onRecordingChange={setIsMicRecording} />
+            <TerminalMicButton sessionId={sessionId} provider="groq" inline onRecordingChange={setIsMicRecording} />
           </div>
         </>
       )}

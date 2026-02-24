@@ -469,6 +469,47 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
   }, [previewPort, baseIframeSrc]);
 
+  const handleClearCache = useCallback(async () => {
+    try {
+      const token = getAccessToken();
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+      // Clear server-side cookies and proxy logs in parallel
+      const clearPromises = [];
+      if (previewPort) {
+        clearPromises.push(
+          fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers }).catch(() => {}),
+          fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers }).catch(() => {})
+        );
+      }
+      await Promise.all(clearPromises);
+
+      // Tell the iframe to clear its localStorage and sessionStorage
+      if (iframeRef.current?.contentWindow) {
+        try {
+          iframeRef.current.contentWindow.postMessage({ type: 'preview-clear-storage' }, '*');
+        } catch {
+          // Cross-origin - can't access iframe storage directly
+        }
+      }
+
+      setHasCookies(false);
+
+      // Force hard reload with cache buster
+      if (baseIframeSrc) {
+        setIsLoading(true);
+        setError(null);
+        setLogs([]);
+        setProxyLogs([]);
+        const cacheBuster = `_cb=${Date.now()}`;
+        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+      }
+    } catch (err) {
+      console.error('Failed to clear cache:', err);
+    }
+  }, [previewPort, baseIframeSrc]);
+
   // Fetch active ports for the dropdown
   useEffect(() => {
     if (!isDocumentVisible) return;
@@ -1079,9 +1120,35 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [url]);
 
   const handleLoad = useCallback(() => {
+    // Escape guard: if a local preview navigates to a same-origin path outside
+    // /preview/:port (e.g. "/signup"), the iframe will render Terminal V4's SPA
+    // instead of the target app. Detect and re-wrap the path back into preview.
+    if (previewPort && iframeRef.current?.contentWindow && typeof window !== 'undefined') {
+      try {
+        const frameLocation = iframeRef.current.contentWindow.location;
+        if (frameLocation.origin === window.location.origin) {
+          const expectedPrefix = `/preview/${previewPort}`;
+          const pathname = frameLocation.pathname || '/';
+          const inPreviewPath = (
+            pathname === expectedPrefix
+            || pathname.startsWith(`${expectedPrefix}/`)
+          );
+          if (!inPreviewPath) {
+            const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+            const escapedUrl = `${expectedPrefix}${normalizedPath}${frameLocation.search || ''}${frameLocation.hash || ''}`;
+            setIsLoading(true);
+            setError(null);
+            setIframeSrc(escapedUrl);
+            return;
+          }
+        }
+      } catch {
+        // Cross-origin iframe (subdomain preview) or transient navigation — ignore.
+      }
+    }
     setIsLoading(false);
     setError(null);
-  }, []);
+  }, [previewPort]);
 
   // Fallback: if iframe doesn't fire onLoad within 5s, show it anyway
   // (some apps like Next.js dev mode may delay the load event)
@@ -3130,6 +3197,18 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   <span>Clear Cookies</span>
                 </button>
               )}
+              <button
+                type="button"
+                className="preview-mobile-tools-item"
+                onClick={() => { handleClearCache(); setShowMobileToolsMenu(false); }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 6h18" />
+                  <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                </svg>
+                <span>Clear Cache</span>
+              </button>
             </div>
           </div>
         )}
@@ -3179,6 +3258,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         onOpenExternal={handleOpenExternal}
         hasCookies={hasCookies}
         onClearCookies={handleClearCookies}
+        onClearCache={handleClearCache}
         mainTerminalMinimized={mainTerminalMinimized}
         onToggleMainTerminal={onToggleMainTerminal}
         alignTerminalControls={browserSplitEnabled}

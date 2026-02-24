@@ -3,7 +3,7 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
 import { AudioWaveform } from './AudioWaveform';
 
-export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange }) {
+export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, provider }) {
   const sendToTerminal = useCallback(async (text) => {
     if (!sessionId || !text) return;
 
@@ -17,7 +17,7 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
     }
   }, [sessionId]);
 
-  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(sendToTerminal);
+  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(sendToTerminal, { provider });
 
   useEffect(() => {
     onRecordingChange?.(isRecording && !!audioStream);
@@ -26,14 +26,15 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
   // Icon size based on inline mode
   const iconSize = inline ? 16 : 20;
 
-  // Determine aria label based on state
+  // Determine tooltip/aria label based on provider and state
+  const providerLabel = provider === 'local' ? 'Voice input (local Whisper)' : provider === 'groq' ? 'Voice input (Groq cloud)' : 'Start voice input';
   const ariaLabel = isChecking
     ? 'Checking API...'
     : isRequesting
       ? 'Requesting microphone access'
       : isRecording
         ? 'Stop recording'
-        : 'Start voice input';
+        : providerLabel;
 
   // Show waveform when recording with active stream
   if (isRecording && audioStream) {
@@ -100,7 +101,27 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
         <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="currentColor">
           <circle cx="12" cy="12" r="8" />
         </svg>
+      ) : provider === 'local' ? (
+        // Chip/computer icon for local Whisper
+        <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <rect x="9" y="9" width="6" height="6" />
+          <line x1="9" y1="1" x2="9" y2="4" />
+          <line x1="15" y1="1" x2="15" y2="4" />
+          <line x1="9" y1="20" x2="9" y2="23" />
+          <line x1="15" y1="20" x2="15" y2="23" />
+          <line x1="20" y1="9" x2="23" y2="9" />
+          <line x1="20" y1="14" x2="23" y2="14" />
+          <line x1="1" y1="9" x2="4" y2="9" />
+          <line x1="1" y1="14" x2="4" y2="14" />
+        </svg>
+      ) : provider === 'groq' ? (
+        // Cloud icon for Groq cloud
+        <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+        </svg>
       ) : (
+        // Default mic icon (no provider specified)
         <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>

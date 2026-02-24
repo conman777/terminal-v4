@@ -115,6 +115,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const fitRafRef = useRef(null);
   const pendingFitOptionsRef = useRef(null);
   const requestAuthoritativeResizeRef = useRef(null);
+  const requestPriorityResizeRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
@@ -712,6 +713,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       setScrollMode(false, { jumpToLive: true });
       return;
     }
+    if (isMobile && requestPriorityResizeRef.current) {
+      try {
+        requestPriorityResizeRef.current();
+      } catch {
+        // Ignore transient resize/promotion failures during mount/reconnect.
+      }
+    }
     setMobileInputEnabled(true);
   }, [isMobile, setMobileInputEnabled, setScrollMode, viewMode]);
 
@@ -1071,7 +1079,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {
     if (onRegisterFocusTerminal) {
-      onRegisterFocusTerminal(() => setMobileInputEnabled(true));
+      onRegisterFocusTerminal(() => {
+        if (requestPriorityResizeRef.current) {
+          try {
+            requestPriorityResizeRef.current();
+          } catch {
+            // Ignore transient resize/promotion failures during mount/reconnect.
+          }
+        }
+        setMobileInputEnabled(true);
+      });
     }
   }, [onRegisterFocusTerminal, setMobileInputEnabled]);
 
@@ -1297,6 +1314,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!cols || !rows) return false;
       if (term.cols === cols && term.rows === rows) return true;
       syncPtySize({ clientId: clientIdRef.current || undefined, dims: { cols, rows } });
+      return true;
+    };
+    requestPriorityResizeRef.current = () => {
+      if (!syncPtySizeRef.current || disposed || historyReloadingRef.current) return false;
+      const clientId = clientIdRef.current;
+      if (!clientId) return false;
+      const ownerClientId = ptyOwnerStateRef.current.ownerClientId;
+      if (ownerClientId && ownerClientId !== clientId) {
+        awaitOwnerPromotionBeforeInput();
+      }
+      syncPtySize({ clientId, priorityOverride: true });
       return true;
     };
 
@@ -1910,6 +1938,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           void loadIncrementalHistory();
         }, delay);
       };
+      let fullHistoryResyncTimer = null;
+      let lastFullHistoryResyncAt = 0;
+      const scheduleFullHistoryResync = (delay = 150) => {
+        if (disposed) return;
+        const now = Date.now();
+        if (now - lastFullHistoryResyncAt < 1500) return;
+        if (fullHistoryResyncTimer) return;
+        fullHistoryResyncTimer = setTimeout(() => {
+          fullHistoryResyncTimer = null;
+          if (disposed) return;
+          lastFullHistoryResyncAt = Date.now();
+          void loadInitialHistory();
+        }, delay);
+      };
+      const scheduleParserRecoveryResync = (delay = 150) => {
+        // Incremental replay works for line-oriented output, but after a parser reset
+        // it cannot reliably reconstruct TUI screen state (e.g. Claude Code) on slower
+        // mobile devices. Rebuild from recent history instead.
+        if (isMobile) {
+          scheduleFullHistoryResync(delay);
+          return;
+        }
+        scheduleIncrementalResync(delay);
+      };
       const scrollDisposer = term.onScroll((newPos) => {
         if (onScrollDirectionRef.current && !disposed) {
           const isUserScrolling = touchStateRef.current !== null;
@@ -2130,6 +2182,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(() => {
               if (socket.readyState !== WebSocket.OPEN) return;
+              // Initial/full history replay can take long enough on mobile devices to
+              // delay processing of incoming ping frames. Treat that as local backpressure,
+              // not a dead socket, otherwise we reconnect mid-replay and get stuck showing
+              // "Loading history..." repeatedly.
+              if (historyReloadingRef.current) {
+                return;
+              }
               const now = Date.now();
               if (now - lastServerPingAtRef.current > HEARTBEAT_TIMEOUT) {
                 socket.close(4000, 'Heartbeat timeout');
@@ -2193,6 +2252,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (parserRecoveryNeeded) {
               parserRecoveryNeeded = false;
               pendingWrite = '';
+              pendingWriteLastSeq = null;
+              if (isMobile) {
+                scheduleParserRecoveryResync(0);
+                return;
+              }
               term.reset();
               clearReader();
               const recoveryNotice = '\r\n[Terminal display resynced after high output]\r\n';
@@ -2288,7 +2352,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               pendingWriteLastSeq = null;
               parserRecoveryNeeded = true;
               tailModeRef.current = true;
-              scheduleIncrementalResync(0);
+              scheduleParserRecoveryResync(0);
             }
             if (pendingWriteFrame) return;
             pendingWriteFrame = requestAnimationFrame(flushPendingWrites);
@@ -2325,7 +2389,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (msg.type === 'resyncSuggested') {
               parserRecoveryNeeded = true;
-              scheduleIncrementalResync(0);
+              scheduleParserRecoveryResync(0);
               return true;
             }
             if (msg.type === 'cwd' && msg.cwd) {
@@ -2400,7 +2464,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               droppedEventCountRef.current += overflow;
               parserRecoveryNeeded = true;
               tailModeRef.current = true;
-              scheduleIncrementalResync(0);
+              scheduleParserRecoveryResync(0);
             }
             void processMessageQueue();
           };
@@ -2549,6 +2613,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           if (incrementalResyncTimer) {
             clearTimeout(incrementalResyncTimer);
             incrementalResyncTimer = null;
+          }
+          if (fullHistoryResyncTimer) {
+            clearTimeout(fullHistoryResyncTimer);
+            fullHistoryResyncTimer = null;
           }
           if (socket) socket.close();
         };
@@ -2806,6 +2874,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       reconnectSocketRef.current = null;
       sendTerminalInputRef.current = null;
       requestAuthoritativeResizeRef.current = null;
+      requestPriorityResizeRef.current = null;
     };
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
@@ -2945,6 +3014,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // On mobile, control keyboard by moving textarea on/off screen
   useEffect(() => {
     if (!isMobile) return;
+    if (keybarOpen && requestPriorityResizeRef.current) {
+      try {
+        requestPriorityResizeRef.current();
+      } catch {
+        // Ignore transient resize/promotion failures during mount/reconnect.
+      }
+    }
     setMobileInputEnabled(keybarOpen);
   }, [isMobile, keybarOpen, setMobileInputEnabled]);
 

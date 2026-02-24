@@ -98,8 +98,9 @@ export function DesktopStatusBar({
           </svg>
         </button>
 
-        {/* Mic button */}
-        <TerminalMicButton sessionId={sessionId} inline />
+        {/* Mic buttons - local Whisper + Groq cloud */}
+        <TerminalMicButton sessionId={sessionId} provider="local" inline />
+        <TerminalMicButton sessionId={sessionId} provider="groq" inline />
       </div>
     </div>
   );
