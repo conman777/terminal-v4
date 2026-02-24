@@ -25,14 +25,23 @@ class AgentWrapper {
   constructor(private options: any) {}
 
   /**
-   * Kill the current PTY process if one is running.
+   * Kill the current PTY process and its entire process group.
    */
   kill(signal?: string): void {
     if (this.currentProcess) {
+      const pid = this.currentProcess.pid;
       try {
         this.currentProcess.kill(signal);
       } catch {
         // Process may already be dead
+      }
+      // Kill the entire process group so child processes (claude CLI, etc.) don't orphan
+      if (pid) {
+        try {
+          process.kill(-pid, signal || 'SIGTERM');
+        } catch {
+          // Process group may already be dead
+        }
       }
       this.currentProcess = null;
     }

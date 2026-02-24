@@ -827,6 +827,168 @@ const PREVIEW_DEBUG_SCRIPT = `
     }
   }
 
+  function shouldSkipNavRewrite(urlValue) {
+    if (!urlValue) return true;
+    var trimmed = String(urlValue).trim();
+    if (!trimmed) return true;
+    if (trimmed[0] === '#') return true;
+    return /^(javascript:|mailto:|tel:|data:|blob:)/i.test(trimmed);
+  }
+
+  function rewriteAnchorHref(anchor) {
+    if (!anchor || typeof anchor.getAttribute !== 'function') return;
+    var rawHref = anchor.getAttribute('href');
+    if (shouldSkipNavRewrite(rawHref)) return;
+    var rewrittenHref = rewritePreviewUrl(rawHref);
+    if (rewrittenHref && rewrittenHref !== rawHref) {
+      anchor.setAttribute('href', rewrittenHref);
+    }
+  }
+
+  function rewriteFormAction(form) {
+    if (!form || typeof form.getAttribute !== 'function') return;
+    var rawAction = form.getAttribute('action');
+    // Empty action submits to current URL, which already remains in preview context.
+    if (!rawAction || shouldSkipNavRewrite(rawAction)) return;
+    var rewrittenAction = rewritePreviewUrl(rawAction);
+    if (rewrittenAction && rewrittenAction !== rawAction) {
+      form.setAttribute('action', rewrittenAction);
+    }
+  }
+
+  function findClosestAnchor(node) {
+    if (!node) return null;
+    var current = node.nodeType === 1 ? node : node.parentElement;
+    if (!current || typeof current.closest !== 'function') return null;
+    try { return current.closest('a[href]'); } catch (e) { return null; }
+  }
+
+  function findAnchorFromEvent(event) {
+    var anchor = findClosestAnchor(event && event.target);
+    if (anchor) return anchor;
+    try {
+      if (!event || typeof event.composedPath !== 'function') return null;
+      var path = event.composedPath();
+      for (var i = 0; i < path.length; i++) {
+        var item = path[i];
+        anchor = findClosestAnchor(item);
+        if (anchor) return anchor;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function rewriteAnchorAndFormTree(root) {
+    try {
+      if (!root) return;
+      if (root.nodeType === 1) {
+        if (String(root.tagName || '').toUpperCase() === 'A') rewriteAnchorHref(root);
+        if (String(root.tagName || '').toUpperCase() === 'FORM') rewriteFormAction(root);
+        if (typeof root.querySelectorAll === 'function') {
+          var anchors = root.querySelectorAll('a[href]');
+          for (var i = 0; i < anchors.length; i++) rewriteAnchorHref(anchors[i]);
+          var forms = root.querySelectorAll('form[action]');
+          for (var j = 0; j < forms.length; j++) rewriteFormAction(forms[j]);
+        }
+        return;
+      }
+      if (typeof DocumentFragment !== 'undefined' && root instanceof DocumentFragment && typeof root.querySelectorAll === 'function') {
+        var fragAnchors = root.querySelectorAll('a[href]');
+        for (var k = 0; k < fragAnchors.length; k++) rewriteAnchorHref(fragAnchors[k]);
+        var fragForms = root.querySelectorAll('form[action]');
+        for (var m = 0; m < fragForms.length; m++) rewriteFormAction(fragForms[m]);
+      }
+    } catch (e) {}
+  }
+
+  // Runtime safeguard: hydration/frameworks may replace href/action attributes after the
+  // proxy rewrites the initial HTML. In path-based preview that can escape to the
+  // Terminal V4 app on :3020. Rewriting on user interaction keeps navigation inside the
+  // preview context.
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('pointerdown', function(event) {
+      try {
+        var anchor = findAnchorFromEvent(event);
+        if (!anchor) return;
+        rewriteAnchorHref(anchor);
+      } catch (e) {}
+    }, true);
+
+    document.addEventListener('click', function(event) {
+      try {
+        if (!event || event.defaultPrevented) return;
+        if (typeof event.button === 'number' && event.button !== 0) return;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        var anchor = findAnchorFromEvent(event);
+        if (!anchor) return;
+        var target = '';
+        try { target = (anchor.getAttribute('target') || '').toLowerCase(); } catch (e) {}
+        if (target && target !== '_self') return;
+        if (anchor.hasAttribute && anchor.hasAttribute('download')) return;
+        rewriteAnchorHref(anchor);
+      } catch (e) {}
+    }, true);
+
+    document.addEventListener('submit', function(event) {
+      try {
+        if (!event || event.defaultPrevented) return;
+        var form = event.target;
+        if (!form || String(form.tagName || '').toUpperCase() !== 'FORM') return;
+        rewriteFormAction(form);
+      } catch (e) {}
+    }, true);
+
+    try {
+      if (typeof MutationObserver !== 'undefined' && document.documentElement) {
+        rewriteAnchorAndFormTree(document.documentElement);
+        var navRewriteObserver = new MutationObserver(function(mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var mutation = mutations[i];
+            if (mutation.type === 'attributes') {
+              var target = mutation.target;
+              if (!target || target.nodeType !== 1) continue;
+              var tag = String(target.tagName || '').toUpperCase();
+              if (tag === 'A') rewriteAnchorHref(target);
+              if (tag === 'FORM') rewriteFormAction(target);
+              continue;
+            }
+            if (mutation.addedNodes && mutation.addedNodes.length > 0) {
+              for (var j = 0; j < mutation.addedNodes.length; j++) {
+                rewriteAnchorAndFormTree(mutation.addedNodes[j]);
+              }
+            }
+          }
+        });
+        navRewriteObserver.observe(document.documentElement, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ['href', 'action']
+        });
+      }
+    } catch (e) {}
+  }
+
+  // Programmatic submit() bypasses the submit event. Patch form methods as a fallback.
+  try {
+    if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype) {
+      var originalFormSubmit = HTMLFormElement.prototype.submit;
+      if (typeof originalFormSubmit === 'function') {
+        HTMLFormElement.prototype.submit = function() {
+          try { rewriteFormAction(this); } catch (e) {}
+          return originalFormSubmit.apply(this, arguments);
+        };
+      }
+      var originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+      if (typeof originalRequestSubmit === 'function') {
+        HTMLFormElement.prototype.requestSubmit = function() {
+          try { rewriteFormAction(this); } catch (e) {}
+          return originalRequestSubmit.apply(this, arguments);
+        };
+      }
+    }
+  } catch (e) {}
+
   // Send logs to code.{domain} for subdomains, or same-origin for path-based/localhost preview
   const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
   const API_BASE = (PREVIEW_BASE_PATH || MAIN_IS_LOCAL)

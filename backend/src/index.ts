@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { registerCoreRoutes } from './routes/register-core-routes';
@@ -40,13 +41,24 @@ export interface CreateServerOptions {
   terminalOptions?: TerminalManagerOptions;
 }
 
+// Build HTTPS options if TLS cert/key files are configured and exist
+const httpsOptions = (() => {
+  const certFile = process.env.TLS_CERT_FILE;
+  const keyFile = process.env.TLS_KEY_FILE;
+  if (certFile && keyFile && existsSync(certFile) && existsSync(keyFile)) {
+    return { cert: readFileSync(certFile), key: readFileSync(keyFile) };
+  }
+  return undefined;
+})();
+
 export async function createServer(options: CreateServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger:
       options.logger ??
       ({
         level: process.env.LOG_LEVEL || 'info'
-      } satisfies NonNullable<FastifyServerOptions['logger']>)
+      } satisfies NonNullable<FastifyServerOptions['logger']>),
+    ...(httpsOptions ? { https: httpsOptions } : {})
   });
 
   await app.register(cors, {
@@ -163,13 +175,28 @@ async function start() {
   // Start memory monitoring
   startMemoryMonitoring();
 
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     server.log.info(`${signal} received, shutting down...`);
     try {
       stopMemoryMonitoring();
       stopCleanupInterval();
-      await server.close();
-      await terminalManager.closeAll();
+      // Run server.close() and terminalManager.closeAll() in parallel so PTY
+      // cleanup still happens even if server.close() is slow (e.g. open WebSockets).
+      // Cap server.close() at 10s to stay well within systemd's TimeoutStopSec=20.
+      const serverCloseWithTimeout = Promise.race([
+        server.close(),
+        new Promise<void>((resolve) => setTimeout(() => {
+          server.log.warn('server.close() timed out after 10s, continuing shutdown');
+          resolve();
+        }, 10_000))
+      ]);
+      await Promise.all([
+        serverCloseWithTimeout,
+        terminalManager.closeAll()
+      ]);
       closeDatabase();
       process.exit(0);
     } catch (err) {
@@ -183,6 +210,8 @@ async function start() {
 
   try {
     await server.listen({ port, host });
+    const protocol = httpsOptions ? 'https' : 'http';
+    server.log.info(`Server listening on ${protocol}://${host}:${port}`);
   } catch (error) {
     server.log.error(error, 'Failed to start server');
     process.exit(1);

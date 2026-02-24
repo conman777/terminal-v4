@@ -18,7 +18,7 @@ echo "Waiting for server to be ready..."
 while [ $HEALTH_WAITED -lt $MAX_HEALTH_WAIT ]; do
   sleep 1
   HEALTH_WAITED=$((HEALTH_WAITED + 1))
-  if curl -s http://localhost:3020/api/health 2>/dev/null | grep -q "ok"; then
+  if curl -sk https://localhost:3020/api/health 2>/dev/null | grep -q "ok" || curl -s http://localhost:3020/api/health 2>/dev/null | grep -q "ok"; then
     echo "Server restarted successfully! (took ${HEALTH_WAITED}s)"
     exit 0
   fi
