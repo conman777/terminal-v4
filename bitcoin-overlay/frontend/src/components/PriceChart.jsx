@@ -12,6 +12,7 @@ import {
   Brush,
   ReferenceDot,
   ReferenceLine,
+  ReferenceArea,
 } from 'recharts';
 import ChartTooltip from './ChartTooltip';
 import AnnotationDot from './AnnotationDot';
@@ -33,22 +34,48 @@ function computeSMA(data, period) {
   return result;
 }
 
-export default function PriceChart({ chartData, annotations, onAnnotationClick, loading, timeRange }) {
+export default function PriceChart({ chartData, annotations, onAnnotationClick, loading, timeRange, predictions = [] }) {
   const prices = chartData?.prices || [];
   const volumes = chartData?.volumes || [];
+
+  const pendingPredictions = useMemo(
+    () => predictions.filter((p) => p.status === 'pending'),
+    [predictions],
+  );
 
   const mergedData = useMemo(() => {
     if (!prices.length) return [];
     const sma7 = computeSMA(prices, 7);
     const sma25 = computeSMA(prices, 25);
     const volumeMap = new Map(volumes.map((v) => [v.timestamp, v.volume]));
-    return prices.map((p, i) => ({
+    const historical = prices.map((p, i) => ({
       ...p,
       sma7: sma7[i],
       sma25: sma25[i],
       volume: volumeMap.get(p.timestamp) || 0,
     }));
-  }, [prices, volumes]);
+
+    // Extend chart into the future if there are pending predictions
+    if (pendingPredictions.length > 0) {
+      const maxExpiry = Math.max(...pendingPredictions.map((p) => p.expiresAt));
+      const now = prices[prices.length - 1].timestamp;
+      const futureSpan = maxExpiry - now;
+      // Add ~8 phantom points spread across the future range
+      const step = futureSpan / 8;
+      for (let i = 1; i <= 8; i++) {
+        historical.push({
+          timestamp: now + step * i,
+          date: new Date(now + step * i).toISOString(),
+          price: null,
+          sma7: null,
+          sma25: null,
+          volume: 0,
+        });
+      }
+    }
+
+    return historical;
+  }, [prices, volumes, pendingPredictions]);
 
   const validAnnotations = useMemo(() => {
     if (!annotations || !prices.length) return [];
@@ -60,6 +87,26 @@ export default function PriceChart({ chartData, annotations, onAnnotationClick, 
     if (!mergedData.length) return 0;
     return Math.max(...mergedData.map((d) => d.volume || 0));
   }, [mergedData]);
+
+  const nowTimestamp = useMemo(
+    () => (prices.length ? prices[prices.length - 1].timestamp : 0),
+    [prices],
+  );
+
+  const predictionZones = useMemo(() => {
+    if (!predictions.length || !mergedData.length) return [];
+    const dataStart = mergedData[0].timestamp;
+    const dataEnd = mergedData[mergedData.length - 1].timestamp;
+    return predictions
+      .filter((p) => p.expiresAt > dataStart && p.createdAt <= dataEnd)
+      .map((p) => ({
+        x1: Math.max(p.createdAt, dataStart),
+        x2: Math.min(p.expiresAt, dataEnd),
+        fill: p.status === 'correct' ? '#10b981' : p.status === 'incorrect' ? '#fb3654' : '#f59e0b',
+        opacity: p.status === 'pending' ? 0.1 : 0.08,
+        key: `${p.createdAt}-${p.expiresAt}-${p.status}`,
+      }));
+  }, [predictions, mergedData]);
 
   const days = parseInt(timeRange, 10) || 30;
 
@@ -98,6 +145,22 @@ export default function PriceChart({ chartData, annotations, onAnnotationClick, 
           <span className="chart-legend__swatch chart-legend__swatch--bar" style={{ background: 'rgba(247,147,26,0.3)' }} />
           Volume
         </span>
+        {predictionZones.length > 0 && (
+          <>
+            <span className="chart-legend__item">
+              <span className="chart-legend__swatch chart-legend__swatch--bar" style={{ background: 'rgba(245,158,11,0.35)' }} />
+              Pending
+            </span>
+            <span className="chart-legend__item">
+              <span className="chart-legend__swatch chart-legend__swatch--bar" style={{ background: 'rgba(16,185,129,0.35)' }} />
+              Correct
+            </span>
+            <span className="chart-legend__item">
+              <span className="chart-legend__swatch chart-legend__swatch--bar" style={{ background: 'rgba(251,54,84,0.35)' }} />
+              Incorrect
+            </span>
+          </>
+        )}
       </div>
       <ResponsiveContainer width="100%" height={480}>
         <ComposedChart data={mergedData} margin={{ top: 16, right: 16, bottom: 0, left: 0 }}>
@@ -142,6 +205,31 @@ export default function PriceChart({ chartData, annotations, onAnnotationClick, 
             hide
           />
           <Tooltip content={<ChartTooltip />} />
+
+          {/* Prediction zones behind everything */}
+          {predictionZones.map((zone) => (
+            <ReferenceArea
+              key={zone.key}
+              yAxisId="price"
+              x1={zone.x1}
+              x2={zone.x2}
+              fill={zone.fill}
+              fillOpacity={zone.opacity}
+              strokeOpacity={0}
+            />
+          ))}
+
+          {/* "Now" divider when predictions extend into the future */}
+          {pendingPredictions.length > 0 && nowTimestamp > 0 && (
+            <ReferenceLine
+              x={nowTimestamp}
+              yAxisId="price"
+              stroke="#555570"
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              label={{ value: 'Now', position: 'top', fill: '#8888a0', fontSize: 10 }}
+            />
+          )}
 
           {/* Volume bars in background */}
           <Bar

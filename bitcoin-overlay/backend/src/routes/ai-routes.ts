@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getCurrentPrice, getChartData } from '../services/coingecko';
 import { analyzeChart } from '../services/ai-analysis';
+import { addPredictions } from '../services/prediction-store';
 
 export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.post('/api/analyze', async (request, reply) => {
@@ -14,6 +15,16 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       ]);
 
       const analysis = await analyzeChart(priceData, chartData, daysNum);
+
+      // Store predictions if they are real (not fallback with 0 confidence)
+      if (analysis.predictions?.length && analysis.predictions.some((p) => p.confidence > 0)) {
+        try {
+          addPredictions(analysis.predictions, priceData.price);
+        } catch (err) {
+          fastify.log.error(err, 'Failed to store predictions');
+        }
+      }
+
       return reply.send(analysis);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to generate analysis';

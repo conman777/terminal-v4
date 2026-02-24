@@ -36,3 +36,7 @@ export function saveApiKey(apiKey) {
     body: JSON.stringify({ apiKey }),
   });
 }
+
+export function fetchPredictions() {
+  return request('/api/predictions');
+}

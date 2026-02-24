@@ -1,10 +1,19 @@
 import { FastifyInstance } from 'fastify';
 import { getCurrentPrice, getChartData } from '../services/coingecko';
+import { resolvePredictions } from '../services/prediction-store';
 
 export async function bitcoinRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.get('/api/price', async (_request, reply) => {
     try {
       const priceData = await getCurrentPrice();
+
+      // Auto-resolve expired predictions on each price fetch
+      try {
+        resolvePredictions(priceData.price);
+      } catch (err) {
+        fastify.log.error(err, 'Failed to resolve predictions');
+      }
+
       return reply.send(priceData);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch price data';

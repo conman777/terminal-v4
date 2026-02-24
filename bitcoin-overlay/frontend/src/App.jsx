@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useBitcoinData } from './hooks/useBitcoinData';
 import { useAiAnalysis } from './hooks/useAiAnalysis';
+import { usePredictions } from './hooks/usePredictions';
 import { fetchSettings } from './utils/api';
 import PriceHeader from './components/PriceHeader';
 import TimeRangeSelector from './components/TimeRangeSelector';
@@ -10,6 +11,8 @@ import AnalysisPanel from './components/AnalysisPanel';
 export default function App() {
   const { price, chartData, timeRange, setTimeRange, loading, error } = useBitcoinData();
   const { analysis, loading: analysisLoading, error: analysisError, refresh: refreshAnalysis } = useAiAnalysis(chartData, timeRange);
+  const [analysisRefreshKey, setAnalysisRefreshKey] = useState(0);
+  const { predictions, stats } = usePredictions(analysisRefreshKey);
   const [activeAnnotation, setActiveAnnotation] = useState(null);
   const [hasApiKey, setHasApiKey] = useState(null);
 
@@ -17,10 +20,15 @@ export default function App() {
     fetchSettings().then((s) => setHasApiKey(s.hasApiKey)).catch(() => setHasApiKey(false));
   }, []);
 
+  const handleRefreshAnalysis = useCallback(() => {
+    refreshAnalysis();
+    setAnalysisRefreshKey((k) => k + 1);
+  }, [refreshAnalysis]);
+
   const handleApiKeySaved = useCallback(() => {
     setHasApiKey(true);
-    refreshAnalysis();
-  }, [refreshAnalysis]);
+    handleRefreshAnalysis();
+  }, [handleRefreshAnalysis]);
 
   return (
     <div className="app">
@@ -39,16 +47,19 @@ export default function App() {
           onAnnotationClick={setActiveAnnotation}
           loading={loading}
           timeRange={timeRange}
+          predictions={predictions}
         />
       </div>
       <AnalysisPanel
         analysis={analysis}
         loading={analysisLoading}
         error={analysisError}
-        onRefresh={refreshAnalysis}
+        onRefresh={handleRefreshAnalysis}
         activeAnnotation={activeAnnotation}
         hasApiKey={hasApiKey === true}
         onApiKeySaved={handleApiKeySaved}
+        stats={stats}
+        predictions={predictions}
       />
     </div>
   );

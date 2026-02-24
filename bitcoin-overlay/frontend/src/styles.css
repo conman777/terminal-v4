@@ -659,6 +659,186 @@ body {
   line-height: 1.5;
 }
 
+/* Prediction track record badge */
+.prediction-card__track {
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  margin-left: 8px;
+  padding: 1px 6px;
+  background: var(--bg-base);
+  border-radius: 3px;
+}
+
+/* ============================================
+   Accuracy Section
+   ============================================ */
+
+.accuracy-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.accuracy-card__overview {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.accuracy-ring {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+}
+
+.accuracy-ring__value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.accuracy-card__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.accuracy-card__resolved {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.accuracy-card__pending {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.accuracy-card__breakdown {
+  display: flex;
+  gap: 6px;
+}
+
+.accuracy-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.accuracy-badge--correct {
+  color: var(--bullish);
+  background: var(--bullish-dim);
+}
+
+.accuracy-badge--incorrect {
+  color: var(--bearish);
+  background: var(--bearish-dim);
+}
+
+.accuracy-card__timeframes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.accuracy-tf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.accuracy-tf__label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-width: 56px;
+}
+
+.accuracy-tf__bar-track {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-base);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.accuracy-tf__bar-fill {
+  height: 100%;
+  background: var(--bullish);
+  border-radius: 2px;
+  transition: width 0.6s ease;
+}
+
+.accuracy-tf__value {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  min-width: 28px;
+  text-align: right;
+}
+
+.accuracy-card__recent {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+}
+
+.accuracy-card__recent-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.accuracy-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 0.8rem;
+}
+
+.accuracy-recent-item__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.accuracy-recent-item__badge.correct {
+  color: var(--bullish);
+  background: var(--bullish-dim);
+}
+
+.accuracy-recent-item__badge.incorrect {
+  color: var(--bearish);
+  background: var(--bearish-dim);
+}
+
+.accuracy-recent-item__tf {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.accuracy-recent-item__dir {
+  color: var(--text-dim);
+}
+
 /* Key factors */
 .key-factors {
   list-style: none;

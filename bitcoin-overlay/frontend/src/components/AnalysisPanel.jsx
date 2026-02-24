@@ -9,6 +9,94 @@ const DIRECTION_ICONS = {
   sideways: { arrow: '\u2192', className: 'neutral' },
 };
 
+function AccuracyRing({ accuracy }) {
+  const pct = Math.round(accuracy * 100);
+  const radius = 28;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (accuracy * circumference);
+  const color = pct >= 60 ? 'var(--bullish)' : pct >= 40 ? 'var(--neutral)' : 'var(--bearish)';
+
+  return (
+    <div className="accuracy-ring">
+      <svg width="72" height="72" viewBox="0 0 72 72">
+        <circle cx="36" cy="36" r={radius} fill="none" stroke="var(--bg-base)" strokeWidth="5" />
+        <circle
+          cx="36" cy="36" r={radius} fill="none"
+          stroke={color} strokeWidth="5"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform="rotate(-90 36 36)"
+          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+        />
+      </svg>
+      <span className="accuracy-ring__value" style={{ color }}>{pct}%</span>
+    </div>
+  );
+}
+
+function AccuracySection({ stats, predictions }) {
+  if (!stats || stats.total === 0) return null;
+  const resolved = predictions.filter((p) => p.status !== 'pending');
+  const recent = resolved.slice(-5).reverse();
+  const timeframes = Object.entries(stats.byTimeframe);
+
+  return (
+    <div className="analysis-section">
+      <h3 className="analysis-section__title">Prediction Accuracy</h3>
+      <div className="accuracy-card">
+        <div className="accuracy-card__overview">
+          <AccuracyRing accuracy={stats.accuracy} />
+          <div className="accuracy-card__summary">
+            <div className="accuracy-card__resolved">
+              {stats.correct + stats.incorrect} resolved
+              {stats.pending > 0 && <span className="accuracy-card__pending"> / {stats.pending} pending</span>}
+            </div>
+            <div className="accuracy-card__breakdown">
+              <span className="accuracy-badge accuracy-badge--correct">{stats.correct} correct</span>
+              <span className="accuracy-badge accuracy-badge--incorrect">{stats.incorrect} incorrect</span>
+            </div>
+          </div>
+        </div>
+
+        {timeframes.length > 0 && (
+          <div className="accuracy-card__timeframes">
+            {timeframes.map(([tf, data]) => (
+              <div key={tf} className="accuracy-tf">
+                <span className="accuracy-tf__label">{tf}</span>
+                <div className="accuracy-tf__bar-track">
+                  <div
+                    className="accuracy-tf__bar-fill"
+                    style={{ width: `${Math.round(data.accuracy * 100)}%` }}
+                  />
+                </div>
+                <span className="accuracy-tf__value">{data.correct}/{data.total}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {recent.length > 0 && (
+          <div className="accuracy-card__recent">
+            <div className="accuracy-card__recent-title">Recent</div>
+            {recent.map((p) => (
+              <div key={p.id} className={`accuracy-recent-item accuracy-recent-item--${p.status}`}>
+                <span className={`accuracy-recent-item__badge ${p.status}`}>
+                  {p.status === 'correct' ? '\u2713' : '\u2717'}
+                </span>
+                <span className="accuracy-recent-item__tf">{p.timeframe}</span>
+                <span className="accuracy-recent-item__dir">
+                  {DIRECTION_ICONS[p.direction]?.arrow || '\u2192'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const SKELETON_WIDTHS = [85, 100, 72, 95, 68];
 
 function SkeletonBlock({ lines = 3 }) {
@@ -25,14 +113,19 @@ function SkeletonBlock({ lines = 3 }) {
   );
 }
 
-function PredictionCard({ prediction }) {
+function PredictionCard({ prediction, trackRecord }) {
   const dir = DIRECTION_ICONS[prediction.direction] || DIRECTION_ICONS.sideways;
   const confidence = Math.max(0, Math.min(100, prediction.confidence));
 
   return (
     <div className="prediction-card">
       <div className="prediction-card__header">
-        <span className="prediction-card__timeframe">{prediction.timeframe}</span>
+        <span className="prediction-card__timeframe">
+          {prediction.timeframe}
+          {trackRecord && (
+            <span className="prediction-card__track">{trackRecord.correct}/{trackRecord.total} correct</span>
+          )}
+        </span>
         <span className={`prediction-card__arrow ${dir.className}`}>{dir.arrow}</span>
       </div>
       <div className="prediction-card__bar-track">
@@ -117,7 +210,7 @@ function ApiKeySetup({ onSaved }) {
   );
 }
 
-export default function AnalysisPanel({ analysis, loading, error, onRefresh, activeAnnotation, hasApiKey, onApiKeySaved }) {
+export default function AnalysisPanel({ analysis, loading, error, onRefresh, activeAnnotation, hasApiKey, onApiKeySaved, stats, predictions = [] }) {
   const panelRef = useRef(null);
 
   useEffect(() => {
@@ -191,13 +284,19 @@ export default function AnalysisPanel({ analysis, loading, error, onRefresh, act
             </div>
           </div>
 
+          <AccuracySection stats={stats} predictions={predictions} />
+
           {analysis.predictions && analysis.predictions.length > 0 && (
             <div className="analysis-section">
               <h3 className="analysis-section__title">Predictions</h3>
               <div className="predictions-grid">
-                {analysis.predictions.map((pred) => (
-                  <PredictionCard key={pred.timeframe} prediction={pred} />
-                ))}
+                {analysis.predictions.map((pred) => {
+                  const tfStats = stats?.byTimeframe?.[pred.timeframe];
+                  const trackRecord = tfStats && tfStats.total > 0 ? tfStats : null;
+                  return (
+                    <PredictionCard key={pred.timeframe} prediction={pred} trackRecord={trackRecord} />
+                  );
+                })}
               </div>
             </div>
           )}

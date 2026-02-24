@@ -6,6 +6,8 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import { bitcoinRoutes } from './routes/bitcoin-routes';
 import { aiRoutes } from './routes/ai-routes';
+import { loadPredictions, getStats, resolvePredictions } from './services/prediction-store';
+import { getCurrentPrice } from './services/coingecko';
 
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
@@ -47,6 +49,29 @@ async function start(): Promise<void> {
 
   await fastify.register(bitcoinRoutes);
   await fastify.register(aiRoutes);
+
+  fastify.get('/api/predictions', async (_request, reply) => {
+    try {
+      const predictions = loadPredictions();
+      const stats = getStats();
+      return reply.send({ predictions, stats });
+    } catch (error) {
+      fastify.log.error(error, 'Error loading predictions');
+      return reply.status(500).send({ error: 'Failed to load predictions' });
+    }
+  });
+
+  fastify.get('/api/predictions/resolve', async (_request, reply) => {
+    try {
+      const priceData = await getCurrentPrice();
+      resolvePredictions(priceData.price);
+      const stats = getStats();
+      return reply.send(stats);
+    } catch (error) {
+      fastify.log.error(error, 'Error resolving predictions');
+      return reply.status(500).send({ error: 'Failed to resolve predictions' });
+    }
+  });
 
   fastify.setNotFoundHandler(async (request, reply) => {
     if (request.url.startsWith('/api/')) {
