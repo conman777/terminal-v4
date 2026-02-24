@@ -5,6 +5,7 @@ import type { CwdSource } from './session-resolver';
 export interface TerminalStreamEvent {
   text: string;
   ts: number;
+  seq?: number;
 }
 
 export interface TerminalSessionSummary {
@@ -32,6 +33,8 @@ export interface TerminalSessionSnapshot {
   updatedAt: string;
   history: TerminalStreamEvent[];
   usesTmux: boolean;
+  currentCols?: number;
+  currentRows?: number;
 }
 
 export interface TerminalCreateOptions {

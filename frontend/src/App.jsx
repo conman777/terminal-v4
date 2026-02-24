@@ -252,6 +252,8 @@ function AppContent() {
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
   const [showAddScanFolderModal, setShowAddScanFolderModal] = useState(false);
   const [addScanFolderError, setAddScanFolderError] = useState('');
+  const [mainTerminalFitToken, setMainTerminalFitToken] = useState(0);
+  const mainTerminalFitRafRef = useRef(null);
   const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
     try {
       return localStorage.getItem('mainTerminalMinimized') === 'true';
@@ -922,6 +924,15 @@ function AppContent() {
     startDragging(e);
   }, [startDragging]);
 
+  const requestMainTerminalFit = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    if (mainTerminalFitRafRef.current) return;
+    mainTerminalFitRafRef.current = window.requestAnimationFrame(() => {
+      mainTerminalFitRafRef.current = null;
+      setMainTerminalFitToken((token) => token + 1);
+    });
+  }, []);
+
   useEffect(() => {
     if (!isDragging) return;
 
@@ -930,10 +941,12 @@ function AppContent() {
       const rect = mainContentRef.current.getBoundingClientRect();
       const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
       updateSplitPosition(newPosition);
+      requestMainTerminalFit();
     };
 
     const handleMouseUp = () => {
       stopDragging();
+      requestMainTerminalFit();
     };
 
     document.addEventListener('mousemove', handleMouseMove);
@@ -943,7 +956,18 @@ function AppContent() {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, updateSplitPosition, stopDragging]);
+  }, [isDragging, requestMainTerminalFit, updateSplitPosition, stopDragging]);
+
+  useEffect(() => {
+    requestMainTerminalFit();
+  }, [requestMainTerminalFit, paneLayout?.root, fullscreenPaneId, showPreview, mainTerminalMinimized]);
+
+  useEffect(() => () => {
+    if (mainTerminalFitRafRef.current) {
+      cancelAnimationFrame(mainTerminalFitRafRef.current);
+      mainTerminalFitRafRef.current = null;
+    }
+  }, []);
 
   // Handler to toggle main terminal minimized state
   const handleToggleMainTerminal = useCallback(() => {
@@ -1230,6 +1254,7 @@ function AppContent() {
                         projectInfo={projectInfo}
                         sessionAiTypes={sessionAiTypes}
                         currentDesktopId={activeDesktopId}
+                        fitSignal={mainTerminalFitToken}
                       />
                     </ErrorBoundary>
                   )}

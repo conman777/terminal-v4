@@ -81,11 +81,12 @@ Frontend configuration (set in `frontend/.env` or your shell):
 
 ## Authentication Setup
 
-Login is required and `/api/auth/register` is disabled.
-For local development, you can create a user by either:
-- Temporarily enabling registration in `backend/src/auth/auth-routes.ts`, or
-- Seeding the SQLite `users` table via a small script that calls
-  `createUser` from `backend/src/auth/user-store.ts`.
+Login is required. `/api/auth/register` is enabled by default.
+
+If `ALLOWED_USERNAME` is set in the backend environment, registration/login is restricted
+to that username. For local development you can either:
+- Register that exact username via `/api/auth/register`, or
+- Unset `ALLOWED_USERNAME` to allow any username.
 
 ## Running the App
 

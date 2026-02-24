@@ -49,6 +49,7 @@ export interface ManagedTerminal {
   primaryClientId?: string | null;
   currentCols: number;
   currentRows: number;
+  nextEventSeq: number;
   usesTmux: boolean;
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
   lastActivityAt: number;

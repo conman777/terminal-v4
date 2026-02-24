@@ -127,8 +127,13 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
     if (usesTmuxRef?.current) {
       const key = direction === 'up' ? '\x1b[A' : '\x1b[B';
       sendCopyModeKeys(key.repeat(safeLines));
+      return;
     }
-  }, [xtermRef, sendCopyModeKeys, setScrollingActive, usesTmuxRef]);
+
+    // Non-tmux fallback: send line-wise arrow keys for apps/readers without tmux.
+    const key = direction === 'up' ? '\x1b[A' : '\x1b[B';
+    sendToTerminal(key.repeat(safeLines));
+  }, [xtermRef, sendCopyModeKeys, sendToTerminal, setScrollingActive, usesTmuxRef]);
 
   const scrollByWheel = useCallback((deltaY, deltaMode, rows) => {
     if (!deltaY) return;

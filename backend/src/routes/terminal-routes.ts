@@ -8,6 +8,7 @@ import {
 } from './schemas';
 import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
+import { verifyAccessToken, isAllowedUsername } from '../auth/auth-service';
 
 const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_WS_MAX_BUFFERED_BYTES || '', 10);
@@ -21,11 +22,15 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     const historyEvents = Number.parseInt(String(query.historyEvents || ''), 10);
     const beforeTs = Number.parseInt(String(query.beforeTs || ''), 10);
     const afterTs = Number.parseInt(String(query.afterTs || ''), 10);
+    const beforeSeq = Number.parseInt(String(query.beforeSeq || ''), 10);
+    const afterSeq = Number.parseInt(String(query.afterSeq || ''), 10);
 
     const hasQueryChars = Number.isFinite(historyChars) && historyChars > 0;
     const hasQueryEvents = Number.isFinite(historyEvents) && historyEvents > 0;
     const hasBeforeTs = Number.isFinite(beforeTs) && beforeTs > 0;
     const hasAfterTs = Number.isFinite(afterTs) && afterTs > 0;
+    const hasBeforeSeq = Number.isFinite(beforeSeq) && beforeSeq > 0;
+    const hasAfterSeq = Number.isFinite(afterSeq) && afterSeq >= 0;
     let maxHistoryChars = hasQueryChars ? historyChars : undefined;
     let maxHistoryEvents = hasQueryEvents ? historyEvents : undefined;
 
@@ -43,6 +48,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     return {
       maxHistoryChars,
       maxHistoryEvents,
+      beforeSeq: hasBeforeSeq ? beforeSeq : undefined,
+      afterSeq: hasAfterSeq ? afterSeq : undefined,
       beforeTs: hasBeforeTs ? beforeTs : undefined,
       afterTs: hasAfterTs ? afterTs : undefined
     };
@@ -153,8 +160,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
     const history = snapshot.history || [];
-    const nextCursor = history.length > 0 ? history[history.length - 1].ts : null;
-    reply.send({ ...snapshot, nextCursor });
+    const lastEntry = history.length > 0 ? history[history.length - 1] : null;
+    const nextCursor = lastEntry?.ts ?? null;
+    const nextSeq = Number.isFinite(lastEntry?.seq) ? Number(lastEntry.seq) : null;
+    reply.send({ ...snapshot, nextCursor, nextSeq });
   });
 
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/project-info', async (request, reply) => {
@@ -225,13 +234,24 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }
 
     try {
-      deps.terminalManager.resize(userId, request.params.id, result.data.cols, result.data.rows, clientId, { priority });
+      const resizeResult = deps.terminalManager.resize(
+        userId,
+        request.params.id,
+        result.data.cols,
+        result.data.rows,
+        clientId,
+        { priority }
+      );
+      reply.send({
+        appliedCols: resizeResult.currentCols,
+        appliedRows: resizeResult.currentRows,
+        ownerClientId: resizeResult.ownerClientId,
+        isOwner: clientId ? resizeResult.ownerClientId === clientId : undefined
+      });
     } catch (error) {
       reply.code(404).send({ error: error instanceof Error ? error.message : String(error) });
       return;
     }
-
-    reply.code(204).send();
   });
 
   app.patch<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {
@@ -378,13 +398,17 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     request.raw.on('close', cleanup);
   });
 
-  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/ws', { websocket: true }, (socket, request) => {
-    const userId = request.userId;
-    if (!userId) {
-      socket.close(4401, 'Unauthorized');
-      return;
-    }
+  app.get<{ Params: TerminalIdParams }>(
+    '/api/terminal/:id/ws',
+    { websocket: true, config: { skipAuth: true } },
+    (socket, request) => {
+    // Phase 1: wait for auth message before setting up session
+    const AUTH_TIMEOUT_MS = 5000;
+    const authTimeout = setTimeout(() => {
+      socket.close(4401, 'Authentication timeout');
+    }, AUTH_TIMEOUT_MS);
 
+    const setupSession = (userId: string) => {
     const sendHistory = shouldSendHistory(request);
     const useFramedProtocol = (() => {
       const query = (request.query || {}) as Record<string, string | undefined>;
@@ -404,81 +428,23 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     // Generate unique client ID for this WebSocket connection
     const clientId = randomUUID();
 
-    const encoder = new TextEncoder();
-    const canSend = (): boolean => {
-      if (socket.readyState !== 1) {
-        return false;
-      }
-      if (socket.bufferedAmount > TERMINAL_WS_MAX_BUFFERED_BYTES) {
-        socket.close(1013, 'Client is too slow to receive terminal output');
-        return false;
-      }
-      return true;
-    };
-    const sendBinary = (text: string): boolean => {
-      if (!canSend()) {
-        return false;
-      }
-      try {
-        const buffer = encoder.encode(text);
-        socket.send(buffer);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const sendFrame = (frameType: number, payload: string): boolean => {
-      if (!canSend()) {
-        return false;
-      }
-      try {
-        const body = encoder.encode(payload);
-        const framed = new Uint8Array(body.length + 1);
-        framed[0] = frameType;
-        framed.set(body, 1);
-        socket.send(framed);
-        return true;
-      } catch {
-        return false;
-      }
-    };
-    const sendOutput = (text: string): boolean => (
-      useFramedProtocol ? sendFrame(1, text) : sendBinary(text)
-    );
-    const sendMeta = (data: Record<string, unknown>): boolean => (
-      useFramedProtocol ? sendFrame(2, JSON.stringify(data)) : sendBinary(JSON.stringify(data))
-    );
-
-    // Send clientId to frontend so it can include it in resize requests
-    if (!sendMeta({ type: 'clientId', clientId })) {
-      return;
-    }
-
-    if (!deps.terminalManager.isActive(snapshot.id)) {
-      if (sendHistory) {
-        for (const entry of snapshot.history) {
-          if (!sendOutput(entry.text)) {
-            return;
-          }
-        }
-      }
-      socket.close(1000, 'Session ended');
-      return;
-    }
-
-    const heartbeatTimer = setInterval(() => {
-      sendMeta({ type: 'serverPing', ts: Date.now() });
-    }, 15000);
-
     const bufferedEvents: Array<{ text: string; ts: number } | null> = [];
     let isBuffering = true;
     let cleaned = false;
     let unsubscribe: (() => void) | null = null;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    let resyncSuggestedPending = false;
+    let resyncSuggestedSinceTs = 0;
+    let resyncSuggestedDrops = 0;
+    let lastSendBlockedByBackpressure = false;
 
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      clearInterval(heartbeatTimer);
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       if (unsubscribe) {
         unsubscribe();
         unsubscribe = null;
@@ -496,6 +462,131 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       }
     };
 
+    const encoder = new TextEncoder();
+    const canSend = (): boolean => {
+      if (socket.readyState !== 1) {
+        lastSendBlockedByBackpressure = false;
+        return false;
+      }
+      if (socket.bufferedAmount > TERMINAL_WS_MAX_BUFFERED_BYTES) {
+        // Client is slow — skip this message, stay connected.
+        // Tell the client to do an incremental history resync once the socket drains.
+        resyncSuggestedPending = true;
+        resyncSuggestedDrops += 1;
+        if (!resyncSuggestedSinceTs) {
+          resyncSuggestedSinceTs = Date.now();
+        }
+        lastSendBlockedByBackpressure = true;
+        return false;
+      }
+      lastSendBlockedByBackpressure = false;
+      return true;
+    };
+    const sendBinaryRaw = (text: string): boolean => {
+      if (!canSend()) {
+        return false;
+      }
+      try {
+        const buffer = encoder.encode(text);
+        socket.send(buffer);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const sendFrameRaw = (frameType: number, payload: string): boolean => {
+      if (!canSend()) {
+        return false;
+      }
+      try {
+        const body = encoder.encode(payload);
+        const framed = new Uint8Array(body.length + 1);
+        framed[0] = frameType;
+        framed.set(body, 1);
+        socket.send(framed);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const sendResyncSuggestionIfNeeded = (): boolean => {
+      if (!resyncSuggestedPending) {
+        return true;
+      }
+      const payload = {
+        __terminal_meta: true,
+        type: 'resyncSuggested',
+        reason: 'slow-client-drop',
+        ts: Date.now(),
+        droppedSends: resyncSuggestedDrops,
+        firstDroppedAt: resyncSuggestedSinceTs || undefined
+      };
+      const ok = useFramedProtocol
+        ? sendFrameRaw(2, JSON.stringify(payload))
+        : sendBinaryRaw(JSON.stringify(payload));
+      if (ok) {
+        resyncSuggestedPending = false;
+        resyncSuggestedSinceTs = 0;
+        resyncSuggestedDrops = 0;
+      }
+      return ok;
+    };
+    const sendBinary = (text: string): boolean => {
+      if (!sendResyncSuggestionIfNeeded()) {
+        return false;
+      }
+      return sendBinaryRaw(text);
+    };
+    const sendFrame = (frameType: number, payload: string): boolean => {
+      if (!sendResyncSuggestionIfNeeded()) {
+        return false;
+      }
+      return sendFrameRaw(frameType, payload);
+    };
+    const sendOutput = (text: string): boolean => (
+      useFramedProtocol ? sendFrame(1, text) : sendBinary(text)
+    );
+    const sendMeta = (data: Record<string, unknown>): boolean => (
+      useFramedProtocol ? sendFrame(2, JSON.stringify(data)) : sendBinary(JSON.stringify(data))
+    );
+    const sendServerCursor = (seq: unknown): boolean => {
+      if (!Number.isFinite(seq)) return true;
+      return sendMeta({ type: 'serverCursor', seq: Number(seq) });
+    };
+
+    // Send clientId to frontend so it can include it in resize requests
+    if (!sendMeta({ type: 'clientId', clientId })) {
+      if (!lastSendBlockedByBackpressure) {
+        closeSocket(1011, 'Failed to send client metadata');
+      }
+      return;
+    }
+
+    if (!deps.terminalManager.isActive(snapshot.id)) {
+      if (sendHistory) {
+        for (const entry of snapshot.history) {
+          if (!sendServerCursor(entry.seq)) {
+            if (!lastSendBlockedByBackpressure) {
+              closeSocket(1011, 'Failed to send terminal cursor metadata');
+              return;
+            }
+          }
+          if (!sendOutput(entry.text)) {
+            if (!lastSendBlockedByBackpressure) {
+              closeSocket(1011, 'Failed to send terminal history');
+              return;
+            }
+          }
+        }
+      }
+      socket.close(1000, 'Session ended');
+      return;
+    }
+
+    heartbeatTimer = setInterval(() => {
+      sendMeta({ type: 'serverPing', ts: Date.now() });
+    }, 15000);
+
     unsubscribe = deps.terminalManager.subscribe(userId, snapshot.id, (event) => {
       if (isBuffering) {
         bufferedEvents.push(event);
@@ -510,7 +601,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
           const parsed = JSON.parse(event.text);
           if (parsed && parsed.__terminal_meta) {
             if (!sendMeta(parsed)) {
-              cleanup();
+              if (!lastSendBlockedByBackpressure) {
+                closeSocket(1011, 'Failed to send terminal metadata');
+              }
             }
             return;
           }
@@ -518,16 +611,32 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
           // Treat as output
         }
       }
+      if (!sendServerCursor(event.seq)) {
+        if (!lastSendBlockedByBackpressure) {
+          closeSocket(1011, 'Failed to send terminal cursor metadata');
+        }
+        return;
+      }
       if (!sendOutput(event.text)) {
-        cleanup();
+        if (!lastSendBlockedByBackpressure) {
+          closeSocket(1011, 'Failed to send terminal output');
+        }
       }
     });
 
     if (sendHistory) {
       for (const entry of snapshot.history) {
+        if (!sendServerCursor(entry.seq)) {
+          if (!lastSendBlockedByBackpressure) {
+            closeSocket(1011, 'Failed to send terminal cursor metadata');
+            return;
+          }
+        }
         if (!sendOutput(entry.text)) {
-          cleanup();
-          return;
+          if (!lastSendBlockedByBackpressure) {
+            closeSocket(1011, 'Failed to send terminal history');
+            return;
+          }
         }
       }
     }
@@ -543,8 +652,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
           const parsed = JSON.parse(event.text);
           if (parsed && parsed.__terminal_meta) {
             if (!sendMeta(parsed)) {
-              cleanup();
-              return;
+              if (!lastSendBlockedByBackpressure) {
+                closeSocket(1011, 'Failed to send terminal metadata');
+                return;
+              }
             }
             continue;
           }
@@ -552,9 +663,17 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
           // Treat as output
         }
       }
+      if (!sendServerCursor(event.seq)) {
+        if (!lastSendBlockedByBackpressure) {
+          closeSocket(1011, 'Failed to send terminal cursor metadata');
+          return;
+        }
+      }
       if (!sendOutput(event.text)) {
-        cleanup();
-        return;
+        if (!lastSendBlockedByBackpressure) {
+          closeSocket(1011, 'Failed to send terminal output');
+          return;
+        }
       }
     }
 
@@ -582,6 +701,30 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
 
     socket.on('close', cleanup);
     socket.on('error', cleanup);
+    }; // end setupSession
+
+    const handleAuth = (raw: Buffer | string) => {
+      try {
+        const text = raw instanceof Buffer ? raw.toString() : raw.toString();
+        const msg = JSON.parse(text);
+        if (msg?.type !== 'auth' || typeof msg.token !== 'string') {
+          socket.close(4401, 'Expected auth message');
+          return;
+        }
+        const payload = verifyAccessToken(msg.token);
+        if (!payload || !isAllowedUsername(payload.username)) {
+          socket.close(4401, 'Invalid token');
+          return;
+        }
+        clearTimeout(authTimeout);
+        socket.off('message', handleAuth);
+        setupSession(payload.sub);
+      } catch {
+        socket.close(4401, 'Invalid auth message');
+      }
+    };
+
+    socket.on('message', handleAuth);
   });
 
   app.delete<{ Params: TerminalIdParams }>('/api/terminal/:id', async (request, reply) => {

@@ -2534,6 +2534,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   viewportHeight={null}
                   fontSize={fontSize}
                   webglEnabled={webglEnabled}
+                  isPrimary={mainTerminalMinimized}
                   fitSignal={previewTerminalFitToken}
                   onUrlDetected={onUrlDetected || (() => {})}
                   usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
@@ -3387,15 +3388,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </div>
               <div className="preview-terminal-content">
                 {selectedTerminalSession ? (
-                  <TerminalChat
-                    key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
-                    sessionId={selectedTerminalSession}
+                <TerminalChat
+                  key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
+                  sessionId={selectedTerminalSession}
                     keybarOpen={false}
                     viewportHeight={null}
                     fontSize={previewTerminalFontSize}
-                    webglEnabled={webglEnabled}
-                    syncPtySize={mainTerminalMinimized}
-                    fitSignal={previewTerminalFitToken}
+                  webglEnabled={webglEnabled}
+                  isPrimary={mainTerminalMinimized}
+                  syncPtySize={mainTerminalMinimized}
+                  fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                     onRegisterImageUpload={() => {}}

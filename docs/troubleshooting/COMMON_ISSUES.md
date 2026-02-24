@@ -11,7 +11,10 @@ This guide covers common issues and their solutions for Terminal v4.
 **Solutions**:
 1. Refresh the browser (`Ctrl+F5` for hard refresh)
 2. Create a new terminal session
-3. Check backend logs: `tail -f /tmp/backend.log`
+3. Check backend logs:
+   - `npm run dev` / foreground `npm start`: watch the terminal where the backend is running
+   - systemd service: `journalctl -u terminal-v4 -f`
+   - `nohup ... > /tmp/backend.log`: `tail -f /tmp/backend.log`
 4. Restart the backend server: `~/terminal-v4/restart.sh`
 5. Verify WebSocket connection in browser DevTools → Network tab
 
@@ -456,7 +459,7 @@ This guide covers common issues and their solutions for Terminal v4.
 1. Check environment variables are set (JWT secrets, etc.)
 2. Verify data directory permissions: `ls -la backend/data`
 3. Check port 3020 isn't already in use: `lsof -i :3020`
-4. Review backend logs: `tail -f /tmp/backend.log`
+4. Review backend logs (foreground console, `journalctl -u terminal-v4 -f`, or `/tmp/backend.log` if started with `nohup ... > /tmp/backend.log`)
 5. Verify frontend is built: `ls frontend/dist`
 
 **Root Causes**:
@@ -499,7 +502,7 @@ This guide covers common issues and their solutions for Terminal v4.
 
 If you can't resolve an issue:
 
-1. Check backend logs: `tail -f /tmp/backend.log`
+1. Check backend logs (foreground console, `journalctl -u terminal-v4 -f`, or `/tmp/backend.log` if started with `nohup ... > /tmp/backend.log`)
 2. Check browser console for errors (F12)
 3. Check system resources: `/api/system/stats`
 4. Gather reproduction steps

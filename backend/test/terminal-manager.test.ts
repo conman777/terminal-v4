@@ -81,6 +81,37 @@ describe('TerminalManager', () => {
     }
   });
 
+  it('supports sequence-based incremental history when multiple events share a timestamp', () => {
+    vi.useFakeTimers();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const fakeProcess = new FakeTerminalProcess();
+      const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess), useTmux: false });
+      const snapshot = manager.createSession(TEST_USER_ID);
+
+      fakeProcess.emit('data', 'one\n');
+      vi.advanceTimersByTime(20);
+      fakeProcess.emit('data', 'two\n');
+      vi.advanceTimersByTime(20);
+      fakeProcess.emit('data', 'three\n');
+      vi.advanceTimersByTime(20);
+
+      const full = manager.getSession(TEST_USER_ID, snapshot.id);
+      expect(full?.history).toHaveLength(3);
+      expect(full?.history.every((entry) => entry.ts === 1_700_000_000_000)).toBe(true);
+      expect(full?.history.map((entry) => entry.seq)).toEqual([1, 2, 3]);
+
+      const afterTs = manager.getSession(TEST_USER_ID, snapshot.id, { afterTs: 1_700_000_000_000 });
+      expect(afterTs?.history).toHaveLength(0);
+
+      const afterSeq = manager.getSession(TEST_USER_ID, snapshot.id, { afterSeq: 1 });
+      expect(afterSeq?.history.map((entry) => entry.text)).toEqual(['two\n', 'three\n']);
+    } finally {
+      nowSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('writes input with newline normalisation and supports resize/close', () => {
     const fakeProcess = new FakeTerminalProcess();
     const spawnMock = vi.fn(() => fakeProcess);
@@ -97,6 +128,48 @@ describe('TerminalManager', () => {
     expect(closed).toBe(true);
     expect(fakeProcess.killed).toBe(true);
     expect(manager.listSessions(TEST_USER_ID)).toHaveLength(0);
+  });
+
+  it('uses a single primary client for PTY resize ownership', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess), useTmux: false });
+    const snapshot = manager.createSession(TEST_USER_ID, { cols: 80, rows: 24 });
+
+    manager.resize(TEST_USER_ID, snapshot.id, 101, 41, 'client-a', { priority: true });
+    expect(fakeProcess.resized).toContainEqual({ cols: 101, rows: 41 });
+
+    const resizeCountAfterOwner = fakeProcess.resized.length;
+    manager.resize(TEST_USER_ID, snapshot.id, 60, 20, 'client-b');
+    expect(fakeProcess.resized).toHaveLength(resizeCountAfterOwner);
+
+    const current = manager.getSession(TEST_USER_ID, snapshot.id);
+    expect(current?.currentCols).toBe(101);
+    expect(current?.currentRows).toBe(41);
+
+    manager.resize(TEST_USER_ID, snapshot.id, 90, 30, 'client-b', { priority: true });
+    expect(fakeProcess.resized).toContainEqual({ cols: 90, rows: 30 });
+    const promoted = manager.getSession(TEST_USER_ID, snapshot.id);
+    expect(promoted?.currentCols).toBe(90);
+    expect(promoted?.currentRows).toBe(30);
+  });
+
+  it('reassigns PTY resize ownership when the primary client disconnects', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const manager = new TerminalManager({ spawnTerminal: vi.fn(() => fakeProcess), useTmux: false });
+    const snapshot = manager.createSession(TEST_USER_ID, { cols: 80, rows: 24 });
+
+    manager.resize(TEST_USER_ID, snapshot.id, 120, 40, 'client-a', { priority: true });
+    manager.resize(TEST_USER_ID, snapshot.id, 95, 28, 'client-b');
+
+    const beforeRemove = fakeProcess.resized.length;
+    manager.removeClient(TEST_USER_ID, snapshot.id, 'client-a');
+
+    expect(fakeProcess.resized.length).toBeGreaterThan(beforeRemove);
+    expect(fakeProcess.resized[fakeProcess.resized.length - 1]).toEqual({ cols: 95, rows: 28 });
+
+    const current = manager.getSession(TEST_USER_ID, snapshot.id);
+    expect(current?.currentCols).toBe(95);
+    expect(current?.currentRows).toBe(28);
   });
 
   it('does not allow one user to close another user terminal session', () => {

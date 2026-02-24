@@ -687,6 +687,8 @@ export class TerminalManager {
       maxHistoryEvents?: number;
       beforeTs?: number;
       afterTs?: number;
+      beforeSeq?: number;
+      afterSeq?: number;
       includeHistory?: boolean;
     } = {}
   ): TerminalSessionSnapshot | null {
@@ -702,7 +704,9 @@ export class TerminalManager {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         history,
-        usesTmux: session.usesTmux
+        usesTmux: session.usesTmux,
+        currentCols: session.currentCols,
+        currentRows: session.currentRows
       };
     }
 
@@ -710,6 +714,7 @@ export class TerminalManager {
     const userPersistedSessions = this.#persistedSessions.get(userId);
     const persisted = userPersistedSessions?.get(id);
     if (persisted) {
+      this.#ensureHistorySequences(persisted.history);
       const history = includeHistory ? this.#limitHistory(persisted.history, options) : [];
       return {
         id: persisted.id,
@@ -727,15 +732,26 @@ export class TerminalManager {
 
   #limitHistory(
     history: TerminalStreamEvent[],
-    options: { maxHistoryChars?: number; maxHistoryEvents?: number; beforeTs?: number; afterTs?: number }
+    options: {
+      maxHistoryChars?: number;
+      maxHistoryEvents?: number;
+      beforeTs?: number;
+      afterTs?: number;
+      beforeSeq?: number;
+      afterSeq?: number;
+    }
   ): TerminalStreamEvent[] {
-    const { maxHistoryChars, maxHistoryEvents, beforeTs, afterTs } = options;
-    if (!maxHistoryChars && !maxHistoryEvents && !beforeTs && !afterTs) {
+    const { maxHistoryChars, maxHistoryEvents, beforeTs, afterTs, beforeSeq, afterSeq } = options;
+    if (!maxHistoryChars && !maxHistoryEvents && !beforeTs && !afterTs && !beforeSeq && !afterSeq) {
       return [...history];
     }
 
-    const endIndex = beforeTs ? this.#findHistoryEndIndex(history, beforeTs) : history.length;
-    let startIndex = afterTs ? this.#findHistoryStartIndex(history, afterTs) : 0;
+    const endIndex = beforeSeq
+      ? this.#findHistoryEndIndexBySeq(history, beforeSeq)
+      : (beforeTs ? this.#findHistoryEndIndex(history, beforeTs) : history.length);
+    let startIndex = afterSeq
+      ? this.#findHistoryStartIndexBySeq(history, afterSeq)
+      : (afterTs ? this.#findHistoryStartIndex(history, afterTs) : 0);
     if (startIndex > endIndex) startIndex = endIndex;
 
     if (maxHistoryEvents && endIndex - startIndex > maxHistoryEvents) {
@@ -788,6 +804,51 @@ export class TerminalManager {
     return low;
   }
 
+  #findHistoryEndIndexBySeq(history: TerminalStreamEvent[], beforeSeq: number): number {
+    if (!Number.isFinite(beforeSeq) || beforeSeq <= 0) return history.length;
+    let low = 0;
+    let high = history.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const seq = history[mid]?.seq ?? 0;
+      if (seq >= beforeSeq) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  }
+
+  #findHistoryStartIndexBySeq(history: TerminalStreamEvent[], afterSeq: number): number {
+    if (!Number.isFinite(afterSeq) || afterSeq < 0) return 0;
+    let low = 0;
+    let high = history.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      const seq = history[mid]?.seq ?? 0;
+      if (seq > afterSeq) {
+        high = mid;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return low;
+  }
+
+  #ensureHistorySequences(history: TerminalStreamEvent[]): number {
+    let nextSeq = 1;
+    for (const entry of history) {
+      if (!entry) continue;
+      const currentSeq = Number.isFinite(entry.seq) ? Number(entry.seq) : 0;
+      if (currentSeq <= 0) {
+        entry.seq = nextSeq;
+      }
+      nextSeq = Math.max(nextSeq, Number(entry.seq) + 1);
+    }
+    return nextSeq;
+  }
+
   #emitCwdChange(session: ManagedTerminal): void {
     const message = JSON.stringify({ __terminal_meta: true, type: 'cwd', cwd: session.cwd });
     session.subscribers.forEach((subscriber) => {
@@ -832,7 +893,8 @@ export class TerminalManager {
     this.#applyOsc7Cwd(session, chunk);
     const event: TerminalStreamEvent = {
       text: chunk,
-      ts: Date.now()
+      ts: Date.now(),
+      seq: session.nextEventSeq++
     };
     session.buffer.push(event);
     session.bufferCharCount += event.text.length;
@@ -958,6 +1020,7 @@ export class TerminalManager {
       primaryClientId: null,
       currentCols: cols,
       currentRows: rows,
+      nextEventSeq: 1,
       usesTmux,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now()
@@ -1035,18 +1098,27 @@ export class TerminalManager {
     rows: number,
     clientId?: string,
     options: { priority?: boolean } = {}
-  ): void {
+  ): { currentCols: number; currentRows: number; ownerClientId: string | null } {
     const session = this.#sessions.get(id);
     if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
     }
 
+    const now = Date.now();
+
     // Track this client's dimensions
     if (clientId) {
-      session.clientDimensions.set(clientId, { cols, rows, updatedAt: Date.now() });
+      session.clientDimensions.set(clientId, { cols, rows, updatedAt: now });
       if (options.priority) {
         session.primaryClientId = clientId;
       }
+    }
+
+    // If there is no owner yet, the first tracked client becomes the owner.
+    // Anonymous resize requests (no clientId) are treated as legacy best-effort and
+    // do not take ownership because they cause width ambiguity across multiple views.
+    if (!session.primaryClientId && clientId) {
+      session.primaryClientId = clientId;
     }
 
     let targetCols = cols;
@@ -1060,39 +1132,19 @@ export class TerminalManager {
         session.primaryClientId = null;
       }
     }
-
-    // If no primary client, use the LARGEST dimensions among all connected clients
-    // This prevents mobile clients from shrinking the terminal when desktop is also connected
-    // Desktop users get proper wide terminals; mobile users see wrapped text (acceptable tradeoff)
-    if (!session.primaryClientId) {
-      const maxDims = this.#getMaxClientDimensions(session, cols, rows);
-      targetCols = maxDims.cols;
-      targetRows = maxDims.rows;
-    }
+    // If still no primary owner (legacy anonymous resize / no tracked clients), use
+    // the provided size for backwards compatibility.
 
     if (targetCols !== session.currentCols || targetRows !== session.currentRows) {
       session.currentCols = targetCols;
       session.currentRows = targetRows;
       session.process.resize(targetCols, targetRows);
     }
-  }
-
-  // Calculate the maximum dimensions across all connected clients
-  // Falls back to provided defaults if no clients are tracked
-  #getMaxClientDimensions(
-    session: { clientDimensions: Map<string, { cols: number; rows: number }> },
-    defaultCols: number,
-    defaultRows: number
-  ): { cols: number; rows: number } {
-    let maxCols = defaultCols;
-    let maxRows = defaultRows;
-
-    for (const dims of session.clientDimensions.values()) {
-      if (dims.cols > maxCols) maxCols = dims.cols;
-      if (dims.rows > maxRows) maxRows = dims.rows;
-    }
-
-    return { cols: maxCols, rows: maxRows };
+    return {
+      currentCols: session.currentCols,
+      currentRows: session.currentRows,
+      ownerClientId: session.primaryClientId ?? null
+    };
   }
 
   // Remove a client's dimensions (called when WebSocket disconnects)
@@ -1107,14 +1159,25 @@ export class TerminalManager {
       session.primaryClientId = null;
     }
 
-    // If there are remaining clients, use the LARGEST dimensions among them
-    // Otherwise keep current dimensions (will be updated when next client resizes)
+    // Promote the most recently-updated remaining client to owner and resize to its
+    // dimensions. This keeps PTY width aligned with one real client instead of
+    // oscillating to a synthetic "largest dimensions" size.
     if (session.clientDimensions.size > 0) {
-      const maxDims = this.#getMaxClientDimensions(session, session.currentCols, session.currentRows);
-      if (maxDims.cols !== session.currentCols || maxDims.rows !== session.currentRows) {
-        session.currentCols = maxDims.cols;
-        session.currentRows = maxDims.rows;
-        session.process.resize(maxDims.cols, maxDims.rows);
+      let nextOwnerId: string | null = null;
+      let nextOwnerDims: { cols: number; rows: number; updatedAt: number } | null = null;
+      for (const [candidateId, dims] of session.clientDimensions.entries()) {
+        if (!nextOwnerDims || dims.updatedAt > nextOwnerDims.updatedAt) {
+          nextOwnerId = candidateId;
+          nextOwnerDims = dims;
+        }
+      }
+      if (nextOwnerId && nextOwnerDims) {
+        session.primaryClientId = nextOwnerId;
+        if (nextOwnerDims.cols !== session.currentCols || nextOwnerDims.rows !== session.currentRows) {
+          session.currentCols = nextOwnerDims.cols;
+          session.currentRows = nextOwnerDims.rows;
+          session.process.resize(nextOwnerDims.cols, nextOwnerDims.rows);
+        }
       }
     }
   }
@@ -1451,6 +1514,9 @@ export class TerminalManager {
       this.#handleExit(session, code, signal);
     };
 
+    const restoredHistory = hasTmuxSession ? [] : persisted.history.map((entry) => ({ ...entry }));
+    const nextEventSeq = hasTmuxSession ? 1 : this.#ensureHistorySequences(restoredHistory);
+
     const session: ManagedTerminal = {
       id: persisted.id,
       userId,
@@ -1462,8 +1528,8 @@ export class TerminalManager {
       process: ptyProcess,
       // If reattaching to tmux, don't restore old history - we'll get fresh output
       // If creating new session, restore history so user sees previous output
-      buffer: hasTmuxSession ? [] : [...persisted.history],
-      bufferCharCount: hasTmuxSession ? 0 : persisted.history.reduce((sum, entry) => sum + entry.text.length, 0),
+      buffer: restoredHistory,
+      bufferCharCount: hasTmuxSession ? 0 : restoredHistory.reduce((sum, entry) => sum + entry.text.length, 0),
       subscribers: new Set(),
       inputBuffer: '',
       dataHandler,
@@ -1472,6 +1538,7 @@ export class TerminalManager {
       primaryClientId: null,
       currentCols: cols,
       currentRows: rows,
+      nextEventSeq,
       usesTmux,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now(),

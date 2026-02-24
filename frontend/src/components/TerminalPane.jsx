@@ -26,7 +26,8 @@ export const TerminalPane = memo(function TerminalPane({
   sessionAiTypes,
   onCwdChange,
   onSessionBusyChange,
-  currentDesktopId
+  currentDesktopId,
+  fitSignal
 }) {
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
@@ -310,6 +311,7 @@ export const TerminalPane = memo(function TerminalPane({
               usesTmux={currentSession?.usesTmux}
               viewMode={viewMode}
               isPrimary={isActive}
+              fitSignal={fitSignal}
               onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
               onConnectionChange={handleConnectionChange}
               onCwdChange={handleCwdChange}

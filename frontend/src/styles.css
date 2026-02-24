@@ -1271,6 +1271,37 @@ button {
   background: rgba(251, 191, 36, 0.25);
 }
 
+.terminal-pty-role-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.terminal-pty-role-badge.mirror {
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+}
+
+.terminal-pty-role-badge.owner {
+  background: rgba(4, 120, 87, 0.18);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #a7f3d0;
+}
+
+.terminal-pty-role-dims {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ===========================================
    Reader View - Clean text view for terminal output
    =========================================== */

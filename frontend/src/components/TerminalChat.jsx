@@ -41,6 +41,30 @@ const TERMINAL_THEMES = {
   }
 };
 
+// Static ANSI 256-colour palette — built once at module load, not per render frame.
+const DEFAULT_ANSI_PALETTE = (() => {
+  const base = [
+    '#2e3436', '#cc0000', '#4e9a06', '#c4a000',
+    '#3465a4', '#75507b', '#06989a', '#d3d7cf',
+    '#555753', '#ef2929', '#8ae234', '#fce94f',
+    '#729fcf', '#ad7fa8', '#34e2e2', '#eeeeec'
+  ];
+  const palette = base.slice();
+  const steps = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
+  const toHex = (v) => v.toString(16).padStart(2, '0');
+  for (let i = 0; i < 216; i++) {
+    const r = steps[Math.floor(i / 36) % 6];
+    const g = steps[Math.floor(i / 6) % 6];
+    const b = steps[i % 6];
+    palette.push(`#${toHex(r)}${toHex(g)}${toHex(b)}`);
+  }
+  for (let i = 0; i < 24; i++) {
+    const c = 8 + i * 10;
+    palette.push(`#${toHex(c)}${toHex(c)}${toHex(c)}`);
+  }
+  return palette;
+})();
+
 export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
@@ -75,6 +99,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [isScrollMode, setIsScrollMode] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [isCopyMode, setIsCopyMode] = useState(false);
+  const [ptyOwnerState, setPtyOwnerState] = useState({
+    isOwner: null,
+    ownerClientId: null,
+    appliedCols: null,
+    appliedRows: null
+  });
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
   const [readerLineHeight, setReaderLineHeight] = useState(null);
@@ -84,6 +114,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const fitTimeoutRef = useRef(null);
   const fitRafRef = useRef(null);
   const pendingFitOptionsRef = useRef(null);
+  const requestAuthoritativeResizeRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
@@ -91,13 +122,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const viewModeRef = useRef(viewMode);
   const isPrimaryRef = useRef(isPrimary);
   const syncPtySizeRef = useRef(syncPtySize !== false);
+  const ptyOwnerStateRef = useRef({
+    isOwner: null,
+    ownerClientId: null,
+    appliedCols: null,
+    appliedRows: null
+  });
+  const pendingServerSeqRef = useRef(null);
+  const lastServerSeqRef = useRef(0);
+  const pendingOwnerPromotionRef = useRef(false);
+  const ownerPromotionDeadlineRef = useRef(0);
+  const ownerPromotionTimerRef = useRef(null);
   const readerSyncRef = useRef(null);
   const droppedOutputRef = useRef(0);
   const droppedEventCountRef = useRef(0);
   const tailModeRef = useRef(false);
   const lastDropNoticeAtRef = useRef(0);
-  const HISTORY_PAGE_EVENTS_DESKTOP = 10000;
-  const HISTORY_PAGE_CHARS_DESKTOP = 5_000_000;
+  const HISTORY_PAGE_EVENTS_DESKTOP = 5000;
+  const HISTORY_PAGE_CHARS_DESKTOP = 1_000_000;
   const HISTORY_MAX_EVENTS_DESKTOP = 100_000;
   const HISTORY_MAX_CHARS_DESKTOP = 20_000_000;
   const HISTORY_PAGE_EVENTS_MOBILE = 1000;
@@ -110,19 +152,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const MIN_FIT_CONTAINER_WIDTH = 50;
   const MIN_FIT_CONTAINER_HEIGHT = 30;
   const HISTORY_WRITE_CHUNK_DESKTOP = 120000;
-  const HISTORY_WRITE_CHUNK_MOBILE = 20000;
+  const HISTORY_WRITE_CHUNK_MOBILE = 80000;
   const historyStateRef = useRef({
-    pageEvents: HISTORY_PAGE_EVENTS_DESKTOP,
-    pageChars: HISTORY_PAGE_CHARS_DESKTOP,
-    maxHistoryEvents: HISTORY_MAX_EVENTS_DESKTOP,
-    maxHistoryChars: HISTORY_MAX_CHARS_DESKTOP,
+    pageEvents: isMobile ? HISTORY_PAGE_EVENTS_MOBILE : HISTORY_PAGE_EVENTS_DESKTOP,
+    pageChars: isMobile ? HISTORY_PAGE_CHARS_MOBILE : HISTORY_PAGE_CHARS_DESKTOP,
+    maxHistoryEvents: isMobile ? HISTORY_MAX_EVENTS_MOBILE : HISTORY_MAX_EVENTS_DESKTOP,
+    maxHistoryChars: isMobile ? HISTORY_MAX_CHARS_MOBILE : HISTORY_MAX_CHARS_DESKTOP,
     exhausted: false,
     loading: false,
     lastCount: 0,
     lastChars: 0,
     lastLoadAt: 0,
     oldestTs: null,
-    newestTs: null
+    newestTs: null,
+    oldestSeq: null,
+    newestSeq: null
   });
   const historyEntriesRef = useRef([]);
   const historyTextRef = useRef('');
@@ -163,6 +207,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyStateRef.current.lastChars = 0;
     historyStateRef.current.oldestTs = null;
     historyStateRef.current.newestTs = null;
+    historyStateRef.current.oldestSeq = null;
+    historyStateRef.current.newestSeq = null;
+    lastServerSeqRef.current = 0;
+    pendingServerSeqRef.current = null;
+  }, []);
+
+  const getEntrySeq = useCallback((entry) => {
+    if (!entry) return null;
+    const seq = Number(entry.seq);
+    return Number.isFinite(seq) && seq > 0 ? seq : null;
   }, []);
 
   const updateHistoryText = useCallback((removedChars = 0) => {
@@ -203,7 +257,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     state.lastChars = historyCharCountRef.current;
     state.oldestTs = entries[0]?.ts ?? null;
     state.newestTs = entries.length > 0 ? entries[entries.length - 1]?.ts ?? null : null;
-  }, [updateHistoryText]);
+    state.oldestSeq = getEntrySeq(entries[0]);
+    state.newestSeq = entries.length > 0 ? getEntrySeq(entries[entries.length - 1]) : null;
+    if (state.newestSeq) {
+      lastServerSeqRef.current = Math.max(lastServerSeqRef.current, state.newestSeq);
+    }
+  }, [getEntrySeq, updateHistoryText]);
 
   const setHistoryEntries = useCallback((entries) => {
     historyEntriesRef.current = entries;
@@ -213,7 +272,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyStateRef.current.lastChars = historyCharCountRef.current;
     historyStateRef.current.oldestTs = entries[0]?.ts ?? null;
     historyStateRef.current.newestTs = entries.length > 0 ? entries[entries.length - 1]?.ts ?? null : null;
-  }, [updateHistoryText]);
+    historyStateRef.current.oldestSeq = getEntrySeq(entries[0]);
+    historyStateRef.current.newestSeq = entries.length > 0 ? getEntrySeq(entries[entries.length - 1]) : null;
+    if (historyStateRef.current.newestSeq) {
+      lastServerSeqRef.current = Math.max(lastServerSeqRef.current, historyStateRef.current.newestSeq);
+    }
+  }, [getEntrySeq, updateHistoryText]);
 
   const appendHistoryEntry = useCallback((entry) => {
     if (!entry?.text) return;
@@ -221,8 +285,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyCharCountRef.current += entry.text.length;
     historyTextRef.current += entry.text;
     historyStateRef.current.newestTs = entry.ts ?? historyStateRef.current.newestTs;
+    const nextSeq = getEntrySeq(entry);
+    if (nextSeq) {
+      historyStateRef.current.newestSeq = nextSeq;
+      lastServerSeqRef.current = Math.max(lastServerSeqRef.current, nextSeq);
+      if (!historyStateRef.current.oldestSeq) {
+        historyStateRef.current.oldestSeq = nextSeq;
+      }
+    }
     trimHistoryEntries();
-  }, [trimHistoryEntries]);
+  }, [getEntrySeq, trimHistoryEntries]);
 
   const prependHistoryEntries = useCallback((entries) => {
     if (!Array.isArray(entries) || entries.length === 0) return;
@@ -406,32 +478,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const defaultFgLower = defaultFg.toLowerCase();
     const defaultBgLower = defaultBg.toLowerCase();
 
-    const buildDefaultPalette = () => {
-      const base = [
-        '#2e3436', '#cc0000', '#4e9a06', '#c4a000',
-        '#3465a4', '#75507b', '#06989a', '#d3d7cf',
-        '#555753', '#ef2929', '#8ae234', '#fce94f',
-        '#729fcf', '#ad7fa8', '#34e2e2', '#eeeeec'
-      ];
-      const palette = base.slice();
-      const steps = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff];
-      const toHex = (value) => value.toString(16).padStart(2, '0');
-      for (let i = 0; i < 216; i++) {
-        const r = steps[Math.floor(i / 36) % 6];
-        const g = steps[Math.floor(i / 6) % 6];
-        const b = steps[i % 6];
-        palette.push(`#${toHex(r)}${toHex(g)}${toHex(b)}`);
-      }
-      for (let i = 0; i < 24; i++) {
-        const c = 8 + i * 10;
-        palette.push(`#${toHex(c)}${toHex(c)}${toHex(c)}`);
-      }
-      return palette;
-    };
-
     const ansiPalette = Array.isArray(themeColors?.ansi) && themeColors.ansi.length >= 16
       ? themeColors.ansi.map((color) => color?.css || defaultFg)
-      : buildDefaultPalette();
+      : DEFAULT_ANSI_PALETTE;
 
     const rgbToCss = (value) => `#${(value & 0xffffff).toString(16).padStart(6, '0')}`;
 
@@ -882,7 +931,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     // recorded at the PTY's original width. Resizing xterm mid-playback misaligns
     // cursor positions and causes severe content garbling. fit() will be triggered
     // explicitly once loadInitialHistory() completes.
-    if (fit && fitAddonRef.current && canRender && !historyReloadingRef.current) {
+    let handledByAuthoritativeResize = false;
+    if (fit && canRender && !historyReloadingRef.current && requestAuthoritativeResizeRef.current) {
+      try {
+        handledByAuthoritativeResize = requestAuthoritativeResizeRef.current() === true;
+      } catch {
+        handledByAuthoritativeResize = false;
+      }
+    }
+
+    if (fit && fitAddonRef.current && canRender && !historyReloadingRef.current && !handledByAuthoritativeResize) {
       let wasAtBottom = true;
       if (preserveBottom) {
         const buffer = term.buffer?.active;
@@ -980,6 +1038,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyStateRef.current.lastChars = 0;
     historyStateRef.current.lastLoadAt = 0;
     historyStateRef.current.oldestTs = null;
+    historyStateRef.current.newestTs = null;
+    historyStateRef.current.oldestSeq = null;
+    historyStateRef.current.newestSeq = null;
+    ptyOwnerStateRef.current = {
+      isOwner: null,
+      ownerClientId: null,
+      appliedCols: null,
+      appliedRows: null
+    };
+    setPtyOwnerState(ptyOwnerStateRef.current);
     resetHistoryCache();
     historyReloadingRef.current = false;
     pendingSocketDataRef.current = [];
@@ -1026,6 +1094,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let openRetryTimeout = null;
     let iosRefreshRaf = null;
     const MAX_OPEN_RETRIES = 20;
+    let suppressResizeSyncCount = 0;
+    let pendingTrackedResize = null;
+    let lastResizeRequestKey = '';
 
     const scrollback = performanceMode
       ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
@@ -1081,16 +1152,152 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return { cols, rows };
     };
 
-    const syncPtySize = ({ clientId } = {}) => {
-      if (!syncPtySizeRef.current) return;
-      const { cols, rows } = getBestTerminalDimensions();
-      if (!cols || !rows) return;
-      const body = isPrimaryRef.current && !isMobile ? { cols, rows, priority: true } : { cols, rows };
-      if (clientId) body.clientId = clientId;
+    const withResizeSyncSuppressed = (fn) => {
+      suppressResizeSyncCount += 1;
+      try {
+        fn();
+      } finally {
+        suppressResizeSyncCount = Math.max(0, suppressResizeSyncCount - 1);
+      }
+    };
+
+    const applyServerPtySize = (cols, rows) => {
+      const nextCols = Number.isFinite(cols) ? Math.max(20, Math.min(500, Math.round(cols))) : 0;
+      const nextRows = Number.isFinite(rows) ? Math.max(3, Math.min(500, Math.round(rows))) : 0;
+      if (!nextCols || !nextRows) return;
+      if (term.cols === nextCols && term.rows === nextRows) return;
+      withResizeSyncSuppressed(() => {
+        try {
+          term.resize(nextCols, nextRows);
+        } catch {
+          // Ignore transient resize failures during mount/reconnect.
+        }
+      });
+    };
+
+    const updatePtyOwnerFromResizeAck = (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      const next = {
+        isOwner: typeof payload.isOwner === 'boolean' ? payload.isOwner : null,
+        ownerClientId: typeof payload.ownerClientId === 'string' ? payload.ownerClientId : null,
+        appliedCols: Number.isFinite(payload.appliedCols) ? Number(payload.appliedCols) : null,
+        appliedRows: Number.isFinite(payload.appliedRows) ? Number(payload.appliedRows) : null
+      };
+      if (next.isOwner === true && next.appliedCols && next.appliedRows) {
+        applyServerPtySize(next.appliedCols, next.appliedRows);
+      }
+      const prev = ptyOwnerStateRef.current;
+      if (
+        prev.isOwner === next.isOwner &&
+        prev.ownerClientId === next.ownerClientId &&
+        prev.appliedCols === next.appliedCols &&
+        prev.appliedRows === next.appliedRows
+      ) {
+        return;
+      }
+      ptyOwnerStateRef.current = next;
+      if (!disposed) {
+        setPtyOwnerState(next);
+      }
+      if (pendingOwnerPromotionRef.current && next.isOwner === true) {
+        pendingOwnerPromotionRef.current = false;
+        ownerPromotionDeadlineRef.current = 0;
+        if (ownerPromotionTimerRef.current) {
+          clearTimeout(ownerPromotionTimerRef.current);
+          ownerPromotionTimerRef.current = null;
+        }
+        if (!disposed) {
+          flushInputBuffer();
+        }
+      }
+    };
+
+    const awaitOwnerPromotionBeforeInput = () => {
+      pendingOwnerPromotionRef.current = true;
+      ownerPromotionDeadlineRef.current = Date.now() + 250;
+      if (ownerPromotionTimerRef.current) {
+        clearTimeout(ownerPromotionTimerRef.current);
+      }
+      ownerPromotionTimerRef.current = setTimeout(() => {
+        ownerPromotionTimerRef.current = null;
+        pendingOwnerPromotionRef.current = false;
+        ownerPromotionDeadlineRef.current = 0;
+        if (!disposed) {
+          flushInputBuffer();
+        }
+      }, 250);
+    };
+
+    const postTrackedResize = ({ cols, rows, clientId, priority = false }) => {
+      if (!syncPtySizeRef.current || disposed) return;
+      const nextCols = Number.isFinite(cols) ? Math.max(20, Math.min(500, Math.round(cols))) : 0;
+      const nextRows = Number.isFinite(rows) ? Math.max(3, Math.min(500, Math.round(rows))) : 0;
+      if (!nextCols || !nextRows) return;
+
+      if (!clientId) {
+        // Wait for the WS-assigned clientId so the backend can attribute ownership.
+        pendingTrackedResize = { cols: nextCols, rows: nextRows, priority: Boolean(priority) };
+        return;
+      }
+
+      const requestKey = `${clientId}:${nextCols}x${nextRows}:${priority ? '1' : '0'}`;
+      if (requestKey === lastResizeRequestKey) return;
+      lastResizeRequestKey = requestKey;
+
+      const body = priority
+        ? { cols: nextCols, rows: nextRows, clientId, priority: true }
+        : { cols: nextCols, rows: nextRows, clientId };
+
       apiFetch(`/api/terminal/${sessionId}/resize`, {
         method: 'POST',
         body
-      }).catch(() => {});
+      })
+        .then(async (response) => {
+          if (!response?.ok) return;
+          const payload = await response.json().catch(() => null);
+          updatePtyOwnerFromResizeAck(payload);
+        })
+        .catch((error) => {
+          if (lastResizeRequestKey === requestKey) {
+            lastResizeRequestKey = '';
+          }
+          console.error('Failed to send resize:', error);
+        });
+    };
+
+    const flushPendingTrackedResize = (clientId) => {
+      if (!clientId || !pendingTrackedResize) return false;
+      const pending = pendingTrackedResize;
+      pendingTrackedResize = null;
+      postTrackedResize({ ...pending, clientId });
+      return true;
+    };
+
+    const syncPtySize = ({ clientId, dims, priorityOverride } = {}) => {
+      if (!syncPtySizeRef.current) return;
+      const { cols, rows } = dims || getBestTerminalDimensions();
+      if (!cols || !rows) return;
+      const priority = typeof priorityOverride === 'boolean'
+        ? priorityOverride
+        : (isPrimaryRef.current && !isMobile);
+      postTrackedResize({
+        cols,
+        rows,
+        clientId,
+        priority
+      });
+    };
+
+    requestAuthoritativeResizeRef.current = () => {
+      if (!syncPtySizeRef.current || disposed || historyReloadingRef.current) return false;
+      const ownerState = ptyOwnerStateRef.current;
+      const shouldDrivePtyResize = ownerState.isOwner !== false || (isPrimaryRef.current && !isMobile);
+      if (!shouldDrivePtyResize) return false;
+      const { cols, rows } = getBestTerminalDimensions();
+      if (!cols || !rows) return false;
+      if (term.cols === cols && term.rows === rows) return true;
+      syncPtySize({ clientId: clientIdRef.current || undefined, dims: { cols, rows } });
+      return true;
     };
 
     const writeTerminal = (text, callback) => {
@@ -1127,6 +1334,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         inputFlushRef.current = null;
       }
       if (!inputBufferRef.current) return;
+      if (pendingOwnerPromotionRef.current) {
+        if (ptyOwnerStateRef.current.isOwner === true || Date.now() >= ownerPromotionDeadlineRef.current) {
+          pendingOwnerPromotionRef.current = false;
+          ownerPromotionDeadlineRef.current = 0;
+          if (ownerPromotionTimerRef.current) {
+            clearTimeout(ownerPromotionTimerRef.current);
+            ownerPromotionTimerRef.current = null;
+          }
+        } else {
+          inputFlushRef.current = setTimeout(flushInputBuffer, 10);
+          return;
+        }
+      }
       const payload = inputBufferRef.current;
       inputBufferRef.current = '';
       sendTerminalInput(payload);
@@ -1404,11 +1624,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
       let scrollThrottleTimer = null;
-      const fetchHistoryPage = async ({ beforeTs, afterTs } = {}) => {
+      const fetchHistoryPage = async ({ beforeTs, afterTs, beforeSeq, afterSeq } = {}) => {
         const state = historyStateRef.current;
         const params = new URLSearchParams();
         params.set('historyEvents', String(state.pageEvents));
         params.set('historyChars', String(state.pageChars));
+        if (Number.isFinite(beforeSeq) && beforeSeq > 0) {
+          params.set('beforeSeq', String(beforeSeq));
+        }
+        if (Number.isFinite(afterSeq) && afterSeq >= 0) {
+          params.set('afterSeq', String(afterSeq));
+        }
         if (beforeTs) {
           params.set('beforeTs', String(beforeTs));
         }
@@ -1418,7 +1644,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const response = await apiFetch(`/api/terminal/${sessionId}/history?${params.toString()}`);
         if (!response.ok) return null;
         const snapshot = await response.json();
-        return Array.isArray(snapshot?.history) ? snapshot.history : [];
+        return {
+          history: Array.isArray(snapshot?.history) ? snapshot.history : [],
+          currentCols: Number.isFinite(snapshot?.currentCols) ? snapshot.currentCols : null,
+          currentRows: Number.isFinite(snapshot?.currentRows) ? snapshot.currentRows : null,
+          nextSeq: Number.isFinite(snapshot?.nextSeq) ? Number(snapshot.nextSeq) : null
+        };
       };
 
       const writeHistoryChunks = (historyText) => new Promise((resolve) => {
@@ -1437,7 +1668,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           offset += chunk.length;
           writeTerminal(chunk, () => {
             if (offset < historyText.length) {
-              requestAnimationFrame(writeNext);
+              setTimeout(writeNext, 0);
             } else {
               resolve();
             }
@@ -1451,7 +1682,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const pending = pendingSocketDataRef.current;
         pendingSocketDataRef.current = [];
         if (pending.length === 0) return;
-        const pendingText = pending.join('');
+        const pendingChunks = pending
+          .map((item) => (typeof item === 'string' ? { text: item } : item))
+          .filter((item) => item && typeof item.text === 'string' && item.text.length > 0);
+        if (pendingChunks.length === 0) return;
+        const pendingText = pendingChunks.map((item) => item.text).join('');
         const shouldAppendReader = viewModeRef.current === 'reader' || !isMobile;
         if (viewModeRef.current === 'reader') {
           writeTerminal(pendingText, scheduleReaderSync);
@@ -1461,8 +1696,32 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             appendToReader(pendingText);
           }
         }
+        // Batch-append all pending chunks: push all entries then trim once,
+        // instead of calling appendHistoryEntry (which trims after every chunk).
         const now = Date.now();
-        pending.forEach((chunk) => appendHistoryEntry({ text: chunk, ts: now }));
+        let newestSeq = historyStateRef.current.newestSeq ?? 0;
+        for (const item of pendingChunks) {
+          const chunk = item.text;
+          const seq = Number(item.seq);
+          historyEntriesRef.current.push({
+            text: chunk,
+            ts: now,
+            seq: Number.isFinite(seq) && seq > 0 ? seq : undefined
+          });
+          historyCharCountRef.current += chunk.length;
+          historyTextRef.current += chunk;
+          if (Number.isFinite(seq) && seq > 0) {
+            newestSeq = Math.max(newestSeq, seq);
+          }
+        }
+        if (pendingChunks.length > 0) {
+          historyStateRef.current.newestTs = now;
+          if (newestSeq > 0) {
+            historyStateRef.current.newestSeq = newestSeq;
+            lastServerSeqRef.current = Math.max(lastServerSeqRef.current, newestSeq);
+          }
+          trimHistoryEntries();
+        }
       };
 
       const loadInitialHistory = async () => {
@@ -1475,14 +1734,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         setIsLoadingHistory(true);
 
         try {
-          const history = await fetchHistoryPage();
-          if (!history) {
+          const historyPage = await fetchHistoryPage();
+          if (!historyPage) {
             setIsLoadingHistory(false);
             return;
           }
+          const history = historyPage.history;
           setHistoryEntries(history);
           state.exhausted = history.length === 0;
           term.reset();
+          applyServerPtySize(historyPage.currentCols, historyPage.currentRows);
           clearReader();
           const historyText = historyTextRef.current;
           await writeHistoryChunks(historyText);
@@ -1524,7 +1785,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const loadMoreHistory = async () => {
         if (disposed) return;
         const state = historyStateRef.current;
-        if (state.loading || state.exhausted || !state.oldestTs) return;
+        if (state.loading || state.exhausted || (!state.oldestTs && !state.oldestSeq)) return;
         const now = Date.now();
         if (now - state.lastLoadAt < 1500) return;
 
@@ -1534,14 +1795,23 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         setIsLoadingMoreHistory(true);
 
         try {
-          const previousOldest = state.oldestTs;
-          const history = await fetchHistoryPage({ beforeTs: state.oldestTs });
+          const previousOldestTs = state.oldestTs;
+          const previousOldestSeq = state.oldestSeq;
+          const historyPage = await fetchHistoryPage(
+            state.oldestSeq
+              ? { beforeSeq: state.oldestSeq }
+              : { beforeTs: state.oldestTs }
+          );
+          const history = historyPage?.history || null;
           if (!history || history.length === 0) {
             state.exhausted = true;
             return;
           }
           prependHistoryEntries(history);
-          if (state.oldestTs === previousOldest) {
+          if (
+            (previousOldestSeq && state.oldestSeq === previousOldestSeq) ||
+            (!previousOldestSeq && state.oldestTs === previousOldestTs)
+          ) {
             state.exhausted = true;
           }
 
@@ -1574,14 +1844,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const loadIncrementalHistory = async () => {
         if (disposed) return;
         const state = historyStateRef.current;
-        if (state.loading || !state.newestTs) return;
+        if (state.loading || (!state.newestTs && !state.newestSeq)) return;
         state.loading = true;
         state.lastLoadAt = Date.now();
         historyReloadingRef.current = true;
         setIsLoadingHistory(true);
 
         try {
-          const history = await fetchHistoryPage({ afterTs: state.newestTs });
+          const historyPage = await fetchHistoryPage(
+            state.newestSeq !== null && state.newestSeq !== undefined
+              ? { afterSeq: state.newestSeq }
+              : { afterTs: state.newestTs }
+          );
+          const history = historyPage?.history || null;
           if (!history || history.length === 0) return;
           history.forEach((entry) => appendHistoryEntry(entry));
           const combined = history.map((entry) => entry.text || '').join('');
@@ -1719,10 +1994,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       window.addEventListener('offline', handleOffline);
 
       const buildSocketUrl = () => {
-        const token = getAccessToken();
         const base = import.meta.env.VITE_API_URL || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
-        if (token) url.searchParams.set('token', token);
         url.searchParams.set('history', '0');
         if (USE_FRAMED_PROTOCOL) url.searchParams.set('framed', '1');
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1789,9 +2062,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const messageQueue = [];
         let processingQueue = false;
         let didOpen = false;
+        let authConnected = false;
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = isMobile ? 30000 : 45000;
-        const CONNECT_TIMEOUT = isMobile ? 30000 : 15000;
+        const CONNECT_TIMEOUT = isMobile ? 20000 : 15000;
 
         const markDisconnected = () => {
           onConnectionChange?.(false);
@@ -1840,6 +2114,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           socket.onopen = () => {
             if (disposed) return;
+            const token = getAccessToken();
+            if (token) socket.send(JSON.stringify({ type: 'auth', token }));
             didOpen = true;
             if (connectTimeout) {
               clearTimeout(connectTimeout);
@@ -1848,7 +2124,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             wsRetryCount = 0;
             authRetryCount = 0;
             resetUserInput();
-            onConnectionChange?.(true);
+            // onConnectionChange(true) is deferred until the server confirms auth
+            // by sending the clientId message — prevents premature input before auth
             lastServerPingAtRef.current = Date.now();
             if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(() => {
@@ -1907,6 +2184,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           };
 
           let pendingWrite = '';
+          let pendingWriteLastSeq = null;
           let pendingWriteFrame = null;
           let parserRecoveryNeeded = false;
           const flushPendingWrites = () => {
@@ -1928,9 +2206,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
             const data = pendingWrite;
             pendingWrite = '';
+            const pendingSeq = pendingWriteLastSeq;
+            pendingWriteLastSeq = null;
 
             if (historyReloadingRef.current) {
-              pendingSocketDataRef.current.push(data);
+              pendingSocketDataRef.current.push({ text: data, seq: pendingSeq ?? undefined });
               return;
             }
 
@@ -1939,7 +2219,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             const viewportYBefore = buffer?.viewportY ?? 0;
             const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
 
-            appendHistoryEntry({ text: data, ts: Date.now() });
+            appendHistoryEntry({
+              text: data,
+              ts: Date.now(),
+              seq: Number.isFinite(pendingSeq) && pendingSeq > 0 ? pendingSeq : undefined
+            });
 
             if (viewModeRef.current === 'reader') {
               writeTerminal(data, scheduleReaderSync);
@@ -1991,12 +2275,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
           };
 
-          const enqueueTerminalWrite = (data) => {
+          const enqueueTerminalWrite = (data, seq) => {
             if (!data) return;
             pendingWrite += data;
+            if (Number.isFinite(seq) && seq > 0) {
+              pendingWriteLastSeq = Math.max(pendingWriteLastSeq || 0, Number(seq));
+              lastServerSeqRef.current = Math.max(lastServerSeqRef.current, Number(seq));
+            }
             if (pendingWrite.length > MAX_PENDING_WRITE_CHARS) {
               droppedOutputRef.current += pendingWrite.length;
               pendingWrite = '';
+              pendingWriteLastSeq = null;
               parserRecoveryNeeded = true;
               tailModeRef.current = true;
               scheduleIncrementalResync(0);
@@ -2012,13 +2301,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
+              flushPendingTrackedResize(msg.clientId);
               syncPtySize({ clientId: msg.clientId });
+              if (!authConnected) {
+                authConnected = true;
+                onConnectionChange?.(true);
+              }
               return true;
             }
             if (msg.type === 'serverPing') {
               return true;
             }
+            if (msg.type === 'serverCursor') {
+              const seq = Number(msg.seq);
+              if (Number.isFinite(seq) && seq > 0) {
+                pendingServerSeqRef.current = seq;
+                lastServerSeqRef.current = Math.max(lastServerSeqRef.current, seq);
+              }
+              return true;
+            }
             if (msg.type === 'pong' && msg.source === 'terminal-client') {
+              return true;
+            }
+            if (msg.type === 'resyncSuggested') {
+              parserRecoveryNeeded = true;
+              scheduleIncrementalResync(0);
               return true;
             }
             if (msg.type === 'cwd' && msg.cwd) {
@@ -2069,11 +2376,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               }
 
               if (historyReloadingRef.current) {
-                pendingSocketDataRef.current.push(data);
+                pendingSocketDataRef.current.push({
+                  text: data,
+                  seq: pendingServerSeqRef.current ?? undefined
+                });
+                pendingServerSeqRef.current = null;
                 continue;
               }
 
-              enqueueTerminalWrite(data);
+              enqueueTerminalWrite(data, pendingServerSeqRef.current);
+              pendingServerSeqRef.current = null;
             }
 
             processingQueue = false;
@@ -2149,7 +2461,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                             setIsLoadingHistory(false);
                             writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                             const nextDelay = restoreRetryDelay;
-                            restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+                            restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                             setTimeout(() => { if (!disposed) connectSocket(); }, nextDelay);
                           });
                       }, 2000);
@@ -2157,7 +2469,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                       setIsLoadingHistory(false);
                       writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                       const nextDelay = restoreRetryDelay;
-                      restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+                      restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                       setTimeout(() => { if (!disposed) connectSocket(); }, nextDelay);
                     }
                   });
@@ -2166,7 +2478,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               setIsLoadingHistory(false);
               writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
               const nextDelayA = restoreRetryDelay;
-              restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+              restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
               setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayA);
               return;
             }
@@ -2183,14 +2495,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     setIsLoadingHistory(false);
                     writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayB = restoreRetryDelay;
-                    restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+                    restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                     setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayB);
                   });
               } else {
                 setIsLoadingHistory(false);
                 writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                 const nextDelayC = restoreRetryDelay;
-                restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+                restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                 setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayC);
               }
               return;
@@ -2212,7 +2524,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     setIsLoadingHistory(false);
                     writeTerminal('\r\n[Auth failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayD = restoreRetryDelay;
-                    restoreRetryDelay = Math.min(restoreRetryDelay * 2, 300000);
+                    restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                     setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayD);
                   }
                 });
@@ -2254,6 +2566,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         exitCopyModeIfActive();
         markUserInput();
         resetIdleTimer(false);
+        const ownerClientId = ptyOwnerStateRef.current.ownerClientId;
+        const currentClientId = clientIdRef.current;
+        const shouldAwaitPromotion = Boolean(
+          syncPtySizeRef.current &&
+          currentClientId &&
+          ownerClientId &&
+          ownerClientId !== currentClientId
+        );
+        if (shouldAwaitPromotion) {
+          awaitOwnerPromotionBeforeInput();
+        }
+        syncPtySize({ clientId: clientIdRef.current || undefined, priorityOverride: true });
         queueTerminalInput(data);
       });
 
@@ -2264,20 +2588,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const resizeDisposer = term.onResize(({ cols, rows }) => {
         if (!syncPtySizeRef.current) return;
         if (disposed) return;
+        if (suppressResizeSyncCount > 0) return;
         if (resizeTimeout) clearTimeout(resizeTimeout);
         resizeTimeout = setTimeout(() => {
           if (!syncPtySizeRef.current) return;
           if (disposed) return;
-          const resizeBody = { cols, rows };
-          if (clientIdRef.current) resizeBody.clientId = clientIdRef.current;
-          if (isPrimaryRef.current && !isMobile) resizeBody.priority = true;
-          apiFetch(`/api/terminal/${sessionId}/resize`, {
-            method: 'POST',
-            body: resizeBody
-          }).catch((error) => {
-            console.error('Failed to send resize:', error);
-          });
-        }, 100);
+          syncPtySize({ clientId: clientIdRef.current || undefined, dims: { cols, rows } });
+        }, isMobile ? 80 : 30);
       });
 
       const VIEWPORT_JITTER_THRESHOLD = 8;
@@ -2428,6 +2745,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       disposed = true;
       detectedUrlsRef.current.clear();
       clientIdRef.current = null;
+      ptyOwnerStateRef.current = {
+        isOwner: null,
+        ownerClientId: null,
+        appliedCols: null,
+        appliedRows: null
+      };
       if (unregisterTerminalSender) {
         unregisterTerminalSender(sessionId, sendUserInput);
       }
@@ -2435,6 +2758,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         clearTimeout(inputFlushRef.current);
         inputFlushRef.current = null;
       }
+      if (ownerPromotionTimerRef.current) {
+        clearTimeout(ownerPromotionTimerRef.current);
+        ownerPromotionTimerRef.current = null;
+      }
+      pendingOwnerPromotionRef.current = false;
+      ownerPromotionDeadlineRef.current = 0;
       inputBufferRef.current = '';
       if (rafId) cancelAnimationFrame(rafId);
       if (openRetryTimeout) {
@@ -2476,6 +2805,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       loadMoreHistoryRef.current = null;
       reconnectSocketRef.current = null;
       sendTerminalInputRef.current = null;
+      requestAuthoritativeResizeRef.current = null;
     };
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
@@ -2618,6 +2948,27 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     setMobileInputEnabled(keybarOpen);
   }, [isMobile, keybarOpen, setMobileInputEnabled]);
 
+  const shouldShowMirrorBadge = (
+    viewMode === 'terminal'
+    && (
+      syncPtySize === false
+      || ptyOwnerState.isOwner === false
+    )
+  );
+  const shouldShowOwnerBadge = (
+    viewMode === 'terminal'
+    && !shouldShowMirrorBadge
+    && ptyOwnerState.isOwner === true
+    && !isPrimary
+  );
+  const ptyBadgeLabel = shouldShowMirrorBadge ? 'Mirror mode' : (shouldShowOwnerBadge ? 'PTY owner' : '');
+  const ptyBadgeDims = (
+    Number.isFinite(ptyOwnerState.appliedCols)
+    && Number.isFinite(ptyOwnerState.appliedRows)
+  )
+    ? `${ptyOwnerState.appliedCols}x${ptyOwnerState.appliedRows}`
+    : '';
+
   return (
     <div
       className={`terminal-chat${isScrollMode ? ' scroll-mode' : ''}`}
@@ -2683,6 +3034,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           >
             Return to live
           </button>
+        </div>
+      )}
+      {(shouldShowMirrorBadge || shouldShowOwnerBadge) && (
+        <div className={`terminal-pty-role-badge ${shouldShowMirrorBadge ? 'mirror' : 'owner'}`}>
+          <span>{ptyBadgeLabel}</span>
+          {ptyBadgeDims && <span className="terminal-pty-role-dims">{ptyBadgeDims}</span>}
         </div>
       )}
 
