@@ -100,6 +100,8 @@ export function PreviewUrlBar({
   hasCookies,
   onClearCookies,
   onClearCache,
+  previewModeInfo,
+  compatibilityModeNotice,
   mainTerminalMinimized,
   onToggleMainTerminal,
   alignTerminalControls,
@@ -156,6 +158,7 @@ export function PreviewUrlBar({
       : undefined;
 
   return (
+    <>
     <div className={`preview-header${alignTerminalControls ? ' align-terminal' : ''}`}>
       <div className="preview-header-left">
         {/* Port selector */}
@@ -257,6 +260,16 @@ export function PreviewUrlBar({
             aria-label="Preview URL"
           />
         </form>
+        {previewModeInfo && previewModeInfo.id !== 'none' && (
+          <div
+            className={`preview-mode-badge${previewModeInfo.limited ? ' limited' : ''}${previewModeInfo.id === 'subdomain' ? ' interactive' : ''}`}
+            title={previewModeInfo.description || previewModeInfo.title || undefined}
+            aria-label={previewModeInfo.title || previewModeInfo.label}
+          >
+            <span className="preview-mode-badge-dot" />
+            <span>{previewModeInfo.label}</span>
+          </div>
+        )}
       </div>
 
       <div className="preview-header-right" style={rightControlsStyle}>
@@ -293,6 +306,22 @@ export function PreviewUrlBar({
             aria-label="Reload preview"
           >
             {isLoading ? '\u22EF' : '\u21BB'}
+          </button>
+        </Tooltip>
+        <Tooltip text="Open in New Tab">
+          <button
+            type="button"
+            className="preview-action-btn"
+            onClick={onOpenExternal}
+            disabled={!iframeSrc}
+            aria-label="Open preview in new tab"
+            title="Open in New Tab"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
           </button>
         </Tooltip>
         <Tooltip text="Clear Cache">
@@ -473,5 +502,11 @@ export function PreviewUrlBar({
         </button>
       </div>
     </div>
+    {compatibilityModeNotice && (
+      <div className="preview-mode-inline-warning" role="status">
+        {compatibilityModeNotice}
+      </div>
+    )}
+    </>
   );
 }

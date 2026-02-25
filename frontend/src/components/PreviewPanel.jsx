@@ -131,6 +131,73 @@ function normalizeStorageSnapshot(snapshot) {
   return result;
 }
 
+function classifyPreviewMode(iframeSrc, useWebContainer) {
+  if (useWebContainer) {
+    return {
+      id: 'webcontainer',
+      label: 'WebContainer',
+      limited: false,
+      title: 'WebContainer preview',
+      description: 'Runs in browser WebContainer mode instead of proxy mode.'
+    };
+  }
+  if (!iframeSrc) {
+    return {
+      id: 'none',
+      label: 'No Preview',
+      limited: false,
+      title: 'No preview loaded',
+      description: null
+    };
+  }
+  try {
+    const parsed = new URL(iframeSrc, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    const host = (parsed.hostname || '').toLowerCase();
+    if (/^preview-\d+\./i.test(host)) {
+      return {
+        id: 'subdomain',
+        label: 'Interactive',
+        limited: false,
+        title: 'Interactive preview (subdomain)',
+        description: 'Full preview mode via subdomain proxy.'
+      };
+    }
+    if (/^\/preview\/\d+(\/|$)/.test(parsed.pathname || '')) {
+      return {
+        id: 'path-compat',
+        label: 'Compatibility',
+        limited: true,
+        title: 'Compatibility preview (path-based)',
+        description: 'Limited compatibility mode for simple pages.'
+      };
+    }
+    if ((parsed.pathname || '').startsWith('/api/proxy-external')) {
+      return {
+        id: 'external-proxy',
+        label: 'External',
+        limited: true,
+        title: 'External proxy preview',
+        description: 'External URL routed through Terminal V4 proxy.'
+      };
+    }
+    return {
+      id: 'direct',
+      label: 'Direct',
+      limited: true,
+      title: 'Direct iframe URL',
+      description: 'Preview is using a direct iframe URL.'
+    };
+  } catch {
+    return {
+      id: 'unknown',
+      label: 'Unknown',
+      limited: true,
+      title: 'Unknown preview mode',
+      description: null
+    };
+  }
+}
+
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal, showStatusLabels = false }) {
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
@@ -205,6 +272,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [useWebContainer, setUseWebContainer] = useState(false);
   const [webContainerSupported, setWebContainerSupported] = useState(null);
   const [webContainerStatus, setWebContainerStatus] = useState(null);
+  const [compatibilityFallbackPrompt, setCompatibilityFallbackPrompt] = useState(null);
+  const [compatibilityModeReason, setCompatibilityModeReason] = useState(null);
   const iframeRef = useRef(null);
   const subdomainFallbackAttemptedRef = useRef(new Set());
   const logsEndRef = useRef(null);
@@ -348,9 +417,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [uiPort, url]);
   const [iframeSrc, setIframeSrc] = useState(baseIframeSrc);
   const baseIframeSrcRef = useRef(baseIframeSrc);
+  const iframeSrcRef = useRef(iframeSrc);
   useEffect(() => { baseIframeSrcRef.current = baseIframeSrc; }, [baseIframeSrc]);
+  useEffect(() => { iframeSrcRef.current = iframeSrc; }, [iframeSrc]);
   useEffect(() => {
     subdomainFallbackAttemptedRef.current.clear();
+    setCompatibilityFallbackPrompt(null);
+    setCompatibilityModeReason(null);
   }, [baseIframeSrc]);
 
   // Browser history navigation state
@@ -387,6 +460,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return null;
     }
   }, [iframeSrc]);
+
+  const previewModeInfo = useMemo(() => classifyPreviewMode(iframeSrc, useWebContainer), [iframeSrc, useWebContainer]);
+  const compatibilityModeNotice = useMemo(() => {
+    if (previewModeInfo.id !== 'path-compat') return null;
+    if (compatibilityModeReason === 'fallback-error') {
+      return 'Compatibility mode is active because interactive preview failed. Links, auth, and HMR may still break for some apps.';
+    }
+    return 'Compatibility mode (path-based preview) is best-effort. Use Interactive mode or Open in New Tab for auth and complex SPA flows.';
+  }, [previewModeInfo.id, compatibilityModeReason]);
 
   // Check for cookies when preview loads or port changes
   useEffect(() => {
@@ -445,23 +527,23 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (!previewPort) return;
     try {
       // Capture iframe src before async to prevent stale state updates
-      const currentIframeSrc = baseIframeSrc;
+      const currentIframeSrc = iframeSrcRef.current || baseIframeSrc;
       const token = getAccessToken();
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
       await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
 
       // Only update state if iframe src hasn't changed during the async operation
-      if (currentIframeSrc === baseIframeSrcRef.current) {
+      if (currentIframeSrc === (iframeSrcRef.current || baseIframeSrcRef.current)) {
         setHasCookies(false);
         // Refresh the preview to apply cleared cookies
-        if (baseIframeSrc) {
+        if (currentIframeSrc) {
           setIsLoading(true);
           setError(null);
           setLogs([]);
           setProxyLogs([]);
           const cacheBuster = `_cb=${Date.now()}`;
-          const separator = baseIframeSrc.includes('?') ? '&' : '?';
-          setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+          const separator = currentIframeSrc.includes('?') ? '&' : '?';
+          setIframeSrc(`${currentIframeSrc}${separator}${cacheBuster}`);
         }
       }
     } catch (err) {
@@ -496,14 +578,15 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setHasCookies(false);
 
       // Force hard reload with cache buster
-      if (baseIframeSrc) {
+      const refreshTarget = iframeSrcRef.current || baseIframeSrc;
+      if (refreshTarget) {
         setIsLoading(true);
         setError(null);
         setLogs([]);
         setProxyLogs([]);
         const cacheBuster = `_cb=${Date.now()}`;
-        const separator = baseIframeSrc.includes('?') ? '&' : '?';
-        setIframeSrc(`${baseIframeSrc}${separator}${cacheBuster}`);
+        const separator = refreshTarget.includes('?') ? '&' : '?';
+        setIframeSrc(`${refreshTarget}${separator}${cacheBuster}`);
       }
     } catch (err) {
       console.error('Failed to clear cache:', err);
@@ -974,12 +1057,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
     // Lazy injection: reload iframe with/without __inspect parameter
     // This ensures the inspector script is only loaded when needed
-    if (baseIframeSrc) {
+    const inspectTarget = iframeSrc || baseIframeSrc;
+    if (inspectTarget) {
       setIsLoading(true);
       setError(null);
       const cacheBuster = `_cb=${Date.now()}`;
       try {
-        const url = new URL(baseIframeSrc, window.location.origin);
+        const url = new URL(inspectTarget, window.location.origin);
         if (newMode) {
           url.searchParams.set('__inspect', '1');
         } else {
@@ -990,9 +1074,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         setIframeSrc(url.toString());
       } catch {
         // Fallback if URL parsing fails
-        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        const separator = inspectTarget.includes('?') ? '&' : '?';
         const inspectParam = newMode ? '__inspect=1&' : '';
-        setIframeSrc(`${baseIframeSrc}${separator}${inspectParam}${cacheBuster}`);
+        setIframeSrc(`${inspectTarget}${separator}${inspectParam}${cacheBuster}`);
       }
     }
 
@@ -1000,7 +1084,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: newMode }, '*');
     }
-  }, [inspectMode, baseIframeSrc]);
+  }, [inspectMode, baseIframeSrc, iframeSrc]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedElement(null);
@@ -1136,6 +1220,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           if (!inPreviewPath) {
             const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
             const escapedUrl = `${expectedPrefix}${normalizedPath}${frameLocation.search || ''}${frameLocation.hash || ''}`;
+            console.warn('[Preview] Path preview escaped into Terminal V4 route, re-wrapping:', pathname);
             setIsLoading(true);
             setError(null);
             setIframeSrc(escapedUrl);
@@ -1146,6 +1231,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         // Cross-origin iframe (subdomain preview) or transient navigation — ignore.
       }
     }
+    setCompatibilityFallbackPrompt(null);
     setIsLoading(false);
     setError(null);
   }, [previewPort]);
@@ -1165,41 +1251,53 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     return () => clearTimeout(timeout);
   }, [isLoading, iframeSrc]);
 
+  const handleUseCompatibilityMode = useCallback(() => {
+    if (!compatibilityFallbackPrompt) return;
+    subdomainFallbackAttemptedRef.current.add(compatibilityFallbackPrompt.sourceUrl);
+    setCompatibilityModeReason('fallback-error');
+    setCompatibilityFallbackPrompt(null);
+    setIsLoading(true);
+    setError(null);
+    setIframeSrc(compatibilityFallbackPrompt.fallbackUrl);
+  }, [compatibilityFallbackPrompt]);
+
   const handleError = useCallback(() => {
     const sourceUrl = baseIframeSrcRef.current || iframeSrc;
     const fallbackUrl = toPathPreviewFallbackUrl(sourceUrl);
     if (fallbackUrl && fallbackUrl !== iframeSrc) {
       const attempted = subdomainFallbackAttemptedRef.current;
       if (!attempted.has(sourceUrl)) {
-        attempted.add(sourceUrl);
-        setIsLoading(true);
-        setError(null);
-        setIframeSrc(fallbackUrl);
+        setCompatibilityFallbackPrompt({ sourceUrl, fallbackUrl });
+        setIsLoading(false);
+        setError('Interactive preview failed to load. You can retry, use Compatibility mode (limited), or open in a new tab.');
         return;
       }
     }
+    setCompatibilityFallbackPrompt(null);
     setIsLoading(false);
     setError('Failed to load page. The server may not be running or CORS may be blocking the request.');
   }, [iframeSrc]);
 
   const handleRefresh = useCallback(() => {
-    if (baseIframeSrc) {
+    const refreshTarget = iframeSrc || baseIframeSrc;
+    if (refreshTarget) {
       setIsLoading(true);
       setError(null);
+      setCompatibilityFallbackPrompt(null);
       setLogs([]);
       try {
-        const url = new URL(baseIframeSrc, window.location.origin);
-        if (inspectMode) url.searchParams.set('__inspect', '1');
-        url.searchParams.set('_cb', Date.now().toString());
-        setIframeSrc(url.toString());
+        const parsed = new URL(refreshTarget, window.location.origin);
+        if (inspectMode) parsed.searchParams.set('__inspect', '1');
+        parsed.searchParams.set('_cb', Date.now().toString());
+        setIframeSrc(parsed.toString());
       } catch {
         const cacheBuster = `_cb=${Date.now()}`;
-        const separator = baseIframeSrc.includes('?') ? '&' : '?';
+        const separator = refreshTarget.includes('?') ? '&' : '?';
         const inspectParam = inspectMode ? '__inspect=1&' : '';
-        setIframeSrc(`${baseIframeSrc}${separator}${inspectParam}${cacheBuster}`);
+        setIframeSrc(`${refreshTarget}${separator}${inspectParam}${cacheBuster}`);
       }
     }
-  }, [baseIframeSrc, inspectMode]);
+  }, [baseIframeSrc, iframeSrc, inspectMode]);
 
   const handleUrlSubmit = useCallback((e) => {
     e.preventDefault();
@@ -1210,11 +1308,13 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   }, [inputUrl, onUrlChange]);
 
   const handleOpenExternal = useCallback(() => {
-    const targetUrl = baseIframeSrc || iframeSrc;
-    if (targetUrl) {
-      window.open(targetUrl, '_blank', 'noopener,noreferrer');
+    let targetUrl = (typeof url === 'string' && url.trim()) ? url.trim() : (baseIframeSrc || iframeSrc);
+    if (!targetUrl) return;
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(targetUrl) && /^[^/\s]+:\d+(?:\/|\?|#|$)/.test(targetUrl)) {
+      targetUrl = `http://${targetUrl}`;
     }
-  }, [baseIframeSrc, iframeSrc]);
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  }, [baseIframeSrc, iframeSrc, url]);
 
   // Navigation handlers for browser history
   const handleBack = useCallback(() => {
@@ -2469,9 +2569,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               <div className="preview-error-icon">{'\u26A0'}</div>
               <h3>Load Error</h3>
               <p>{error}</p>
-              <button type="button" className="btn-primary" onClick={handleRefresh}>
-                Try Again
-              </button>
+              <div className="preview-error-actions">
+                <button type="button" className="btn-primary" onClick={handleRefresh}>
+                  Try Again
+                </button>
+                {compatibilityFallbackPrompt && (
+                  <button type="button" className="btn-secondary" onClick={handleUseCompatibilityMode}>
+                    Use Compatibility Mode
+                  </button>
+                )}
+                <button type="button" className="btn-secondary" onClick={handleOpenExternal} disabled={!iframeSrc}>
+                  Open in New Tab
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -2666,6 +2776,14 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {displayUrl}
             </button>
           )}
+          {previewModeInfo.id !== 'none' && (
+            <span
+              className={`preview-mobile-mode-chip${previewModeInfo.limited ? ' limited' : ''}${previewModeInfo.id === 'subdomain' ? ' interactive' : ''}`}
+              title={previewModeInfo.title || undefined}
+            >
+              {previewModeInfo.label}
+            </span>
+          )}
           {/* Cookie clear button - only shown when cookies exist */}
           {previewPort && hasCookies && (
             <button
@@ -2681,6 +2799,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </svg>
             </button>
           )}
+          <button
+            type="button"
+            className="preview-floating-btn"
+            onClick={handleOpenExternal}
+            disabled={!iframeSrc}
+            aria-label="Open in new tab"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </button>
           <button
             type="button"
             className="preview-floating-btn"
@@ -3259,6 +3390,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         hasCookies={hasCookies}
         onClearCookies={handleClearCookies}
         onClearCache={handleClearCache}
+        previewModeInfo={previewModeInfo}
+        compatibilityModeNotice={compatibilityModeNotice}
         mainTerminalMinimized={mainTerminalMinimized}
         onToggleMainTerminal={onToggleMainTerminal}
         alignTerminalControls={browserSplitEnabled}
@@ -3350,9 +3483,19 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <div className="preview-error-icon">{'\u26A0'}</div>
                 <h3>Load Error</h3>
                 <p>{error}</p>
-                <button type="button" className="btn-primary" onClick={handleRefresh}>
-                  Try Again
-                </button>
+                <div className="preview-error-actions">
+                  <button type="button" className="btn-primary" onClick={handleRefresh}>
+                    Try Again
+                  </button>
+                  {compatibilityFallbackPrompt && (
+                    <button type="button" className="btn-secondary" onClick={handleUseCompatibilityMode}>
+                      Use Compatibility Mode
+                    </button>
+                  )}
+                  <button type="button" className="btn-secondary" onClick={handleOpenExternal} disabled={!iframeSrc}>
+                    Open in New Tab
+                  </button>
+                </div>
               </div>
             ) : useWebContainer ? (
               <WebContainerPreview

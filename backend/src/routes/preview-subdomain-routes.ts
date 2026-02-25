@@ -234,6 +234,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   const VIRTUAL_PROTOCOL = PREVIEW_ORIGIN.startsWith('https:') ? 'https:' : 'http:';
   const VIRTUAL_ORIGIN = VIRTUAL_PROTOCOL + '//localhost:' + PORT;
   const SHOULD_NAMESPACE_STORAGE = !!PREVIEW_BASE_PATH;
+  const COMPAT_PATH_MODE = !!PREVIEW_BASE_PATH;
   var lastReportedLocation = null;
 
   function stripPreviewBasePath(path) {
@@ -510,7 +511,7 @@ const PREVIEW_DEBUG_SCRIPT = `
     if (typeof original !== 'function') return;
     history[methodName] = function() {
       var args = Array.prototype.slice.call(arguments);
-      if (args.length > 2 && args[2]) {
+      if (COMPAT_PATH_MODE && args.length > 2 && args[2]) {
         var rawUrl = args[2];
         try {
           if (typeof rawUrl !== 'string' && rawUrl.toString) {
@@ -530,48 +531,50 @@ const PREVIEW_DEBUG_SCRIPT = `
     };
   }
 
-  try {
-    if (typeof window !== 'undefined' && window.location) {
-      var originalAssign = window.location.assign.bind(window.location);
-      var originalReplace = window.location.replace.bind(window.location);
-      window.location.assign = function(url) {
-        return originalAssign(rewriteNavigationUrl(url));
-      };
-      window.location.replace = function(url) {
-        return originalReplace(rewriteNavigationUrl(url));
-      };
-    }
-  } catch (e) {}
+  if (COMPAT_PATH_MODE) {
+    try {
+      if (typeof window !== 'undefined' && window.location) {
+        var originalAssign = window.location.assign.bind(window.location);
+        var originalReplace = window.location.replace.bind(window.location);
+        window.location.assign = function(url) {
+          return originalAssign(rewriteNavigationUrl(url));
+        };
+        window.location.replace = function(url) {
+          return originalReplace(rewriteNavigationUrl(url));
+        };
+      }
+    } catch (e) {}
 
-  // Intercept location.href setter (best-effort)
-  try {
-    var locationProto = Object.getPrototypeOf(window.location);
-    var hrefDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'href');
-    if (hrefDescriptor && hrefDescriptor.set && hrefDescriptor.configurable) {
-      var originalHrefSetter = hrefDescriptor.set;
-      Object.defineProperty(locationProto, 'href', {
-        get: function() {
-          try {
-            if (rawHrefGetter) {
-              return stripPreviewBaseFromHref(rawHrefGetter.call(this));
-            }
-          } catch (e) {}
-          try {
-            if (hrefDescriptor.get) {
-              return stripPreviewBaseFromHref(hrefDescriptor.get.call(this));
-            }
-          } catch (e) {}
-          return stripPreviewBaseFromHref('');
-        },
-        set: function(url) {
-          return originalHrefSetter.call(this, rewriteNavigationUrl(url));
-        },
-        configurable: true,
-        enumerable: hrefDescriptor.enumerable
-      });
+    // Intercept location.href setter (best-effort)
+    try {
+      var locationProto = Object.getPrototypeOf(window.location);
+      var hrefDescriptor = Object.getOwnPropertyDescriptor(locationProto, 'href');
+      if (hrefDescriptor && hrefDescriptor.set && hrefDescriptor.configurable) {
+        var originalHrefSetter = hrefDescriptor.set;
+        Object.defineProperty(locationProto, 'href', {
+          get: function() {
+            try {
+              if (rawHrefGetter) {
+                return stripPreviewBaseFromHref(rawHrefGetter.call(this));
+              }
+            } catch (e) {}
+            try {
+              if (hrefDescriptor.get) {
+                return stripPreviewBaseFromHref(hrefDescriptor.get.call(this));
+              }
+            } catch (e) {}
+            return stripPreviewBaseFromHref('');
+          },
+          set: function(url) {
+            return originalHrefSetter.call(this, rewriteNavigationUrl(url));
+          },
+          configurable: true,
+          enumerable: hrefDescriptor.enumerable
+        });
+      }
+    } catch (e) {
+      // Some browsers block modifying location prototype
     }
-  } catch (e) {
-    // Some browsers block modifying location prototype
   }
 
   hookHistoryMethod('pushState');
@@ -582,7 +585,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   reportLocationChange();
 
   // Path escape guard: if we're in path-based preview but URL doesn't have prefix, redirect
-  if (PREVIEW_BASE_PATH) {
+  if (COMPAT_PATH_MODE) {
     try {
       var currentPath = getRawPathname() + location.search + location.hash;
       var correctedPath = withPreviewBasePath(currentPath);
@@ -905,7 +908,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   // proxy rewrites the initial HTML. In path-based preview that can escape to the
   // Terminal V4 app on :3020. Rewriting on user interaction keeps navigation inside the
   // preview context.
-  if (typeof document !== 'undefined' && document.addEventListener) {
+  if (COMPAT_PATH_MODE && typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('pointerdown', function(event) {
       try {
         var anchor = findAnchorFromEvent(event);
@@ -970,24 +973,26 @@ const PREVIEW_DEBUG_SCRIPT = `
   }
 
   // Programmatic submit() bypasses the submit event. Patch form methods as a fallback.
-  try {
-    if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype) {
-      var originalFormSubmit = HTMLFormElement.prototype.submit;
-      if (typeof originalFormSubmit === 'function') {
-        HTMLFormElement.prototype.submit = function() {
-          try { rewriteFormAction(this); } catch (e) {}
-          return originalFormSubmit.apply(this, arguments);
-        };
+  if (COMPAT_PATH_MODE) {
+    try {
+      if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype) {
+        var originalFormSubmit = HTMLFormElement.prototype.submit;
+        if (typeof originalFormSubmit === 'function') {
+          HTMLFormElement.prototype.submit = function() {
+            try { rewriteFormAction(this); } catch (e) {}
+            return originalFormSubmit.apply(this, arguments);
+          };
+        }
+        var originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+        if (typeof originalRequestSubmit === 'function') {
+          HTMLFormElement.prototype.requestSubmit = function() {
+            try { rewriteFormAction(this); } catch (e) {}
+            return originalRequestSubmit.apply(this, arguments);
+          };
+        }
       }
-      var originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
-      if (typeof originalRequestSubmit === 'function') {
-        HTMLFormElement.prototype.requestSubmit = function() {
-          try { rewriteFormAction(this); } catch (e) {}
-          return originalRequestSubmit.apply(this, arguments);
-        };
-      }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   // Send logs to code.{domain} for subdomains, or same-origin for path-based/localhost preview
   const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
@@ -1117,7 +1122,7 @@ const PREVIEW_DEBUG_SCRIPT = `
     var url = typeof input === 'string' ? input : (input.url || String(input));
     var method = (init && init.method) || (typeof input === 'object' && input.method) || 'GET';
     var startTime = Date.now();
-    var rewrittenUrl = rewritePreviewUrl(url);
+    var rewrittenUrl = COMPAT_PATH_MODE ? rewritePreviewUrl(url) : url;
     if (rewrittenUrl !== url) {
       url = rewrittenUrl;
       if (typeof input === 'string') {
@@ -1198,7 +1203,7 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   // WebSocket rewrite for local dev URLs (HMR, live reload, etc.)
   var OrigWebSocket = window.WebSocket;
-  if (OrigWebSocket) {
+  if (COMPAT_PATH_MODE && OrigWebSocket) {
     window.WebSocket = function(url, protocols) {
       var rewrittenUrl = rewriteWebSocketUrl(url);
       if (protocols !== undefined) {
@@ -1219,7 +1224,7 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   XMLHttpRequest.prototype.open = function(method, url) {
     this._debugMethod = method;
-    var rewrittenUrl = rewritePreviewUrl(url);
+    var rewrittenUrl = COMPAT_PATH_MODE ? rewritePreviewUrl(url) : url;
     this._debugUrl = rewrittenUrl;
     this._debugHeaders = {};
     var args = Array.prototype.slice.call(arguments);
