@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
+import { useChatTurns } from '../hooks/useChatTurns';
+import { MobileChatView } from './MobileChatView';
 
 export function MobileTerminalCarousel({
   sessions,
@@ -15,6 +17,8 @@ export function MobileTerminalCarousel({
   onRegisterFocusTerminal,
   onSessionBusyChange,
   sessionAiTypes,
+  chatMode = false,
+  onChatModeChange,
 }) {
   // Clamp index to valid range when sessions change
   useEffect(() => {
@@ -43,9 +47,20 @@ export function MobileTerminalCarousel({
   }); // 'terminal' | 'reader'
   const [isConnected, setIsConnected] = useState(false);
 
+  const { turns, streamingContent, handleUserSend, handleOutputChunk, clearTurns } = useChatTurns();
+
   // Auto-remount watchdog: if disconnected for 5 continuous minutes, force remount
   const disconnectStartRef = useRef(null);
   const autoRemountTimerRef = useRef(null);
+
+  const sendToTerminalRef = useRef(null);
+  const handleRegisterSendText = useCallback((fn) => {
+    sendToTerminalRef.current = fn;
+  }, []);
+
+  const handleChatSend = useCallback((text) => {
+    sendToTerminalRef.current?.(text + '\n');
+  }, []);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -90,6 +105,11 @@ export function MobileTerminalCarousel({
     } catch {}
   }, [viewMode]);
 
+  // Clear turns when session changes
+  useEffect(() => {
+    clearTurns();
+  }, [currentSession?.id, clearTurns]);
+
   // No sessions - show empty state
   if (sessions.length === 0) {
     return (
@@ -104,8 +124,8 @@ export function MobileTerminalCarousel({
 
   return (
     <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
-      {/* Terminal content */}
-      <div className="carousel-content">
+      {/* Terminal content - always mounted to keep WebSocket alive */}
+      <div className="carousel-content" style={chatMode ? { display: 'none' } : undefined}>
         <TerminalChat
           key={`${currentSession.id}-${refreshToken}`}
           sessionId={currentSession.id}
@@ -122,8 +142,19 @@ export function MobileTerminalCarousel({
           onRegisterFocusTerminal={onRegisterFocusTerminal}
           onConnectionChange={handleConnectionChange}
           onActivityChange={(isBusy) => onSessionBusyChange?.(currentSession.id, isBusy)}
+          onSendMessage={handleUserSend}
+          onOutputChunk={handleOutputChunk}
+          onRegisterSendText={handleRegisterSendText}
         />
       </div>
+
+      {chatMode && (
+        <MobileChatView
+          turns={turns}
+          streamingContent={streamingContent}
+          onSend={handleChatSend}
+        />
+      )}
 
       {/* Status bar with integrated mic and image buttons */}
       <MobileStatusBar
