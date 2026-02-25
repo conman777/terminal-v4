@@ -1798,6 +1798,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const historyText = historyTextRef.current;
           await writeHistoryChunks(historyText);
           if (disposed) return;
+          if (historyText) onOutputChunkRef.current?.(historyText);
           if (viewModeRef.current === 'reader') {
             syncReaderBuffer();
           } else if (!isMobile) {
@@ -1870,6 +1871,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           clearReader();
           await writeHistoryChunks(historyText);
           if (disposed) return;
+          if (historyText) onOutputChunkRef.current?.(historyText);
           if (viewModeRef.current === 'reader') {
             syncReaderBuffer();
           } else if (!isMobile) {
