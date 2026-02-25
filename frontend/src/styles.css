@@ -7713,7 +7713,7 @@ button {
 }
 
 .mobile-chat-toggle.active {
-  color: #6c47ff;
+  color: var(--chat-accent, #6c47ff);
   background: rgba(108, 71, 255, 0.1);
 }
 

@@ -364,7 +364,7 @@ export function MobileHeader({
               <button
                 type="button"
                 className={`mobile-chat-toggle${chatMode ? ' active' : ''}`}
-                onClick={onToggleChatMode}
+                onClick={() => onToggleChatMode?.()}
                 title="Chat view"
                 aria-label="Toggle chat view"
               >
