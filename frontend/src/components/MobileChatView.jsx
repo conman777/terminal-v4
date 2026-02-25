@@ -46,6 +46,15 @@ export function MobileChatView({ turns, streamingContent, onSend }) {
   const containerRef = useRef(null);
   const autoScrollRef = useRef(true);
   const textareaRef = useRef(null);
+  const streamingStartRef = useRef(null);
+
+  useEffect(() => {
+    if (streamingContent && !streamingStartRef.current) {
+      streamingStartRef.current = Date.now();
+    } else if (!streamingContent) {
+      streamingStartRef.current = null;
+    }
+  }, [streamingContent]);
 
   // Auto-scroll to bottom, but pause if user has scrolled up
   useEffect(() => {
@@ -91,7 +100,7 @@ export function MobileChatView({ turns, streamingContent, onSend }) {
   const allMessages = [
     ...turns,
     ...(streamingContent
-      ? [{ role: 'assistant', content: streamingContent, ts: Date.now(), streaming: true }]
+      ? [{ role: 'assistant', content: streamingContent, ts: streamingStartRef.current ?? Date.now(), streaming: true }]
       : []),
   ];
 
@@ -109,8 +118,8 @@ export function MobileChatView({ turns, streamingContent, onSend }) {
           </div>
         )}
 
-        {allMessages.map((msg, i) => (
-          <div key={i} className={`chat-message-row ${msg.role}`}>
+        {allMessages.map((msg) => (
+          <div key={msg.streaming ? 'streaming' : msg.ts} className={`chat-message-row ${msg.role}`}>
             {msg.role === 'assistant' && (
               <div className="chat-avatar">C</div>
             )}
