@@ -249,6 +249,7 @@ function AppContent() {
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
+  const [chatMode, setChatMode] = useState(false);
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
   const [showAddScanFolderModal, setShowAddScanFolderModal] = useState(false);
   const [addScanFolderError, setAddScanFolderError] = useState('');
@@ -1132,6 +1133,8 @@ function AppContent() {
               onViewChange: handleMobileViewChange,
               previewUrl,
               onNavigateToPath: handleNavigateToPath,
+              chatMode,
+              onToggleChatMode: () => setChatMode(v => !v),
             }}
           />
           <MobileKeybar
@@ -1336,6 +1339,8 @@ function AppContent() {
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
                   sessionAiTypes={sessionAiTypes}
+                  chatMode={chatMode}
+                  onChatModeChange={setChatMode}
                 />
               </div>
             )}

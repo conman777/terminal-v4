@@ -42,6 +42,7 @@ export function Header({
     isNavCollapsed, onToggleKeybar, keybarOpen,
     projects, projectsLoading, onFolderSelect, currentPath, onAddScanFolder,
     mobileView, onViewChange, previewUrl, onNavigateToPath,
+    chatMode, onToggleChatMode,
   } = mobileProps || {};
   if (isMobile) {
     return (
@@ -79,6 +80,8 @@ export function Header({
         showTabStatusLabels={showTabStatusLabels}
         sessionAiTypes={sessionAiTypes}
         onSetSessionAiType={onSetSessionAiType}
+        chatMode={chatMode}
+        onToggleChatMode={onToggleChatMode}
       />
     );
   }

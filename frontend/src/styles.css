@@ -7698,6 +7698,25 @@ button {
   background: var(--accent-primary-dim);
 }
 
+.mobile-chat-toggle {
+  padding: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #888);
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.mobile-chat-toggle.active {
+  color: #6c47ff;
+  background: rgba(108, 71, 255, 0.1);
+}
+
 .mobile-header-actions-right {
   margin-left: auto;
   display: flex;
