@@ -1736,6 +1736,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           .filter((item) => item && typeof item.text === 'string' && item.text.length > 0);
         if (pendingChunks.length === 0) return;
         const pendingText = pendingChunks.map((item) => item.text).join('');
+        onOutputChunkRef.current?.(pendingText);
         const shouldAppendReader = viewModeRef.current === 'reader' || !isMobile;
         if (viewModeRef.current === 'reader') {
           writeTerminal(pendingText, scheduleReaderSync);
@@ -1910,6 +1911,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           history.forEach((entry) => appendHistoryEntry(entry));
           const combined = history.map((entry) => entry.text || '').join('');
           if (combined) {
+            onOutputChunkRef.current?.(combined);
             const buffer = term.buffer?.active;
             const baseY = buffer?.baseY || 0;
             const viewportYBefore = buffer?.viewportY ?? 0;
