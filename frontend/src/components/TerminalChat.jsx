@@ -65,7 +65,7 @@ const DEFAULT_ANSI_PALETTE = (() => {
   return palette;
 })();
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onActivityChange, onConnectionChange, onCwdChange, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onRegisterSendText, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -117,6 +117,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const requestAuthoritativeResizeRef = useRef(null);
   const requestPriorityResizeRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
+  const onSendMessageRef = useRef(onSendMessage);
+  const onOutputChunkRef = useRef(onOutputChunk);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
   const scrollModeRef = useRef(false);
@@ -871,10 +873,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     rawTouchCancelCapture(e);
   }, [cancelMomentum, rawTouchCancelCapture]);
 
-  // Keep ref updated to avoid stale closures
+  // Keep refs updated to avoid stale closures
   useEffect(() => {
     onScrollDirectionRef.current = onScrollDirection;
   }, [onScrollDirection]);
+
+  useEffect(() => {
+    onSendMessageRef.current = onSendMessage;
+  }, [onSendMessage]);
+
+  useEffect(() => {
+    onOutputChunkRef.current = onOutputChunk;
+  }, [onOutputChunk]);
 
   useEffect(() => {
     usesTmuxRef.current = Boolean(usesTmux);
@@ -1091,6 +1101,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
     }
   }, [onRegisterFocusTerminal, setMobileInputEnabled]);
+
+  // Register send-text function for external callers (e.g. chat input bar)
+  useEffect(() => {
+    if (onRegisterSendText) {
+      onRegisterSendText((text) => {
+        const socket = socketRef.current;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(text);
+          onSendMessageRef.current?.(text);
+        }
+      });
+    }
+  }, [onRegisterSendText]);
 
   // Update document.title with active session name
   useEffect(() => {
@@ -1345,6 +1368,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(text);
+        onSendMessageRef.current?.(text);
         return;
       }
       apiFetch(`/api/terminal/${sessionId}/input`, {
@@ -2341,6 +2365,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           const enqueueTerminalWrite = (data, seq) => {
             if (!data) return;
+            onOutputChunkRef.current?.(data);
             pendingWrite += data;
             if (Number.isFinite(seq) && seq > 0) {
               pendingWriteLastSeq = Math.max(pendingWriteLastSeq || 0, Number(seq));
