@@ -1106,11 +1106,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (onRegisterSendText) {
       onRegisterSendText((text) => {
-        const socket = socketRef.current;
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(text);
-          onSendMessageRef.current?.(text);
-        }
+        sendTerminalInputRef.current?.(text);
       });
     }
   }, [onRegisterSendText]);
@@ -1371,6 +1367,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         onSendMessageRef.current?.(text);
         return;
       }
+      onSendMessageRef.current?.(text);
       apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
         body: { command: text }
