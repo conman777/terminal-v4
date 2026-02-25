@@ -67,7 +67,7 @@ export function useChatTurns() {
     if (!stripped) return;
 
     bufferRef.current += stripped;
-    setStreamingContent(bufferRef.current);
+    setStreamingContent(bufferRef.current.trim());
 
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(flushAssistantTurn, IDLE_TIMEOUT_MS);
