@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { authenticateWithPasskey } from '../utils/passkey';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isPasskeySubmitting, setIsPasskeySubmitting] = useState(false);
 
-  const { login, error: authError } = useAuth();
+  const { login, loginWithPasskeyResult, error: authError } = useAuth();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -25,6 +27,27 @@ export default function LoginPage() {
       // Error is set in auth context
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    if (!username.trim()) {
+      setLocalError('Enter your username first');
+      return;
+    }
+    setLocalError('');
+    setIsPasskeySubmitting(true);
+    try {
+      const data = await authenticateWithPasskey(username.trim());
+      loginWithPasskeyResult(data);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setLocalError('Passkey sign-in was cancelled');
+      } else {
+        setLocalError(err.message || 'Passkey sign-in failed');
+      }
+    } finally {
+      setIsPasskeySubmitting(false);
     }
   };
 
@@ -75,8 +98,19 @@ export default function LoginPage() {
             />
           </div>
 
-          <button type="submit" className="login-submit" disabled={isSubmitting}>
+          <button type="submit" className="login-submit" disabled={isSubmitting || isPasskeySubmitting}>
             {isSubmitting ? 'Please wait...' : 'Sign In'}
+          </button>
+
+          <div className="login-divider"><span>or</span></div>
+
+          <button
+            type="button"
+            className="login-passkey-btn"
+            onClick={handlePasskeyLogin}
+            disabled={isPasskeySubmitting || isSubmitting}
+          >
+            {isPasskeySubmitting ? 'Waiting for Face ID...' : 'Sign in with Passkey'}
           </button>
         </form>
       </div>

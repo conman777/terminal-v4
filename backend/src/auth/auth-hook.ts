@@ -6,7 +6,9 @@ const PUBLIC_ROUTES = [
   '/api/auth/register',
   '/api/auth/login',
   '/api/auth/refresh',
-  '/api/health'
+  '/api/health',
+  '/api/auth/passkey/authenticate/begin',
+  '/api/auth/passkey/authenticate/complete'
 ];
 
 // Route patterns that don't require authentication (for dynamic routes)

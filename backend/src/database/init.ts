@@ -125,6 +125,27 @@ function runMigrations(db: Database.Database): void {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_user_name ON api_key_vault(user_id, key_name);
       `
+    },
+    {
+      name: '011_create_passkey_credentials',
+      sql: `
+        CREATE TABLE IF NOT EXISTS passkey_credentials (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          credential_id TEXT NOT NULL UNIQUE,
+          public_key BLOB NOT NULL,
+          counter INTEGER NOT NULL DEFAULT 0,
+          device_type TEXT NOT NULL,
+          backed_up INTEGER NOT NULL DEFAULT 0,
+          transports TEXT,
+          name TEXT,
+          created_at TEXT NOT NULL,
+          last_used_at TEXT,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id);
+        CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id);
+      `
     }
   ];
 

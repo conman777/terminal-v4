@@ -30,6 +30,7 @@ import { ClaudeCodeManager } from './claude-code/claude-code-manager';
 import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
+import { registerPasskeyRoutes } from './auth/passkey-routes';
 import { assertAuthConfig } from './auth/auth-service';
 import { stopCleanupInterval } from './preview/preview-logs-service';
 import { migrateOrphanedSessions } from './migrations/migrate-sessions';
@@ -92,6 +93,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Register auth routes
   registerAuthRoutes(app);
+  registerPasskeyRoutes(app);
 
   // Register preview subdomain routes early (before other routes)
   // This handles requests to preview-{port}.{PREVIEW_SUBDOMAIN_BASE}

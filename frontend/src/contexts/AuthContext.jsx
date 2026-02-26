@@ -151,6 +151,12 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const loginWithPasskeyResult = useCallback((data) => {
+    setTokens(data.tokens.accessToken, data.tokens.refreshToken);
+    setUser(data.user);
+    setUserState(data.user);
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       const token = getAccessToken();
@@ -174,6 +180,7 @@ export function AuthProvider({ children }) {
     error,
     isAuthenticated: !!user,
     login,
+    loginWithPasskeyResult,
     register,
     logout
   };

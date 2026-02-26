@@ -75,7 +75,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 // Generate a JWT access token
-function generateAccessToken(user: User): string {
+export function generateAccessToken(user: User): string {
   return jwt.sign(
     { sub: user.id, username: user.username },
     JWT_SECRET,
@@ -84,7 +84,7 @@ function generateAccessToken(user: User): string {
 }
 
 // Generate a refresh token and store it
-function generateRefreshToken(userId: string): string {
+export function generateRefreshToken(userId: string): string {
   const token = randomUUID();
   const tokenHash = hashToken(token);
   const expiresAt = new Date();

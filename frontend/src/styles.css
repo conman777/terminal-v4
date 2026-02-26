@@ -7698,20 +7698,6 @@ button {
   background: var(--accent-primary-dim);
 }
 
-.mobile-chat-toggle {
-  padding: 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted, #888);
-  border-radius: 6px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color 0.15s, background 0.15s;
-  flex-shrink: 0;
-}
-
 .mobile-chat-toggle.active {
   color: var(--chat-accent, #6c47ff);
   background: rgba(108, 71, 255, 0.1);
@@ -10885,6 +10871,46 @@ textarea:focus-visible {
   cursor: not-allowed;
 }
 
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color, #333);
+}
+
+.login-passkey-btn {
+  width: 100%;
+  padding: 0.875rem;
+  background: transparent;
+  border: 1px solid var(--border-color, #444);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.login-passkey-btn:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  background: rgba(var(--accent-primary-rgb, 99, 102, 241), 0.08);
+}
+
+.login-passkey-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .login-toggle {
   margin-top: 1.5rem;
   text-align: center;
@@ -11635,6 +11661,32 @@ textarea:focus-visible {
 .mobile-terminal-carousel .empty-state p {
   margin: 0;
   font-size: 0.875rem;
+}
+
+/* Floating scroll-to-bottom button */
+.mobile-scroll-bottom-btn {
+  position: absolute;
+  bottom: 60px; /* sits above the status bar */
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-elevated, #27272a);
+  color: var(--text-secondary, #a1a1aa);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 50;
+  transition: background 0.15s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-scroll-bottom-btn:active {
+  background: var(--bg-hover, #3f3f46);
+  transform: scale(0.92);
 }
 
 /* ==========================================================================

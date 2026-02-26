@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { apiGet, apiPost, apiDelete, apiPatch } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import PasskeyManager from './PasskeyManager';
 
 export default function ApiSettingsModal({ isOpen, onClose }) {
   const { user } = useAuth();
@@ -322,6 +323,10 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                   </div>
                 ))}
               </div>
+
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />
+
+              <PasskeyManager />
 
               {error && <div className="form-error">{error}</div>}
               {success && <div className="form-success">{success}</div>}
