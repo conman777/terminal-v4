@@ -20,7 +20,7 @@ const PREVIEW_LOG_STREAM_POLL_MS = (() => {
 })();
 const PREVIEW_PORT_PROBE_TIMEOUT_MS = (() => {
   const parsed = Number.parseInt(process.env.PREVIEW_PORT_PROBE_TIMEOUT_MS || '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1500;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3000;
 })();
 const PREVIEW_EVAL_ENABLED = process.env.PREVIEW_EVAL_ENABLED === 'true';
 const NON_PREVIEW_PROCESS_PREFIXES = [

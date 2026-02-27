@@ -1,12 +1,5 @@
 import { useMemo, useState } from 'react';
 
-function isFrontendPort(port, previewPort) {
-  if (!port?.listening) return false;
-  if (port.port === previewPort) return true;
-  if (port.frontendLikely === true || port.previewable === true) return true;
-  return port.probeStatus === 'html' || port.probeStatus === 'redirect';
-}
-
 function isGenericRuntimeProcess(processName) {
   if (!processName || typeof processName !== 'string') return true;
   const normalized = processName.trim().toLowerCase();
@@ -111,9 +104,8 @@ export function PreviewUrlBar({
   const [portSearch, setPortSearch] = useState('');
 
   const selectablePorts = useMemo(() => {
-    const frontendPorts = activePorts.filter((port) => isFrontendPort(port, previewPort));
     const bestByApp = new Map();
-    for (const portInfo of frontendPorts) {
+    for (const portInfo of activePorts) {
       const key = getAppKey(portInfo);
       const existing = bestByApp.get(key);
       if (!existing) {

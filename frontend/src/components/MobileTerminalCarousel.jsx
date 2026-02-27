@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
-import { useChatTurns } from '../hooks/useChatTurns';
+import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { MobileChatView } from './MobileChatView';
 
 export function MobileTerminalCarousel({
@@ -23,7 +23,6 @@ export function MobileTerminalCarousel({
   // Clamp index to valid range when sessions change
   useEffect(() => {
     if (sessions.length === 0) return;
-    // Handle negative index when first session is added after all were closed
     if (currentIndex < 0) {
       onIndexChange(0);
     } else if (currentIndex >= sessions.length) {
@@ -31,12 +30,12 @@ export function MobileTerminalCarousel({
     }
   }, [sessions.length, currentIndex, onIndexChange]);
 
-  // Refresh token to force terminal remount (used by auto-remount watchdog)
   const [refreshToken, setRefreshToken] = useState(0);
-
-  // Image upload trigger function from TerminalChat
   const [triggerImageUpload, setTriggerImageUpload] = useState(null);
   const [triggerHistoryPanel, setTriggerHistoryPanel] = useState(null);
+  const [triggerScrollToBottom, setTriggerScrollToBottom] = useState(null);
+  const [isTerminalScrolledUp, setIsTerminalScrolledUp] = useState(false);
+  const [isClaudeBusy, setIsClaudeBusy] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     try {
       const stored = localStorage.getItem('mobileTerminalViewMode');
@@ -44,23 +43,12 @@ export function MobileTerminalCarousel({
     } catch {
       return 'terminal';
     }
-  }); // 'terminal' | 'reader'
+  });
   const [isConnected, setIsConnected] = useState(false);
-
-  const { turns, streamingContent, handleUserSend, handleOutputChunk, clearTurns } = useChatTurns();
 
   // Auto-remount watchdog: if disconnected for 5 continuous minutes, force remount
   const disconnectStartRef = useRef(null);
   const autoRemountTimerRef = useRef(null);
-
-  const sendToTerminalRef = useRef(null);
-  const handleRegisterSendText = useCallback((fn) => {
-    sendToTerminalRef.current = fn;
-  }, []);
-
-  const handleChatSend = useCallback((text) => {
-    sendToTerminalRef.current?.(text + '\n');
-  }, []);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -73,6 +61,26 @@ export function MobileTerminalCarousel({
   const handleRegisterHistoryPanel = useCallback((trigger) => {
     setTriggerHistoryPanel(() => trigger);
   }, []);
+
+  const handleRegisterScrollToBottom = useCallback((trigger) => {
+    setTriggerScrollToBottom(() => trigger);
+  }, []);
+
+  const handleScrollDirection = useCallback((direction) => {
+    if (direction === 'up') setIsTerminalScrolledUp(true);
+    else if (direction === 'down') setIsTerminalScrolledUp(false);
+    onScrollDirection?.(direction);
+  }, [onScrollDirection]);
+
+  const handleScrollToBottom = useCallback(() => {
+    triggerScrollToBottom?.();
+    setIsTerminalScrolledUp(false);
+  }, [triggerScrollToBottom]);
+
+  const handleActivityChange = useCallback((isBusy) => {
+    setIsClaudeBusy(isBusy);
+    onSessionBusyChange?.(currentSession?.id, isBusy);
+  }, [onSessionBusyChange]);
 
   const handleConnectionChange = useCallback((connected) => {
     setIsConnected(connected);
@@ -91,7 +99,6 @@ export function MobileTerminalCarousel({
     }
   }, []);
 
-  // Cleanup watchdog timer on unmount
   useEffect(() => {
     return () => clearTimeout(autoRemountTimerRef.current);
   }, []);
@@ -99,18 +106,24 @@ export function MobileTerminalCarousel({
   const currentSession = sessions[currentIndex] || null;
   const currentAiType = currentSession ? sessionAiTypes?.[currentSession.id] : null;
 
+  const {
+    turns,
+    isLoading: isChatHistoryLoading,
+    handleTurn,
+    handleRegisterSendText,
+    handleChatSend,
+    handleInterrupt,
+  } = useMobileChatTurns({
+    sessionId: currentSession?.id ?? null,
+    chatMode,
+  });
+
   useEffect(() => {
     try {
       localStorage.setItem('mobileTerminalViewMode', viewMode);
     } catch {}
   }, [viewMode]);
 
-  // Clear turns when session changes
-  useEffect(() => {
-    clearTurns();
-  }, [currentSession?.id, clearTurns]);
-
-  // No sessions - show empty state
   if (sessions.length === 0) {
     return (
       <div className="mobile-terminal-carousel">
@@ -124,8 +137,19 @@ export function MobileTerminalCarousel({
 
   return (
     <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
-      {/* Terminal content - always mounted to keep WebSocket alive */}
-      <div className="carousel-content" style={chatMode ? { display: 'none' } : undefined}>
+      {/* Terminal content — always mounted to keep WebSocket alive.
+          In chat mode: opacity:0 hides WebGL canvas at compositor level. */}
+      <div
+        className="carousel-content"
+        style={chatMode ? {
+          position: 'absolute',
+          inset: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+          zIndex: 0,
+        } : undefined}
+        aria-hidden={chatMode ? 'true' : undefined}
+      >
         <TerminalChat
           key={`${currentSession.id}-${refreshToken}`}
           sessionId={currentSession.id}
@@ -136,35 +160,56 @@ export function MobileTerminalCarousel({
           webglEnabled={webglEnabled}
           usesTmux={currentSession?.usesTmux}
           viewMode={viewMode}
-          onScrollDirection={onScrollDirection}
+          onScrollDirection={handleScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
+          onRegisterScrollToBottom={handleRegisterScrollToBottom}
           onConnectionChange={handleConnectionChange}
-          onActivityChange={(isBusy) => onSessionBusyChange?.(currentSession.id, isBusy)}
-          onSendMessage={handleUserSend}
-          onOutputChunk={handleOutputChunk}
+          onActivityChange={handleActivityChange}
           onRegisterSendText={handleRegisterSendText}
+          onTurn={handleTurn}
         />
       </div>
 
+      {/* Chat view — in normal flex flow so iOS keyboard handling works correctly. */}
       {chatMode && (
         <MobileChatView
           turns={turns}
-          streamingContent={streamingContent}
+          isStreaming={isClaudeBusy}
+          isLoadingHistory={isChatHistoryLoading}
           onSend={handleChatSend}
+          onInterrupt={handleInterrupt}
+          onImageUpload={triggerImageUpload ?? undefined}
+          sessionId={currentSession?.id ?? null}
         />
       )}
 
-      {/* Status bar with integrated mic and image buttons */}
-      <MobileStatusBar
-        sessionId={currentSession.id}
-        onImageUpload={triggerImageUpload}
-        onOpenHistory={triggerHistoryPanel}
-        viewMode={viewMode}
-        onToggleViewMode={handleToggleViewMode}
-        isConnected={isConnected}
-      />
+      {/* Status bar — terminal mode only */}
+      {!chatMode && (
+        <MobileStatusBar
+          sessionId={currentSession.id}
+          onImageUpload={triggerImageUpload}
+          onOpenHistory={triggerHistoryPanel}
+          viewMode={viewMode}
+          onToggleViewMode={handleToggleViewMode}
+          isConnected={isConnected}
+        />
+      )}
+
+      {/* Scroll-to-bottom button — terminal mode only */}
+      {!chatMode && isTerminalScrolledUp && (
+        <button
+          type="button"
+          className="mobile-scroll-bottom-btn"
+          onClick={handleScrollToBottom}
+          aria-label="Scroll to bottom"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }

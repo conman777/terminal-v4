@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { TurnDetector, type ChatTurn } from './turn-detector';
 import { EventEmitter } from 'node:events';
 import { spawn as ptySpawn } from '@homebridge/node-pty-prebuilt-multiarch';
 import path from 'node:path';
@@ -21,7 +22,8 @@ import {
   getSessionMetadata,
   listSessionMetadata,
   deleteSessionMetadata,
-  type SessionMetadataIndex
+  type SessionMetadataIndex,
+  type ThreadMetadata
 } from './session-store';
 import { resolveSessionPaths } from './session-resolver';
 import {
@@ -679,6 +681,22 @@ export class TerminalManager {
     return this.#sessions.has(id);
   }
 
+  syncThreadMetadata(userId: string, id: string, thread: ThreadMetadata): void {
+    const active = this.#sessions.get(id);
+    if (active && active.userId === userId) {
+      active.thread = { ...thread };
+    }
+
+    const userPersistedSessions = this.#persistedSessions.get(userId);
+    const persisted = userPersistedSessions?.get(id);
+    if (persisted && userPersistedSessions) {
+      userPersistedSessions.set(id, {
+        ...persisted,
+        thread: { ...thread }
+      });
+    }
+  }
+
   getSession(
     userId: string,
     id: string,
@@ -891,6 +909,7 @@ export class TerminalManager {
   #handleData(session: ManagedTerminal, chunk: string) {
     this.#recordSessionActivity(session);
     this.#applyOsc7Cwd(session, chunk);
+    session.turnDetector?.onPtyOutput(chunk, Date.now());
     const event: TerminalStreamEvent = {
       text: chunk,
       ts: Date.now(),
@@ -933,8 +952,9 @@ export class TerminalManager {
         clearTimeout(session.idleTimer);
         session.idleTimer = undefined;
       }
-      // Destroy output batcher
+      // Destroy output batcher and turn detector
       session.outputBatcher?.destroy();
+      session.turnDetector?.dispose();
 
       void this.#saveSessionToDisk(session).catch((error) => {
         console.error(`Failed to persist terminal session ${session.id}:`, error);
@@ -1031,6 +1051,16 @@ export class TerminalManager {
       this.#handleData(session, batchedData);
     });
 
+    // Create turn detector — emits structured turn events to WS subscribers.
+    session.turnDetector = new TurnDetector((turn: ChatTurn) => {
+      const metaEvent = {
+        text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
+        ts: turn.ts,
+        seq: undefined
+      };
+      session.subscribers.forEach((sub) => sub(metaEvent));
+    });
+
     // PTY data handler appends to batcher instead of calling #handleData directly
     const batchedDataHandler = (data: string) => {
       session.outputBatcher?.append(data);
@@ -1087,6 +1117,7 @@ export class TerminalManager {
     session.outputBatcher?.flush();
 
     this.#processInputForCwd(session, input);
+    session.turnDetector?.onUserInput(input);
     session.process.write(normaliseNewlines(input));
     this.#recordSessionActivity(session);
   }
@@ -1320,8 +1351,9 @@ export class TerminalManager {
         clearTimeout(session.idleTimer);
         session.idleTimer = undefined;
       }
-      // Destroy output batcher
+      // Destroy output batcher and turn detector
       session.outputBatcher?.destroy();
+      session.turnDetector?.dispose();
       // Notify subscribers that session is ending before cleanup
       session.subscribers.forEach((subscriber) => subscriber(null));
       session.subscribers.clear();
@@ -1400,8 +1432,9 @@ export class TerminalManager {
 
     for (const session of sessions) {
       try {
-        // Destroy output batcher
+        // Destroy output batcher and turn detector
         session.outputBatcher?.destroy();
+        session.turnDetector?.dispose();
         if (session.idleTimer) {
           clearTimeout(session.idleTimer);
           session.idleTimer = undefined;
@@ -1548,6 +1581,16 @@ export class TerminalManager {
     // Create output batcher for this session
     session.outputBatcher = new OutputBatcher((batchedData: string) => {
       this.#handleData(session, batchedData);
+    });
+
+    // Create turn detector — emits structured turn events to WS subscribers.
+    session.turnDetector = new TurnDetector((turn: ChatTurn) => {
+      const metaEvent = {
+        text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
+        ts: turn.ts,
+        seq: undefined
+      };
+      session.subscribers.forEach((sub) => sub(metaEvent));
     });
 
     // PTY data handler appends to batcher instead of calling #handleData directly

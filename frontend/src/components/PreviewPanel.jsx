@@ -1055,36 +1055,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setEditDescription('');
     }
 
-    // Lazy injection: reload iframe with/without __inspect parameter
-    // This ensures the inspector script is only loaded when needed
-    const inspectTarget = iframeSrc || baseIframeSrc;
-    if (inspectTarget) {
-      setIsLoading(true);
-      setError(null);
-      const cacheBuster = `_cb=${Date.now()}`;
-      try {
-        const url = new URL(inspectTarget, window.location.origin);
-        if (newMode) {
-          url.searchParams.set('__inspect', '1');
-        } else {
-          url.searchParams.delete('__inspect');
-        }
-        // Always add cache buster for fresh load
-        url.searchParams.set('_cb', Date.now().toString());
-        setIframeSrc(url.toString());
-      } catch {
-        // Fallback if URL parsing fails
-        const separator = inspectTarget.includes('?') ? '&' : '?';
-        const inspectParam = newMode ? '__inspect=1&' : '';
-        setIframeSrc(`${inspectTarget}${separator}${inspectParam}${cacheBuster}`);
-      }
-    }
-
-    // Send message to iframe (will be received after reload if inspector is injected)
+    // Toggle inspector at runtime without reloading the preview app.
     if (iframeRef.current?.contentWindow) {
       iframeRef.current.contentWindow.postMessage({ type: 'preview-inspect-mode', enabled: newMode }, '*');
     }
-  }, [inspectMode, baseIframeSrc, iframeSrc]);
+  }, [inspectMode]);
 
   const handleClearSelection = useCallback(() => {
     setSelectedElement(null);

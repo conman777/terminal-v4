@@ -44,5 +44,5 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   await registerFilesystemRoutes(app);
   await registerProjectsRoutes(app);
   await registerPreviewApiRoutes(app);
-  await registerThreadRoutes(app);
+  await registerThreadRoutes(app, deps);
 }

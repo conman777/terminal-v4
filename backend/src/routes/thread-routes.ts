@@ -10,7 +10,7 @@ import {
   createDefaultThreadMetadata,
   type ThreadGitStats
 } from '../terminal/session-store';
-import type { TerminalIdParams } from './types';
+import type { CoreRouteDependencies, TerminalIdParams } from './types';
 
 const execFileAsync = promisify(execFile);
 
@@ -83,35 +83,88 @@ function stripAnsi(raw: string): string {
   return raw
     .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')   // CSI sequences (colors, cursor moves)
     .replace(/\x1b\][^\x07]*\x07/g, '')        // OSC sequences (window title etc.)
+    .replace(/\x1b\][^\x1b]*(?:\x1b\\)/g, '')  // OSC terminated by ST
     .replace(/\x1b[^[\]]/g, '')                // other two-char escapes
     .replace(/[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]/g, ''); // non-printable control chars
 }
 
+function normalizeTopicLine(raw: string): string {
+  return raw
+    .replace(/\x1b\(B/g, '')
+    .replace(/[·•]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isLikelyShellCommand(line: string): boolean {
+  return /^(cd|ls|pwd|git|npm|pnpm|yarn|bun|node|python|pip|cargo|go|make|bash|sh|zsh|cat|rg|grep|sed|awk|jq|chmod|chown|mv|cp|rm|mkdir|touch)\b/i.test(line);
+}
+
 /**
- * Extract the first sentence-like line from plain terminal text.
- * Looks for lines that resemble user prompts typed to Claude Code:
- * mostly alphabetic, not shell prompts or file paths.
+ * Extract a short topic-like line from terminal text.
+ * Prefer recent user intent / command lines and avoid wrapped fragments/tool chrome.
  */
 function extractTopicFromText(plainText: string): string | null {
-  const lines = plainText.split(/[\r\n]+/);
-  for (const raw of lines) {
-    const line = raw.trim();
+  const rawLines = plainText.split(/[\r\n]+/);
+  const lines = rawLines.map(normalizeTopicLine).filter(Boolean);
+
+  // Pass 1: prefer the most recent explicit user prompt line rendered by Claude/Codex CLI.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const raw = lines[i];
+    const promptMatch = raw.match(/^[›>]\s*(.+)$/);
+    if (!promptMatch) continue;
+    const line = promptMatch[1].trim();
     if (line.length < 8 || line.length > 150) continue;
+    if (!/\s/.test(line)) continue;
+    if (isLikelyShellCommand(line)) continue;
+    if (/^[./~]/.test(line) || /^https?:\/\//.test(line)) continue;
+    return line.slice(0, 60);
+  }
+
+  const candidates: { line: string; score: number }[] = [];
+
+  for (const raw of lines) {
+    let line = raw;
+    if (line.length < 8 || line.length > 150) continue;
+
+    // Secondary pass can still use prompt lines, but strip marker.
+    if (/^[›>]\s*/.test(line)) {
+      line = line.replace(/^[›>]\s*/, '').trim();
+    }
+
     // Must be mostly words (letters + spaces > 55%)
     const wordChars = (line.match(/[a-zA-Z ]/g) ?? []).length;
     if (wordChars / line.length < 0.55) continue;
-    // Skip shell prompt lines
-    if (/^[\$%>#!]/.test(line)) continue;
+    // Skip shell prompt / prompt+cwd lines
+    if (/^[\$%#!]/.test(line)) continue;
+    if (/^[^@\s]+@[^:\s]+:/.test(line)) continue;
     // Skip file/URL paths
     if (/^[./~]/.test(line) || /^https?:\/\//.test(line)) continue;
     // Skip lines that are just one word (likely a command name)
     if (!/\s/.test(line)) continue;
-    return line.slice(0, 60);
+    if (isLikelyShellCommand(line)) continue;
+    // Skip obvious tool/output chrome and wrapped fragments
+    if (/^(Ran|Done!?|Next:|Building |Restarting |Worked for )/i.test(line)) continue;
+    if (/^\+?\d+\s+more\s+(lines|tool uses)\b/i.test(line)) continue;
+    if (/^\(?ctrl\+|^esc to /i.test(line)) continue;
+    if (/^[a-z]/.test(line) && line.length < 28) continue; // likely wrapped continuation fragment
+    if (/^[0-9]+\.\s/.test(line)) continue; // numbered list items from assistant output
+
+    let score = 0;
+    if (/[a-z]/.test(line[0] || '')) score += 2;
+    if (/\b(fix|debug|investigate|add|update|rebuild|test|review|show)\b/i.test(line)) score += 3;
+    if (line.length >= 20 && line.length <= 80) score += 2;
+    if (!/[.:]\s*$/.test(line)) score += 1;
+
+    candidates.push({ line, score });
   }
-  return null;
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates[0].line.slice(0, 60);
 }
 
-export async function registerThreadRoutes(app: FastifyInstance): Promise<void> {
+export async function registerThreadRoutes(app: FastifyInstance, deps: CoreRouteDependencies): Promise<void> {
   /**
    * PATCH /api/terminal/:id/thread - Update thread metadata
    */
@@ -135,6 +188,9 @@ export async function registerThreadRoutes(app: FastifyInstance): Promise<void> 
     if (!session) {
       reply.code(404).send({ error: 'Session not found' });
       return;
+    }
+    if (session.thread) {
+      deps.terminalManager.syncThreadMetadata(userId, request.params.id, session.thread);
     }
 
     reply.send({ thread: session.thread });
@@ -189,6 +245,7 @@ export async function registerThreadRoutes(app: FastifyInstance): Promise<void> 
       lastActivityAt: new Date().toISOString()
     };
     await saveSession(userId, session);
+    deps.terminalManager.syncThreadMetadata(userId, request.params.id, session.thread);
 
     reply.send({
       gitStats,
@@ -206,13 +263,18 @@ export async function registerThreadRoutes(app: FastifyInstance): Promise<void> 
       return;
     }
 
-    const session = await loadSession(userId, request.params.id);
-    if (!session) {
+    const liveSnapshot = deps.terminalManager.getSession(userId, request.params.id, {
+      includeHistory: true
+    });
+    const persistedSession = liveSnapshot ? null : await loadSession(userId, request.params.id);
+    const history = liveSnapshot?.history || persistedSession?.history || [];
+
+    if (!liveSnapshot && !persistedSession) {
       reply.code(404).send({ error: 'Session not found' });
       return;
     }
 
-    const rawHistory = session.history.map((e) => e.text || '').join('');
+    const rawHistory = history.map((e) => e.text || '').join('');
     const plainText = stripAnsi(rawHistory);
 
     const topic = extractTopicFromText(plainText);
@@ -225,6 +287,9 @@ export async function registerThreadRoutes(app: FastifyInstance): Promise<void> 
       topic,
       topicAutoGenerated: true
     });
+    if (updatedSession?.thread) {
+      deps.terminalManager.syncThreadMetadata(userId, request.params.id, updatedSession.thread);
+    }
 
     reply.send({ topic, thread: updatedSession?.thread });
   });
@@ -255,6 +320,7 @@ export async function registerThreadRoutes(app: FastifyInstance): Promise<void> 
       lastActivityAt: new Date().toISOString()
     };
     await saveSession(userId, session);
+    deps.terminalManager.syncThreadMetadata(userId, request.params.id, session.thread);
 
     reply.send({ projectPath });
   });

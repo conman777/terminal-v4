@@ -1,4 +1,7 @@
+import { useState, useCallback } from 'react';
 import { TerminalChat } from './TerminalChat';
+import { MobileChatView } from './MobileChatView';
+import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 
 export default function ClaudeCodePanel({
   sessionId,
@@ -9,8 +12,24 @@ export default function ClaudeCodePanel({
   webglEnabled,
   onScrollDirection,
   onRegisterFocusTerminal,
-  usesTmux
+  usesTmux,
+  chatMode = false
 }) {
+  const [isClaudeBusy, setIsClaudeBusy] = useState(false);
+
+  const {
+    turns,
+    isLoading: isChatHistoryLoading,
+    handleTurn,
+    handleRegisterSendText,
+    handleChatSend,
+    handleInterrupt,
+  } = useMobileChatTurns({ sessionId, chatMode });
+
+  const handleActivityChange = useCallback((isBusy) => {
+    setIsClaudeBusy(isBusy);
+  }, []);
+
   if (!sessionId) {
     return (
       <div className="claude-code-panel">
@@ -26,17 +45,44 @@ export default function ClaudeCodePanel({
 
   return (
     <div className="claude-code-panel">
-      <TerminalChat
-        sessionId={sessionId}
-        keybarOpen={keybarOpen}
-        viewportHeight={viewportHeight}
-        onUrlDetected={onUrlDetected}
-        fontSize={fontSize}
-        webglEnabled={webglEnabled}
-        usesTmux={usesTmux}
-        onScrollDirection={onScrollDirection}
-        onRegisterFocusTerminal={onRegisterFocusTerminal}
-      />
+      {/* Terminal - always mounted. opacity:0 hides WebGL canvas at compositor level. */}
+      <div
+        style={chatMode ? {
+          position: 'absolute',
+          inset: 0,
+          opacity: 0,
+          pointerEvents: 'none',
+          zIndex: 0,
+        } : { height: '100%' }}
+        aria-hidden={chatMode ? 'true' : undefined}
+      >
+        <TerminalChat
+          sessionId={sessionId}
+          keybarOpen={keybarOpen}
+          viewportHeight={viewportHeight}
+          onUrlDetected={onUrlDetected}
+          fontSize={fontSize}
+          webglEnabled={webglEnabled}
+          usesTmux={usesTmux}
+          onScrollDirection={onScrollDirection}
+          onRegisterFocusTerminal={onRegisterFocusTerminal}
+          onActivityChange={handleActivityChange}
+          onRegisterSendText={handleRegisterSendText}
+          onTurn={handleTurn}
+        />
+      </div>
+
+      {/* Chat view - in normal flow so iOS keyboard handling works correctly */}
+      {chatMode && (
+        <MobileChatView
+          turns={turns}
+          isStreaming={isClaudeBusy}
+          isLoadingHistory={isChatHistoryLoading}
+          onSend={handleChatSend}
+          onInterrupt={handleInterrupt}
+          sessionId={sessionId}
+        />
+      )}
     </div>
   );
 }

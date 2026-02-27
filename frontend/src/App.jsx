@@ -396,7 +396,11 @@ function AppContent() {
       const session = sessionsRef.current?.find((s) => s.id === sessionId);
       if (session && !session.thread?.topic) {
         topicGeneratedRef.current.add(sessionId);
-        generateSessionTopic(sessionId);
+        void generateSessionTopic(sessionId).then((ok) => {
+          if (!ok) {
+            topicGeneratedRef.current.delete(sessionId);
+          }
+        });
       }
     }
   }, [activeSessionId, markSessionActivity, setSessionBusy, generateSessionTopic]);
@@ -434,7 +438,11 @@ function AppContent() {
     sessions.forEach((session) => {
       if (!session.thread?.topic && !topicGeneratedRef.current.has(session.id)) {
         topicGeneratedRef.current.add(session.id);
-        generateSessionTopic(session.id);
+        void generateSessionTopic(session.id).then((ok) => {
+          if (!ok) {
+            topicGeneratedRef.current.delete(session.id);
+          }
+        });
       }
     });
   }, [sessions, generateSessionTopic]);
@@ -1134,7 +1142,11 @@ function AppContent() {
               previewUrl,
               onNavigateToPath: handleNavigateToPath,
               chatMode,
-              onToggleChatMode: () => setChatMode(v => !v),
+              onToggleChatMode: () => setChatMode(v => {
+                const next = !v;
+                if (next) setKeybarOpen(false);
+                return next;
+              }),
             }}
           />
           <MobileKeybar
@@ -1358,6 +1370,7 @@ function AppContent() {
                   onScrollDirection={handleScrollDirectionSafe}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   usesTmux={activeClaudeSession?.usesTmux}
+                  chatMode={chatMode}
                 />
               </div>
             )}

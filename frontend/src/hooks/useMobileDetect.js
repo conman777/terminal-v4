@@ -30,12 +30,21 @@ export function useMobileDetect() {
   const [isMobile, setIsMobile] = useState(() => getIsMobile());
 
   useEffect(() => {
+    let debounceTimer = null;
+
+    // Debounce prevents transient pointer-type changes (e.g. touchscreen laptop
+    // briefly reporting coarse pointer) and visualViewport resize events (iOS
+    // keyboard open/close) from flipping the layout and remounting all terminals.
     const checkMobile = () => {
-      setIsMobile(getIsMobile());
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        setIsMobile(getIsMobile());
+      }, 400);
     };
 
-    // Re-check on mount in case of SSR hydration mismatch
-    checkMobile();
+    // Re-check immediately on mount (no debounce needed — no terminals mounted yet).
+    setIsMobile(getIsMobile());
+
     window.addEventListener('resize', checkMobile);
     window.addEventListener('orientationchange', checkMobile);
 
@@ -50,6 +59,7 @@ export function useMobileDetect() {
     hoverQuery?.addEventListener?.('change', checkMobile);
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       window.removeEventListener('resize', checkMobile);
       window.removeEventListener('orientationchange', checkMobile);
       if (viewport) {

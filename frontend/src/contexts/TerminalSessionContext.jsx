@@ -393,7 +393,7 @@ export function TerminalSessionProvider({ children }) {
       const response = await apiFetch(`/api/terminal/${sessionId}/generate-topic`, {
         method: 'POST'
       });
-      if (!response.ok) return;
+      if (!response.ok) return false;
       const data = await response.json();
       if (data?.topic) {
         setSessions((current) =>
@@ -403,9 +403,12 @@ export function TerminalSessionProvider({ children }) {
               : s
           )
         );
+        return true;
       }
+      return false;
     } catch {
       // Topic generation is non-critical
+      return false;
     }
   }, [setSessions]);
 

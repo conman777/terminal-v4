@@ -1,5 +1,6 @@
 import type { TerminalProcess, TerminalStreamEvent } from './terminal-types';
 import type { PersistedSession, ThreadMetadata } from './session-store';
+import type { TurnDetector } from './turn-detector';
 
 // Terminal dimension constants
 export const DEFAULT_COLS = 120;
@@ -52,6 +53,7 @@ export interface ManagedTerminal {
   nextEventSeq: number;
   usesTmux: boolean;
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
+  turnDetector?: TurnDetector; // Detects conversation turns from the PTY stream
   lastActivityAt: number;
   idleTimer?: NodeJS.Timeout;
   thread?: ThreadMetadata;   // Thread metadata for grouping/organizing sessions

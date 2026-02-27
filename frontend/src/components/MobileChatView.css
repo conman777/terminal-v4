@@ -1,8 +1,11 @@
 /* ── Container ── */
 .mobile-chat-view {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
   background: var(--chat-bg, #f0f0f0);
 }
@@ -53,7 +56,7 @@
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 12px 8px;
+  padding: 10px 8px 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -90,6 +93,7 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
+  width: 100%;
 }
 
 .chat-message-row.user {
@@ -114,7 +118,7 @@
 
 /* ── Bubble ── */
 .chat-bubble {
-  max-width: 78%;
+  max-width: calc(100% - 40px);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -138,7 +142,8 @@
   font-size: 15px;
   line-height: 1.5;
   white-space: pre-wrap;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ── Streaming cursor ── */
@@ -196,13 +201,16 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 10px;
   background: var(--chat-input-bar-bg);
   border-top: 1px solid var(--chat-input-border);
+  flex-shrink: 0;
 }
 
 .chat-input {
   flex: 1;
+  width: 100%;
+  min-width: 0;
   background: var(--chat-input-bg);
   color: var(--chat-input-color);
   border: 1px solid var(--chat-input-border);
@@ -245,4 +253,77 @@
 
 .chat-send-btn:not(:disabled):active {
   transform: scale(0.92);
+}
+
+/* ── Typing indicator ── */
+.chat-typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  min-height: 20px;
+}
+
+.typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chat-timestamp-color);
+  animation: typing-bounce 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+/* ── Small icon buttons (image upload, interrupt) ── */
+.chat-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--chat-input-border);
+  background: transparent;
+  color: var(--chat-timestamp-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.chat-icon-btn:active {
+  color: var(--chat-send-btn-color);
+  border-color: var(--chat-send-btn-color);
+  background: rgba(108, 71, 255, 0.1);
+}
+
+.chat-interrupt-btn:active {
+  color: #ef4444;
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+/* ── Scroll-to-bottom button in chat ── */
+.chat-scroll-bottom-btn {
+  /* Override: chat view positions relative to .mobile-chat-view flex container */
+  position: absolute;
+  bottom: 74px; /* above the input bar */
+}
+
+/* ── Inline mic in input bar ── */
+.chat-input-bar .terminal-mic-inline-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-input-bar .terminal-mic-inline-container.recording-active {
+  flex: 1;
 }

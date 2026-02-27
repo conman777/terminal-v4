@@ -166,6 +166,26 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     reply.send({ ...snapshot, nextCursor, nextSeq });
   });
 
+  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/turns', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+    const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
+      historyChars: 5_000_000,
+      historyEvents: 20_000,
+      includeHistory: true
+    });
+    if (!snapshot) {
+      reply.code(404).send({ error: 'Terminal session not found' });
+      return;
+    }
+    const { buildTurnsFromHistory } = await import('../terminal/turn-detector.js');
+    const turns = buildTurnsFromHistory(snapshot.history || []);
+    reply.send({ turns });
+  });
+
   app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/project-info', async (request, reply) => {
     const userId = request.userId;
     if (!userId) {

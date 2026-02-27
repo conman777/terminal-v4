@@ -2375,8 +2375,6 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           // If URL parsing fails, generate fresh cache buster
           cacheBuster = Date.now().toString();
         }
-        // Use inspectModeRequested (extracted earlier for redirect handling)
-        const inspectModeEnabled = inspectModeRequested;
         const contentType = response.headers.get('content-type') || '';
         const isHtml = contentType.includes('text/html');
         const isScriptPath = requestPath.startsWith('/@');
@@ -2780,8 +2778,8 @@ html[data-preview-force-anim="1"] :is(
   height: auto !important;
 }
 </style>`;
-          // Only inject inspector script when explicitly requested via __inspect=1 parameter (lazy injection)
-          const inspectorScriptTag = inspectModeEnabled ? '<script>' + INSPECTOR_SCRIPT + '</script>' : '';
+          // Always inject inspector runtime so inspect mode can toggle without reloading the preview app.
+          const inspectorScriptTag = '<script>' + INSPECTOR_SCRIPT + '</script>';
           const injectedScripts =
             (useLegacyPreviewFixes ? backdropFixCSS + animationFixCSS : '') +
             PREVIEW_DEBUG_SCRIPT +
