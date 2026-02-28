@@ -13,7 +13,6 @@ const PUBLIC_ROUTES = [
 
 // Route patterns that don't require authentication (for dynamic routes)
 const PUBLIC_ROUTE_PATTERNS = [
-  /^\/api\/process-logs(\/\d+)?$/, // Process logs by PID or list all
   /^\/api\/browser\//            // Browser automation API
 ];
 

@@ -3,7 +3,7 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
 import { AudioWaveform } from './AudioWaveform';
 
-export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, provider }) {
+export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, onStateChange, provider }) {
   const sendToTerminal = useCallback(async (text) => {
     if (!sessionId || !text) return;
 
@@ -22,6 +22,17 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
   useEffect(() => {
     onRecordingChange?.(isRecording && !!audioStream);
   }, [isRecording, audioStream, onRecordingChange]);
+
+  useEffect(() => {
+    onStateChange?.({
+      isRecording,
+      isChecking,
+      isRequesting,
+      isTranscribing,
+      error: error || null,
+      hasAudioStream: Boolean(audioStream)
+    });
+  }, [isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, onStateChange]);
 
   // Icon size based on inline mode
   const iconSize = inline ? 16 : 20;

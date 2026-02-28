@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
 
 // Stats history storage
 const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
@@ -320,9 +321,49 @@ function getTopProcesses(): ProcessInfo[] {
   }
 }
 
-// Absolute path to rebuild script
-const REBUILD_SCRIPT = '/home/conor/terminal-v4/rebuild.sh';
-const PROJECT_ROOT = '/home/conor/terminal-v4';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..');
+const PROJECT_ROOT = path.resolve(process.env.REBUILD_PROJECT_ROOT || DEFAULT_PROJECT_ROOT);
+const REBUILD_SCRIPT = path.resolve(process.env.REBUILD_SCRIPT_PATH || path.join(PROJECT_ROOT, 'rebuild.sh'));
+const REBUILD_SCRIPT_WINDOWS_PS1 = path.resolve(
+  process.env.REBUILD_SCRIPT_WINDOWS_PS1 || path.join(PROJECT_ROOT, 'rebuild.ps1')
+);
+const REBUILD_SCRIPT_WINDOWS_CMD = path.resolve(
+  process.env.REBUILD_SCRIPT_WINDOWS_CMD || path.join(PROJECT_ROOT, 'rebuild.cmd')
+);
+
+function getRebuildCommand(): { command: string; args: string[] } | null {
+  if (process.platform === 'win32') {
+    if (fs.existsSync(REBUILD_SCRIPT_WINDOWS_PS1)) {
+      return {
+        command: 'powershell.exe',
+        args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', REBUILD_SCRIPT_WINDOWS_PS1]
+      };
+    }
+    if (fs.existsSync(REBUILD_SCRIPT_WINDOWS_CMD)) {
+      return {
+        command: 'cmd.exe',
+        args: ['/c', REBUILD_SCRIPT_WINDOWS_CMD]
+      };
+    }
+    if (fs.existsSync(REBUILD_SCRIPT)) {
+      return {
+        command: 'bash',
+        args: [REBUILD_SCRIPT]
+      };
+    }
+    return null;
+  }
+
+  if (!fs.existsSync(REBUILD_SCRIPT)) {
+    return null;
+  }
+
+  return {
+    command: 'bash',
+    args: [REBUILD_SCRIPT]
+  };
+}
 
 export async function registerSystemRoutes(app: FastifyInstance): Promise<void> {
   // Start collecting stats history
@@ -384,43 +425,58 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       return;
     }
 
+    const rebuildCommand = getRebuildCommand();
+    if (!rebuildCommand) {
+      reply.code(500).send({
+        success: false,
+        error: 'Rebuild script not found. Set REBUILD_SCRIPT_PATH or REBUILD_PROJECT_ROOT.'
+      });
+      return;
+    }
+
     return new Promise((resolve) => {
-      const child = spawn('bash', [REBUILD_SCRIPT], {
+      const child = spawn(rebuildCommand.command, rebuildCommand.args, {
         cwd: PROJECT_ROOT,
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      const settle = (payload: Record<string, unknown>, statusCode = 200) => {
+        if (settled) return;
+        settled = true;
+        if (statusCode !== 200) {
+          reply.code(statusCode);
+        }
+        resolve(payload);
+      };
+      const timeoutId = setTimeout(() => {
+        child.kill();
+        settle({ success: false, error: 'Rebuild timed out' }, 500);
+      }, 5 * 60 * 1000);
 
-      child.stdout.on('data', (data) => {
+      child.stdout?.on('data', (data) => {
         stdout += data.toString();
       });
 
-      child.stderr.on('data', (data) => {
+      child.stderr?.on('data', (data) => {
         stderr += data.toString();
       });
 
       child.on('close', (code) => {
+        clearTimeout(timeoutId);
         if (code === 0) {
-          resolve({ success: true, message: 'Rebuild completed', output: stdout });
+          settle({ success: true, message: 'Rebuild completed', output: stdout });
         } else {
-          reply.code(500);
-          resolve({ success: false, error: 'Rebuild failed', output: stderr || stdout });
+          settle({ success: false, error: 'Rebuild failed', output: stderr || stdout }, 500);
         }
       });
 
       child.on('error', (err) => {
-        reply.code(500);
-        resolve({ success: false, error: err.message });
+        clearTimeout(timeoutId);
+        settle({ success: false, error: err.message }, 500);
       });
-
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        child.kill();
-        reply.code(500);
-        resolve({ success: false, error: 'Rebuild timed out' });
-      }, 5 * 60 * 1000);
     });
   });
 

@@ -73,7 +73,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
   // Logout (requires auth - handled by auth hook)
   app.post('/api/auth/logout', async (request, reply) => {
-    const userId = (request as any).userId;
+    const userId = request.userId;
     if (!userId) {
       reply.status(401).send({ error: 'Unauthorized' });
       return;
@@ -84,8 +84,8 @@ export function registerAuthRoutes(app: FastifyInstance): void {
 
   // Get current user (requires auth)
   app.get('/api/auth/me', async (request, reply) => {
-    const userId = (request as any).userId;
-    const username = (request as any).username;
+    const userId = request.userId;
+    const username = request.username;
     if (!userId) {
       reply.status(401).send({ error: 'Unauthorized' });
       return;

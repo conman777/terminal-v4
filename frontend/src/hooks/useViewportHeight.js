@@ -11,8 +11,6 @@ export function useViewportHeight() {
     return Math.round(viewport ? viewport.height : window.innerHeight);
   });
 
-  const lastHeightRef = useRef(height);
-  // Timer refs to prevent memory leaks in event handler closures
   const pollIntervalIdRef = useRef(null);
   const slowdownTimeoutIdRef = useRef(null);
 
@@ -21,15 +19,23 @@ export function useViewportHeight() {
       return;
     }
 
+    const clearPollingTimers = () => {
+      if (pollIntervalIdRef.current) {
+        clearInterval(pollIntervalIdRef.current);
+        pollIntervalIdRef.current = null;
+      }
+      if (slowdownTimeoutIdRef.current) {
+        clearTimeout(slowdownTimeoutIdRef.current);
+        slowdownTimeoutIdRef.current = null;
+      }
+    };
+
     const updateHeight = () => {
       const viewport = window.visualViewport;
       const nextHeight = Math.round(viewport ? viewport.height : window.innerHeight);
 
-      // CRITICAL: Use callback form for atomic check-and-set to prevent race conditions
-      // during rapid height changes (e.g., iOS keyboard animation)
       setHeight((prevHeight) => {
         if (nextHeight !== prevHeight) {
-          lastHeightRef.current = nextHeight;
           return nextHeight;
         }
         return prevHeight;
@@ -48,70 +54,54 @@ export function useViewportHeight() {
     }
 
     const isTouchLike = isTouchLikeDevice();
+    const hasVisualViewport = Boolean(viewport);
 
-    // Dynamic polling for mobile - faster during keyboard animations
-    // iOS keyboard typically takes ~350ms to animate, poll fast during this time
-    const FAST_POLL_INTERVAL = 100;   // Poll every 100ms during keyboard animation
-    const SLOW_POLL_INTERVAL = 2000;  // Poll every 2000ms otherwise
-    const KEYBOARD_ANIMATION_DURATION = 400;  // Wait 400ms before slowing down
+    // Short burst polling keeps keyboard transitions smooth on mobile while
+    // avoiding continuous background timers on devices with visualViewport support.
+    const FAST_POLL_INTERVAL = 100;
+    const FALLBACK_POLL_INTERVAL = 2000;
+    const KEYBOARD_ANIMATION_DURATION = 450;
 
     const startFastPolling = () => {
       if (!isTouchLike) return;
-      // Immediately check height on focus change
+
       updateHeight();
+      clearPollingTimers();
 
-      // Clear any existing timers via refs
-      if (slowdownTimeoutIdRef.current) {
-        clearTimeout(slowdownTimeoutIdRef.current);
-        slowdownTimeoutIdRef.current = null;
-      }
-      if (pollIntervalIdRef.current) {
-        clearInterval(pollIntervalIdRef.current);
-        pollIntervalIdRef.current = null;
-      }
-
-      // Start fast polling
       pollIntervalIdRef.current = setInterval(updateHeight, FAST_POLL_INTERVAL);
 
-      // Slow down after keyboard animation completes
       slowdownTimeoutIdRef.current = setTimeout(() => {
         if (pollIntervalIdRef.current) {
           clearInterval(pollIntervalIdRef.current);
           pollIntervalIdRef.current = null;
         }
-        pollIntervalIdRef.current = setInterval(updateHeight, SLOW_POLL_INTERVAL);
+        if (!hasVisualViewport) {
+          pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+        }
       }, KEYBOARD_ANIMATION_DURATION);
     };
 
-    // Start with slow polling on mobile
     if (isTouchLike) {
-      pollIntervalIdRef.current = setInterval(updateHeight, SLOW_POLL_INTERVAL);
-      // Switch to fast polling on focus changes (keyboard appearing/disappearing)
+      if (!hasVisualViewport) {
+        pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+      }
       window.addEventListener('focusin', startFastPolling);
       window.addEventListener('focusout', startFastPolling);
+      window.addEventListener('orientationchange', startFastPolling);
     }
 
     return () => {
-      // Clean up event listeners
       window.removeEventListener('resize', updateHeight);
       if (isTouchLike) {
         window.removeEventListener('focusin', startFastPolling);
         window.removeEventListener('focusout', startFastPolling);
+        window.removeEventListener('orientationchange', startFastPolling);
       }
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight);
         viewport.removeEventListener('scroll', updateHeight);
       }
-
-      // CRITICAL: Clean up timers using refs to prevent memory leaks
-      if (pollIntervalIdRef.current) {
-        clearInterval(pollIntervalIdRef.current);
-        pollIntervalIdRef.current = null;
-      }
-      if (slowdownTimeoutIdRef.current) {
-        clearTimeout(slowdownTimeoutIdRef.current);
-        slowdownTimeoutIdRef.current = null;
-      }
+      clearPollingTimers();
     };
   }, []);
 

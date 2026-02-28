@@ -222,5 +222,8 @@ async function start() {
 
 const modulePath = fileURLToPath(import.meta.url);
 if (process.argv[1] && modulePath === process.argv[1]) {
-  start();
+  start().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

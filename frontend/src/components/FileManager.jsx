@@ -156,16 +156,26 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
       formData.append('files', file, relativePath || file.name);
 
       try {
-        await fetch('/api/files/upload', {
+        const token = getAccessToken();
+        const response = await fetch('/api/files/upload', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${getAccessToken()}`
-          },
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
           body: formData
         });
-        setUploadProgress({ current: i + 1, total: files.length });
+        if (!response.ok) {
+          let errorMessage = 'Upload failed';
+          try {
+            const payload = await response.json();
+            errorMessage = payload?.error || payload?.message || errorMessage;
+          } catch {
+            // Keep generic message if response isn't JSON.
+          }
+          throw new Error(errorMessage);
+        }
+        setUploadProgress({ current: i + 1, total: entries.length });
       } catch (err) {
-        setError(`Failed to upload ${file.name}: ${err.message}`);
+        const message = err instanceof Error ? err.message : String(err);
+        setError(`Failed to upload ${file.name}: ${message}`);
       }
     }
 
@@ -229,7 +239,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
 
   const handleDownload = useCallback(async (item) => {
     const fullPath = buildItemPath(item.name);
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken();
     window.open(`/api/files/download?path=${encodeURIComponent(fullPath)}&token=${token}`, '_blank');
   }, [buildItemPath]);
 

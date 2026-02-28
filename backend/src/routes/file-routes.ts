@@ -151,6 +151,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     const pendingFiles: Array<{ tempPath: string; filename: string }> = [];
     const uploadedFiles: string[] = [];
     const tempDir = join(USER_HOME, '.terminal-upload-tmp');
+    const alreadyMoved: string[] = [];
 
     try {
       for await (const part of parts) {
@@ -220,11 +221,18 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         for (const staged of pendingFiles) {
           const finalPath = join(resolvedDest, staged.filename);
           if (!isWithinBase(resolvedDest, finalPath)) {
+            for (const s of pendingFiles) {
+              await rm(s.tempPath, { force: true }).catch(() => {});
+            }
             reply.code(400).send({ error: 'Invalid filename' });
             return;
           }
           await mkdir(dirname(finalPath), { recursive: true });
+          const targetExisted = await stat(finalPath).then(() => true).catch(() => false);
           await rename(staged.tempPath, finalPath);
+          if (!targetExisted) {
+            alreadyMoved.push(finalPath);
+          }
           uploadedFiles.push(formatDisplayPath(finalPath));
         }
       }
@@ -233,6 +241,9 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
     } catch (error) {
       for (const staged of pendingFiles) {
         await rm(staged.tempPath, { force: true }).catch(() => {});
+      }
+      for (const finalPath of alreadyMoved) {
+        await rm(finalPath, { force: true }).catch(() => {});
       }
       reply.code(500).send({ error: 'Upload failed', message: (error as Error).message });
     }
@@ -258,7 +269,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       const stats = await stat(safePath);
       if (stats.isDirectory()) {
         const folderName = basename(safePath) || 'download';
-        const zipFileName = `${folderName}.zip`;
+        const zipFileName = `${folderName}.zip`.replace(/["\\;\r\n]/g, '_');
 
         reply.hijack();
         reply.raw.writeHead(200, {
@@ -270,7 +281,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         const archive = archiver('zip', { zlib: { level: 5 } });
         archive.on('error', (err) => {
           console.error('Archive error:', err);
-          reply.raw.end();
+          reply.raw.destroy(err);
         });
 
         archive.pipe(reply.raw);
@@ -280,12 +291,12 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
           await archive.finalize();
         } catch (error) {
           console.error('Archive finalize error:', error);
-          reply.raw.end();
+          reply.raw.destroy(error instanceof Error ? error : new Error(String(error)));
         }
         return;
       }
 
-      const filename = basename(safePath);
+      const filename = basename(safePath).replace(/["\\;\r\n]/g, '_');
       reply.header('Content-Disposition', `attachment; filename="${filename}"`);
       reply.header('Content-Type', 'application/octet-stream');
       reply.header('Content-Length', stats.size);

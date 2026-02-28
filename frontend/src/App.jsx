@@ -12,6 +12,7 @@ import { DesktopSwitcher } from './components/DesktopSwitcher';
 import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
+import { MobileGestureHints } from './components/MobileGestureHints';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
@@ -331,6 +332,9 @@ function AppContent() {
     const normalizedView = view === 'preview' || view === 'claude' || view === 'terminal'
       ? view
       : 'terminal';
+    if (normalizedView === 'preview' && keybarOpen) {
+      setKeybarOpen(false);
+    }
     if (normalizedView === 'terminal' && activeSessionId) {
       // When switching to terminal view, jump to the currently active terminal
       const index = activeSessions.findIndex(s => s.id === activeSessionId);
@@ -339,7 +343,7 @@ function AppContent() {
       }
     }
     setMobileView(normalizedView);
-  }, [activeSessionId, activeSessions]);
+  }, [activeSessionId, activeSessions, keybarOpen]);
 
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
@@ -1154,6 +1158,7 @@ function AppContent() {
             isOpen={keybarOpen}
             onHeightChange={handleKeybarHeightChange}
           />
+          <MobileGestureHints />
         </>
       )}
 

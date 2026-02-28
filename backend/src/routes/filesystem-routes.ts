@@ -63,7 +63,7 @@ export async function registerFilesystemRoutes(app: FastifyInstance): Promise<vo
     }
 
     const folderName = basename(safePath) || 'download';
-    const zipFileName = `${folderName}.zip`;
+    const zipFileName = `${folderName}.zip`.replace(/["\\;\r\n]/g, '_');
 
     reply.hijack();
 
@@ -77,7 +77,7 @@ export async function registerFilesystemRoutes(app: FastifyInstance): Promise<vo
 
     archive.on('error', (err) => {
       console.error('Archive error:', err);
-      reply.raw.end();
+      reply.raw.destroy(err);
     });
 
     archive.pipe(reply.raw);
@@ -89,7 +89,7 @@ export async function registerFilesystemRoutes(app: FastifyInstance): Promise<vo
       await archive.finalize();
     } catch (error) {
       console.error('Archive finalize error:', error);
-      reply.raw.end();
+      reply.raw.destroy(error instanceof Error ? error : new Error(String(error)));
     }
   });
 }

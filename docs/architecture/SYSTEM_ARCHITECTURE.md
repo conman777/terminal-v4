@@ -235,10 +235,11 @@ Key files:
 **Mobile UI:**
 - `MobileTerminalCarousel` swipe navigation between terminals.
 - `MobileKeybar` dedicated control row with common keys (Esc, Tab, Ctrl, arrows).
-- `MobileActionBar` quick actions (split, file manager, settings).
 - `MobileHeader` compact header with hamburger menu.
 - `MobileStatusBar` session info and stats.
 - `MobileDrawer` side navigation for mobile.
+- `MobileSessionPicker` quick jump list for 4+ active sessions.
+- `MobileGestureHints` first-run onboarding for swipe and long-press gestures.
 
 **File & Process Management:**
 - `FileManager` file browser with upload, download, rename, delete, unzip.

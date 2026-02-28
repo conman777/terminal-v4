@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useMemo } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
@@ -10,6 +10,13 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
   const [inputText, setInputText] = useState('');
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMicRecording, setIsMicRecording] = useState(false);
+  const [micState, setMicState] = useState({
+    isRecording: false,
+    isChecking: false,
+    isRequesting: false,
+    isTranscribing: false,
+    error: null
+  });
   const inputRef = useRef(null);
   const { sendToSession } = useTerminalSession();
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
@@ -82,6 +89,20 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
       return !prev;
     });
   }, []);
+
+  const handleMicStateChange = useCallback((nextState) => {
+    if (!nextState) return;
+    setMicState(nextState);
+  }, []);
+
+  const micStatusText = useMemo(() => {
+    if (micState.error) return micState.error;
+    if (micState.isRequesting) return 'Allow microphone...';
+    if (micState.isChecking) return 'Checking voice...';
+    if (micState.isTranscribing) return 'Transcribing...';
+    if (micState.isRecording) return 'Recording...';
+    return '';
+  }, [micState.error, micState.isChecking, micState.isRecording, micState.isRequesting, micState.isTranscribing]);
 
   return (
     <div className={`mobile-status-bar ${isExpanded ? 'expanded' : ''} ${isMicRecording ? 'recording' : ''}`}>
@@ -219,8 +240,13 @@ export function MobileStatusBar({ sessionId, onImageUpload, onOpenHistory, viewM
             )}
 
             {/* Mic buttons - local Whisper + Groq cloud */}
-            <TerminalMicButton sessionId={sessionId} provider="local" inline onRecordingChange={setIsMicRecording} />
-            <TerminalMicButton sessionId={sessionId} provider="groq" inline onRecordingChange={setIsMicRecording} />
+            <TerminalMicButton sessionId={sessionId} provider="local" inline onRecordingChange={setIsMicRecording} onStateChange={handleMicStateChange} />
+            <TerminalMicButton sessionId={sessionId} provider="groq" inline onRecordingChange={setIsMicRecording} onStateChange={handleMicStateChange} />
+            {micStatusText && (
+              <span className={`mobile-mic-status${micState.error ? ' error' : ''}`}>
+                {micStatusText}
+              </span>
+            )}
           </div>
         </>
       )}

@@ -31,8 +31,8 @@ export function useTerminalStream(sessionId) {
       source.close();
     });
 
-    source.onerror = () => {
-      // Allow EventSource to attempt automatic reconnect.
+    source.onerror = (err) => {
+      console.warn('[Terminal Stream] EventSource error, will retry:', err);
     };
 
     return () => {

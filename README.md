@@ -83,6 +83,10 @@ terminal-v4/
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
 - `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits (use with care on exposed deployments)
+- `REBUILD_PROJECT_ROOT` - Override project root used by `/api/system/rebuild` (default: repo root)
+- `REBUILD_SCRIPT_PATH` - Override rebuild script path (default: `<project-root>/rebuild.sh`)
+- `REBUILD_SCRIPT_WINDOWS_PS1` - Optional Windows PowerShell rebuild script path
+- `REBUILD_SCRIPT_WINDOWS_CMD` - Optional Windows cmd rebuild script path
 
 ### Default Shell
 

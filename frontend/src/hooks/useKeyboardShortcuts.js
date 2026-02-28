@@ -45,7 +45,7 @@ export function useKeyboardShortcuts({
       onCloseTerminal,
       onExitFullScreen
     };
-  });
+  }, [onToggleSidebar, onTogglePreview, onToggleFullScreen, onFocusPane, onNewTerminal, onCloseTerminal, onExitFullScreen]);
 
   const handleKeyDown = useCallback((e) => {
     // Don't trigger shortcuts when typing in inputs

@@ -118,7 +118,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onTurn, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onTurn, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -158,6 +158,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     appliedCols: null,
     appliedRows: null
   });
+  const [showCopiedBanner, setShowCopiedBanner] = useState(false);
+  const copiedBannerTimerRef = useRef(null);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
   const [readerLineHeight, setReaderLineHeight] = useState(null);
@@ -528,6 +530,68 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const handleReaderLoadMore = useCallback(() => {
     loadMoreHistoryRef.current?.();
   }, []);
+
+  const showCopiedFeedback = useCallback(() => {
+    setShowCopiedBanner(true);
+    if (copiedBannerTimerRef.current) {
+      clearTimeout(copiedBannerTimerRef.current);
+    }
+    copiedBannerTimerRef.current = setTimeout(() => {
+      setShowCopiedBanner(false);
+      copiedBannerTimerRef.current = null;
+    }, 1500);
+  }, []);
+
+  const fallbackCopyText = useCallback((text) => {
+    if (typeof document === 'undefined' || !document.body || !text) return false;
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch {
+      copied = false;
+    }
+    document.body.removeChild(textarea);
+    return copied;
+  }, []);
+
+  const hasTerminalSelection = useCallback(() => {
+    const term = xtermRef.current;
+    return Boolean(term && typeof term.hasSelection === 'function' && term.hasSelection());
+  }, []);
+
+  const copyTerminalSelection = useCallback(async () => {
+    const term = xtermRef.current;
+    const selection = term?.getSelection?.() || '';
+    if (!selection) return false;
+
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(selection);
+        showCopiedFeedback();
+        return true;
+      }
+    } catch (error) {
+      console.error('Failed to copy terminal selection via clipboard API:', error);
+    }
+
+    if (fallbackCopyText(selection)) {
+      showCopiedFeedback();
+      return true;
+    }
+
+    return false;
+  }, [fallbackCopyText, showCopiedFeedback]);
 
   const syncReaderBuffer = useCallback(() => {
     const term = xtermRef.current;
@@ -1158,6 +1222,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onRegisterHistoryPanel(() => setHistoryModalOpen(true));
     }
   }, [onRegisterHistoryPanel]);
+
+  // Register selection actions for mobile long-press context menu
+  useEffect(() => {
+    if (!onRegisterSelectionActions) return undefined;
+
+    onRegisterSelectionActions({
+      hasSelection: hasTerminalSelection,
+      copySelection: copyTerminalSelection
+    });
+
+    return () => {
+      onRegisterSelectionActions(null);
+    };
+  }, [onRegisterSelectionActions, hasTerminalSelection, copyTerminalSelection]);
 
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {
@@ -3158,6 +3236,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
   }, [isMobile, scheduleViewportRefresh]);
 
+  useEffect(() => () => {
+    if (copiedBannerTimerRef.current) {
+      clearTimeout(copiedBannerTimerRef.current);
+      copiedBannerTimerRef.current = null;
+    }
+  }, []);
+
   // On mobile, control keyboard by moving textarea on/off screen
   useEffect(() => {
     if (!isMobile) return;
@@ -3264,6 +3349,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         <div className={`terminal-pty-role-badge ${shouldShowMirrorBadge ? 'mirror' : 'owner'}`}>
           <span>{ptyBadgeLabel}</span>
           {ptyBadgeDims && <span className="terminal-pty-role-dims">{ptyBadgeDims}</span>}
+        </div>
+      )}
+      {showCopiedBanner && (
+        <div className="terminal-copy-feedback-banner" role="status" aria-live="polite">
+          Copied
         </div>
       )}
 

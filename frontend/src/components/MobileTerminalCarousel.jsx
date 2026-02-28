@@ -3,6 +3,8 @@ import { TerminalChat } from './TerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { MobileChatView } from './MobileChatView';
+import { ContextMenu } from './ContextMenu';
+import { useLongPress } from '../hooks/useLongPress';
 
 export function MobileTerminalCarousel({
   sessions,
@@ -36,6 +38,7 @@ export function MobileTerminalCarousel({
   const [triggerScrollToBottom, setTriggerScrollToBottom] = useState(null);
   const [isTerminalScrolledUp, setIsTerminalScrolledUp] = useState(false);
   const [isClaudeBusy, setIsClaudeBusy] = useState(false);
+  const [selectionActions, setSelectionActions] = useState(null);
   const [viewMode, setViewMode] = useState(() => {
     try {
       const stored = localStorage.getItem('mobileTerminalViewMode');
@@ -45,10 +48,16 @@ export function MobileTerminalCarousel({
     }
   });
   const [isConnected, setIsConnected] = useState(false);
+  const [reconnectBannerState, setReconnectBannerState] = useState('idle');
+  const [terminalContextMenu, setTerminalContextMenu] = useState(null);
+
+  const currentSession = sessions[currentIndex] || null;
+  const currentAiType = currentSession ? sessionAiTypes?.[currentSession.id] : null;
 
   // Auto-remount watchdog: if disconnected for 5 continuous minutes, force remount
   const disconnectStartRef = useRef(null);
   const autoRemountTimerRef = useRef(null);
+  const reconnectFeedbackTimerRef = useRef(null);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -82,6 +91,10 @@ export function MobileTerminalCarousel({
     onSessionBusyChange?.(currentSession?.id, isBusy);
   }, [onSessionBusyChange]);
 
+  const handleRegisterSelectionActions = useCallback((actions) => {
+    setSelectionActions(() => actions || null);
+  }, []);
+
   const handleConnectionChange = useCallback((connected) => {
     setIsConnected(connected);
     if (connected) {
@@ -90,21 +103,81 @@ export function MobileTerminalCarousel({
         clearTimeout(autoRemountTimerRef.current);
         autoRemountTimerRef.current = null;
       }
+      setReconnectBannerState((previousState) => {
+        if (previousState !== 'reconnecting') {
+          return previousState;
+        }
+
+        if (reconnectFeedbackTimerRef.current) {
+          clearTimeout(reconnectFeedbackTimerRef.current);
+          reconnectFeedbackTimerRef.current = null;
+        }
+        reconnectFeedbackTimerRef.current = setTimeout(() => {
+          setReconnectBannerState('idle');
+          reconnectFeedbackTimerRef.current = null;
+        }, 2000);
+        return 'reconnected';
+      });
     } else if (!disconnectStartRef.current) {
       disconnectStartRef.current = Date.now();
       autoRemountTimerRef.current = setTimeout(() => {
+        setReconnectBannerState('reconnecting');
         setRefreshToken(v => v + 1);
         disconnectStartRef.current = null;
+        autoRemountTimerRef.current = null;
       }, 5 * 60 * 1000);
     }
   }, []);
 
+  const handleTerminalLongPress = useCallback((coords) => {
+    const items = [];
+    const hasSelection = Boolean(selectionActions?.hasSelection?.());
+
+    if (hasSelection) {
+      items.push({
+        label: 'Copy selection',
+        onClick: () => selectionActions?.copySelection?.()
+      });
+    }
+
+    if (triggerHistoryPanel) {
+      items.push({
+        label: 'Open copy panel',
+        onClick: () => triggerHistoryPanel?.()
+      });
+    }
+
+    items.push({
+      label: viewMode === 'reader' ? 'Switch to Terminal' : 'Switch to Reader',
+      onClick: () => handleToggleViewMode()
+    });
+
+    if (items.length === 0) {
+      return;
+    }
+
+    setTerminalContextMenu({
+      x: coords?.x || 12,
+      y: coords?.y || 12,
+      items
+    });
+  }, [handleToggleViewMode, selectionActions, triggerHistoryPanel, viewMode]);
+
+  const longPressHandlers = useLongPress(handleTerminalLongPress);
+
+  // Cleanup watchdog timer on unmount
   useEffect(() => {
-    return () => clearTimeout(autoRemountTimerRef.current);
+    return () => {
+      clearTimeout(autoRemountTimerRef.current);
+      if (reconnectFeedbackTimerRef.current) {
+        clearTimeout(reconnectFeedbackTimerRef.current);
+      }
+    };
   }, []);
 
-  const currentSession = sessions[currentIndex] || null;
-  const currentAiType = currentSession ? sessionAiTypes?.[currentSession.id] : null;
+  useEffect(() => {
+    setSelectionActions(null);
+  }, [currentSession?.id]);
 
   const {
     turns,
@@ -135,8 +208,28 @@ export function MobileTerminalCarousel({
     );
   }
 
+  if (!currentSession) {
+    return <div className="mobile-terminal-carousel" />;
+  }
+
   return (
     <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
+      {!isConnected && reconnectBannerState !== 'reconnecting' && (
+        <div className="mobile-terminal-disconnected-pill" role="status" aria-live="polite">
+          Disconnected
+        </div>
+      )}
+      {reconnectBannerState === 'reconnecting' && (
+        <div className="mobile-reconnect-banner reconnecting" role="status" aria-live="assertive">
+          <span className="mobile-reconnect-spinner" aria-hidden="true" />
+          Reconnecting...
+        </div>
+      )}
+      {reconnectBannerState === 'reconnected' && (
+        <div className="mobile-reconnect-banner reconnected" role="status" aria-live="polite">
+          Reconnected
+        </div>
+      )}
       {/* Terminal content — always mounted to keep WebSocket alive.
           In chat mode: opacity:0 hides WebGL canvas at compositor level. */}
       <div
@@ -149,6 +242,7 @@ export function MobileTerminalCarousel({
           zIndex: 0,
         } : undefined}
         aria-hidden={chatMode ? 'true' : undefined}
+        {...longPressHandlers}
       >
         <TerminalChat
           key={`${currentSession.id}-${refreshToken}`}
@@ -163,6 +257,7 @@ export function MobileTerminalCarousel({
           onScrollDirection={handleScrollDirection}
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
+          onRegisterSelectionActions={handleRegisterSelectionActions}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
           onRegisterScrollToBottom={handleRegisterScrollToBottom}
           onConnectionChange={handleConnectionChange}
@@ -209,6 +304,15 @@ export function MobileTerminalCarousel({
             <polyline points="6 9 12 15 18 9" />
           </svg>
         </button>
+      )}
+
+      {terminalContextMenu && (
+        <ContextMenu
+          x={terminalContextMenu.x}
+          y={terminalContextMenu.y}
+          items={terminalContextMenu.items}
+          onClose={() => setTerminalContextMenu(null)}
+        />
       )}
     </div>
   );

@@ -4,7 +4,14 @@ import { ContextMenu } from './ContextMenu';
 import { Dropdown } from './Dropdown';
 import { useLongPress } from '../hooks/useLongPress';
 import { MobileViewTabs } from './MobileViewTabs';
+import { MobileSessionPicker } from './MobileSessionPicker';
 import { useTheme } from '../contexts/ThemeContext';
+
+const EDGE_SWIPE_ZONE_PX = 28;
+const HORIZONTAL_SWIPE_THRESHOLD_PX = 56;
+const VERTICAL_SWIPE_THRESHOLD_PX = 64;
+const SWIPE_AXIS_BIAS_PX = 18;
+const MAX_GESTURE_DURATION_MS = 700;
 
 const AI_TYPE_OPTIONS = [
   { id: null,      label: 'CLI (default)', color: '#f59e0b' },
@@ -120,6 +127,7 @@ export function MobileHeader({
   const [renameValue, setRenameValue] = useState('');
   const [hasOverflow, setHasOverflow] = useState(false);
   const [previewOpened, setPreviewOpened] = useState(() => mobileView === 'preview' && Boolean(previewUrl));
+  const [showSessionPicker, setShowSessionPicker] = useState(false);
   const tabsRef = useRef(null);
   const headerRef = useRef(null);
   const renameInputRef = useRef(null);
@@ -128,6 +136,7 @@ export function MobileHeader({
   // Track user scrolling to prevent auto-scroll interruption
   const userScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef(null);
+  const topRowGestureRef = useRef(null);
 
   // Update --mobile-header-height CSS variable
   // Set initial header height synchronously before first paint to prevent
@@ -257,11 +266,74 @@ export function MobileHeader({
 
     if (tabsRef.current && activeSessionId) {
       const activeTab = tabsRef.current.querySelector('.mobile-header-tab.active');
-      if (activeTab) {
-        activeTab.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+      if (activeTab && typeof activeTab.scrollIntoView === 'function') {
+        const prefersReducedMotion = (
+          typeof window !== 'undefined' &&
+          typeof window.matchMedia === 'function' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        );
+        activeTab.scrollIntoView({
+          behavior: prefersReducedMotion ? 'auto' : 'smooth',
+          inline: 'center',
+          block: 'nearest'
+        });
       }
     }
   }, [activeSessionId]);
+
+  const handleTopRowTouchStart = useCallback((event) => {
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    topRowGestureRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      startedAt: Date.now()
+    };
+  }, []);
+
+  const handleTopRowTouchEnd = useCallback((event) => {
+    const gesture = topRowGestureRef.current;
+    topRowGestureRef.current = null;
+    if (!gesture) return;
+
+    const touch = event.changedTouches?.[0];
+    if (!touch) return;
+
+    const deltaX = touch.clientX - gesture.x;
+    const deltaY = touch.clientY - gesture.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+    const elapsed = Date.now() - gesture.startedAt;
+    if (elapsed > MAX_GESTURE_DURATION_MS) return;
+
+    const horizontalSwipe = absX >= HORIZONTAL_SWIPE_THRESHOLD_PX && absX > absY + SWIPE_AXIS_BIAS_PX;
+    if (horizontalSwipe) {
+      const fromLeftEdge = gesture.x <= EDGE_SWIPE_ZONE_PX;
+      if (!showDrawer && fromLeftEdge && deltaX > 0) {
+        setShowDrawer(true);
+      }
+      return;
+    }
+
+    if (mobileView === 'preview') {
+      return;
+    }
+
+    const verticalSwipe = absY >= VERTICAL_SWIPE_THRESHOLD_PX && absY > absX + SWIPE_AXIS_BIAS_PX;
+    if (!verticalSwipe) return;
+
+    if (deltaY > 0 && !keybarOpen) {
+      onToggleKeybar?.();
+      return;
+    }
+    if (deltaY < 0 && keybarOpen) {
+      onToggleKeybar?.();
+    }
+  }, [keybarOpen, mobileView, onToggleKeybar, showDrawer]);
+
+  const handleTopRowTouchCancel = useCallback(() => {
+    topRowGestureRef.current = null;
+  }, []);
 
   // Track when preview is opened
   useEffect(() => {
@@ -280,6 +352,12 @@ export function MobileHeader({
       setPreviewOpened(false);
     }
   }, [previewUrl]);
+
+  useEffect(() => {
+    if (activeSessions.length <= 3) {
+      setShowSessionPicker(false);
+    }
+  }, [activeSessions.length]);
 
   const toolsItems = [
     {
@@ -334,7 +412,12 @@ export function MobileHeader({
         ref={headerRef}
         className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}${previewOpened ? ' preview-mode' : ''}`}
       >
-        <div className="mobile-header-top-row">
+        <div
+          className="mobile-header-top-row"
+          onTouchStart={handleTopRowTouchStart}
+          onTouchEnd={handleTopRowTouchEnd}
+          onTouchCancel={handleTopRowTouchCancel}
+        >
           <button
             className="mobile-header-btn-modern"
             onClick={() => setShowDrawer(true)}
@@ -449,6 +532,17 @@ export function MobileHeader({
                 </svg>
               </button>
             )}
+            {activeSessions.length > 3 && !isPreviewView && (
+              <button
+                className="mobile-header-session-picker-btn"
+                onClick={() => setShowSessionPicker(true)}
+                aria-label="Open session picker"
+                title="Open session picker"
+                type="button"
+              >
+                {activeSessions.length} sessions
+              </button>
+            )}
             {activeSessionId && !isPreviewView && !chatMode && (
               <button
                 ref={sessionActionsButtonRef}
@@ -544,6 +638,16 @@ export function MobileHeader({
         sessionActivity={sessionActivity}
         onSelectSession={onSelectSession}
         sessionsGroupedByProject={sessionsGroupedByProject}
+      />
+
+      <MobileSessionPicker
+        isOpen={showSessionPicker}
+        onClose={() => setShowSessionPicker(false)}
+        sessions={activeSessions}
+        activeSessionId={activeSessionId}
+        sessionActivity={sessionActivity}
+        sessionAiTypes={sessionAiTypes}
+        onSelectSession={onSelectSession}
       />
 
       {tabContextMenu && (

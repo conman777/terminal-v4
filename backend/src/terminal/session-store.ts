@@ -32,6 +32,8 @@ export interface PersistedSession {
 
 // Stable base data directory (repo-relative or env override)
 const DATA_DIR = ensureDataDir();
+const METADATA_RENAME_MAX_ATTEMPTS = 5;
+const metadataWriteQueues = new Map<string, Promise<void>>();
 
 function sanitizeId(id: string): string {
   const safeId = id.replace(/[^a-zA-Z0-9-]/g, '');
@@ -90,6 +92,39 @@ async function loadMetadataIndex(userId: string): Promise<SessionMetadataIndex> 
   }
 }
 
+function isRetryableRenameError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
+}
+
+async function renameWithRetry(tempPath: string, destinationPath: string, maxAttempts = METADATA_RENAME_MAX_ATTEMPTS): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await rename(tempPath, destinationPath);
+      return;
+    } catch (error) {
+      if (!isRetryableRenameError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 25));
+    }
+  }
+}
+
+function enqueueMetadataWrite<T>(userId: string, task: () => Promise<T>): Promise<T> {
+  const safeUserId = sanitizeId(userId);
+  const previous = metadataWriteQueues.get(safeUserId) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const queued = run.then(() => undefined, () => undefined);
+  metadataWriteQueues.set(safeUserId, queued);
+  queued.finally(() => {
+    if (metadataWriteQueues.get(safeUserId) === queued) {
+      metadataWriteQueues.delete(safeUserId);
+    }
+  });
+  return run;
+}
+
 async function saveMetadataIndex(userId: string, index: SessionMetadataIndex): Promise<void> {
   const indexPath = getMetadataIndexPath(userId);
   const parentDir = join(DATA_DIR, 'users', sanitizeId(userId));
@@ -100,7 +135,7 @@ async function saveMetadataIndex(userId: string, index: SessionMetadataIndex): P
       await mkdir(parentDir, { recursive: true });
     }
     await writeFile(tempPath, JSON.stringify(index, null, 2), 'utf-8');
-    await rename(tempPath, indexPath);
+    await renameWithRetry(tempPath, indexPath);
   } catch (error) {
     try {
       if (existsSync(tempPath)) await unlink(tempPath);
@@ -115,9 +150,11 @@ export async function updateSessionMetadata(
   sessionId: string,
   metadata: { title: string; shell: string; cwd: string; createdAt: string }
 ): Promise<void> {
-  const index = await loadMetadataIndex(userId);
-  index[sessionId] = metadata;
-  await saveMetadataIndex(userId, index);
+  await enqueueMetadataWrite(userId, async () => {
+    const index = await loadMetadataIndex(userId);
+    index[sessionId] = metadata;
+    await saveMetadataIndex(userId, index);
+  });
 }
 
 export async function getSessionMetadata(
@@ -133,9 +170,11 @@ export async function listSessionMetadata(userId: string): Promise<SessionMetada
 }
 
 export async function deleteSessionMetadata(userId: string, sessionId: string): Promise<void> {
-  const index = await loadMetadataIndex(userId);
-  delete index[sessionId];
-  await saveMetadataIndex(userId, index);
+  await enqueueMetadataWrite(userId, async () => {
+    const index = await loadMetadataIndex(userId);
+    delete index[sessionId];
+    await saveMetadataIndex(userId, index);
+  });
 }
 
 export async function saveSession(userId: string, session: PersistedSession): Promise<void> {
@@ -146,7 +185,7 @@ export async function saveSession(userId: string, session: PersistedSession): Pr
   try {
     // Write to temp file first, then atomic rename to prevent corruption
     await writeFile(tempPath, JSON.stringify(session, null, 2), 'utf-8');
-    await rename(tempPath, filePath);
+    await renameWithRetry(tempPath, filePath);
   } catch (error) {
     console.error(`Failed to save session ${session.id}:`, error);
     // Clean up temp file if it exists

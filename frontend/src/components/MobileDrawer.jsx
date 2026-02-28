@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 /**
@@ -29,6 +29,12 @@ function formatRelativeTime(timestamp) {
   return `${Math.floor(days / 7)}w ago`;
 }
 
+const GESTURE_HELP_ITEMS = [
+  { glyph: '\u2192', text: 'Swipe right from the left edge to open the drawer.' },
+  { glyph: '\u2193', text: 'Swipe down on the header to toggle the keyboard bar.' },
+  { glyph: '\u22ef', text: 'Long-press a session tab for quick actions.' }
+];
+
 export function MobileDrawer({
   isOpen,
   onClose,
@@ -56,8 +62,13 @@ export function MobileDrawer({
   onSelectSession,
   sessionsGroupedByProject = []
 }) {
+  const drawerSwipeRef = useRef(null);
   const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [showGestureHelp, setShowGestureHelp] = useState(false);
+  const drawerRef = useRef(null);
+  const closeButtonRef = useRef(null);
+  const previousFocusedElementRef = useRef(null);
 
   const visibleThreadGroups = useMemo(() => {
     return (sessionsGroupedByProject || []).filter((group) => group.sessions && group.sessions.length > 0);
@@ -69,8 +80,111 @@ export function MobileDrawer({
   useEffect(() => {
     if (!isOpen) {
       setSearchQuery('');
+      setShowGestureHelp(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') {
+      return;
+    }
+
+    previousFocusedElementRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    const scheduleFrame = typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame
+      : (callback) => setTimeout(callback, 0);
+    const cancelFrame = typeof window.cancelAnimationFrame === 'function'
+      ? window.cancelAnimationFrame
+      : clearTimeout;
+
+    const frameId = scheduleFrame(() => {
+      closeButtonRef.current?.focus();
+    });
+
+    return () => {
+      cancelFrame(frameId);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (isOpen || typeof document === 'undefined') {
+      return;
+    }
+
+    const previousFocused = previousFocusedElementRef.current;
+    if (previousFocused && typeof previousFocused.focus === 'function') {
+      previousFocused.focus();
+    }
+    previousFocusedElementRef.current = null;
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') {
+      return;
+    }
+
+    const focusableSelector = [
+      'button:not([disabled])',
+      '[href]',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[tabindex]:not([tabindex="-1"])'
+    ].join(', ');
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const drawer = drawerRef.current;
+      if (!drawer) {
+        return;
+      }
+
+      const focusableElements = Array.from(drawer.querySelectorAll(focusableSelector));
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        drawer.focus();
+        return;
+      }
+
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!drawer.contains(activeElement)) {
+        event.preventDefault();
+        firstFocusable.focus();
+        return;
+      }
+
+      if (event.shiftKey && activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   const normalizePath = (p) => p?.toLowerCase().replace(/\/$/, '');
   const currentNormalized = normalizePath(currentPath);
@@ -106,13 +220,63 @@ export function MobileDrawer({
     onClose();
   };
 
+  const handleDrawerSwipeStart = (event) => {
+    if (!isOpen) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    drawerSwipeRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      startedAt: Date.now()
+    };
+  };
+
+  const handleDrawerSwipeEnd = (event) => {
+    const swipe = drawerSwipeRef.current;
+    drawerSwipeRef.current = null;
+    if (!swipe) return;
+
+    const touch = event.changedTouches?.[0];
+    if (!touch) return;
+
+    const elapsed = Date.now() - swipe.startedAt;
+    const deltaX = touch.clientX - swipe.x;
+    const deltaY = touch.clientY - swipe.y;
+    const absX = Math.abs(deltaX);
+    const absY = Math.abs(deltaY);
+
+    const isLeftSwipe = (
+      elapsed <= 700 &&
+      deltaX <= -56 &&
+      absX > absY + 16
+    );
+    if (isLeftSwipe) {
+      onClose();
+    }
+  };
+
+  const handleDrawerSwipeCancel = () => {
+    drawerSwipeRef.current = null;
+  };
+
   return (
     <>
       <div className={`mobile-drawer-overlay-modern${isOpen ? ' open' : ''}`} onClick={onClose} aria-hidden="true"></div>
-      <div className={`mobile-drawer-modern${isOpen ? ' open' : ''}`} aria-hidden={!isOpen}>
+      <div
+        ref={drawerRef}
+        className={`mobile-drawer-modern${isOpen ? ' open' : ''}`}
+        aria-hidden={!isOpen}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Mobile menu"
+        tabIndex={-1}
+        onTouchStart={handleDrawerSwipeStart}
+        onTouchEnd={handleDrawerSwipeEnd}
+        onTouchCancel={handleDrawerSwipeCancel}
+      >
         <div className="mobile-drawer-header-modern">
           <h2>Menu</h2>
-          <button className="mobile-drawer-close-modern" onClick={onClose} aria-label="Close menu">
+          <button ref={closeButtonRef} className="mobile-drawer-close-modern" onClick={onClose} aria-label="Close menu">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
@@ -371,6 +535,28 @@ export function MobileDrawer({
             )}
           </div>
         </div>
+        <div className="mobile-drawer-footer-modern">
+          <button
+            type="button"
+            className={`mobile-drawer-help-btn-modern${showGestureHelp ? ' active' : ''}`}
+            onClick={() => setShowGestureHelp((prev) => !prev)}
+            aria-expanded={showGestureHelp}
+            aria-label="Show mobile gesture help"
+          >
+            <span className="mobile-drawer-help-icon-modern">?</span>
+            <span>Gesture help</span>
+          </button>
+          {showGestureHelp && (
+            <div className="mobile-drawer-help-list-modern" role="note" aria-label="Mobile gesture hints">
+              {GESTURE_HELP_ITEMS.map((item) => (
+                <div key={item.text} className="mobile-drawer-help-row-modern">
+                  <span className="mobile-drawer-help-glyph-modern" aria-hidden="true">{item.glyph}</span>
+                  <span>{item.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <style>{`
@@ -383,6 +569,8 @@ export function MobileDrawer({
           background: var(--bg-primary, #0a0a0c);
           z-index: 1500;
           transform: translateX(-100%);
+          visibility: hidden;
+          pointer-events: none;
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
           display: flex;
           flex-direction: column;
@@ -391,6 +579,8 @@ export function MobileDrawer({
 
         .mobile-drawer-modern.open {
           transform: translateX(0);
+          visibility: visible;
+          pointer-events: auto;
           box-shadow: 20px 0 50px rgba(0, 0, 0, 0.5);
         }
 
@@ -447,6 +637,75 @@ export function MobileDrawer({
           flex: 1;
           overflow-y: auto;
           padding: 14px 0 calc(18px + env(safe-area-inset-bottom, 0px));
+        }
+
+        .mobile-drawer-footer-modern {
+          border-top: 1px solid var(--border-subtle, #1e1e21);
+          padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+          background: var(--bg-primary, #0a0a0c);
+          flex-shrink: 0;
+        }
+
+        .mobile-drawer-help-btn-modern {
+          width: 100%;
+          min-height: 42px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          border-radius: 10px;
+          border: 1px solid var(--border-default, #2a2a2e);
+          background: var(--bg-surface, #141416);
+          color: var(--text-secondary, #a1a1aa);
+          font-size: 12px;
+          font-weight: 600;
+          transition: all 0.2s ease;
+        }
+
+        .mobile-drawer-help-btn-modern.active {
+          border-color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary, #f59e0b);
+          background: var(--accent-primary-dim, rgba(245, 158, 11, 0.15));
+        }
+
+        .mobile-drawer-help-icon-modern {
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          border: 1px solid currentColor;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          line-height: 1;
+          font-weight: 700;
+        }
+
+        .mobile-drawer-help-list-modern {
+          margin-top: 8px;
+          border-radius: 10px;
+          border: 1px solid var(--border-subtle, #1e1e21);
+          background: var(--bg-surface, #141416);
+          padding: 8px 10px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          font-size: 12px;
+          color: var(--text-secondary, #a1a1aa);
+        }
+
+        .mobile-drawer-help-row-modern {
+          display: flex;
+          align-items: flex-start;
+          gap: 8px;
+          line-height: 1.35;
+        }
+
+        .mobile-drawer-help-glyph-modern {
+          color: var(--accent-primary, #f59e0b);
+          font-weight: 700;
+          min-width: 16px;
+          text-align: center;
         }
 
         .mobile-drawer-section-modern {
@@ -796,6 +1055,10 @@ export function MobileDrawer({
             padding: 12px 0 calc(14px + env(safe-area-inset-bottom, 0px));
           }
 
+          .mobile-drawer-footer-modern {
+            padding: 8px 12px calc(8px + env(safe-area-inset-bottom, 0px));
+          }
+
           .mobile-drawer-section-modern {
             padding: 0 12px;
             margin-bottom: 12px;
@@ -819,6 +1082,24 @@ export function MobileDrawer({
           .mobile-drawer-thread-item-modern {
             padding: 6px 8px;
             font-size: 12px;
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .mobile-drawer-modern,
+          .mobile-drawer-overlay-modern,
+          .mobile-drawer-close-modern,
+          .mobile-drawer-grid-btn-modern,
+          .mobile-drawer-list-item-modern,
+          .mobile-drawer-thread-item-modern,
+          .project-item-modern,
+          .collapsible-chevron-modern {
+            transition: none !important;
+            animation: none !important;
+          }
+
+          .mobile-drawer-overlay-modern {
+            backdrop-filter: none;
           }
         }
       `}</style>
