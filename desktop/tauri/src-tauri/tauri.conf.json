@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Terminal V4",
+  "version": "0.1.0",
+  "identifier": "com.conor.terminalv4",
+  "build": {
+    "frontendDist": "../../frontend/dist",
+    "devUrl": "http://127.0.0.1:3020"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Terminal V4",
+        "url": "http://127.0.0.1:3020",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

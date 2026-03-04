@@ -17,6 +17,10 @@ Terminal v4 is a comprehensive web-based terminal and development cockpit. It co
 The system is split into a React SPA frontend and a Fastify backend. The backend
 also serves the built frontend in production.
 
+Phase 1 also includes a Windows desktop wrapper (`desktop/tauri`) that launches
+the existing backend as a local child process and hosts the same UI in a native
+window. In this phase, desktop mode is local-only (`127.0.0.1:3020`).
+
 ## High-Level Architecture
 
 ```
@@ -62,6 +66,17 @@ also serves the built frontend in production.
 ```
 
 ## Backend Components
+
+### Desktop Shell (Windows, Phase 1)
+- Built with Tauri (`desktop/tauri/src-tauri`).
+- Starts backend process on app setup (`node backend/dist/index.js`).
+- Waits for backend readiness before continuing.
+- Stops backend process when the desktop app exits.
+- Uses local-only bind (`HOST=127.0.0.1`, `PORT=3020`) for safety in this phase.
+
+Key files:
+- `desktop/tauri/src-tauri/src/main.rs`
+- `desktop/tauri/src-tauri/tauri.conf.json`
 
 ### Auth (JWT)
 - Access tokens are JWTs; refresh tokens are stored hashed in SQLite.

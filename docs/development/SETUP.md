@@ -108,6 +108,29 @@ Defaults:
 - Backend: http://localhost:3020
 - Frontend: http://localhost:5173 (proxying `/api/*` to backend)
 
+## Running the Windows Desktop App (Tauri)
+
+Prerequisites:
+- Rust toolchain (`cargo --version`)
+- WebView2 runtime (usually present on modern Windows)
+
+From repo root:
+
+```bash
+npm run desktop:dev
+```
+
+Desktop scripts:
+- `npm run desktop:install` - install desktop wrapper dependencies
+- `npm run desktop:predev` - build frontend/backend bundles consumed by desktop shell
+- `npm run desktop:dev` - launch native desktop app in development mode
+- `npm run desktop:build` - create desktop build artifacts (bundle disabled in current phase)
+
+Notes:
+- Phase 1 desktop mode forces local-only backend binding (`127.0.0.1:3020`).
+- Network share mode is intentionally not enabled yet.
+- Desktop shell source lives in `desktop/tauri/src-tauri`.
+
 ## Preview Troubleshooting (Local Dev Servers)
 
 If the preview only shows the background or a blank page:

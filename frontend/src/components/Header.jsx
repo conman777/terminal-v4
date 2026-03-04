@@ -168,8 +168,12 @@ export function Header({
 
   return (
     <header className={`app-header redesign${showPreview ? ' preview-active' : ''}`}>
-      {orderedSessions.length > 0 && (
-        <div className="header-tabs-area">
+      <div className="header-left">
+        <span className="header-brand">Terminal V4</span>
+      </div>
+
+      <div className="header-tabs-area">
+        {orderedSessions.length > 0 ? (
           <SessionTabBar
             sessions={orderedSessions}
             activeSessionId={activeSessionId}
@@ -184,8 +188,10 @@ export function Header({
             sessionAiTypes={sessionAiTypes}
             onSetSessionAiType={onSetSessionAiType}
           />
-        </div>
-      )}
+        ) : (
+          <div className="header-tabs-empty">No active sessions</div>
+        )}
+      </div>
 
       <div className="header-actions">
         <button
@@ -277,11 +283,12 @@ export function Header({
 
       <style jsx>{`
         .app-header.redesign {
-          height: 44px;
-          display: flex;
+          min-height: 44px;
+          display: grid;
+          grid-template-columns: auto minmax(0, 1fr) auto;
           align-items: center;
-          justify-content: space-between;
-          padding: 0 12px;
+          column-gap: 10px;
+          padding: 0 10px;
           background: var(--bg-primary, #0a0a0c);
           border-bottom: none;
           box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 12px rgba(0, 0, 0, 0.2);
@@ -292,15 +299,38 @@ export function Header({
         .header-left {
           display: flex;
           align-items: center;
-          gap: 20px;
+          gap: 8px;
           flex-shrink: 0;
+          min-width: 0;
+        }
+
+        .header-brand {
+          font-size: 11px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-muted, #71717a);
+          white-space: nowrap;
         }
 
         .header-tabs-area {
-          flex: 1;
+          width: 100%;
           min-width: 0;
-          overflow: visible;
-          margin: 0 12px;
+          overflow: hidden;
+        }
+
+        .header-tabs-empty {
+          display: flex;
+          align-items: center;
+          height: 28px;
+          padding: 0 10px;
+          border-radius: 8px;
+          color: var(--text-muted, #71717a);
+          background: rgba(255, 255, 255, 0.03);
+          font-size: 12px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
 
         .app-title {
@@ -315,8 +345,10 @@ export function Header({
         .header-actions {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
           flex-shrink: 0;
+          justify-self: end;
+          min-width: max-content;
         }
 
         .header-btn-modern {
@@ -404,7 +436,7 @@ export function Header({
 
         .app-header.redesign.preview-active {
           height: 36px;
-          padding: 0 12px;
+          padding: 0 10px;
         }
 
         .app-header.redesign.preview-active .app-title {
@@ -420,6 +452,12 @@ export function Header({
           width: 22px;
           height: 22px;
           font-size: 10px;
+        }
+
+        @media (max-width: 1280px) {
+          .header-brand {
+            display: none;
+          }
         }
       `}</style>
     </header>

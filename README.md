@@ -35,6 +35,28 @@ See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 4. Start frontend: `cd frontend && npm run dev`
 5. Open `http://localhost:5173` and create your first terminal!
 
+## Windows Desktop (Phase 1)
+
+Terminal v4 now includes a Windows desktop wrapper scaffold using Tauri.
+
+```bash
+# From repo root
+npm run desktop:dev
+```
+
+What this does:
+- Builds `frontend/dist` and `backend/dist`
+- Starts the backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
+- Launches a native Tauri window pointed at `http://127.0.0.1:3020`
+
+Build command:
+
+```bash
+npm run desktop:build
+```
+
+See [Windows Desktop Development](docs/development/WINDOWS_DESKTOP_DEVELOPMENT.md) for full setup details.
+
 ## Project Structure
 
 ```

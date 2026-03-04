@@ -6,7 +6,11 @@
   "scripts": {
     "test": "npm --prefix backend test",
     "test:e2e": "playwright test",
-    "test:e2e:headed": "playwright test --headed"
+    "test:e2e:headed": "playwright test --headed",
+    "desktop:install": "npm --prefix desktop/tauri install",
+    "desktop:predev": "npm --prefix frontend run build && npm --prefix backend run build",
+    "desktop:dev": "npm run desktop:install && npm run desktop:predev && npm --prefix desktop/tauri run tauri dev -- --no-dev-server-wait",
+    "desktop:build": "npm run desktop:install && npm run desktop:predev && npm --prefix desktop/tauri run tauri build"
   },
   "keywords": [],
   "author": "",
