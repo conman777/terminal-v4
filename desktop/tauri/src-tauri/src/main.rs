@@ -28,6 +28,35 @@ fn resolve_repo_root() -> Result<PathBuf> {
     .ok_or_else(|| io_error("Failed to resolve repository root from CARGO_MANIFEST_DIR"))
 }
 
+fn build_desktop_backend_path() -> Option<String> {
+  let current_path = std::env::var("PATH").ok()?;
+  let app_data = std::env::var("APPDATA").ok()?;
+  let npm_bin = PathBuf::from(app_data).join("npm");
+  let npm_bin_str = npm_bin.to_string_lossy().to_string();
+  if npm_bin_str.is_empty() {
+    return Some(current_path);
+  }
+
+  let separator = if cfg!(windows) { ';' } else { ':' };
+  let mut parts: Vec<String> = current_path
+    .split(separator)
+    .filter(|part| !part.trim().is_empty())
+    .map(|part| part.to_string())
+    .collect();
+
+  let is_match = |candidate: &str| -> bool {
+    if cfg!(windows) {
+      candidate.eq_ignore_ascii_case(&npm_bin_str)
+    } else {
+      candidate == npm_bin_str
+    }
+  };
+
+  parts.retain(|part| !is_match(part));
+  parts.insert(0, npm_bin_str);
+  Some(parts.join(&separator.to_string()))
+}
+
 fn spawn_backend() -> Result<Child> {
   let repo_root = resolve_repo_root()?;
   let backend_dir = repo_root.join("backend");
@@ -37,7 +66,8 @@ fn spawn_backend() -> Result<Child> {
     return Err(io_error("backend/dist/index.js is missing. Run npm run desktop:predev first."));
   }
 
-  Command::new("node")
+  let mut command = Command::new("node");
+  command
     .arg("--enable-source-maps")
     .arg(&backend_entry)
     .current_dir(backend_dir)
@@ -47,7 +77,13 @@ fn spawn_backend() -> Result<Child> {
     .env("TERMINAL_V4_SHARE_MODE", "off")
     .stdout(Stdio::inherit())
     .stderr(Stdio::inherit())
-    .stdin(Stdio::null())
+    .stdin(Stdio::null());
+
+  if let Some(path_override) = build_desktop_backend_path() {
+    command.env("PATH", path_override);
+  }
+
+  command
     .spawn()
     .map_err(|err| io_error(format!("Failed to launch backend process: {err}")))
 }

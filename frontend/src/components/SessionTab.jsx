@@ -1,4 +1,5 @@
 import { useCallback, useState, useRef, useEffect, memo } from 'react';
+import { getAiDisplayLabel, inferSessionAiType } from '../utils/aiProviders';
 
 /**
  * Individual session tab with drag support and right-click menu.
@@ -118,6 +119,8 @@ export const SessionTab = memo(function SessionTab({
     isDragOver && 'drag-over',
     aiType && `ai-${aiType}`,
   ].filter(Boolean).join(' ');
+  const detectedAiType = inferSessionAiType(session, aiType);
+  const providerLabel = getAiDisplayLabel(detectedAiType) || session.shell || 'Terminal';
   const statusClass = isBusy ? 'busy' : 'idle';
   const statusLabel = isBusy ? 'Busy' : 'Idle';
 
@@ -142,26 +145,34 @@ export const SessionTab = memo(function SessionTab({
     >
       <span className={`tab-status-dot-modern ${statusClass}`} />
 
-      {isRenaming ? (
-        <input
-          ref={inputRef}
-          className="tab-rename-input-modern"
-          value={renameValue}
-          onChange={(e) => setRenameValue(e.target.value)}
-          onBlur={handleRenameSubmit}
-          onKeyDown={handleRenameKeyDown}
-          onClick={(e) => e.stopPropagation()}
-          maxLength={60}
-        />
-      ) : (
-        <span className="tab-title-modern">{session.title}</span>
-      )}
-
-      {showStatusLabels && (
-        <span className={`tab-status-label-modern ${statusClass}`} aria-hidden="true">
-          {statusLabel}
-        </span>
-      )}
+      <div className="tab-copy-modern">
+        {isRenaming ? (
+          <input
+            ref={inputRef}
+            className="tab-rename-input-modern"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onBlur={handleRenameSubmit}
+            onKeyDown={handleRenameKeyDown}
+            onClick={(e) => e.stopPropagation()}
+            maxLength={60}
+          />
+        ) : (
+          <>
+            <span className="tab-title-modern">{session.title}</span>
+            <span className="tab-meta-modern">
+              <span className={`tab-provider-label-modern${detectedAiType ? ` ai-${detectedAiType}` : ''}`}>
+                {providerLabel}
+              </span>
+              {(showStatusLabels || isBusy) && (
+                <span className={`tab-status-label-modern ${statusClass}`} aria-hidden="true">
+                  {statusLabel}
+                </span>
+              )}
+            </span>
+          </>
+        )}
+      </div>
 
       {hasUnread && !isActive && (
         <span className="tab-unread-dot-modern" aria-hidden="true" />
@@ -185,11 +196,11 @@ export const SessionTab = memo(function SessionTab({
           display: flex;
           align-items: center;
           gap: 8px;
-          height: 30px;
-          padding: 0 11px;
+          min-height: 36px;
+          padding: 0 12px;
           background: rgba(30, 41, 59, 0.28);
           border: 1px solid rgba(148, 163, 184, 0.18);
-          border-radius: 10px;
+          border-radius: 12px;
           color: rgba(203, 213, 225, 0.86);
           font-size: 12px;
           font-weight: 500;
@@ -329,9 +340,51 @@ export const SessionTab = memo(function SessionTab({
 
         .tab-title-modern {
           min-width: 28px;
-          max-width: 180px;
+          max-width: 188px;
           overflow: hidden;
           text-overflow: ellipsis;
+          font-size: 12px;
+          font-weight: 600;
+          color: inherit;
+        }
+
+        .tab-copy-modern {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          flex: 1;
+        }
+
+        .tab-meta-modern {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .tab-provider-label-modern {
+          max-width: 150px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 10px;
+          line-height: 1;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+          color: var(--text-muted, #94a3b8);
+        }
+
+        .tab-provider-label-modern.ai-claude {
+          color: #ff9a69;
+        }
+
+        .tab-provider-label-modern.ai-codex {
+          color: #8bb8ff;
+        }
+
+        .tab-provider-label-modern.ai-gemini {
+          color: #73e29e;
         }
 
         .tab-status-label-modern {

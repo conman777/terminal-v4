@@ -5,7 +5,8 @@ import {
   NEW_TAB_AI_OPTIONS,
   getAiCapabilities,
   getAiDisplayLabel,
-  getAiLaunchCommand
+  getAiLaunchCommand,
+  inferSessionAiType
 } from './aiProviders';
 
 describe('aiProviders', () => {
@@ -30,5 +31,11 @@ describe('aiProviders', () => {
   it('exposes capability matrix for supported providers', () => {
     expect(getAiCapabilities('claude').supportsPromptEvents).toBe(true);
     expect(getAiCapabilities('codex').prefersStructuredUi).toBe(true);
+  });
+
+  it('infers a provider from session shell or title when explicit aiType is missing', () => {
+    expect(inferSessionAiType({ shell: 'claude', title: 'Terminal 1' })).toBe('claude');
+    expect(inferSessionAiType({ title: 'OpenAI Codex' })).toBe('codex');
+    expect(inferSessionAiType({ shell: 'pwsh', title: 'Gemini CLI' })).toBe('gemini');
   });
 });

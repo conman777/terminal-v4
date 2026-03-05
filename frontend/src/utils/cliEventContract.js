@@ -3,7 +3,22 @@ const CANONICAL_EVENT_TYPES = new Set([
   'assistant_turn',
   'prompt_required',
   'status',
-  'error'
+  'error',
+]);
+
+/** Structured-mode canonical event types from the structured adapter system. */
+export const STRUCTURED_EVENT_TYPES = new Set([
+  'session_started',
+  'session_ended',
+  'message_started',
+  'message_delta',
+  'message_completed',
+  'tool_started',
+  'tool_output',
+  'tool_completed',
+  'approval_required',
+  'input_required',
+  'raw_provider_event',
 ]);
 
 function isNonEmptyString(value) {
@@ -62,6 +77,19 @@ export function normalizeCliEventFromMeta(metaMessage) {
       ts: normalizeTs(metaMessage.ts),
       source: 'pty'
     };
+  }
+
+  // Handle structured events from the structured adapter system
+  if (metaMessage.type === 'structured_event' && metaMessage.event && typeof metaMessage.event === 'object') {
+    const event = metaMessage.event;
+    if (STRUCTURED_EVENT_TYPES.has(event.type)) {
+      return {
+        ...event,
+        ts: normalizeTs(event.ts),
+        source: 'structured',
+      };
+    }
+    return null;
   }
 
   return null;

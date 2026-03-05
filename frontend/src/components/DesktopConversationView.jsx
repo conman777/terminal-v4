@@ -343,6 +343,96 @@ function buildVisibleTurns(turns, aiType) {
   return visibleTurns;
 }
 
+function extractWorkingDirectory(...sources) {
+  for (const source of sources) {
+    if (typeof source !== 'string' || !source.trim()) continue;
+
+    const lines = source
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      const directoryMatch = line.match(/^(?:directory|cwd)\s*:\s*(.+)$/i);
+      const promptPathMatch = line.match(/^([A-Za-z]:\\.+|~[\\/].+)>$/);
+      const barePathMatch = line.match(/^([A-Za-z]:\\.+|~[\\/].+)$/);
+
+      const candidate = directoryMatch?.[1]?.trim()
+        || promptPathMatch?.[1]?.trim()
+        || barePathMatch?.[1]?.trim()
+        || '';
+
+      if (!candidate) continue;
+      if ((candidate.match(/[\\/]/g) ?? []).length < 2) continue;
+      return candidate;
+    }
+  }
+
+  return '';
+}
+
+function getConversationModeLabel(terminalViewState) {
+  switch (terminalViewState) {
+    case 'interactive_prompt':
+      return 'Prompt';
+    case 'terminal_mirror':
+      return 'Mirror';
+    case 'structured':
+      return 'Structured';
+    default:
+      return 'Conversation';
+  }
+}
+
+function getConversationStatusLabel({
+  interactivePrompt,
+  isStreaming,
+  isOffline,
+  connectionState,
+  isSendReady,
+  terminalViewState,
+}) {
+  if (interactivePrompt) return 'Input required';
+  if (isOffline) return 'Offline';
+  if (connectionState === 'connecting') return 'Connecting';
+  if (isStreaming) return 'Responding';
+  if (terminalViewState === 'terminal_mirror') return 'Live';
+  if (!isSendReady) return 'Preparing';
+  return 'Ready';
+}
+
+function getConversationTitle(assistantLabel, terminalViewState, interactivePrompt, isStructured) {
+  if (isStructured) return `${assistantLabel} structured session`;
+  if (interactivePrompt || terminalViewState === 'interactive_prompt') {
+    return `${assistantLabel} needs terminal input`;
+  }
+  if (terminalViewState === 'terminal_mirror') {
+    return `Live ${assistantLabel} terminal`;
+  }
+  return `${assistantLabel} conversation workspace`;
+}
+
+function getConversationSubtitle({
+  terminalViewState,
+  interactivePrompt,
+  isStructured,
+  isStreaming,
+}) {
+  if (isStructured) {
+    return 'Structured messages, tools, and approvals stay in one focused workspace.';
+  }
+  if (interactivePrompt || terminalViewState === 'interactive_prompt') {
+    return 'Use the prompt controls below or type directly into the live CLI to continue the session.';
+  }
+  if (terminalViewState === 'terminal_mirror') {
+    return 'The session is still terminal-first, so the live CLI snapshot stays front and center.';
+  }
+  if (isStreaming) {
+    return 'Readable transcript mode is active while the CLI continues running in the background.';
+  }
+  return 'Conversation mode keeps terminal-backed coding sessions readable without hiding the live context.';
+}
+
 function TypingIndicator() {
   return (
     <div className="desktop-streaming-indicator" aria-label="Assistant is responding">
@@ -397,13 +487,6 @@ export function DesktopConversationView({
       ? parseInteractivePromptSnapshot(terminalScreenSnapshot)
       : null);
   const shouldCaptureRawKeyboard = showTerminalMirror && Boolean(interactivePrompt);
-  const compactSnapshotLine = hasLiveScreenSnapshot
-    ? terminalScreenSnapshot
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .slice(-1)[0]
-    : '';
   const terminalViewState = isStructured
     ? 'structured'
     : interactivePrompt
@@ -411,14 +494,44 @@ export function DesktopConversationView({
       : showTerminalMirror
         ? 'terminal_mirror'
         : 'conversation';
+  const isTerminalFirstView = terminalViewState === 'interactive_prompt' || terminalViewState === 'terminal_mirror';
   const shouldShowMirrorScreen = hasLiveScreenSnapshot && terminalViewState !== 'conversation';
+  const terminalFirstTurns = isStructured
+    ? []
+    : isTerminalFirstView
+      ? visibleTurns.filter((turn) => turn.role === 'user')
+      : [];
   const displayTurns = isStructured
     ? []
     : terminalViewState === 'conversation'
       ? visibleTurns
       : [];
+  const isConnected = connectionState === 'online';
+  const isOffline = connectionState === 'offline';
+  const modeLabel = getConversationModeLabel(terminalViewState);
+  const statusLabel = getConversationStatusLabel({
+    interactivePrompt,
+    isStreaming,
+    isOffline,
+    connectionState,
+    isSendReady,
+    terminalViewState,
+  });
+  const viewTitle = getConversationTitle(assistantLabel, terminalViewState, interactivePrompt, isStructured);
+  const viewSubtitle = getConversationSubtitle({
+    terminalViewState,
+    interactivePrompt,
+    isStructured,
+    isStreaming,
+  });
+  const promptFallbackNotice =
+    interactivePrompt && !shouldShowMirrorScreen
+      ? `Current prompt: ${interactivePrompt.prompt}`
+      : '';
+  const workingDirectory = extractWorkingDirectory(terminalScreenSnapshot, terminalPreview);
   const hasVisibleTurns =
     displayTurns.length > 0
+    || terminalFirstTurns.length > 0
     || Boolean(interactivePromptFromEvent)
     || (showTerminalMirror && hasLiveScreenSnapshot)
     || (isStructured && (
@@ -427,8 +540,6 @@ export function DesktopConversationView({
       || Boolean(pendingApproval)
     ));
   const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
-  const isConnected = connectionState === 'online';
-  const isOffline = connectionState === 'offline';
   const startupMessage = isStructured
     ? (isOffline
       ? 'Structured session is offline. Refresh the session stream and try again.'
@@ -448,6 +559,12 @@ export function DesktopConversationView({
         : isStreaming
           ? `${assistantLabel} is running. Waiting for the first response turn...`
           : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`);
+  const terminalSnapshotBlock = shouldShowMirrorScreen ? (
+    <div className="desktop-cli-focus-screen-block">
+      <span className="desktop-cli-focus-section-label">Live terminal snapshot</span>
+      <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
+    </div>
+  ) : null;
 
   const scrollToBottom = useCallback(() => {
     const element = bottomRef.current;
@@ -550,19 +667,48 @@ export function DesktopConversationView({
   }, [sessionId]);
 
   return (
-    <div className="desktop-conversation-view">
-      <div className="desktop-conversation-header">
-        <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
-          {assistantLabel}
-        </span>
-        <span className="desktop-conversation-header-note">Conversation view</span>
+    <div className={`desktop-conversation-view mode-${terminalViewState}${isTerminalFirstView ? ' terminal-first' : ''}`}>
+      <div className={`desktop-conversation-header${isTerminalFirstView ? ' compact' : ''}`}>
+        <div className="desktop-conversation-header-main">
+          <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
+            {assistantLabel}
+          </span>
+          <div className="desktop-conversation-heading">
+            <div className="desktop-conversation-title">{viewTitle}</div>
+            <div className="desktop-conversation-subtitle">{viewSubtitle}</div>
+          </div>
+        </div>
+
+        <div className="desktop-conversation-header-meta">
+          {workingDirectory && (
+            <div className="desktop-conversation-path-block">
+              <span className="desktop-conversation-path-label">Working directory</span>
+              <code className="desktop-conversation-path-value">{workingDirectory}</code>
+            </div>
+          )}
+
+          <div className="desktop-conversation-chip-row">
+            <span className={`desktop-conversation-chip status-${statusLabel.toLowerCase().replace(/\s+/g, '-')}`}>
+              {statusLabel}
+            </span>
+            <span className={`desktop-conversation-chip mode-${modeLabel.toLowerCase()}`}>
+              {modeLabel}
+            </span>
+          </div>
+        </div>
       </div>
 
-      <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
-        <div className="desktop-thread-inner">
+      <div ref={containerRef} className={`desktop-thread${isTerminalFirstView ? ' terminal-first' : ''}`} onScroll={handleScroll}>
+        <div className={`desktop-thread-inner${isTerminalFirstView ? ' wide-layout' : ''}`}>
           {conversationNotice && !showTerminalMirror && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
+            </div>
+          )}
+
+          {promptFallbackNotice && (
+            <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
+              {promptFallbackNotice}
             </div>
           )}
 
@@ -633,57 +779,14 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {terminalViewState !== 'conversation' && (hasLiveScreenSnapshot || Boolean(interactivePromptFromEvent)) && (
-            <div className="desktop-cli-focus-card" role="status" aria-live="polite">
-              <div className="desktop-cli-focus-head">
-                <span className="desktop-cli-focus-title">
-                  {interactivePrompt ? 'Interactive CLI input required' : 'CLI session active'}
-                </span>
-                <button
-                  type="button"
-                  className="desktop-cli-open-terminal-btn"
-                  onClick={onOpenTerminal}
-                  disabled={!onOpenTerminal}
-                >
-                  Open Terminal Panel
-                </button>
-              </div>
+          {terminalFirstTurns.map((turn, index) => (
+            <ToolCallBlock
+              key={`terminal-first-${turn.ts ?? index}-${turn.role}-${index}`}
+              item={{ type: turn.role, content: turn.content }}
+            />
+          ))}
 
-              {interactivePrompt ? (
-                <>
-                  <div className="desktop-cli-focus-prompt">{interactivePrompt.prompt}</div>
-                  <div className="desktop-interactive-prompt-actions">
-                    {interactivePrompt.actions.map((action) => (
-                      <button
-                        key={`${action.label}-${action.payload}`}
-                        type="button"
-                        className={`desktop-interactive-action ${action.kind}`}
-                        onClick={() => onSendRaw?.(action.payload)}
-                      >
-                        {action.label}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="desktop-interactive-prompt-hint">
-                    Keyboard passthrough is active for this prompt.
-                  </div>
-                  {shouldShowMirrorScreen && (
-                    <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
-                  )}
-                </>
-              ) : (
-                <>
-                  <div className="desktop-cli-focus-note">
-                    Live CLI is running in the background. Messages sent here go directly to the CLI.
-                    {compactSnapshotLine ? ` Latest terminal line: ${compactSnapshotLine}` : ''}
-                  </div>
-                  {shouldShowMirrorScreen && (
-                    <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
-                  )}
-                </>
-              )}
-            </div>
-          )}
+          {terminalSnapshotBlock}
 
           {displayTurns.map((turn, index) => (
             <ToolCallBlock
@@ -806,17 +909,24 @@ export function DesktopConversationView({
         </button>
       )}
 
-      <div className="desktop-conversation-composer">
-        <textarea
-          ref={textareaRef}
-          className="desktop-conversation-input"
-          value={inputValue}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={`Message ${assistantLabel}...`}
-          rows={1}
-        />
+      <div className={`desktop-conversation-composer${isTerminalFirstView ? ' compact' : ''}`}>
+        <div className="desktop-conversation-composer-main">
+          <div className="desktop-conversation-composer-meta">
+            <span className="desktop-conversation-composer-label">Message {assistantLabel}</span>
+            <span className="desktop-conversation-composer-hint">Enter to send · Shift+Enter for newline</span>
+          </div>
+
+          <textarea
+            ref={textareaRef}
+            className="desktop-conversation-input"
+            value={inputValue}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={`Message ${assistantLabel}...`}
+            rows={1}
+          />
+        </div>
 
         <div className="desktop-conversation-actions">
           {onImageUpload && (

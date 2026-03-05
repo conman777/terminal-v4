@@ -57,7 +57,7 @@ export default function ThreadsProjectGroup({
 
         <span className="threads-project-name">{projectName}</span>
 
-        <span className="threads-project-count" aria-hidden="true" />
+        <span className="threads-project-count" aria-hidden="true">{visibleSessions.length}</span>
       </div>
 
       {isExpanded && (
@@ -80,7 +80,7 @@ export default function ThreadsProjectGroup({
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .threads-project-group {
           margin-bottom: 6px;
         }
@@ -96,6 +96,7 @@ export default function ThreadsProjectGroup({
           border-radius: 8px;
           margin: 2px 8px;
           color: var(--text-secondary, #a1a1aa);
+          gap: 0;
         }
 
         .threads-project-header:hover {
@@ -135,13 +136,22 @@ export default function ThreadsProjectGroup({
         }
 
         .threads-project-count {
-          width: 0;
-          height: 0;
-          overflow: hidden;
+          min-width: 20px;
+          height: 18px;
+          padding: 0 6px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--text-muted, #94a3b8);
+          background: rgba(15, 23, 42, 0.45);
+          border: 1px solid rgba(148, 163, 184, 0.14);
         }
 
         .threads-project-content {
-          padding: 2px 0 6px 16px;
+          padding: 2px 0 8px 14px;
         }
 
         @media (max-width: 768px) {

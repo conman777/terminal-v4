@@ -34,7 +34,8 @@ describe('useMobileChatTurns', () => {
 
     expect(result.current.isSendReady).toBe(true);
     expect(sender.mock.calls).toEqual([
-      ['claude\r'],
+      ['claude'],
+      ['\r'],
       ['\x03'],
     ]);
   });
@@ -54,13 +55,19 @@ describe('useMobileChatTurns', () => {
     });
 
     expect(sendResult).toEqual({ queued: true });
-    expect(rejectingSender).toHaveBeenCalledWith('claude\r');
+    expect(rejectingSender.mock.calls).toEqual([
+      ['claude'],
+      ['\r'],
+    ]);
 
     act(() => {
       result.current.handleRegisterSendText(readySender);
     });
 
-    expect(readySender).toHaveBeenCalledWith('claude\r');
+    expect(readySender.mock.calls).toEqual([
+      ['claude'],
+      ['\r'],
+    ]);
   });
 
   it('retries queued input without requiring sender re-registration', async () => {
@@ -80,14 +87,40 @@ describe('useMobileChatTurns', () => {
     });
 
     expect(sendResult).toEqual({ queued: true });
-    expect(sender).toHaveBeenCalledWith('hey\r');
+    expect(sender.mock.calls).toEqual([
+      ['hey'],
+      ['\r'],
+    ]);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(sender).toHaveBeenCalledTimes(2);
-    expect(sender.mock.calls[1]).toEqual(['hey\r']);
+    expect(sender).toHaveBeenCalledTimes(3);
+    expect(sender.mock.calls[2]).toEqual(['hey']);
+    vi.useRealTimers();
+  });
+
+  it('sends terminal-first prompts as separate text and submit writes', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleChatSend('hello');
+    });
+
+    expect(sender.mock.calls).toEqual([['hello']]);
+
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+
+    expect(sender.mock.calls).toEqual([
+      ['hello'],
+      ['\r'],
+    ]);
     vi.useRealTimers();
   });
 

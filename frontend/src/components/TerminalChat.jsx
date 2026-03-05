@@ -24,6 +24,7 @@ import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
 import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
+import { prepareTerminalForExternalInput } from '../utils/terminalExternalInput';
 
 const TERMINAL_THEMES = {
   dark: {
@@ -1311,14 +1312,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (onRegisterFocusTerminal) {
       onRegisterFocusTerminal(() => {
-        if (requestPriorityResizeRef.current) {
-          try {
-            requestPriorityResizeRef.current();
-          } catch {
-            // Ignore transient resize/promotion failures during mount/reconnect.
-          }
-        }
-        setMobileInputEnabled(true);
+        prepareTerminalForExternalInput({
+          requestPriorityResize: requestPriorityResizeRef.current,
+          focusTerminal: () => xtermRef.current?.focus?.(),
+          setMobileInputEnabled
+        });
       });
     }
   }, [onRegisterFocusTerminal, setMobileInputEnabled]);
@@ -1328,6 +1326,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (!onRegisterSendText) return undefined;
     onRegisterSendText((text) => {
       if (!text) return false;
+      prepareTerminalForExternalInput({
+        requestPriorityResize: requestPriorityResizeRef.current,
+        focusTerminal: () => xtermRef.current?.focus?.(),
+        setMobileInputEnabled
+      });
       const sender = sendTerminalInputRef.current;
       if (!sender) {
         pendingExternalInputRef.current.push(text);
@@ -1339,7 +1342,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     return () => {
       onRegisterSendText(null);
     };
-  }, [onRegisterSendText]);
+  }, [onRegisterSendText, setMobileInputEnabled]);
 
   // Register scroll-to-bottom function for external callers (e.g. floating button)
   useEffect(() => {
@@ -1692,7 +1695,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       exitCopyModeIfActive();
       markUserInput();
       resetIdleTimer(false);
-      queueTerminalInput(text);
+      if (inputBufferRef.current) {
+        flushInputBuffer();
+      }
+      sendTerminalInput(text);
     };
     const confirmLargePaste = (text) => {
       if (!text) return false;

@@ -33,8 +33,13 @@ export default function ThreadsSidebar({
 
   // Count total visible sessions
   const totalSessions = useMemo(() => {
-    return visibleGroups.reduce((acc, group) => acc + group.sessions.length, 0);
-  }, [visibleGroups]);
+    const ids = new Set();
+    visibleGroups.forEach((group) => {
+      group.sessions.forEach((session) => ids.add(session.id));
+    });
+    pinnedSessions.forEach((session) => ids.add(session.id));
+    return ids.size;
+  }, [pinnedSessions, visibleGroups]);
 
   return (
     <aside className={`threads-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
@@ -97,6 +102,12 @@ export default function ThreadsSidebar({
 
       {!isCollapsed && (
         <div className="threads-sidebar-content">
+          <div className="threads-overview">
+            <span className="threads-overview-pill">{totalSessions} active</span>
+            <span className="threads-overview-pill">{pinnedSessions.length} pinned</span>
+            <span className="threads-overview-pill">{archivedSessions.length} archived</span>
+          </div>
+
           {/* Pinned section */}
           {pinnedSessions.length > 0 && (
             <div className="threads-section">
@@ -199,11 +210,11 @@ export default function ThreadsSidebar({
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .threads-sidebar {
           width: 256px;
           height: 100%;
-          background: var(--bg-primary, #0a0a0c);
+          background: linear-gradient(180deg, rgba(8, 12, 22, 0.98), rgba(6, 10, 18, 0.98));
           border-right: none;
           display: flex;
           flex-direction: column;
@@ -235,7 +246,7 @@ export default function ThreadsSidebar({
 
         /* ── Top bar: mode switch + collapse ── */
         .ts-topbar {
-          height: 44px;
+          height: 48px;
           display: flex;
           align-items: center;
           gap: 6px;
@@ -288,7 +299,7 @@ export default function ThreadsSidebar({
 
         /* ── Toolbar: view toggle + new ── */
         .ts-toolbar {
-          height: 34px;
+          height: 38px;
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -371,7 +382,30 @@ export default function ThreadsSidebar({
           overflow-y: auto;
           scrollbar-width: thin;
           scrollbar-color: var(--border-default) transparent;
-          padding-top: 4px;
+          padding: 8px 0 6px;
+        }
+
+        .threads-overview {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+          padding: 0 12px 10px;
+        }
+
+        .threads-overview-pill {
+          display: inline-flex;
+          align-items: center;
+          min-height: 20px;
+          padding: 0 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(148, 163, 184, 0.16);
+          background: rgba(15, 23, 42, 0.52);
+          color: var(--text-muted, #94a3b8);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
         }
 
         .threads-sidebar-content::-webkit-scrollbar {
@@ -384,7 +418,7 @@ export default function ThreadsSidebar({
         }
 
         .threads-section {
-          margin-bottom: 10px;
+          margin-bottom: 12px;
         }
 
         .threads-section-header {
@@ -393,10 +427,10 @@ export default function ThreadsSidebar({
           gap: 8px;
           padding: 6px 16px;
           font-size: 10px;
-          font-weight: 600;
-          color: var(--text-muted, #71717a);
+          font-weight: 700;
+          color: var(--text-muted, #94a3b8);
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.08em;
         }
 
         .threads-section-header.clickable {
@@ -420,8 +454,8 @@ export default function ThreadsSidebar({
         .threads-section.archived {
           border-top: none;
           box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
-          padding-top: 8px;
-          margin-top: 8px;
+          padding-top: 10px;
+          margin-top: 10px;
         }
 
         .threads-empty {

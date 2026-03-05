@@ -27,6 +27,7 @@ import { registerScreenshotRoutes } from './routes/screenshot-routes';
 import { registerWebContainerRoutes } from './routes/webcontainer-routes';
 import { TerminalManager, type TerminalManagerOptions } from './terminal/terminal-manager';
 import { ClaudeCodeManager } from './claude-code/claude-code-manager';
+import { StructuredSessionManager } from './structured/session-manager';
 import { getDatabase, closeDatabase } from './database/db';
 import { registerAuthHook } from './auth/auth-hook';
 import { registerAuthRoutes } from './auth/auth-routes';
@@ -106,8 +107,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const claudeCodeManager = new ClaudeCodeManager();
   await claudeCodeManager.initialize();
 
-  // Register routes with both managers
-  await registerCoreRoutes(app, { terminalManager, claudeCodeManager });
+  // Initialize structured session manager
+  const structuredSessionManager = new StructuredSessionManager();
+  await structuredSessionManager.initialize();
+
+  // Register routes with all managers
+  await registerCoreRoutes(app, { terminalManager, claudeCodeManager, structuredSessionManager });
   await registerBookmarkRoutes(app);
   await registerNoteRoutes(app);
   await registerPreviewRoutes(app);

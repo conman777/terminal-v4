@@ -58,4 +58,16 @@ describe('SessionTab', () => {
     render(<SessionTab {...buildProps({ showStatusLabels: true })} />);
     expect(screen.getByText('Idle')).toBeInTheDocument();
   });
+
+  it('renders provider metadata when aiType is available', () => {
+    render(<SessionTab {...buildProps({ aiType: 'claude' })} />);
+
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
+  });
+
+  it('infers provider metadata from the session shell when aiType is not passed', () => {
+    render(<SessionTab {...buildProps({ session: { id: 'session-1', title: 'Workspace', shell: 'codex' } })} />);
+
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+  });
 });

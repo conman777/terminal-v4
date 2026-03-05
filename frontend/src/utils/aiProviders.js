@@ -134,6 +134,41 @@ export function getAiCapabilities(aiType) {
   };
 }
 
+function inferAiTypeFromText(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return null;
+
+  for (const provider of KNOWN_AI_PROVIDERS) {
+    const tokens = [
+      provider.id,
+      provider.label,
+      provider.title,
+      provider.launchCommand
+    ].map((token) => String(token).trim().toLowerCase());
+
+    if (tokens.some((token) => token && normalized.includes(token))) {
+      return provider.id;
+    }
+  }
+
+  return null;
+}
+
+export function inferSessionAiType(session, explicitAiType = null) {
+  const explicit = normalizeAiType(explicitAiType);
+  if (explicit) return explicit;
+  if (!session || typeof session !== 'object') return null;
+
+  return (
+    inferAiTypeFromText(session.aiType)
+    || inferAiTypeFromText(session.shell)
+    || inferAiTypeFromText(session.title)
+    || inferAiTypeFromText(session.thread?.topic)
+    || null
+  );
+}
+
 export const COMMON_LAUNCH_PREFIXES = KNOWN_AI_PROVIDERS.map((provider) => provider.launchCommand);
 
 export const NEW_TAB_AI_OPTIONS = [

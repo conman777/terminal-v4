@@ -45,6 +45,7 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSendReady, setIsSendReady] = useState(false);
   const turnsRef = useRef([]);
+  const delayedSubmitTimerRef = useRef(null);
 
   // Ref so the send function registered by TerminalChat is always fresh.
   const sendToTerminalRef = useRef(null);
@@ -176,7 +177,20 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   // Send a message from the chat input bar.
   const handleChatSend = useCallback((text) => {
     const trimmed = typeof text === 'string' ? text.trim() : '';
-    const result = sendOrQueue(text + '\r');
+    const textResult = sendOrQueue(text);
+    const submit = () => sendOrQueue('\r');
+
+    if (textResult.queued) {
+      submit();
+    } else {
+      if (delayedSubmitTimerRef.current) {
+        clearTimeout(delayedSubmitTimerRef.current);
+      }
+      delayedSubmitTimerRef.current = setTimeout(() => {
+        delayedSubmitTimerRef.current = null;
+        submit();
+      }, 35);
+    }
 
     if (trimmed) {
       optimisticUserTurnsRef.current.push(trimmed);
@@ -193,7 +207,7 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
       setTurns(next);
     }
 
-    return result;
+    return { queued: textResult.queued };
   }, [sendOrQueue]);
 
   // Send raw key/input data directly to the terminal transport.
@@ -219,6 +233,10 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
     if (retryFlushTimerRef.current) {
       clearTimeout(retryFlushTimerRef.current);
       retryFlushTimerRef.current = null;
+    }
+    if (delayedSubmitTimerRef.current) {
+      clearTimeout(delayedSubmitTimerRef.current);
+      delayedSubmitTimerRef.current = null;
     }
     seededRef.current = false;
     seededSessionRef.current = null;
