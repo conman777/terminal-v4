@@ -31,6 +31,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
+import { NEW_TAB_AI_OPTIONS } from './utils/aiProviders';
 
 function isDynamicImportFetchError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -126,28 +127,6 @@ const SystemResourcesView = lazyWithChunkRecovery(
   'SystemResourcesView',
   (module) => module.SystemResourcesView
 );
-
-const NEW_TAB_AI_OPTIONS = [
-  { id: 'cli', label: 'CLI' },
-  {
-    id: 'claude',
-    label: 'Claude Code',
-    title: 'Claude Code',
-    command: 'claude --dangerously-skip-permissions'
-  },
-  {
-    id: 'codex',
-    label: 'Codex',
-    title: 'Codex',
-    command: 'codex --yolo'
-  },
-  {
-    id: 'gemini',
-    label: 'Gemini CLI',
-    title: 'Gemini CLI',
-    command: 'gemini --yolo'
-  }
-];
 
 function AppContent() {
   const { logout, user } = useAuth();

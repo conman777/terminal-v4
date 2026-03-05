@@ -186,14 +186,13 @@ export const SessionTab = memo(function SessionTab({
           align-items: center;
           gap: 8px;
           height: 30px;
-          padding: 0 12px;
-          background: transparent;
-          border: none;
-          border-top: 2px solid transparent;
-          border-radius: 8px 8px 0 0;
-          color: var(--text-muted, #71717a);
-          font-size: 13px;
-          font-weight: 400;
+          padding: 0 11px;
+          background: rgba(30, 41, 59, 0.28);
+          border: 1px solid rgba(148, 163, 184, 0.18);
+          border-radius: 10px;
+          color: rgba(203, 213, 225, 0.86);
+          font-size: 12px;
+          font-weight: 500;
           white-space: nowrap;
           cursor: pointer;
           transition: all 0.2s ease;
@@ -204,15 +203,16 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item:hover:not(.active) {
-          background: rgba(255, 255, 255, 0.04);
-          color: var(--text-primary, #fafafa);
+          background: rgba(51, 65, 85, 0.55);
+          border-color: rgba(56, 189, 248, 0.35);
+          color: #e2e8f0;
         }
 
         .session-tab-item.active {
-          background: rgba(245, 158, 11, 0.08);
-          border-top-color: var(--accent-primary, #f59e0b);
-          color: var(--text-primary, #fafafa);
-          box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
+          background: rgba(34, 211, 238, 0.2);
+          border-color: rgba(34, 211, 238, 0.52);
+          color: #f8fafc;
+          box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.4), 0 8px 24px rgba(14, 165, 233, 0.2);
           z-index: 5;
           font-weight: 600;
         }
@@ -290,10 +290,10 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item.busy.active {
-          background: rgba(245, 158, 11, 0.08);
-          color: var(--tab-active-text, var(--text-primary, #fafafa));
-          border-top-color: var(--accent-primary, #f59e0b);
-          box-shadow: var(--tab-active-shadow, 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 12px rgba(245, 158, 11, 0.25));
+          background: rgba(34, 211, 238, 0.2);
+          color: #f8fafc;
+          border-color: rgba(34, 211, 238, 0.52);
+          box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.4), 0 8px 24px rgba(14, 165, 233, 0.2);
           animation: none;
         }
 
@@ -307,7 +307,7 @@ export const SessionTab = memo(function SessionTab({
           height: 14px;
           border-radius: 2px;
           flex-shrink: 0;
-          margin-left: -6px;
+          margin-left: -4px;
           transition: background 0.3s ease, box-shadow 0.3s ease;
         }
 
@@ -329,7 +329,7 @@ export const SessionTab = memo(function SessionTab({
 
         .tab-title-modern {
           min-width: 28px;
-          max-width: 140px;
+          max-width: 180px;
           overflow: hidden;
           text-overflow: ellipsis;
         }
@@ -380,7 +380,7 @@ export const SessionTab = memo(function SessionTab({
           border-radius: 4px;
           opacity: 0.5;
           transition: all 0.2s ease;
-          margin-right: -4px;
+          margin-right: -2px;
         }
 
         .tab-close-btn-modern:hover {

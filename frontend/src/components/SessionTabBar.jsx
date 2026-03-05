@@ -1,13 +1,7 @@
 import { useCallback, useState, useRef, useEffect } from 'react';
 import { SessionTab } from './SessionTab';
 import { ContextMenu } from './ContextMenu';
-
-const AI_TYPE_OPTIONS = [
-  { id: null,      label: 'CLI (default)', color: '#f59e0b' },
-  { id: 'claude',  label: 'Claude Code',   color: '#ff6b2b' },
-  { id: 'codex',   label: 'Codex',         color: '#3b82f6' },
-  { id: 'gemini',  label: 'Gemini',        color: '#22c55e' },
-];
+import { AI_TYPE_OPTIONS } from '../utils/aiProviders';
 
 /**
  * Horizontal tab bar for session management.
@@ -259,10 +253,9 @@ export function SessionTabBar({
         .session-tab-bar-container-modern {
           display: flex;
           align-items: center;
-          background: var(--bg-primary, #0a0a0c);
-          border-bottom: 1px solid var(--border-subtle, #1e1e21);
-          padding: 0 4px;
-          height: 38px;
+          background: transparent;
+          padding: 0 6px;
+          height: 40px;
           flex-shrink: 0;
           position: relative;
         }
@@ -271,18 +264,18 @@ export function SessionTabBar({
           background: transparent;
           border-bottom: none;
           height: 100%;
-          padding: 0;
+          padding: 0 2px;
         }
 
         .session-tab-bar-modern {
           display: flex;
           align-items: center;
-          gap: 4px;
+          gap: 6px;
           flex: 1;
           overflow-x: auto;
           scrollbar-width: none;
           height: 100%;
-          padding: 6px 4px;
+          padding: 4px 2px;
         }
 
         .session-tab-bar-modern::-webkit-scrollbar {
@@ -295,39 +288,41 @@ export function SessionTabBar({
           display: flex;
           align-items: center;
           justify-content: center;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-subtle, #1e1e21);
-          color: var(--text-muted, #71717a);
-          border-radius: 6px;
+          background: rgba(30, 41, 59, 0.5);
+          border: 1px solid rgba(148, 163, 184, 0.25);
+          color: rgba(226, 232, 240, 0.82);
+          border-radius: 8px;
           cursor: pointer;
           z-index: 10;
           transition: all 0.2s ease;
         }
 
         .session-tab-scroll-btn-modern:hover {
-          color: var(--text-primary, #fafafa);
-          background: var(--bg-elevated, #1e1e21);
+          color: #e2e8f0;
+          border-color: rgba(56, 189, 248, 0.45);
+          background: rgba(56, 189, 248, 0.18);
         }
 
         .session-tab-new-modern {
           flex-shrink: 0;
-          width: 28px;
-          height: 28px;
+          width: 30px;
+          height: 30px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: transparent;
-          border: none;
-          color: var(--text-muted, #71717a);
-          border-radius: 6px;
+          background: rgba(30, 41, 59, 0.4);
+          border: 1px solid rgba(148, 163, 184, 0.25);
+          color: rgba(226, 232, 240, 0.85);
+          border-radius: 8px;
           cursor: pointer;
           transition: all 0.2s ease;
           margin-left: 4px;
         }
 
         .session-tab-new-modern:hover {
-          background: var(--bg-surface, #141416);
-          color: var(--text-primary, #fafafa);
+          background: rgba(34, 211, 238, 0.18);
+          border-color: rgba(34, 211, 238, 0.45);
+          color: #e2e8f0;
         }
 
       `}</style>

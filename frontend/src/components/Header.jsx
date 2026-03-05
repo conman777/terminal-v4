@@ -283,15 +283,16 @@ export function Header({
 
       <style jsx>{`
         .app-header.redesign {
-          min-height: 44px;
+          min-height: 54px;
           display: grid;
           grid-template-columns: auto minmax(0, 1fr) auto;
           align-items: center;
-          column-gap: 10px;
-          padding: 0 10px;
-          background: var(--bg-primary, #0a0a0c);
-          border-bottom: none;
-          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 12px rgba(0, 0, 0, 0.2);
+          column-gap: 14px;
+          padding: 0 14px;
+          background: linear-gradient(180deg, rgba(20, 28, 44, 0.88), rgba(11, 16, 28, 0.88));
+          border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.32);
+          backdrop-filter: blur(8px);
           user-select: none;
           z-index: 100;
         }
@@ -305,11 +306,11 @@ export function Header({
         }
 
         .header-brand {
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 700;
-          letter-spacing: 0.08em;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          color: var(--text-muted, #71717a);
+          color: rgba(226, 232, 240, 0.8);
           white-space: nowrap;
         }
 
@@ -322,11 +323,12 @@ export function Header({
         .header-tabs-empty {
           display: flex;
           align-items: center;
-          height: 28px;
-          padding: 0 10px;
-          border-radius: 8px;
-          color: var(--text-muted, #71717a);
-          background: rgba(255, 255, 255, 0.03);
+          height: 34px;
+          padding: 0 12px;
+          border-radius: 10px;
+          color: rgba(148, 163, 184, 0.88);
+          background: rgba(30, 41, 59, 0.45);
+          border: 1px solid rgba(148, 163, 184, 0.16);
           font-size: 12px;
           white-space: nowrap;
           overflow: hidden;
@@ -345,7 +347,7 @@ export function Header({
         .header-actions {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 8px;
           flex-shrink: 0;
           justify-self: end;
           min-width: max-content;
@@ -356,24 +358,25 @@ export function Header({
           align-items: center;
           justify-content: center;
           gap: 6px;
-          padding: 6px 8px;
-          border-radius: 6px;
-          border: none;
-          background: transparent;
-          color: var(--text-muted, #71717a);
+          padding: 7px 10px;
+          border-radius: 10px;
+          border: 1px solid rgba(148, 163, 184, 0.18);
+          background: rgba(30, 41, 59, 0.34);
+          color: rgba(226, 232, 240, 0.9);
           font-size: 12px;
-          font-weight: 500;
+          font-weight: 600;
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
         .header-btn-modern span {
-          display: none;
+          display: inline;
         }
 
         .header-btn-modern:hover {
-          background: var(--bg-elevated, #1e1e21);
-          color: var(--text-primary, #fafafa);
+          background: rgba(56, 189, 248, 0.2);
+          border-color: rgba(56, 189, 248, 0.45);
+          color: #e2e8f0;
           transform: translateY(-1px);
         }
 
@@ -382,8 +385,9 @@ export function Header({
         }
 
         .header-btn-modern.active {
-          color: var(--accent-primary, #f59e0b);
-          background: var(--accent-primary-dim);
+          color: #22d3ee;
+          border-color: rgba(34, 211, 238, 0.55);
+          background: rgba(34, 211, 238, 0.18);
         }
 
         .header-divider {
@@ -394,36 +398,36 @@ export function Header({
           display: flex;
           align-items: center;
           gap: 8px;
-          padding: 3px 8px 3px 3px;
+          padding: 4px 10px 4px 4px;
           border-radius: 20px;
-          background: var(--bg-surface, #141416);
-          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: rgba(30, 41, 59, 0.5);
+          border: 1px solid rgba(148, 163, 184, 0.2);
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
         .header-user-badge-modern:hover {
-          background: var(--bg-elevated, #1e1e21);
-          border-color: rgba(255, 255, 255, 0.1);
+          background: rgba(56, 189, 248, 0.2);
+          border-color: rgba(56, 189, 248, 0.42);
         }
 
         .user-avatar {
-          width: 24px;
-          height: 24px;
+          width: 26px;
+          height: 26px;
           border-radius: 50%;
-          background: var(--accent-primary, #f59e0b);
-          color: var(--bg-primary, #0a0a0c);
+          background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+          color: #02131d;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 700;
         }
 
         .username {
-          font-size: 13px;
+          font-size: 12px;
           font-weight: 500;
-          color: var(--text-primary, #fafafa);
+          color: #e2e8f0;
           max-width: 100px;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -435,8 +439,8 @@ export function Header({
         }
 
         .app-header.redesign.preview-active {
-          height: 36px;
-          padding: 0 10px;
+          min-height: 44px;
+          padding: 0 12px;
         }
 
         .app-header.redesign.preview-active .app-title {
@@ -444,7 +448,7 @@ export function Header({
         }
 
         .app-header.redesign.preview-active .header-btn-modern {
-          padding: 4px 8px;
+          padding: 5px 9px;
           font-size: 12px;
         }
 
@@ -456,6 +460,12 @@ export function Header({
 
         @media (max-width: 1280px) {
           .header-brand {
+            display: none;
+          }
+        }
+
+        @media (max-width: 1500px) {
+          .header-btn-modern span {
             display: none;
           }
         }

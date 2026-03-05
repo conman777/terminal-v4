@@ -1,0 +1,442 @@
+import { useRef, useEffect, useState, useCallback } from 'react';
+import ToolCallBlock from './ToolCallBlock';
+import { apiFetch, uploadScreenshot } from '../utils/api';
+import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
+import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
+
+function compactText(value) {
+  return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function isLaunchCommand(content, aiType) {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) return false;
+
+  const firstToken = normalized.split(/\s+/, 1)[0];
+  if (COMMON_LAUNCH_PREFIXES.includes(firstToken)) {
+    return true;
+  }
+
+  const normalizedAiType = normalizeAiType(aiType);
+  if (normalizedAiType && (normalized === normalizedAiType || normalized.startsWith(`${normalizedAiType} `))) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLikeBootstrapNoiseText(text) {
+  if (!text) return true;
+  const normalized = text.toLowerCase();
+
+  const looksLikeWindowsBanner =
+    normalized.includes('microsoft windows [version')
+    || normalized.includes('microsoft corporation. all rights reserved');
+  const looksLikeAgentBanner =
+    normalized.includes('claude code v')
+    || normalized.includes('codex v')
+    || normalized.includes('gemini cli')
+    || normalized.includes('sonnet 4.6');
+  const looksLikePromptPath = /(?:[A-Za-z]:\\|~[\\/])[^\\\n]+.*>/.test(text);
+
+  return looksLikeWindowsBanner || looksLikeAgentBanner || looksLikePromptPath;
+}
+
+function looksLikeDecoratedPathLine(line) {
+  const withoutDecorators = line.replace(/^[^A-Za-z0-9~\\/.:_-]+/, '').trim();
+  if (!withoutDecorators) return false;
+  const pathLike = /^(~[\\/]|[A-Za-z]:\\)/.test(withoutDecorators);
+  if (!pathLike) return false;
+  return ((withoutDecorators.match(/[\\/]/g) ?? []).length >= 2) && !/[.!?]/.test(withoutDecorators);
+}
+
+function looksLikeInteractiveStatusLine(line, squashed) {
+  if (!line.includes('>')) return false;
+  const hasProgressVerb = /\b(thinking|computing|running|waiting|loading|initializing|caramelizing)\b/i.test(line);
+  const hasTuiMarkers = /[·•*]/.test(line) || squashed.includes('presstochoose') || squashed.includes('selectanoption');
+  return hasProgressVerb && hasTuiMarkers;
+}
+
+function sanitizeAssistantTurnContent(content, aiType) {
+  if (typeof content !== 'string') return '';
+
+  const normalizedLines = [];
+  const lines = content.split('\n');
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    const squashed = compactText(trimmed);
+    if (looksLikeInteractiveStatusLine(trimmed, squashed)) continue;
+    if (/^\s*[>❯]\s*$/.test(trimmed)) continue;
+    if (squashed.includes('microsoftwindows[version')) continue;
+    if (squashed.includes('microsoftcorporation.allrightsreserved')) continue;
+    if (squashed.startsWith('claude--dangerously-skip-permissions')) continue;
+    if (looksLikeDecoratedPathLine(trimmed)) continue;
+
+    if (aiType === 'claude') {
+      if (squashed.includes('claudecodev')) continue;
+      if (squashed.includes('sonnet4.6') && squashed.includes('claudemax')) continue;
+      if (squashed.includes('bypasspermissionson')) continue;
+      if (squashed.includes('shift+tabtocycle')) continue;
+      if (squashed.includes('found1settingsissue') && squashed.includes('/doctor')) continue;
+      if (trimmed.includes('>') && /[·•*]/.test(trimmed) && /\b(thinking|computing|running|waiting|caramelizing)\b/i.test(trimmed)) continue;
+
+      if (squashed.includes('mcpserverfailed')) {
+        if (!normalizedLines.includes('MCP server failed (/mcp). Open Terminal Panel for details.')) {
+          normalizedLines.push('MCP server failed (/mcp). Open Terminal Panel for details.');
+        }
+        continue;
+      }
+
+      if (looksLikeDecoratedPathLine(trimmed)) continue;
+    }
+
+    normalizedLines.push(trimmed);
+  }
+
+  const dedupedLines = [];
+  for (const line of normalizedLines) {
+    if (dedupedLines[dedupedLines.length - 1] !== line) {
+      dedupedLines.push(line);
+    }
+  }
+  return dedupedLines.join('\n').trim();
+}
+
+function buildVisibleTurns(turns, aiType) {
+  const visibleTurns = [];
+  let hasMeaningfulUserTurn = false;
+
+  for (const turn of turns) {
+    if (!turn || typeof turn.content !== 'string') continue;
+
+    if (turn.role === 'user') {
+      const userContent = turn.content.trim();
+      if (!userContent) continue;
+      if (!hasMeaningfulUserTurn && isLaunchCommand(userContent, aiType)) continue;
+      hasMeaningfulUserTurn = true;
+      visibleTurns.push({ ...turn, content: userContent });
+      continue;
+    }
+
+    if (turn.role === 'assistant') {
+      const assistantContent = sanitizeAssistantTurnContent(turn.content, aiType);
+      if (!assistantContent) continue;
+      if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
+      visibleTurns.push({ ...turn, content: assistantContent });
+      continue;
+    }
+
+    visibleTurns.push(turn);
+  }
+
+  return visibleTurns;
+}
+
+function TypingIndicator() {
+  return (
+    <div className="desktop-streaming-indicator" aria-label="Assistant is responding">
+      <span className="dot" />
+      <span className="dot" />
+      <span className="dot" />
+    </div>
+  );
+}
+
+export function DesktopConversationView({
+  turns,
+  isStreaming = false,
+  onSend,
+  onInterrupt,
+  onImageUpload,
+  sessionId,
+  isLoadingHistory = false,
+  aiType = null,
+  connectionState = 'connecting',
+  isSendReady = false,
+  terminalPreview = '',
+  terminalScreenSnapshot = '',
+  launchCommand = '',
+  launchQueued = false,
+  onLaunchAgent,
+  onOpenTerminal,
+  conversationNotice = '',
+  showTerminalMirror = false
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const containerRef = useRef(null);
+  const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
+  const autoScrollRef = useRef(true);
+  const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
+  const visibleTurns = buildVisibleTurns(turns, aiType);
+  const displayTurns = showTerminalMirror
+    ? visibleTurns.filter((turn) => turn?.role !== 'assistant')
+    : visibleTurns;
+  const hasVisibleTurns = displayTurns.length > 0 || (showTerminalMirror && hasLiveScreenSnapshot);
+  const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
+  const hasBackgroundOutput = typeof terminalPreview === 'string' && terminalPreview.trim().length > 0;
+  const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
+  const isConnected = connectionState === 'online';
+  const isOffline = connectionState === 'offline';
+  const startupMessage = isOffline
+    ? 'Terminal is offline. Reconnect or open the terminal panel to inspect the session.'
+    : connectionState === 'connecting'
+      ? 'Connecting to terminal transport. You can still queue a launch command now.'
+      : hasBackgroundOutput
+        ? `${assistantLabel} launched in background. Waiting for the first conversation turn...`
+      : !isSendReady
+        ? 'Transport is online and preparing input channel...'
+      : isStreaming
+        ? `${assistantLabel} is running. Waiting for the first response turn...`
+        : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`;
+
+  const scrollToBottom = useCallback(() => {
+    const element = bottomRef.current;
+    if (!element || typeof element.scrollIntoView !== 'function') return;
+    element.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    if (!autoScrollRef.current) return;
+    scrollToBottom();
+  }, [turns, isStreaming, scrollToBottom]);
+
+  const handleScroll = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    autoScrollRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
+  }, []);
+
+  const handleInputChange = useCallback((event) => {
+    setInputValue(event.target.value);
+    const element = event.target;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
+  }, []);
+
+  const handleSend = useCallback(() => {
+    const text = inputValue.trim();
+    if (!text) return;
+    onSend?.(text);
+    setInputValue('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+    autoScrollRef.current = true;
+  }, [inputValue, onSend]);
+
+  const handleKeyDown = useCallback((event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    handleSend();
+  }, [handleSend]);
+
+  const handlePaste = useCallback(async (event) => {
+    if (!sessionId || !event.clipboardData) return;
+    const imageFile = await getImageFileFromDataTransfer(event.clipboardData);
+    if (!imageFile) return;
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      const path = await uploadScreenshot(imageFile);
+      if (path) {
+        await apiFetch(`/api/terminal/${sessionId}/input`, {
+          method: 'POST',
+          body: { command: `${path} ` }
+        });
+      }
+    } catch (error) {
+      console.error('Failed to paste image in conversation view:', error);
+    }
+  }, [sessionId]);
+
+  return (
+    <div className="desktop-conversation-view">
+      <div className="desktop-conversation-header">
+        <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
+          {assistantLabel}
+        </span>
+        <span className="desktop-conversation-header-note">Conversation view</span>
+      </div>
+
+      <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
+        <div className="desktop-thread-inner">
+          {conversationNotice && (
+            <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
+              {conversationNotice}
+            </div>
+          )}
+
+          {!hasVisibleTurns && isLoadingHistory && (
+            <div className="desktop-conversation-empty">Loading conversation history...</div>
+          )}
+
+          {showStartupCard && (
+            <div className="desktop-agent-status-card" role="status" aria-live="polite">
+              <div className="desktop-agent-status-row">
+                <span className={`desktop-agent-connection ${connectionState}`}>
+                  {isConnected ? 'Online' : isOffline ? 'Offline' : 'Connecting'}
+                </span>
+                <span className={`desktop-agent-runtime ${isStreaming ? 'busy' : 'idle'}`}>
+                  {isStreaming ? 'Agent busy' : 'Agent idle'}
+                </span>
+              </div>
+
+              <div className="desktop-agent-status-text">{startupMessage}</div>
+
+              <div className="desktop-agent-actions-row">
+                {launchCommand && (
+                  <button
+                    type="button"
+                    className="desktop-agent-action primary"
+                    onClick={onLaunchAgent}
+                    disabled={!onLaunchAgent || isOffline || isStreaming}
+                  >
+                    Launch {assistantLabel}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="desktop-agent-action"
+                  onClick={onOpenTerminal}
+                  disabled={!onOpenTerminal}
+                >
+                  Open Terminal Panel
+                </button>
+              </div>
+
+              {launchCommand && (
+                <div className="desktop-agent-command-preview">
+                  <span className="desktop-agent-command-label">Startup command</span>
+                  <code>{launchCommand}</code>
+                  {launchQueued && (
+                    <span className="desktop-agent-command-queued">queued</span>
+                  )}
+                </div>
+              )}
+
+              {(hasLiveScreenSnapshot || terminalPreview) ? (
+                <div className="desktop-agent-output-preview">
+                  <span className="desktop-agent-output-label">
+                    {hasLiveScreenSnapshot ? 'Live terminal screen' : 'Background output'}
+                  </span>
+                  <pre className={hasLiveScreenSnapshot ? 'terminal-screen' : undefined}>
+                    {hasLiveScreenSnapshot ? terminalScreenSnapshot : terminalPreview}
+                  </pre>
+                </div>
+              ) : (
+                <div className="desktop-agent-output-empty">
+                  {isStreaming ? 'Listening for terminal output...' : 'No background output captured yet.'}
+                </div>
+              )}
+            </div>
+          )}
+
+          {showTerminalMirror && hasLiveScreenSnapshot && (
+            <div className="desktop-terminal-mirror-card" role="status" aria-live="polite">
+              <div className="desktop-terminal-mirror-label">Live terminal mirror</div>
+              <pre className="desktop-terminal-mirror-output">{terminalScreenSnapshot}</pre>
+            </div>
+          )}
+
+          {displayTurns.map((turn, index) => (
+            <ToolCallBlock
+              key={`${turn.ts ?? index}-${turn.role}-${index}`}
+              item={{ type: turn.role, content: turn.content }}
+            />
+          ))}
+
+          {isStreaming && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <TypingIndicator />
+              </div>
+            </div>
+          )}
+        </div>
+        <div ref={bottomRef} />
+      </div>
+
+      {showScrollBtn && (
+        <button
+          type="button"
+          className="desktop-conversation-scroll-btn"
+          onClick={() => {
+            autoScrollRef.current = true;
+            setShowScrollBtn(false);
+            scrollToBottom();
+          }}
+          aria-label="Scroll to latest message"
+          title="Scroll to latest message"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      )}
+
+      <div className="desktop-conversation-composer">
+        <textarea
+          ref={textareaRef}
+          className="desktop-conversation-input"
+          value={inputValue}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={`Message ${assistantLabel}...`}
+          rows={1}
+        />
+
+        <div className="desktop-conversation-actions">
+          {onImageUpload && (
+            <button
+              type="button"
+              className="desktop-conversation-btn"
+              onClick={onImageUpload}
+              title="Upload image"
+              aria-label="Upload image"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+            </button>
+          )}
+
+          {onInterrupt && (
+            <button
+              type="button"
+              className="desktop-conversation-btn stop"
+              onClick={onInterrupt}
+              title="Interrupt (Ctrl+C)"
+              aria-label="Interrupt"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+              </svg>
+            </button>
+          )}
+
+          <button
+            type="button"
+            className="desktop-conversation-send-btn"
+            onClick={handleSend}
+            disabled={!inputValue.trim()}
+            aria-label="Send message"
+            title="Send message"
+          >
+            <svg width="17" height="17" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

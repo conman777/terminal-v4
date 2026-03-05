@@ -231,7 +231,12 @@ Key files:
 
 **Terminal Components:**
 - `TerminalChat` integrates xterm.js, WebSocket IO, and WebGL rendering (optional).
-- `TerminalPane` wraps terminal with scrolling, history, and image upload support.
+- `TerminalPane` now supports three desktop view modes:
+  - `conversation` (default): chat-only surface rendered from structured `/turns` events
+    while `TerminalChat` remains mounted in a hidden runtime layer to keep WebSocket
+    transport, image upload hooks, and send-text wiring alive.
+  - `terminal`: classic xterm.js interface.
+  - `reader`: accessible text-first terminal output view.
 - `SplitPaneContainer` manages multi-pane terminal layouts with draggable divider.
 - `SessionTabBar` displays active terminal tabs with drag-to-reorder.
 - `ReaderView` provides accessible terminal output reading with pagination.

@@ -1,12 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../utils/api';
-
-const DEFAULT_AI_OPTIONS = [
-  { id: 'cli', label: 'CLI' },
-  { id: 'claude', label: 'Claude Code', command: 'claude --dangerously-skip-permissions' },
-  { id: 'codex', label: 'Codex', command: 'codex --yolo' },
-  { id: 'gemini', label: 'Gemini CLI', command: 'gemini --yolo' }
-];
+import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
 
 function resolveInitialAiOptionId(options, preferredId) {
   if (preferredId && options.some((option) => option.id === preferredId)) {
@@ -22,10 +16,10 @@ export function FolderBrowserModal({
   recentFolders,
   onSelect,
   showAiSelector = false,
-  aiOptions = DEFAULT_AI_OPTIONS,
+  aiOptions = NEW_TAB_AI_OPTIONS,
   defaultAiOptionId = 'cli'
 }) {
-  const resolvedAiOptions = showAiSelector && aiOptions.length > 0 ? aiOptions : DEFAULT_AI_OPTIONS;
+  const resolvedAiOptions = showAiSelector && aiOptions.length > 0 ? aiOptions : NEW_TAB_AI_OPTIONS;
   const [path, setPath] = useState(currentPath || '');
   const [folders, setFolders] = useState([]);
   const [parent, setParent] = useState(null);

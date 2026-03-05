@@ -58,11 +58,41 @@ function isUiChrome(line: string): boolean {
   if (/^Added \d+ lines?$/.test(t)) return true;
   if (/^Next: /.test(t)) return true;
   if (/^\s*[>❯]\s*$/.test(t)) return true;
+  if (/^\s*[>❯]\s+/.test(t)) return true;
   if (/^\s*[>❯]\s*[─\-]{10,}/.test(t)) return true;
+  if (/^[A-Za-z]:\\[^>]*>\s*$/.test(t)) return true;
+  if (/^[A-Za-z]:\\[^>]*>\S.+$/.test(t)) return true;
   if (/^\s*[^@\s]+@[^:\s]+:/.test(t)) return true;
   if (/^\d+$/.test(t)) return true;
   if (/^[\s─═━\-─═━>│╭╰╯╮╱╲]+$/.test(t)) return true;
   if (/^[\s│]+\.[\s│.·]+$/.test(t)) return true;
+  return false;
+}
+
+function squash(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function fingerprint(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`'"“”‘’]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function isClaudeBootstrapNoise(line: string): boolean {
+  const t = line.trim();
+  if (!t) return true;
+  const squashed = squash(t);
+
+  if (squashed.includes('microsoftwindows[version')) return true;
+  if (squashed.includes('(c)microsoftcorporation.allrightsreserved')) return true;
+  if (squashed.includes('claudecodev')) return true;
+  if (squashed.includes('sonnet4.6') && squashed.includes('claudemax')) return true;
+  if (squashed.includes('found1settingsissue') && squashed.includes('/doctor')) return true;
+  if (squashed.includes('bypasspermissionson')) return true;
+  if (squashed.includes('shift+tabtocycle')) return true;
+
   return false;
 }
 
@@ -80,16 +110,50 @@ function applyCarriageReturns(line: string): string {
   return result;
 }
 
-function extractContent(rawBuffer: string): string {
+function extractContent(rawBuffer: string, recentUserInputs: string[] = []): string {
   const stripped = stripAnsi(rawBuffer);
+  const userFingerprints = new Set(
+    recentUserInputs
+      .map(fingerprint)
+      .filter(fp => fp.length >= 4),
+  );
+
+  let lastFingerprint = '';
+
   return stripped
     .split('\n')
     .map(applyCarriageReturns)
-    .filter(line => !isUiChrome(line))
+    .filter(line => {
+      if (isUiChrome(line)) return false;
+      if (isClaudeBootstrapNoise(line)) return false;
+      const fp = fingerprint(line);
+      if (fp && userFingerprints.has(fp)) return false;
+      if (fp && fp === lastFingerprint) return false;
+      lastFingerprint = fp;
+      return true;
+    })
     .map(line => line.trimEnd())
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function isInteractiveSafetyPrompt(content: string): boolean {
+  if (!content) return false;
+  const squashed = content.toLowerCase().replace(/\s+/g, '');
+  const hasSafetyPrompt =
+    (squashed.includes('accessingworkspace:') || squashed.includes('quicksafetycheck'))
+    && (squashed.includes('trustthisfolder') || squashed.includes('createdoroneyoutrust'))
+    && (squashed.includes('entertoconfirm') || squashed.includes('esctocancel'));
+
+  if (hasSafetyPrompt) return true;
+
+  const hasChoicePrompt =
+    squashed.includes('entertoconfirm')
+    && squashed.includes('esctocancel')
+    && (squashed.includes('1.yes') || squashed.includes('2.no'));
+
+  return hasChoicePrompt;
 }
 
 /**
@@ -100,6 +164,7 @@ export class TurnDetector {
   private outputBuffer = '';
   private lastOutputTs = Date.now();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private recentUserInputs: string[] = [];
   private readonly onTurn: (turn: ChatTurn) => void;
 
   constructor(onTurn: (turn: ChatTurn) => void) {
@@ -113,6 +178,10 @@ export class TurnDetector {
     // Skip single-key presses, control chars, and empty strings.
     if (cleaned.length >= 2) {
       this.onTurn({ role: 'user', content: cleaned, ts: Date.now() });
+      this.recentUserInputs.push(cleaned);
+      if (this.recentUserInputs.length > 5) {
+        this.recentUserInputs.shift();
+      }
     }
   }
 
@@ -141,8 +210,8 @@ export class TurnDetector {
     const buffer = this.outputBuffer;
     this.outputBuffer = '';
     if (!buffer) return;
-    const content = extractContent(buffer);
-    if (content) {
+    const content = extractContent(buffer, this.recentUserInputs);
+    if (content && !isInteractiveSafetyPrompt(content)) {
       this.onTurn({ role: 'assistant', content, ts: this.lastOutputTs });
     }
   }
@@ -151,6 +220,7 @@ export class TurnDetector {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.outputBuffer = '';
+    this.recentUserInputs = [];
   }
 }
 
@@ -172,17 +242,36 @@ export function buildTurnsFromHistory(
   const turns: ChatTurn[] = [];
   let currentRole: 'user' | 'assistant' = 'assistant';
   let currentLines: string[] = [];
+  const recentUserInputs: string[] = [];
 
   const flush = () => {
-    const content = currentLines
+    const normalizedLines = currentLines
       .map(applyCarriageReturns)
-      .filter(l => !isUiChrome(l))
-      .map(l => l.trimEnd())
-      .join('\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-    if (content) {
+      .map(l => l.trimEnd());
+
+    const content = currentRole === 'assistant'
+      ? extractContent(normalizedLines.join('\n'), recentUserInputs)
+      : normalizedLines
+        .filter(l => !isUiChrome(l))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+
+    const isDuplicatePromptEcho = (() => {
+      if (currentRole !== 'user') return false;
+      const lastUser = recentUserInputs[recentUserInputs.length - 1];
+      if (!lastUser) return false;
+      return fingerprint(lastUser) === fingerprint(content);
+    })();
+
+    if (content && !isInteractiveSafetyPrompt(content) && !isDuplicatePromptEcho) {
       turns.push({ role: currentRole, content, ts: lastTs + turns.length });
+      if (currentRole === 'user') {
+        recentUserInputs.push(content);
+        if (recentUserInputs.length > 5) {
+          recentUserInputs.shift();
+        }
+      }
     }
     currentLines = [];
   };

@@ -1,0 +1,27 @@
+import { describe, expect, it } from 'vitest';
+import {
+  AI_TYPE_OPTIONS,
+  COMMON_LAUNCH_PREFIXES,
+  NEW_TAB_AI_OPTIONS,
+  getAiDisplayLabel,
+  getAiLaunchCommand
+} from './aiProviders';
+
+describe('aiProviders', () => {
+  it('returns known labels and launch commands', () => {
+    expect(getAiDisplayLabel('claude')).toBe('Claude Code');
+    expect(getAiDisplayLabel('gemini')).toBe('Gemini');
+    expect(getAiLaunchCommand('codex')).toBe('codex');
+  });
+
+  it('falls back for unknown providers', () => {
+    expect(getAiDisplayLabel('deepseek')).toBe('Deepseek');
+    expect(getAiLaunchCommand('deepseek')).toBe('deepseek');
+  });
+
+  it('exposes extended provider options for new tabs and context menus', () => {
+    expect(NEW_TAB_AI_OPTIONS.some((option) => option.id === 'aider')).toBe(true);
+    expect(AI_TYPE_OPTIONS.some((option) => option.id === 'ollama')).toBe(true);
+    expect(COMMON_LAUNCH_PREFIXES).toContain('qwen');
+  });
+});

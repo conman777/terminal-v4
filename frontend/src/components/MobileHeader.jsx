@@ -6,19 +6,13 @@ import { useLongPress } from '../hooks/useLongPress';
 import { MobileViewTabs } from './MobileViewTabs';
 import { MobileSessionPicker } from './MobileSessionPicker';
 import { useTheme } from '../contexts/ThemeContext';
+import { AI_TYPE_OPTIONS } from '../utils/aiProviders';
 
 const EDGE_SWIPE_ZONE_PX = 28;
 const HORIZONTAL_SWIPE_THRESHOLD_PX = 56;
 const VERTICAL_SWIPE_THRESHOLD_PX = 64;
 const SWIPE_AXIS_BIAS_PX = 18;
 const MAX_GESTURE_DURATION_MS = 700;
-
-const AI_TYPE_OPTIONS = [
-  { id: null,      label: 'CLI (default)', color: '#f59e0b' },
-  { id: 'claude',  label: 'Claude Code',   color: '#ff6b2b' },
-  { id: 'codex',   label: 'Codex',         color: '#3b82f6' },
-  { id: 'gemini',  label: 'Gemini',        color: '#22c55e' },
-];
 
 // Separate component for mobile tab to use hooks properly
 function MobileTab({

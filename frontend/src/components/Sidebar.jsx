@@ -126,10 +126,10 @@ export default function Sidebar({
 
       <style jsx>{`
         .explorer-sidebar {
-          width: 256px;
+          width: 280px;
           height: 100%;
-          background: var(--bg-primary, #0a0a0c);
-          border-right: none;
+          background: linear-gradient(180deg, rgba(10, 16, 30, 0.95), rgba(8, 13, 24, 0.95));
+          border-right: 1px solid rgba(148, 163, 184, 0.16);
           display: flex;
           flex-direction: column;
           transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -145,13 +145,13 @@ export default function Sidebar({
           right: 0;
           bottom: 0;
           width: 1px;
-          background: linear-gradient(180deg, var(--accent-primary, #f59e0b) 0%, rgba(245, 158, 11, 0.3) 30%, transparent 100%);
-          opacity: 0.4;
+          background: linear-gradient(180deg, rgba(56, 189, 248, 0.6) 0%, rgba(56, 189, 248, 0.2) 35%, transparent 100%);
+          opacity: 0.55;
           pointer-events: none;
         }
 
         .explorer-sidebar.collapsed {
-          width: 48px;
+          width: 54px;
         }
 
         .explorer-sidebar.collapsed::after {
@@ -160,13 +160,13 @@ export default function Sidebar({
 
         /* ── Top bar ── */
         .es-topbar {
-          height: 44px;
+          height: 52px;
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 0 8px;
-          border-bottom: none;
-          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+          padding: 0 10px;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04);
           flex-shrink: 0;
         }
 
@@ -180,11 +180,11 @@ export default function Sidebar({
           display: flex;
           align-items: center;
           gap: 8px;
-          color: var(--accent-primary, #f59e0b);
-          font-size: 13px;
+          color: #67e8f9;
+          font-size: 12px;
           font-weight: 700;
           text-transform: uppercase;
-          letter-spacing: 0.5px;
+          letter-spacing: 0.09em;
         }
 
         .es-title svg {
@@ -192,34 +192,34 @@ export default function Sidebar({
         }
 
         .es-collapse-btn {
-          width: 30px;
-          height: 30px;
+          width: 32px;
+          height: 32px;
           display: flex;
           align-items: center;
           justify-content: center;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          border-radius: 6px;
+          border-radius: 9px;
           cursor: pointer;
           transition: all 0.15s ease;
           flex-shrink: 0;
         }
 
         .es-collapse-btn:hover {
-          background: var(--bg-surface, #141416);
-          color: var(--text-primary, #fafafa);
+          background: rgba(56, 189, 248, 0.18);
+          color: #e2e8f0;
         }
 
         /* ── Toolbar ── */
         .es-toolbar {
-          height: 34px;
+          height: 40px;
           display: flex;
           align-items: center;
           justify-content: space-between;
           padding: 0 10px 0 12px;
-          border-bottom: none;
-          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+          border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+          box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
           flex-shrink: 0;
         }
 
@@ -231,20 +231,20 @@ export default function Sidebar({
 
         .es-mode-toggle {
           display: flex;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-subtle, #1e1e21);
-          border-radius: 6px;
+          background: rgba(30, 41, 59, 0.5);
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          border-radius: 8px;
           padding: 2px;
           gap: 1px;
         }
 
         .es-mode-btn {
-          height: 22px;
+          height: 24px;
           padding: 0 10px;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          font-size: 10px;
+          font-size: 11px;
           font-weight: 600;
           letter-spacing: 0.3px;
           border-radius: 4px;
@@ -258,8 +258,8 @@ export default function Sidebar({
         }
 
         .es-mode-btn.active {
-          background: var(--bg-elevated, #1e1e21);
-          color: var(--accent-primary, #f59e0b);
+          background: rgba(34, 211, 238, 0.18);
+          color: #67e8f9;
           cursor: default;
         }
 
@@ -272,22 +272,22 @@ export default function Sidebar({
         }
 
         .es-new-btn {
-          width: 24px;
-          height: 24px;
+          width: 26px;
+          height: 26px;
           display: flex;
           align-items: center;
           justify-content: center;
           background: transparent;
           border: none;
           color: var(--text-muted, #71717a);
-          border-radius: 5px;
+          border-radius: 8px;
           cursor: pointer;
           transition: all 0.15s ease;
         }
 
         .es-new-btn:hover {
-          background: var(--bg-surface, #141416);
-          color: var(--text-primary, #fafafa);
+          background: rgba(34, 211, 238, 0.18);
+          color: #e2e8f0;
         }
 
         /* ── Content area ── */

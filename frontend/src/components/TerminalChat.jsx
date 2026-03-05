@@ -118,7 +118,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onTurn, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -166,6 +166,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const readerLineHeightRef = useRef(null);
   const [readerScrollToken, setReaderScrollToken] = useState(0);
   const sendTerminalInputRef = useRef(null);
+  const pendingExternalInputRef = useRef([]);
   const fitTimeoutRef = useRef(null);
   const fitRafRef = useRef(null);
   const pendingFitOptionsRef = useRef(null);
@@ -174,6 +175,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const onScrollDirectionRef = useRef(onScrollDirection);
   const onSendMessageRef = useRef(onSendMessage);
   const onOutputChunkRef = useRef(onOutputChunk);
+  const onScreenSnapshotRef = useRef(onScreenSnapshot);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
   const scrollModeRef = useRef(false);
@@ -241,6 +243,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const updateSessionTopicRef = useRef(updateSessionTopic);
   const previewInputLineRef = useRef('');
   const lastAutoPreviewRef = useRef({ sessionId: null, value: '' });
+  const screenSnapshotFrameRef = useRef(null);
+  const lastScreenSnapshotRef = useRef('');
   const restoreRetryAttemptedRef = useRef(false);
   const restoreAttempt2Ref = useRef(false);
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -1016,6 +1020,66 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [onOutputChunk]);
 
   useEffect(() => {
+    onScreenSnapshotRef.current = onScreenSnapshot;
+  }, [onScreenSnapshot]);
+
+  const emitScreenSnapshot = useCallback(() => {
+    const callback = onScreenSnapshotRef.current;
+    const term = xtermRef.current;
+    if (typeof callback !== 'function' || !term) return;
+
+    const buffer = term.buffer?.active;
+    if (!buffer) return;
+
+    const viewportY = Math.max(0, buffer.viewportY ?? 0);
+    const rowCount = Math.max(1, term.rows || 24);
+    const lines = [];
+
+    for (let row = 0; row < rowCount; row += 1) {
+      const line = buffer.getLine(viewportY + row);
+      const text = line ? line.translateToString(true).replace(/\s+$/g, '') : '';
+      lines.push(text);
+    }
+
+    while (lines.length > 0 && lines[lines.length - 1] === '') {
+      lines.pop();
+    }
+
+    const text = lines.join('\n');
+    const bufferType = buffer.type === 'alternate' ? 'alternate' : 'normal';
+    const signature = `${bufferType}:${text}`;
+    if (signature === lastScreenSnapshotRef.current) return;
+    lastScreenSnapshotRef.current = signature;
+
+    callback({
+      text,
+      bufferType,
+      rows: rowCount,
+      cols: term.cols || 0,
+      ts: Date.now()
+    });
+  }, []);
+
+  const scheduleScreenSnapshot = useCallback(() => {
+    if (typeof requestAnimationFrame !== 'function') {
+      emitScreenSnapshot();
+      return;
+    }
+    if (screenSnapshotFrameRef.current) return;
+    screenSnapshotFrameRef.current = requestAnimationFrame(() => {
+      screenSnapshotFrameRef.current = null;
+      emitScreenSnapshot();
+    });
+  }, [emitScreenSnapshot]);
+
+  useEffect(() => () => {
+    if (screenSnapshotFrameRef.current && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(screenSnapshotFrameRef.current);
+      screenSnapshotFrameRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
     usesTmuxRef.current = Boolean(usesTmux);
   }, [usesTmux]);
 
@@ -1255,11 +1319,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Register send-text function for external callers (e.g. chat input bar)
   useEffect(() => {
-    if (onRegisterSendText) {
-      onRegisterSendText((text) => {
-        sendTerminalInputRef.current?.(text);
-      });
-    }
+    if (!onRegisterSendText) return undefined;
+    onRegisterSendText((text) => {
+      if (!text) return false;
+      const sender = sendTerminalInputRef.current;
+      if (!sender) {
+        pendingExternalInputRef.current.push(text);
+        return false;
+      }
+      sender(text);
+      return true;
+    });
+    return () => {
+      onRegisterSendText(null);
+    };
   }, [onRegisterSendText]);
 
   // Register scroll-to-bottom function for external callers (e.g. floating button)
@@ -1512,11 +1585,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         term.write(text, () => {
           callback();
           scheduleIOSRefresh();
+          scheduleScreenSnapshot();
         });
         return;
       }
       term.write(text);
       scheduleIOSRefresh();
+      scheduleScreenSnapshot();
     };
 
     const capturePreviewFromInput = (text) => {
@@ -1628,6 +1703,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return !shouldPreferImageOverText(text);
     };
     sendTerminalInputRef.current = sendUserInput;
+    if (pendingExternalInputRef.current.length > 0) {
+      const queuedInputs = pendingExternalInputRef.current.splice(0, pendingExternalInputRef.current.length);
+      for (const queuedText of queuedInputs) {
+        sendUserInput(queuedText);
+      }
+    }
     if (registerTerminalSender) {
       registerTerminalSender(sessionId, sendUserInput);
     }
@@ -1702,23 +1783,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!container) return;
 
       const { width, height } = container.getBoundingClientRect();
-      if (width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT) {
-        openRetryCount++;
+      const containerTooSmall = width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT;
+      if (containerTooSmall) {
+        if (openRetryCount < MAX_OPEN_RETRIES) {
+          openRetryCount++;
+          const retryDelay = openRetryCount < 30 ? 0 : 150;
+          if (openRetryTimeout) clearTimeout(openRetryTimeout);
+          if (retryDelay === 0) {
+            rafId = requestAnimationFrame(openWhenReady);
+          } else {
+            openRetryTimeout = setTimeout(() => {
+              if (!disposed) {
+                rafId = requestAnimationFrame(openWhenReady);
+              }
+            }, retryDelay);
+          }
+          return;
+        }
         if (openRetryCount === MAX_OPEN_RETRIES) {
-          console.warn('[Terminal] Container never reached viable size after', MAX_OPEN_RETRIES, 'retries');
+          console.warn(
+            '[Terminal] Container never reached viable size; forcing init so transport can connect',
+            { width, height, retries: MAX_OPEN_RETRIES }
+          );
+          openRetryCount++;
         }
-        const retryDelay = openRetryCount < 30 ? 0 : 150;
-        if (openRetryTimeout) clearTimeout(openRetryTimeout);
-        if (retryDelay === 0) {
-          rafId = requestAnimationFrame(openWhenReady);
-        } else {
-          openRetryTimeout = setTimeout(() => {
-            if (!disposed) {
-              rafId = requestAnimationFrame(openWhenReady);
-            }
-          }, retryDelay);
-        }
-        return;
       }
 
       hasOpened = true;
@@ -3098,6 +3186,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       loadMoreHistoryRef.current = null;
       reconnectSocketRef.current = null;
       sendTerminalInputRef.current = null;
+      pendingExternalInputRef.current = [];
       requestAuthoritativeResizeRef.current = null;
       requestPriorityResizeRef.current = null;
     };
