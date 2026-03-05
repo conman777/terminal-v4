@@ -195,6 +195,70 @@ function looksLikeInteractiveStatusLine(line, squashed) {
   return hasProgressVerb && hasTuiMarkers;
 }
 
+function looksLikeClaudeDashboardLine(line, squashed) {
+  const separatorCount = (line.match(/\|/g) ?? []).length;
+  const hasDashboardKeyword = [
+    'recentactivity',
+    'welcomeback',
+    'whatsnew',
+    '/resume',
+    '/claude-api',
+    'emptybashprompt',
+    'numerickeypadsupport',
+    'opus4.6withhigheffort',
+    'claudemax',
+  ].some((keyword) => squashed.includes(keyword));
+  const looksLikeTuiChrome = separatorCount >= 1 || /[^\x00-\x7F]/.test(line);
+  return hasDashboardKeyword && looksLikeTuiChrome;
+}
+
+function looksLikeCodexStartupLine(line, squashed) {
+  const hasCodexStartupMarker = (
+    squashed.includes('openaicodex(v')
+    || squashed.includes('bootingmcpserver')
+    || squashed.includes('improvedocumentationin@filename')
+    || squashed.includes('new2xrationlimitsuntil')
+    || ((squashed.includes('gpt-5.4high') || squashed.includes('gpt-5.4defalt')) && squashed.includes('100%left'))
+    || (squashed.includes('model:') && squashed.includes('/modeltochange') && squashed.includes('100%left'))
+  );
+  return hasCodexStartupMarker && (/[^\x00-\x7F]/.test(line) || /\|/.test(line) || line.includes('\n') || squashed.includes('100%left'));
+}
+
+function shouldHideMirrorScreenSnapshot(snapshot, aiType) {
+  if (typeof snapshot !== 'string' || !snapshot.trim()) return false;
+
+  const squashed = compactText(snapshot);
+  if (aiType === 'claude') {
+    return looksLikeClaudeDashboardLine(snapshot, squashed)
+      || squashed.includes('claudecodev')
+      || squashed.includes('claudemax')
+      || squashed.includes('found1settingsissue')
+      || squashed.includes('claude.aiconnectorneedsauth');
+  }
+
+  if (aiType === 'codex') {
+    return looksLikeCodexStartupLine(snapshot, squashed)
+      || squashed.includes('tip:new2xrationlimitsuntil');
+  }
+
+  return false;
+}
+
+function normalizeClaudeAssistantLine(line) {
+  let normalized = line
+    .replace(/^MCP server failed \(\/mcp\)\. Open Terminal Panel for details\.\s*/i, '')
+    .replace(/^[✶✽✢·*]+\s+\w+…\s*[>❯]\s*/i, '')
+    .replace(/[─-]{10,}\s*[>❯]\s*/g, ' ')
+    .replace(/\s+Opus 4\.6\s+\|.*$/i, '')
+    .replace(/^[●•]\s*/, '')
+    .trim();
+
+  if (!normalized) return '';
+  const letters = (normalized.match(/[A-Za-z ]/g) ?? []).length;
+  if (letters / normalized.length < 0.55) return '';
+  return normalized;
+}
+
 function sanitizeAssistantTurnContent(content, aiType) {
   if (typeof content !== 'string') return '';
 
@@ -220,8 +284,13 @@ function sanitizeAssistantTurnContent(content, aiType) {
       if (squashed.includes('found1settingsissue') && squashed.includes('/doctor')) continue;
       if (trimmed.includes('>') && /[·•*]/.test(trimmed) && /\b(thinking|computing|running|waiting|caramelizing)\b/i.test(trimmed)) continue;
 
+      if (looksLikeClaudeDashboardLine(trimmed, squashed)) continue;
+
       if (squashed.includes('mcpserverfailed')) {
-        if (!normalizedLines.includes('MCP server failed (/mcp). Open Terminal Panel for details.')) {
+        const normalizedClaudeLine = normalizeClaudeAssistantLine(trimmed);
+        if (normalizedClaudeLine && !compactText(normalizedClaudeLine).includes('mcpserverfailed')) {
+          normalizedLines.push(normalizedClaudeLine);
+        } else if (!normalizedLines.includes('MCP server failed (/mcp). Open Terminal Panel for details.')) {
           normalizedLines.push('MCP server failed (/mcp). Open Terminal Panel for details.');
         }
         continue;
@@ -229,6 +298,8 @@ function sanitizeAssistantTurnContent(content, aiType) {
 
       if (looksLikeDecoratedPathLine(trimmed)) continue;
     }
+
+    if (aiType === 'codex' && looksLikeCodexStartupLine(trimmed, squashed)) continue;
 
     normalizedLines.push(trimmed);
   }
@@ -302,7 +373,12 @@ export function DesktopConversationView({
   onOpenTerminal,
   conversationNotice = '',
   showTerminalMirror = false,
-  interactivePromptEvent = null
+  interactivePromptEvent = null,
+  mode = 'terminal',
+  structuredMessages = [],
+  structuredToolCalls = [],
+  pendingApproval = null,
+  onApprove = null,
 }) {
   const [inputValue, setInputValue] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -311,8 +387,8 @@ export function DesktopConversationView({
   const textareaRef = useRef(null);
   const autoScrollRef = useRef(true);
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
-  const visibleTurns = buildVisibleTurns(turns, aiType);
-  const displayTurns = visibleTurns;
+  const isStructured = mode === 'structured';
+  const visibleTurns = isStructured ? [] : buildVisibleTurns(turns, aiType);
   const hasBackgroundOutput = typeof terminalPreview === 'string' && terminalPreview.trim().length > 0;
   const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
   const interactivePromptFromEvent = parseInteractivePromptEvent(interactivePromptEvent);
@@ -328,21 +404,50 @@ export function DesktopConversationView({
       .filter(Boolean)
       .slice(-1)[0]
     : '';
-  const hasVisibleTurns = displayTurns.length > 0 || Boolean(interactivePromptFromEvent) || (showTerminalMirror && hasLiveScreenSnapshot);
+  const terminalViewState = isStructured
+    ? 'structured'
+    : interactivePrompt
+      ? 'interactive_prompt'
+      : showTerminalMirror
+        ? 'terminal_mirror'
+        : 'conversation';
+  const shouldShowMirrorScreen = hasLiveScreenSnapshot && terminalViewState !== 'conversation';
+  const displayTurns = isStructured
+    ? []
+    : terminalViewState === 'conversation'
+      ? visibleTurns
+      : [];
+  const hasVisibleTurns =
+    displayTurns.length > 0
+    || Boolean(interactivePromptFromEvent)
+    || (showTerminalMirror && hasLiveScreenSnapshot)
+    || (isStructured && (
+      structuredMessages.length > 0
+      || structuredToolCalls.length > 0
+      || Boolean(pendingApproval)
+    ));
   const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
   const isConnected = connectionState === 'online';
   const isOffline = connectionState === 'offline';
-  const startupMessage = isOffline
-    ? 'Terminal is offline. Reconnect or open the terminal panel to inspect the session.'
-    : connectionState === 'connecting'
-      ? 'Connecting to terminal transport. You can still queue a launch command now.'
-      : hasBackgroundOutput
-        ? `${assistantLabel} launched in background. Waiting for the first conversation turn...`
-      : !isSendReady
-        ? 'Transport is online and preparing input channel...'
-      : isStreaming
-        ? `${assistantLabel} is running. Waiting for the first response turn...`
-        : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`;
+  const startupMessage = isStructured
+    ? (isOffline
+      ? 'Structured session is offline. Refresh the session stream and try again.'
+      : connectionState === 'connecting'
+        ? 'Connecting to the structured session stream...'
+        : isStreaming
+          ? `${assistantLabel} is responding. Waiting for the first visible message...`
+          : `Send a message to start this ${assistantLabel} session.`)
+    : (isOffline
+      ? 'Terminal is offline. Reconnect or open the terminal panel to inspect the session.'
+      : connectionState === 'connecting'
+        ? 'Connecting to terminal transport. You can still queue a launch command now.'
+        : hasBackgroundOutput
+          ? `${assistantLabel} launched in background. Waiting for the first conversation turn...`
+        : !isSendReady
+          ? 'Transport is online and preparing input channel...'
+        : isStreaming
+          ? `${assistantLabel} is running. Waiting for the first response turn...`
+          : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`);
 
   const scrollToBottom = useCallback(() => {
     const element = bottomRef.current;
@@ -353,7 +458,7 @@ export function DesktopConversationView({
   useEffect(() => {
     if (!autoScrollRef.current) return;
     scrollToBottom();
-  }, [turns, isStreaming, scrollToBottom]);
+  }, [turns, structuredMessages, structuredToolCalls, pendingApproval, isStreaming, scrollToBottom]);
 
   useEffect(() => {
     if (!shouldCaptureRawKeyboard) return undefined;
@@ -489,14 +594,16 @@ export function DesktopConversationView({
                     Launch {assistantLabel}
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="desktop-agent-action"
-                  onClick={onOpenTerminal}
-                  disabled={!onOpenTerminal}
-                >
-                  Open Terminal Panel
-                </button>
+                {!isStructured && (
+                  <button
+                    type="button"
+                    className="desktop-agent-action"
+                    onClick={onOpenTerminal}
+                    disabled={!onOpenTerminal}
+                  >
+                    Open Terminal Panel
+                  </button>
+                )}
               </div>
 
               {launchCommand && (
@@ -526,7 +633,7 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {showTerminalMirror && (hasLiveScreenSnapshot || Boolean(interactivePromptFromEvent)) && (
+          {terminalViewState !== 'conversation' && (hasLiveScreenSnapshot || Boolean(interactivePromptFromEvent)) && (
             <div className="desktop-cli-focus-card" role="status" aria-live="polite">
               <div className="desktop-cli-focus-head">
                 <span className="desktop-cli-focus-title">
@@ -560,12 +667,20 @@ export function DesktopConversationView({
                   <div className="desktop-interactive-prompt-hint">
                     Keyboard passthrough is active for this prompt.
                   </div>
+                  {shouldShowMirrorScreen && (
+                    <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
+                  )}
                 </>
               ) : (
-                <div className="desktop-cli-focus-note">
-                  Live CLI is running in the background. Conversation stays in this view.
-                  {compactSnapshotLine ? ` Latest terminal line: ${compactSnapshotLine}` : ''}
-                </div>
+                <>
+                  <div className="desktop-cli-focus-note">
+                    Live CLI is running in the background. Messages sent here go directly to the CLI.
+                    {compactSnapshotLine ? ` Latest terminal line: ${compactSnapshotLine}` : ''}
+                  </div>
+                  {shouldShowMirrorScreen && (
+                    <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -577,7 +692,92 @@ export function DesktopConversationView({
             />
           ))}
 
-          {isStreaming && !showTerminalMirror && (
+          {isStructured && structuredMessages.map((msg, index) => {
+            if (msg.role === 'user') {
+              return (
+                <ToolCallBlock
+                  key={`s-${msg.ts ?? index}-user-${index}`}
+                  item={{ type: 'user', content: msg.content }}
+                />
+              );
+            }
+            if (msg.role === 'assistant') {
+              return (
+                <ToolCallBlock
+                  key={`s-${msg.ts ?? index}-assistant-${index}`}
+                  item={{ type: 'assistant', content: msg.content }}
+                />
+              );
+            }
+            if (msg.role === 'tool') {
+              return (
+                <ToolCallBlock
+                  key={`s-${msg.ts ?? index}-tool-${index}`}
+                  item={{
+                    type: 'tool_use',
+                    tool: msg.toolName,
+                    toolInput: msg.toolInput,
+                    result: {
+                      toolResult: msg.result || '',
+                      isError: Boolean(msg.isError)
+                    }
+                  }}
+                />
+              );
+            }
+            if (msg.role === 'error') {
+              return (
+                <div key={`s-${msg.ts ?? index}-error-${index}`} className="cc-message cc-error">
+                  <div className="cc-error-bubble">{msg.content}</div>
+                </div>
+              );
+            }
+            return null;
+          })}
+
+          {isStructured && structuredToolCalls.length > 0 && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                {structuredToolCalls.map((tc, i) => (
+                  <div key={`tc-${i}`} className="structured-tool-running">
+                    Running <strong>{tc.toolName}</strong>...
+                    {tc.result && <pre className="structured-tool-partial">{tc.result}</pre>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {isStructured && pendingApproval && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <div className="structured-approval-prompt">
+                  <p>{pendingApproval.description || pendingApproval.prompt || `Approve ${pendingApproval.toolName}?`}</p>
+                  {pendingApproval.toolInput && (
+                    <pre className="structured-approval-input">{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
+                  )}
+                  <div className="desktop-interactive-prompt-actions">
+                    <button
+                      type="button"
+                      className="desktop-interactive-action primary"
+                      onClick={() => onApprove?.(true)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="desktop-interactive-action secondary"
+                      onClick={() => onApprove?.(false)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isStreaming && !showTerminalMirror && !isStructured && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
                 <TypingIndicator />

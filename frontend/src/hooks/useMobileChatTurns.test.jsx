@@ -102,4 +102,58 @@ describe('useMobileChatTurns', () => {
 
     expect(sender).toHaveBeenCalledWith('\x1b[B');
   });
+
+  it('adds an optimistic user turn when chat input is sent', () => {
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleChatSend('Implement the fix');
+    });
+
+    expect(result.current.turns).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Implement the fix' })
+    ]);
+  });
+
+  it('deduplicates optimistic user turns when the same turn arrives from terminal metadata', () => {
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleChatSend('Implement the fix');
+    });
+
+    act(() => {
+      result.current.handleTurn({ role: 'user', content: 'Implement the fix', ts: 1234 });
+    });
+
+    expect(result.current.turns).toEqual([
+      { role: 'user', content: 'Implement the fix', ts: 1234 }
+    ]);
+  });
+
+  it('deduplicates matching fetched and pending turns during initial seed', async () => {
+    apiFetchMock.mockResolvedValueOnce({
+      json: async () => ({
+        turns: [
+          { role: 'assistant', content: 'Ready.', ts: 1000 }
+        ]
+      }),
+    });
+
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+
+    act(() => {
+      result.current.handleTurn({ role: 'assistant', content: 'Ready.', ts: 1001 });
+    });
+
+    await act(async () => {});
+
+    expect(result.current.turns).toEqual([
+      { role: 'assistant', content: 'Ready.', ts: 1000 }
+    ]);
+  });
 });

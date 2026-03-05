@@ -1,6 +1,37 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
 
+function normalizeTurnContent(content) {
+  return typeof content === 'string' ? content.trim() : '';
+}
+
+function areSameTurn(a, b) {
+  return Boolean(
+    a
+    && b
+    && a.role === b.role
+    && normalizeTurnContent(a.content) === normalizeTurnContent(b.content)
+  );
+}
+
+function mergeDistinctTurns(turns) {
+  const merged = [];
+  for (const turn of turns) {
+    const normalizedContent = normalizeTurnContent(turn?.content);
+    if (!normalizedContent) continue;
+
+    const normalizedTurn = {
+      ...turn,
+      content: normalizedContent
+    };
+
+    if (!areSameTurn(merged[merged.length - 1], normalizedTurn)) {
+      merged.push(normalizedTurn);
+    }
+  }
+  return merged;
+}
+
 /**
  * Manages chat turns for the mobile conversation view.
  *
@@ -13,11 +44,13 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   const [turns, setTurns] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSendReady, setIsSendReady] = useState(false);
+  const turnsRef = useRef([]);
 
   // Ref so the send function registered by TerminalChat is always fresh.
   const sendToTerminalRef = useRef(null);
   const pendingInputsRef = useRef([]);
   const retryFlushTimerRef = useRef(null);
+  const optimisticUserTurnsRef = useRef([]);
 
   // Track which session we've seeded to avoid redundant fetches.
   const seededSessionRef = useRef(null);
@@ -57,10 +90,54 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
 
   // Called by TerminalChat whenever a structured turn arrives over WebSocket.
   const handleTurn = useCallback((turn) => {
+    if (!turn || typeof turn.content !== 'string') return;
+
+    const normalizedContent = normalizeTurnContent(turn.content);
+    if (!normalizedContent) return;
+
+    const normalizedTurn = {
+      ...turn,
+      content: normalizedContent
+    };
+
+    const currentTurns = turnsRef.current;
+    if (normalizedTurn.role === 'user') {
+      const optimisticMatchIndex = currentTurns.findIndex((item) => (
+        item?.role === 'user'
+        && item?.optimistic === true
+        && item.content === normalizedContent
+      ));
+
+      if (optimisticMatchIndex !== -1) {
+        const next = [...currentTurns];
+        next.splice(optimisticMatchIndex, 1, normalizedTurn);
+        turnsRef.current = next;
+        setTurns(next);
+        optimisticUserTurnsRef.current = optimisticUserTurnsRef.current.filter((item) => item !== normalizedContent);
+
+        if (!seededRef.current) {
+          const pendingTurns = pendingTurnsRef.current;
+          if (!areSameTurn(pendingTurns[pendingTurns.length - 1], normalizedTurn)) {
+            pendingTurnsRef.current.push(normalizedTurn);
+          }
+        }
+        return;
+      }
+    }
+
     if (seededRef.current) {
-      setTurns(prev => [...prev, turn]);
+      if (areSameTurn(currentTurns[currentTurns.length - 1], normalizedTurn)) {
+        return;
+      }
+
+      const next = [...currentTurns, normalizedTurn];
+      turnsRef.current = next;
+      setTurns(next);
     } else {
-      pendingTurnsRef.current.push(turn);
+      const pendingTurns = pendingTurnsRef.current;
+      if (!areSameTurn(pendingTurns[pendingTurns.length - 1], normalizedTurn)) {
+        pendingTurnsRef.current.push(normalizedTurn);
+      }
     }
   }, []);
 
@@ -98,7 +175,25 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
 
   // Send a message from the chat input bar.
   const handleChatSend = useCallback((text) => {
-    return sendOrQueue(text + '\r');
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    const result = sendOrQueue(text + '\r');
+
+    if (trimmed) {
+      optimisticUserTurnsRef.current.push(trimmed);
+      const next = [
+        ...turnsRef.current,
+        {
+          role: 'user',
+          content: trimmed,
+          ts: Date.now(),
+          optimistic: true
+        }
+      ];
+      turnsRef.current = next;
+      setTurns(next);
+    }
+
+    return result;
   }, [sendOrQueue]);
 
   // Send raw key/input data directly to the terminal transport.
@@ -115,10 +210,12 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   // Reset synchronously on session switch so child registration effects can
   // re-register sender afterward without being clobbered by a late parent effect.
   useLayoutEffect(() => {
+    turnsRef.current = [];
     setTurns([]);
     setIsSendReady(false);
     sendToTerminalRef.current = null;
     pendingInputsRef.current = [];
+    optimisticUserTurnsRef.current = [];
     if (retryFlushTimerRef.current) {
       clearTimeout(retryFlushTimerRef.current);
       retryFlushTimerRef.current = null;
@@ -142,7 +239,9 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
         if (cancelled) return;
         const fetched = Array.isArray(data?.turns) ? data.turns : [];
         // Apply fetched history then flush any live turns that arrived during the fetch.
-        setTurns([...fetched, ...pendingTurnsRef.current]);
+        const next = mergeDistinctTurns([...fetched, ...pendingTurnsRef.current]);
+        turnsRef.current = next;
+        setTurns(next);
         pendingTurnsRef.current = [];
         seededRef.current = true;
         seededSessionRef.current = sessionId;
@@ -150,7 +249,9 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
       .catch(() => {
         if (cancelled) return;
         // Seeding failed — still apply any buffered live turns.
-        setTurns([...pendingTurnsRef.current]);
+        const next = mergeDistinctTurns(pendingTurnsRef.current);
+        turnsRef.current = next;
+        setTurns(next);
         pendingTurnsRef.current = [];
         seededRef.current = true;
         seededSessionRef.current = sessionId;
