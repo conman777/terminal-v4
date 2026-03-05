@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TurnDetector, type ChatTurn } from './turn-detector';
+import type { TerminalCliEvent } from './cli-events';
 import { EventEmitter } from 'node:events';
 import { spawn as ptySpawn } from '@homebridge/node-pty-prebuilt-multiarch';
 import path from 'node:path';
@@ -34,6 +35,7 @@ import {
   getTmuxSessionCwd,
   listTmuxSessions
 } from './tmux-manager';
+import { buildInteractiveTerminalEnv } from './terminal-env';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -191,7 +193,7 @@ function ptySpawner(options: TerminalSpawnOptions): TerminalProcess {
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd || process.cwd(),
-    env: { ...process.env, ...options.env } as Record<string, string>
+    env: buildInteractiveTerminalEnv(process.env, options.env) as Record<string, string>
   });
 
   ptyProcess.onData((data: string) => {
@@ -1052,14 +1054,24 @@ export class TerminalManager {
     });
 
     // Create turn detector — emits structured turn events to WS subscribers.
-    session.turnDetector = new TurnDetector((turn: ChatTurn) => {
-      const metaEvent = {
-        text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
-        ts: turn.ts,
-        seq: undefined
-      };
-      session.subscribers.forEach((sub) => sub(metaEvent));
-    });
+    session.turnDetector = new TurnDetector(
+      (turn: ChatTurn) => {
+        const metaEvent = {
+          text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
+          ts: turn.ts,
+          seq: undefined
+        };
+        session.subscribers.forEach((sub) => sub(metaEvent));
+      },
+      (event: TerminalCliEvent) => {
+        const metaEvent = {
+          text: JSON.stringify({ __terminal_meta: true, type: 'cli_event', event }),
+          ts: event.ts,
+          seq: undefined
+        };
+        session.subscribers.forEach((sub) => sub(metaEvent));
+      }
+    );
 
     // PTY data handler appends to batcher instead of calling #handleData directly
     const batchedDataHandler = (data: string) => {
@@ -1584,14 +1596,24 @@ export class TerminalManager {
     });
 
     // Create turn detector — emits structured turn events to WS subscribers.
-    session.turnDetector = new TurnDetector((turn: ChatTurn) => {
-      const metaEvent = {
-        text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
-        ts: turn.ts,
-        seq: undefined
-      };
-      session.subscribers.forEach((sub) => sub(metaEvent));
-    });
+    session.turnDetector = new TurnDetector(
+      (turn: ChatTurn) => {
+        const metaEvent = {
+          text: JSON.stringify({ __terminal_meta: true, type: 'turn', ...turn }),
+          ts: turn.ts,
+          seq: undefined
+        };
+        session.subscribers.forEach((sub) => sub(metaEvent));
+      },
+      (event: TerminalCliEvent) => {
+        const metaEvent = {
+          text: JSON.stringify({ __terminal_meta: true, type: 'cli_event', event }),
+          ts: event.ts,
+          seq: undefined
+        };
+        session.subscribers.forEach((sub) => sub(metaEvent));
+      }
+    );
 
     // PTY data handler appends to batcher instead of calling #handleData directly
     const batchedDataHandler = (data: string) => {

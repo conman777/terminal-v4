@@ -8,6 +8,144 @@ function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
 }
 
+function mapKeyboardEventToTerminalInput(event) {
+  const { key, ctrlKey, altKey, metaKey, shiftKey } = event;
+  if (metaKey) return null;
+
+  if (ctrlKey && key && key.length === 1) {
+    const lower = key.toLowerCase();
+    const code = lower.charCodeAt(0);
+    if (code >= 97 && code <= 122) {
+      return String.fromCharCode(code - 96);
+    }
+    return null;
+  }
+
+  switch (key) {
+    case 'Enter':
+      return '\r';
+    case 'Tab':
+      return shiftKey ? '\x1b[Z' : '\t';
+    case 'Backspace':
+      return '\x7f';
+    case 'Delete':
+      return '\x1b[3~';
+    case 'Escape':
+      return '\x1b';
+    case 'ArrowUp':
+      return '\x1b[A';
+    case 'ArrowDown':
+      return '\x1b[B';
+    case 'ArrowRight':
+      return '\x1b[C';
+    case 'ArrowLeft':
+      return '\x1b[D';
+    case 'Home':
+      return '\x1b[H';
+    case 'End':
+      return '\x1b[F';
+    case 'PageUp':
+      return '\x1b[5~';
+    case 'PageDown':
+      return '\x1b[6~';
+    default:
+      break;
+  }
+
+  if (!altKey && !ctrlKey && key && key.length === 1) {
+    return key;
+  }
+
+  return null;
+}
+
+function parseInteractivePromptSnapshot(snapshotText) {
+  if (typeof snapshotText !== 'string') return null;
+  const text = snapshotText.trim();
+  if (!text) return null;
+
+  const lines = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return null;
+
+  const lowerText = text.toLowerCase();
+  const promptLine = [...lines].reverse().find((line) => (
+    /\[[yYnN]\/[yYnN]\]/.test(line)
+    || /(?:continue anyway|trust this folder|select an option|confirm|cancel)/i.test(line)
+    || /(?:enter|esc|shift\+tab|tab to cycle)/i.test(line)
+  )) || lines[lines.length - 1];
+
+  const actions = [];
+  if (/\[[yYnN]\/[yYnN]\]/.test(promptLine) || /continue anyway|trust this folder/i.test(promptLine)) {
+    actions.push(
+      { label: 'Yes', payload: 'y\r', kind: 'primary' },
+      { label: 'No', payload: 'n\r', kind: 'secondary' }
+    );
+  }
+
+  if (/enter to (confirm|continue)|\[[yYnN]\/[yYnN]\]|continue anyway|confirm/i.test(promptLine) || /enter to (confirm|continue)/i.test(lowerText)) {
+    actions.push({ label: 'Enter', payload: '\r', kind: 'secondary' });
+  }
+
+  if (/esc(?:ape)? to cancel|cancel/i.test(promptLine) || /esc(?:ape)? to cancel/i.test(lowerText)) {
+    actions.push({ label: 'Esc', payload: '\x1b', kind: 'secondary' });
+  }
+
+  if (/shift\+tab to cycle|tab to cycle/i.test(promptLine) || /shift\+tab to cycle|tab to cycle/i.test(lowerText)) {
+    actions.push(
+      { label: 'Tab', payload: '\t', kind: 'secondary' },
+      { label: 'Shift+Tab', payload: '\x1b[Z', kind: 'secondary' }
+    );
+  }
+
+  if (actions.length === 0) {
+    return null;
+  }
+
+  const deduped = [];
+  const seen = new Set();
+  for (const action of actions) {
+    const key = `${action.label}:${action.payload}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(action);
+  }
+
+  return {
+    prompt: promptLine,
+    actions: deduped
+  };
+}
+
+function parseInteractivePromptEvent(event) {
+  if (!event || typeof event !== 'object') return null;
+  if (event.type !== 'prompt_required') return null;
+  if (typeof event.prompt !== 'string' || event.prompt.trim().length === 0) return null;
+
+  const actionMap = {
+    yes: { label: 'Yes', payload: 'y\r', kind: 'primary' },
+    no: { label: 'No', payload: 'n\r', kind: 'secondary' },
+    enter: { label: 'Enter', payload: '\r', kind: 'secondary' },
+    escape: { label: 'Esc', payload: '\x1b', kind: 'secondary' },
+    tab: { label: 'Tab', payload: '\t', kind: 'secondary' },
+    shift_tab: { label: 'Shift+Tab', payload: '\x1b[Z', kind: 'secondary' }
+  };
+
+  const requestedActions = Array.isArray(event.actions)
+    ? event.actions.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
+    : [];
+  const mapped = requestedActions.map((name) => actionMap[name]).filter(Boolean);
+  const actions = mapped.length > 0 ? mapped : [{ label: 'Enter', payload: '\r', kind: 'secondary' }];
+
+  return {
+    prompt: event.prompt.trim(),
+    actions
+  };
+}
+
 function isLaunchCommand(content, aiType) {
   const normalized = content.trim().toLowerCase();
   if (!normalized) return false;
@@ -148,6 +286,7 @@ export function DesktopConversationView({
   turns,
   isStreaming = false,
   onSend,
+  onSendRaw,
   onInterrupt,
   onImageUpload,
   sessionId,
@@ -162,7 +301,8 @@ export function DesktopConversationView({
   onLaunchAgent,
   onOpenTerminal,
   conversationNotice = '',
-  showTerminalMirror = false
+  showTerminalMirror = false,
+  interactivePromptEvent = null
 }) {
   const [inputValue, setInputValue] = useState('');
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -172,13 +312,24 @@ export function DesktopConversationView({
   const autoScrollRef = useRef(true);
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const visibleTurns = buildVisibleTurns(turns, aiType);
-  const displayTurns = showTerminalMirror
-    ? visibleTurns.filter((turn) => turn?.role !== 'assistant')
-    : visibleTurns;
-  const hasVisibleTurns = displayTurns.length > 0 || (showTerminalMirror && hasLiveScreenSnapshot);
-  const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
+  const displayTurns = visibleTurns;
   const hasBackgroundOutput = typeof terminalPreview === 'string' && terminalPreview.trim().length > 0;
   const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
+  const interactivePromptFromEvent = parseInteractivePromptEvent(interactivePromptEvent);
+  const interactivePrompt = interactivePromptFromEvent
+    || (showTerminalMirror && hasLiveScreenSnapshot
+      ? parseInteractivePromptSnapshot(terminalScreenSnapshot)
+      : null);
+  const shouldCaptureRawKeyboard = showTerminalMirror && Boolean(interactivePrompt);
+  const compactSnapshotLine = hasLiveScreenSnapshot
+    ? terminalScreenSnapshot
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-1)[0]
+    : '';
+  const hasVisibleTurns = displayTurns.length > 0 || Boolean(interactivePromptFromEvent) || (showTerminalMirror && hasLiveScreenSnapshot);
+  const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
   const isConnected = connectionState === 'online';
   const isOffline = connectionState === 'offline';
   const startupMessage = isOffline
@@ -204,6 +355,35 @@ export function DesktopConversationView({
     scrollToBottom();
   }, [turns, isStreaming, scrollToBottom]);
 
+  useEffect(() => {
+    if (!shouldCaptureRawKeyboard) return undefined;
+
+    const handleGlobalKeyDown = (event) => {
+      const target = event.target;
+      const isInput = target instanceof HTMLInputElement;
+      const isTextarea = target instanceof HTMLTextAreaElement;
+      const isEditable = isInput || isTextarea || Boolean(target?.isContentEditable);
+      if (isEditable) {
+        const isComposer = target === textareaRef.current;
+        if (!isComposer) return;
+        const hasText = Boolean(textareaRef.current?.value?.length);
+        if (hasText && event.key !== 'Enter') return;
+      }
+
+      const payload = mapKeyboardEventToTerminalInput(event);
+      if (!payload) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      onSendRaw?.(payload);
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleGlobalKeyDown, true);
+    };
+  }, [onSendRaw, shouldCaptureRawKeyboard]);
+
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -221,7 +401,6 @@ export function DesktopConversationView({
 
   const handleSend = useCallback(() => {
     const text = inputValue.trim();
-    if (!text) return;
     onSend?.(text);
     setInputValue('');
     if (textareaRef.current) {
@@ -231,10 +410,20 @@ export function DesktopConversationView({
   }, [inputValue, onSend]);
 
   const handleKeyDown = useCallback((event) => {
+    if (shouldCaptureRawKeyboard) {
+      const payload = mapKeyboardEventToTerminalInput(event);
+      if (payload) {
+        event.preventDefault();
+        event.stopPropagation();
+        onSendRaw?.(payload);
+        return;
+      }
+    }
+
     if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault();
     handleSend();
-  }, [handleSend]);
+  }, [handleSend, onSendRaw, shouldCaptureRawKeyboard]);
 
   const handlePaste = useCallback(async (event) => {
     if (!sessionId || !event.clipboardData) return;
@@ -266,7 +455,7 @@ export function DesktopConversationView({
 
       <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
         <div className="desktop-thread-inner">
-          {conversationNotice && (
+          {conversationNotice && !showTerminalMirror && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
             </div>
@@ -337,10 +526,47 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {showTerminalMirror && hasLiveScreenSnapshot && (
-            <div className="desktop-terminal-mirror-card" role="status" aria-live="polite">
-              <div className="desktop-terminal-mirror-label">Live terminal mirror</div>
-              <pre className="desktop-terminal-mirror-output">{terminalScreenSnapshot}</pre>
+          {showTerminalMirror && (hasLiveScreenSnapshot || Boolean(interactivePromptFromEvent)) && (
+            <div className="desktop-cli-focus-card" role="status" aria-live="polite">
+              <div className="desktop-cli-focus-head">
+                <span className="desktop-cli-focus-title">
+                  {interactivePrompt ? 'Interactive CLI input required' : 'CLI session active'}
+                </span>
+                <button
+                  type="button"
+                  className="desktop-cli-open-terminal-btn"
+                  onClick={onOpenTerminal}
+                  disabled={!onOpenTerminal}
+                >
+                  Open Terminal Panel
+                </button>
+              </div>
+
+              {interactivePrompt ? (
+                <>
+                  <div className="desktop-cli-focus-prompt">{interactivePrompt.prompt}</div>
+                  <div className="desktop-interactive-prompt-actions">
+                    {interactivePrompt.actions.map((action) => (
+                      <button
+                        key={`${action.label}-${action.payload}`}
+                        type="button"
+                        className={`desktop-interactive-action ${action.kind}`}
+                        onClick={() => onSendRaw?.(action.payload)}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="desktop-interactive-prompt-hint">
+                    Keyboard passthrough is active for this prompt.
+                  </div>
+                </>
+              ) : (
+                <div className="desktop-cli-focus-note">
+                  Live CLI is running in the background. Conversation stays in this view.
+                  {compactSnapshotLine ? ` Latest terminal line: ${compactSnapshotLine}` : ''}
+                </div>
+              )}
             </div>
           )}
 
@@ -351,7 +577,7 @@ export function DesktopConversationView({
             />
           ))}
 
-          {isStreaming && (
+          {isStreaming && !showTerminalMirror && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
                 <TypingIndicator />

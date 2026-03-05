@@ -5,7 +5,12 @@ const KNOWN_AI_PROVIDERS = [
     title: 'Claude Code',
     launchCommand: 'claude',
     initialCommand: 'claude --dangerously-skip-permissions',
-    color: '#ff6b2b'
+    color: '#ff6b2b',
+    capabilities: {
+      prefersStructuredUi: true,
+      supportsStructuredEvents: true,
+      supportsPromptEvents: true
+    }
   },
   {
     id: 'codex',
@@ -13,7 +18,12 @@ const KNOWN_AI_PROVIDERS = [
     title: 'Codex',
     launchCommand: 'codex',
     initialCommand: 'codex --yolo',
-    color: '#3b82f6'
+    color: '#3b82f6',
+    capabilities: {
+      prefersStructuredUi: true,
+      supportsStructuredEvents: true,
+      supportsPromptEvents: true
+    }
   },
   {
     id: 'gemini',
@@ -21,7 +31,12 @@ const KNOWN_AI_PROVIDERS = [
     title: 'Gemini CLI',
     launchCommand: 'gemini',
     initialCommand: 'gemini --yolo',
-    color: '#22c55e'
+    color: '#22c55e',
+    capabilities: {
+      prefersStructuredUi: true,
+      supportsStructuredEvents: true,
+      supportsPromptEvents: true
+    }
   },
   {
     id: 'aider',
@@ -59,6 +74,11 @@ const KNOWN_AI_PROVIDERS = [
 
 const KNOWN_PROVIDER_MAP = new Map(KNOWN_AI_PROVIDERS.map((provider) => [provider.id, provider]));
 const AI_TYPE_ID_RE = /^[a-z][a-z0-9_-]*$/;
+const DEFAULT_AI_CAPABILITIES = {
+  prefersStructuredUi: false,
+  supportsStructuredEvents: false,
+  supportsPromptEvents: false
+};
 
 function humanizeAiType(aiType) {
   return aiType
@@ -93,7 +113,8 @@ export function getAiProvider(aiType) {
     title: label,
     launchCommand: normalized,
     initialCommand: normalized,
-    color: '#38bdf8'
+    color: '#38bdf8',
+    capabilities: { ...DEFAULT_AI_CAPABILITIES }
   };
 }
 
@@ -103,6 +124,14 @@ export function getAiDisplayLabel(aiType) {
 
 export function getAiLaunchCommand(aiType) {
   return getAiProvider(aiType)?.launchCommand ?? '';
+}
+
+export function getAiCapabilities(aiType) {
+  const capabilities = getAiProvider(aiType)?.capabilities;
+  return {
+    ...DEFAULT_AI_CAPABILITIES,
+    ...(capabilities && typeof capabilities === 'object' ? capabilities : {})
+  };
 }
 
 export const COMMON_LAUNCH_PREFIXES = KNOWN_AI_PROVIDERS.map((provider) => provider.launchCommand);

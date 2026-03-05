@@ -1,6 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import type { TerminalProcess, TerminalSpawnOptions } from './terminal-types';
+import { buildInteractiveTerminalEnv } from './terminal-env';
 
 const TMUX_SESSION_PREFIX = 'terminal-app-';
 const TMUX_HISTORY_LIMIT = Number(process.env.TMUX_HISTORY_LIMIT || '100000');
@@ -120,7 +121,7 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
       '-t', sessionName
     ], {
       cwd: options.cwd || process.cwd(),
-      env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
+      env: buildInteractiveTerminalEnv(process.env, { ...options.env, TERM: 'xterm-256color' }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
   } else {
@@ -141,7 +142,7 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
         options.shell
       ], {
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
+        env: buildInteractiveTerminalEnv(process.env, { ...options.env, TERM: 'xterm-256color' }),
         stdio: 'pipe'
       });
     } catch (error) {
@@ -157,7 +158,7 @@ export function spawnTmuxSession(options: TerminalSpawnOptions & { sessionId: st
       '-t', sessionName
     ], {
       cwd: options.cwd || process.cwd(),
-      env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
+      env: buildInteractiveTerminalEnv(process.env, { ...options.env, TERM: 'xterm-256color' }),
       stdio: ['pipe', 'pipe', 'pipe']
     });
   }
@@ -241,7 +242,7 @@ export function spawnTmuxWithPty(
         options.shell
       ], {
         cwd: options.cwd || process.cwd(),
-        env: { ...process.env, ...options.env, TERM: 'xterm-256color' } as NodeJS.ProcessEnv,
+        env: buildInteractiveTerminalEnv(process.env, { ...options.env, TERM: 'xterm-256color' }),
         stdio: 'pipe'
       });
     } catch (error) {
@@ -260,7 +261,7 @@ export function spawnTmuxWithPty(
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd || process.cwd(),
-    env: { ...process.env, ...options.env } as Record<string, string>
+    env: buildInteractiveTerminalEnv(process.env, options.env) as Record<string, string>
   });
 
   ptyProcess.onData((data: string) => {

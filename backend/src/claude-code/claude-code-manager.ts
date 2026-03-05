@@ -14,6 +14,7 @@ import {
   deleteClaudeCodeSession
 } from './claude-code-store';
 import { validatePathSecurity } from '../utils/path-security';
+import { buildInteractiveTerminalEnv } from '../terminal/terminal-env';
 
 /**
  * A wrapper around the Claude Code CLI using PTY to maintain compatibility
@@ -88,7 +89,7 @@ class AgentWrapper {
       cols: 160,
       rows: 30,
       cwd: this.options.cwd || process.cwd(),
-      env: { ...process.env, ...this.options.env }
+      env: buildInteractiveTerminalEnv(process.env, this.options.env)
     });
 
     // Store reference for cleanup

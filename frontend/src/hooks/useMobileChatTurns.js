@@ -101,6 +101,11 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
     return sendOrQueue(text + '\r');
   }, [sendOrQueue]);
 
+  // Send raw key/input data directly to the terminal transport.
+  const handleRawSend = useCallback((data) => {
+    return sendOrQueue(data);
+  }, [sendOrQueue]);
+
   // Send Ctrl-C to interrupt Claude.
   const handleInterrupt = useCallback(() => {
     return sendOrQueue('\x03');
@@ -167,6 +172,7 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
     handleTurn,
     handleRegisterSendText,
     handleChatSend,
+    handleRawSend,
     handleInterrupt,
   };
 }

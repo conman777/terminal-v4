@@ -9,6 +9,8 @@
  * The same ANSI-stripping / UI-chrome-filtering logic is also exposed as
  * buildTurnsFromHistory() for the HTTP /turns endpoint to process stored history.
  */
+import type { TerminalCliEvent } from './cli-events';
+import { buildCliTurnEvent } from './cli-events';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -166,9 +168,11 @@ export class TurnDetector {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private recentUserInputs: string[] = [];
   private readonly onTurn: (turn: ChatTurn) => void;
+  private readonly onCliEvent?: (event: TerminalCliEvent) => void;
 
-  constructor(onTurn: (turn: ChatTurn) => void) {
+  constructor(onTurn: (turn: ChatTurn) => void, onCliEvent?: (event: TerminalCliEvent) => void) {
     this.onTurn = onTurn;
+    this.onCliEvent = onCliEvent;
   }
 
   onUserInput(text: string): void {
@@ -177,7 +181,9 @@ export class TurnDetector {
     const cleaned = stripAnsi(text).replace(/[\r\n]+$/, '').trim();
     // Skip single-key presses, control chars, and empty strings.
     if (cleaned.length >= 2) {
-      this.onTurn({ role: 'user', content: cleaned, ts: Date.now() });
+      const turn: ChatTurn = { role: 'user', content: cleaned, ts: Date.now() };
+      this.onTurn(turn);
+      this.onCliEvent?.(buildCliTurnEvent(turn));
       this.recentUserInputs.push(cleaned);
       if (this.recentUserInputs.length > 5) {
         this.recentUserInputs.shift();
@@ -211,9 +217,22 @@ export class TurnDetector {
     this.outputBuffer = '';
     if (!buffer) return;
     const content = extractContent(buffer, this.recentUserInputs);
-    if (content && !isInteractiveSafetyPrompt(content)) {
-      this.onTurn({ role: 'assistant', content, ts: this.lastOutputTs });
+    if (!content) return;
+
+    if (isInteractiveSafetyPrompt(content)) {
+      this.onCliEvent?.({
+        type: 'prompt_required',
+        prompt: content,
+        actions: ['enter', 'escape', 'yes', 'no'],
+        ts: this.lastOutputTs,
+        source: 'pty'
+      });
+      return;
     }
+
+    const turn: ChatTurn = { role: 'assistant', content, ts: this.lastOutputTs };
+    this.onTurn(turn);
+    this.onCliEvent?.(buildCliTurnEvent(turn));
   }
 
   dispose(): void {

@@ -3,6 +3,7 @@ import {
   AI_TYPE_OPTIONS,
   COMMON_LAUNCH_PREFIXES,
   NEW_TAB_AI_OPTIONS,
+  getAiCapabilities,
   getAiDisplayLabel,
   getAiLaunchCommand
 } from './aiProviders';
@@ -17,11 +18,17 @@ describe('aiProviders', () => {
   it('falls back for unknown providers', () => {
     expect(getAiDisplayLabel('deepseek')).toBe('Deepseek');
     expect(getAiLaunchCommand('deepseek')).toBe('deepseek');
+    expect(getAiCapabilities('deepseek').supportsStructuredEvents).toBe(false);
   });
 
   it('exposes extended provider options for new tabs and context menus', () => {
     expect(NEW_TAB_AI_OPTIONS.some((option) => option.id === 'aider')).toBe(true);
     expect(AI_TYPE_OPTIONS.some((option) => option.id === 'ollama')).toBe(true);
     expect(COMMON_LAUNCH_PREFIXES).toContain('qwen');
+  });
+
+  it('exposes capability matrix for supported providers', () => {
+    expect(getAiCapabilities('claude').supportsPromptEvents).toBe(true);
+    expect(getAiCapabilities('codex').prefersStructuredUi).toBe(true);
   });
 });

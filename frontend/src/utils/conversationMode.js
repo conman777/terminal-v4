@@ -6,8 +6,8 @@ function squashWhitespace(value) {
 }
 
 /**
- * Heuristic: detect full-screen interactive CLI output (e.g. Claude startup
- * trust/safety prompts) that does not render well in conversation bubbles.
+ * Detect truly interactive terminal states that need raw key passthrough.
+ * Keep this strict so normal streaming output remains in conversation mode.
  */
 export function shouldFallbackToTerminalView(outputChunk) {
   if (typeof outputChunk !== 'string' || outputChunk.length === 0) {
@@ -29,6 +29,17 @@ export function shouldFallbackToTerminalView(outputChunk) {
     return true;
   }
 
+  const hasYesNoPrompt =
+    /\[[yYnN]\/[yYnN]\]/.test(plain) ||
+    (
+      (squashed.includes('continueanyway') || squashed.includes('trustthisfolder') || squashed.includes('bypasspermissions')) &&
+      (squashed.includes('[y/n]') || squashed.includes('[n/y]'))
+    );
+
+  if (hasYesNoPrompt) {
+    return true;
+  }
+
   const hasInteractiveChoices =
     squashed.includes('presstochoose') ||
     squashed.includes('entertoconfirm') ||
@@ -40,28 +51,19 @@ export function shouldFallbackToTerminalView(outputChunk) {
 
   const hasGenericMenuPrompt =
     (
-      squashed.includes('selectanoption')
-      || squashed.includes('arrowkeystonavigate')
-      || squashed.includes('shift+tabtocycle')
-      || squashed.includes('presstochoose')
-    )
-    && (
-      squashed.includes('entertocontinue')
-      || squashed.includes('entertoconfirm')
-      || squashed.includes('esctocancel')
-      || squashed.includes('qtoquit')
+      squashed.includes('selectanoption') ||
+      squashed.includes('arrowkeystonavigate') ||
+      squashed.includes('shift+tabtocycle') ||
+      squashed.includes('presstochoose')
+    ) &&
+    (
+      squashed.includes('entertocontinue') ||
+      squashed.includes('entertoconfirm') ||
+      squashed.includes('esctocancel') ||
+      squashed.includes('qtoquit')
     );
 
   if (hasGenericMenuPrompt) {
-    return true;
-  }
-
-  const hasProgressPrompt =
-    /(thinking|computing|running|loading|initializing)/i.test(plain)
-    && plain.includes('>')
-    && /[•·*]/.test(plain);
-
-  if (hasProgressPrompt) {
     return true;
   }
 

@@ -12528,35 +12528,96 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
-.desktop-terminal-mirror-card {
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--border-subtle));
+.desktop-cli-focus-card {
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 40%, var(--border-subtle));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
-  overflow: hidden;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.desktop-terminal-mirror-label {
-  padding: 7px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-subtle);
+.desktop-cli-focus-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.desktop-cli-focus-title {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  color: var(--text-secondary);
 }
 
-.desktop-terminal-mirror-output {
-  margin: 0;
-  padding: 10px;
-  max-height: 340px;
-  overflow: auto;
-  background: color-mix(in srgb, var(--bg-base) 92%, transparent);
-  color: var(--text-primary);
+.desktop-cli-focus-prompt {
   font-size: 13px;
-  line-height: 1.45;
-  font-family: 'JetBrains Mono', 'SF Mono', monospace;
-  white-space: pre;
-  word-break: normal;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.desktop-cli-focus-note {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.desktop-cli-open-terminal-btn {
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.desktop-cli-open-terminal-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-subtle));
+  color: var(--text-primary);
+}
+
+.desktop-cli-open-terminal-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.desktop-interactive-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.desktop-interactive-action {
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.desktop-interactive-action.primary {
+  border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.desktop-interactive-action:hover {
+  border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-subtle));
+}
+
+.desktop-interactive-prompt-hint {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .desktop-streaming-indicator {

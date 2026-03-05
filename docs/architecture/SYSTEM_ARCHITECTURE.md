@@ -304,7 +304,12 @@ Key files:
 2. Connect to `/api/terminal/:id/ws` for IO (token in query).
 3. Server sends a `clientId` JSON frame on connect.
 4. Client sends raw keystrokes; server streams raw output.
-5. Sessions are persisted as JSON history snapshots.
+5. Server also emits terminal metadata frames with `__terminal_meta: true`.
+   - Legacy conversation metadata: `type: "turn"` with `{ role, content, ts }`.
+   - Canonical CLI metadata: `type: "cli_event"` with
+     `{ event: { type, ts, source, ... } }` where `type` is one of:
+     `user_turn`, `assistant_turn`, `prompt_required`, `status`, `error`.
+6. Sessions are persisted as JSON history snapshots.
 
 ### Claude Code Sessions
 1. Start via `POST /api/claude-code/start`.

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildTurnsFromHistory } from './turn-detector';
+import { describe, expect, it, vi } from 'vitest';
+import { buildTurnsFromHistory, TurnDetector } from './turn-detector';
 
 describe('buildTurnsFromHistory', () => {
   it('skips interactive Claude safety prompts', () => {
@@ -74,5 +74,37 @@ describe('buildTurnsFromHistory', () => {
     ]);
 
     expect(turns).toEqual([]);
+  });
+
+  it('emits prompt_required canonical event for interactive safety prompts', () => {
+    vi.useFakeTimers();
+    const turns = [];
+    const events = [];
+    const detector = new TurnDetector(
+      (turn) => turns.push(turn),
+      (event) => events.push(event)
+    );
+
+    detector.onPtyOutput([
+      'Accessing workspace: C:\\repo\\terminal-v4',
+      'Quick safety check: Is this a project you created or one you trust?',
+      '1. Yes, trust this folder',
+      '2. No, exit',
+      'Enter to confirm Esc to cancel',
+      '> '
+    ].join('\n'), 10_000);
+
+    vi.advanceTimersByTime(600);
+
+    expect(turns).toEqual([]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'prompt_required',
+        source: 'pty'
+      })
+    ]);
+
+    detector.dispose();
+    vi.useRealTimers();
   });
 });

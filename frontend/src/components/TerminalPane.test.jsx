@@ -37,6 +37,7 @@ vi.mock('../hooks/useMobileChatTurns', () => ({
     handleTurn: vi.fn(),
     handleRegisterSendText: vi.fn(),
     handleChatSend: handleChatSendMock,
+    handleRawSend: vi.fn(),
     handleInterrupt: handleInterruptMock,
   })
 }));
@@ -123,5 +124,21 @@ describe('TerminalPane', () => {
     });
 
     expect(latestConversationProps.terminalScreenSnapshot).toContain('Claude Code v2.1.68');
+  });
+
+  it('forwards canonical prompt_required events into conversation view state', () => {
+    render(<TerminalPane {...buildProps()} />);
+    expect(latestTerminalChatProps).not.toBeNull();
+
+    act(() => {
+      latestTerminalChatProps.onCliEvent({
+        type: 'prompt_required',
+        prompt: 'Continue anyway? [y/N]:',
+        actions: ['yes', 'no']
+      });
+    });
+
+    expect(latestConversationProps.showTerminalMirror).toBe(true);
+    expect(latestConversationProps.interactivePromptEvent?.type).toBe('prompt_required');
   });
 });

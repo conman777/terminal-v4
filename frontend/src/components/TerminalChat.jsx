@@ -23,6 +23,7 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
+import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
 
 const TERMINAL_THEMES = {
   dark: {
@@ -118,7 +119,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -176,6 +177,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const onSendMessageRef = useRef(onSendMessage);
   const onOutputChunkRef = useRef(onOutputChunk);
   const onScreenSnapshotRef = useRef(onScreenSnapshot);
+  const onCliEventRef = useRef(onCliEvent);
   const usesTmuxRef = useRef(Boolean(usesTmux));
   const webglEnabledRef = useRef(webglEnabled !== false);
   const scrollModeRef = useRef(false);
@@ -1022,6 +1024,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     onScreenSnapshotRef.current = onScreenSnapshot;
   }, [onScreenSnapshot]);
+
+  useEffect(() => {
+    onCliEventRef.current = onCliEvent;
+  }, [onCliEvent]);
 
   const emitScreenSnapshot = useCallback(() => {
     const callback = onScreenSnapshotRef.current;
@@ -2671,6 +2677,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (msg.__terminal_meta) {
               msg = { ...msg, __terminal_meta: undefined };
             }
+
+            const cliEvent = normalizeCliEventFromMeta(msg);
+            if (cliEvent) {
+              onCliEventRef.current?.(cliEvent);
+              if (cliEvent.type === 'user_turn' || cliEvent.type === 'assistant_turn') {
+                onTurn?.({
+                  role: cliEvent.type === 'user_turn' ? 'user' : 'assistant',
+                  content: cliEvent.content,
+                  ts: cliEvent.ts ?? Date.now()
+                });
+              }
+              return true;
+            }
+
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
               flushPendingTrackedResize(msg.clientId);
@@ -2702,10 +2722,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (msg.type === 'cwd' && msg.cwd) {
               onCwdChange?.(msg.cwd);
-              return true;
-            }
-            if (msg.type === 'turn' && msg.role && msg.content) {
-              onTurn?.({ role: msg.role, content: msg.content, ts: msg.ts ?? Date.now() });
               return true;
             }
             return false;

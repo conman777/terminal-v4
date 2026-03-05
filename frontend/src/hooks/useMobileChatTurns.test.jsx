@@ -90,4 +90,16 @@ describe('useMobileChatTurns', () => {
     expect(sender.mock.calls[1]).toEqual(['hey\r']);
     vi.useRealTimers();
   });
+
+  it('sends raw passthrough data for interactive key forwarding', () => {
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleRawSend('\x1b[B');
+    });
+
+    expect(sender).toHaveBeenCalledWith('\x1b[B');
+  });
 });

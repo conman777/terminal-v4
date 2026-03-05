@@ -25,8 +25,13 @@ describe('shouldFallbackToTerminalView', () => {
     expect(shouldFallbackToTerminalView(chunk)).toBe(true);
   });
 
-  it('returns true for progress/status TUI fragments with prompt markers', () => {
+  it('returns false for progress/status fragments without explicit interactive prompt', () => {
     const chunk = '* Running... > waiting for input';
+    expect(shouldFallbackToTerminalView(chunk)).toBe(false);
+  });
+
+  it('returns true for explicit yes/no prompts', () => {
+    const chunk = 'Continue anyway? [y/N]:';
     expect(shouldFallbackToTerminalView(chunk)).toBe(true);
   });
 });
