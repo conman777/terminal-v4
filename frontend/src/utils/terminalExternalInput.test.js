@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { prepareTerminalForExternalInput } from './terminalExternalInput';
+import {
+  createExternalInputFrames,
+  EXTERNAL_INPUT_SETTLE_DELAY_MS,
+  EXTERNAL_INPUT_STEP_DELAY_MS,
+  prepareTerminalForExternalInput,
+} from './terminalExternalInput';
 
 describe('prepareTerminalForExternalInput', () => {
   it('requests priority resize, focuses the terminal, and enables mobile input', () => {
@@ -30,5 +35,20 @@ describe('prepareTerminalForExternalInput', () => {
     }).not.toThrow();
 
     expect(setMobileInputEnabled).toHaveBeenCalledWith(true);
+  });
+});
+
+describe('createExternalInputFrames', () => {
+  it('chunks plain text and leaves a settle delay after the final chunk', () => {
+    expect(createExternalInputFrames('playwright')).toEqual([
+      { data: 'play', delayAfterMs: EXTERNAL_INPUT_STEP_DELAY_MS },
+      { data: 'wrig', delayAfterMs: EXTERNAL_INPUT_STEP_DELAY_MS },
+      { data: 'ht', delayAfterMs: EXTERNAL_INPUT_SETTLE_DELAY_MS },
+    ]);
+  });
+
+  it('keeps control sequences opaque', () => {
+    expect(createExternalInputFrames('\r')).toEqual([{ data: '\r', delayAfterMs: 0 }]);
+    expect(createExternalInputFrames('\x1b[B')).toEqual([{ data: '\x1b[B', delayAfterMs: 0 }]);
   });
 });

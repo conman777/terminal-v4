@@ -24,7 +24,10 @@ import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
 import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
-import { prepareTerminalForExternalInput } from '../utils/terminalExternalInput';
+import {
+  createExternalInputFrames,
+  prepareTerminalForExternalInput,
+} from '../utils/terminalExternalInput';
 
 const TERMINAL_THEMES = {
   dark: {
@@ -169,6 +172,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const [readerScrollToken, setReaderScrollToken] = useState(0);
   const sendTerminalInputRef = useRef(null);
   const pendingExternalInputRef = useRef([]);
+  const enqueueExternalInputRef = useRef(null);
+  const externalInputFramesRef = useRef([]);
+  const externalInputTimerRef = useRef(null);
+  const nextExternalInputAtRef = useRef(0);
   const fitTimeoutRef = useRef(null);
   const fitRafRef = useRef(null);
   const pendingFitOptionsRef = useRef(null);
@@ -1331,13 +1338,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         focusTerminal: () => xtermRef.current?.focus?.(),
         setMobileInputEnabled
       });
-      const sender = sendTerminalInputRef.current;
-      if (!sender) {
+      const enqueueExternalInput = enqueueExternalInputRef.current;
+      if (!enqueueExternalInput) {
         pendingExternalInputRef.current.push(text);
         return false;
       }
-      sender(text);
-      return true;
+      return enqueueExternalInput(text);
     });
     return () => {
       onRegisterSendText(null);
@@ -1700,6 +1706,44 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       sendTerminalInput(text);
     };
+    const clearExternalInputTimer = () => {
+      if (externalInputTimerRef.current) {
+        clearTimeout(externalInputTimerRef.current);
+        externalInputTimerRef.current = null;
+      }
+    };
+    const scheduleExternalInputDrain = () => {
+      if (disposed || externalInputFramesRef.current.length === 0 || externalInputTimerRef.current) {
+        return;
+      }
+      const delay = Math.max(0, nextExternalInputAtRef.current - Date.now());
+      externalInputTimerRef.current = setTimeout(() => {
+        externalInputTimerRef.current = null;
+        drainExternalInput();
+      }, delay);
+    };
+    const drainExternalInput = () => {
+      if (disposed || externalInputFramesRef.current.length === 0) return;
+      if (Date.now() < nextExternalInputAtRef.current) {
+        scheduleExternalInputDrain();
+        return;
+      }
+      const nextFrame = externalInputFramesRef.current.shift();
+      if (!nextFrame?.data) return;
+      sendUserInput(nextFrame.data);
+      nextExternalInputAtRef.current = Date.now() + (Number.isFinite(nextFrame.delayAfterMs) ? nextFrame.delayAfterMs : 0);
+      if (externalInputFramesRef.current.length > 0) {
+        scheduleExternalInputDrain();
+      }
+    };
+    const enqueueExternalInput = (text) => {
+      const frames = createExternalInputFrames(text);
+      if (disposed || frames.length === 0) return false;
+      externalInputFramesRef.current.push(...frames);
+      scheduleExternalInputDrain();
+      drainExternalInput();
+      return true;
+    };
     const confirmLargePaste = (text) => {
       if (!text) return false;
       if (text.length <= LARGE_PASTE_THRESHOLD) return true;
@@ -1715,10 +1759,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return !shouldPreferImageOverText(text);
     };
     sendTerminalInputRef.current = sendUserInput;
+    enqueueExternalInputRef.current = enqueueExternalInput;
     if (pendingExternalInputRef.current.length > 0) {
       const queuedInputs = pendingExternalInputRef.current.splice(0, pendingExternalInputRef.current.length);
       for (const queuedText of queuedInputs) {
-        sendUserInput(queuedText);
+        enqueueExternalInput(queuedText);
       }
     }
     if (registerTerminalSender) {
@@ -3208,7 +3253,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       loadMoreHistoryRef.current = null;
       reconnectSocketRef.current = null;
       sendTerminalInputRef.current = null;
+      enqueueExternalInputRef.current = null;
       pendingExternalInputRef.current = [];
+      externalInputFramesRef.current = [];
+      nextExternalInputAtRef.current = 0;
+      if (externalInputTimerRef.current) {
+        clearTimeout(externalInputTimerRef.current);
+        externalInputTimerRef.current = null;
+      }
       requestAuthoritativeResizeRef.current = null;
       requestPriorityResizeRef.current = null;
     };
