@@ -8,7 +8,6 @@ import { MobileKeybar } from './components/MobileKeybar';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
-import { DesktopSwitcher } from './components/DesktopSwitcher';
 import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
@@ -1183,15 +1182,6 @@ function AppContent() {
             />
           )}
           <div className="main-container">
-            <DesktopSwitcher
-              desktops={desktops}
-              activeDesktopId={activeDesktopId}
-              sessions={activeSessions}
-              onSwitch={switchDesktop}
-              onCreate={createDesktop}
-              onDelete={deleteDesktop}
-              onMoveSession={moveSessionToDesktop}
-            />
             <Header
               isMobile={false}
               sessionProps={headerSessionProps}
@@ -1204,6 +1194,15 @@ function AppContent() {
               onToggleSystemResources={toggleSystemResources}
               user={user}
               logout={logout}
+              desktopSwitcherProps={{
+                desktops,
+                activeDesktopId,
+                sessions: activeSessions,
+                onSwitch: switchDesktop,
+                onCreate: createDesktop,
+                onDelete: deleteDesktop,
+                onMoveSession: moveSessionToDesktop,
+              }}
             />
 
           <main

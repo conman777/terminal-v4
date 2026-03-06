@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { SessionTabBar } from './SessionTabBar';
 import { Dropdown } from './Dropdown';
 import { MobileHeader } from './MobileHeader';
+import { DesktopSwitcher } from './DesktopSwitcher';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function Header({
@@ -16,6 +17,7 @@ export function Header({
   onToggleSystemResources,
   user,
   logout,
+  desktopSwitcherProps,
   // Mobile specific props
   mobileProps,
 }) {
@@ -170,6 +172,12 @@ export function Header({
     <header className={`app-header redesign${showPreview ? ' preview-active' : ''}`}>
       <div className="header-left">
         <span className="header-brand">Terminal V4</span>
+        {desktopSwitcherProps ? (
+          <DesktopSwitcher
+            {...desktopSwitcherProps}
+            variant="header"
+          />
+        ) : null}
       </div>
 
       <div className="header-tabs-area">
@@ -303,6 +311,7 @@ export function Header({
           gap: 8px;
           flex-shrink: 0;
           min-width: 0;
+          overflow: hidden;
         }
 
         .header-brand {

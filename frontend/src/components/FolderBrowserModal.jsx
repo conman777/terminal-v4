@@ -93,113 +93,151 @@ export function FolderBrowserModal({
     : folders;
   const selectedAiOption = resolvedAiOptions.find((option) => option.id === selectedAiOptionId) || null;
 
+  const pathSegments = path.split(/([/\\])/).filter(Boolean);
+  const breadcrumbs = [];
+  let accumulated = '';
+  for (const seg of pathSegments) {
+    accumulated += seg;
+    if (seg !== '/' && seg !== '\\') {
+      breadcrumbs.push({ name: seg, path: accumulated });
+    }
+  }
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="folder-browser-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>Select Folder</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
+        {/* Path bar with integrated back button and breadcrumbs */}
+        <div className="fb-pathbar">
+          {parent && (
+            <button
+              className="fb-back-btn"
+              onClick={handleGoUp}
+              disabled={loading}
+              aria-label="Go up"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          )}
+          <div className="fb-breadcrumbs">
+            {breadcrumbs.map((crumb, i) => (
+              <span key={i} className="fb-breadcrumb-segment">
+                {i > 0 && <span className="fb-breadcrumb-sep">/</span>}
+                <button
+                  className={`fb-breadcrumb-btn${i === breadcrumbs.length - 1 ? ' fb-breadcrumb-active' : ''}`}
+                  onClick={() => loadDirectory(crumb.path)}
+                >
+                  {crumb.name}
+                </button>
+              </span>
+            ))}
+          </div>
         </div>
 
         <div className="folder-browser-content">
-          {/* Current path */}
-          <div className="folder-browser-path">
-            <span className="folder-icon">📁</span>
-            <span className="path-text">{path}</span>
-          </div>
-
+          {/* AI selector and tab name in compact row */}
           {showAiSelector && (
-            <div className="folder-browser-ai">
-              <label htmlFor="folder-browser-ai-select">AI to launch</label>
-              <select
-                id="folder-browser-ai-select"
-                value={selectedAiOptionId}
-                onChange={(e) => {
-                  const newId = e.target.value;
-                  setSelectedAiOptionId(newId);
-                  const opt = resolvedAiOptions.find(o => o.id === newId);
-                  setTabName(opt?.label || '');
-                }}
-              >
-                {resolvedAiOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {selectedAiOption?.command && (
-                <small className="folder-browser-ai-command">{selectedAiOption.command}</small>
-              )}
+            <div className="fb-config-row">
+              <div className="fb-config-field">
+                <label htmlFor="folder-browser-ai-select">AI</label>
+                <div className="fb-select-wrapper">
+                  <select
+                    id="folder-browser-ai-select"
+                    value={selectedAiOptionId}
+                    onChange={(e) => {
+                      const newId = e.target.value;
+                      setSelectedAiOptionId(newId);
+                      const opt = resolvedAiOptions.find(o => o.id === newId);
+                      setTabName(opt?.label || '');
+                    }}
+                  >
+                    {resolvedAiOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <svg className="fb-select-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+              </div>
+              <div className="fb-config-field fb-config-field-grow">
+                <label htmlFor="folder-browser-tabname-input">Tab name</label>
+                <input
+                  id="folder-browser-tabname-input"
+                  type="text"
+                  value={tabName}
+                  onChange={(e) => setTabName(e.target.value)}
+                  placeholder="Optional"
+                  maxLength={60}
+                />
+              </div>
             </div>
           )}
 
-          {showAiSelector && (
-            <div className="folder-browser-tabname">
-              <label htmlFor="folder-browser-tabname-input">Tab name</label>
-              <input
-                id="folder-browser-tabname-input"
-                type="text"
-                value={tabName}
-                onChange={(e) => setTabName(e.target.value)}
-                placeholder="Optional — defaults to AI name"
-                maxLength={60}
-              />
-            </div>
-          )}
-
-          <div className="folder-browser-search">
+          {/* Search with icon */}
+          <div className="fb-search">
+            <svg className="fb-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.5"/>
+              <path d="M9.5 9.5L12.5 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search folders"
+              placeholder="Search folders..."
               aria-label="Search folders"
             />
           </div>
 
-          {/* Go up button */}
-          {parent && (
-            <button
-              className="folder-browser-up"
-              onClick={handleGoUp}
-              disabled={loading}
-            >
-              ⬆ Go Up
-            </button>
-          )}
-
           {/* Folder list */}
-          <div className="folder-browser-list">
+          <div className="fb-folder-list">
             {loading && <div className="folder-browser-loading">Loading...</div>}
             {error && <div className="folder-browser-error">{error}</div>}
             {!loading && !error && visibleFolders.length === 0 && (
-              <div className="folder-browser-empty">No subfolders</div>
+              <div className="folder-browser-empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.4, marginBottom: 8 }}>
+                  <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H12L10 5H5C3.89543 5 3 5.89543 3 7Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
+                </svg>
+                No subfolders
+              </div>
             )}
             {!loading && !error && visibleFolders.map((folder) => (
               <button
                 key={folder}
-                className="folder-browser-item"
+                className="fb-folder-item"
                 onClick={() => handleFolderClick(folder)}
               >
-                <span className="folder-icon">📁</span>
-                <span className="folder-name">{folder}</span>
+                <svg className="fb-folder-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H12L10 5H5C3.89543 5 3 5.89543 3 7Z" fill="var(--accent-primary-dim)" stroke="var(--accent-primary)" strokeWidth="1.5" strokeLinejoin="round"/>
+                </svg>
+                <span className="fb-folder-name">{folder}</span>
+                <svg className="fb-folder-arrow" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M5 3L9 7L5 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
               </button>
             ))}
           </div>
 
           {/* Recent folders */}
           {recentFolders && recentFolders.length > 0 && (
-            <div className="folder-browser-recent">
-              <div className="recent-label">Recent:</div>
-              <div className="recent-list">
+            <div className="fb-recent">
+              <div className="fb-recent-label">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="1.2"/>
+                  <path d="M6 3V6L8 7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                </svg>
+                Recent
+              </div>
+              <div className="fb-recent-list">
                 {recentFolders.slice(0, 5).map((recent, idx) => {
                   const shortName = recent.split(/[/\\]/).pop() || recent;
                   return (
                     <button
                       key={idx}
-                      className="recent-chip"
+                      className="fb-recent-chip"
                       onClick={() => handleRecentClick(recent)}
                       title={recent}
                     >
@@ -212,119 +250,25 @@ export function FolderBrowserModal({
           )}
         </div>
 
-        <div className="modal-footer">
-          <button className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn-primary" onClick={handleSelect}>
-            Select
-          </button>
+        {/* Footer with path confirmation */}
+        <div className="fb-footer">
+          <div className="fb-footer-path" title={path}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H12L10 5H5C3.89543 5 3 5.89543 3 7Z" fill="var(--accent-primary-dim)" stroke="var(--accent-primary)" strokeWidth="1.5" strokeLinejoin="round"/>
+            </svg>
+            {path.split(/[/\\]/).pop() || path}
+          </div>
+          <div className="fb-footer-actions">
+            <button className="fb-btn-cancel" onClick={onClose}>Cancel</button>
+            <button className="fb-btn-select" onClick={handleSelect}>
+              Open here
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M2 7H12M8 3L12 7L8 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
-      <style jsx>{`
-        .folder-browser-search {
-          padding: 8px 16px 10px;
-        }
-
-        .folder-browser-ai {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          padding: 4px 16px 2px;
-        }
-
-        .folder-browser-ai label {
-          font-size: 12px;
-          font-weight: 600;
-          color: var(--text-muted, #71717a);
-          text-transform: uppercase;
-          letter-spacing: 0.6px;
-        }
-
-        .folder-browser-ai select {
-          width: 100%;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          color: var(--text-primary, #fafafa);
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-size: 13px;
-          outline: none;
-        }
-
-        .folder-browser-ai select:focus {
-          border-color: var(--accent-primary, #f59e0b);
-          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
-        }
-
-        .folder-browser-tabname {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-          padding: 2px 16px 8px;
-        }
-
-        .folder-browser-tabname label {
-          font-size: 12px;
-          font-weight: 600;
-          color: var(--text-muted, #71717a);
-          text-transform: uppercase;
-          letter-spacing: 0.6px;
-        }
-
-        .folder-browser-tabname input {
-          width: 100%;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          color: var(--text-primary, #fafafa);
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-size: 13px;
-          outline: none;
-        }
-
-        .folder-browser-tabname input:focus {
-          border-color: var(--accent-primary, #f59e0b);
-          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
-        }
-
-        .folder-browser-ai-command {
-          color: var(--text-muted, #71717a);
-          font-size: 12px;
-          font-family: 'JetBrains Mono', monospace;
-        }
-
-        .folder-browser-search input {
-          width: 100%;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          color: var(--text-primary, #fafafa);
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-size: 13px;
-          outline: none;
-        }
-
-        .folder-browser-search input:focus {
-          border-color: var(--accent-primary, #f59e0b);
-          box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2);
-        }
-
-        @media (max-width: 768px) {
-          .folder-browser-search {
-            padding: 10px 14px 12px;
-          }
-
-          .folder-browser-ai {
-            padding: 6px 14px 2px;
-          }
-
-          .folder-browser-search input {
-            font-size: 14px;
-            padding: 10px 12px;
-          }
-        }
-      `}</style>
     </div>
   );
 }

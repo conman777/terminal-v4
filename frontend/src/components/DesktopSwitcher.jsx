@@ -7,7 +7,8 @@ export function DesktopSwitcher({
   onSwitch,
   onCreate,
   onDelete,
-  onMoveSession
+  onMoveSession,
+  variant = 'default',
 }) {
   const [dragOverDesktopId, setDragOverDesktopId] = useState(null);
   const [editingDesktopId, setEditingDesktopId] = useState(null);
@@ -80,7 +81,7 @@ export function DesktopSwitcher({
   }, []);
 
   return (
-    <div className="desktop-switcher">
+    <div className={`desktop-switcher${variant === 'header' ? ' header-embedded' : ''}`}>
       {desktops.map((desktop, index) => {
         const isActive = desktop.id === activeDesktopId;
         const isDragOver = dragOverDesktopId === desktop.id;

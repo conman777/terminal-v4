@@ -38,38 +38,6 @@ const KNOWN_AI_PROVIDERS = [
       supportsPromptEvents: true
     }
   },
-  {
-    id: 'aider',
-    label: 'Aider',
-    title: 'Aider',
-    launchCommand: 'aider',
-    initialCommand: 'aider',
-    color: '#f97316'
-  },
-  {
-    id: 'qwen',
-    label: 'Qwen',
-    title: 'Qwen CLI',
-    launchCommand: 'qwen',
-    initialCommand: 'qwen',
-    color: '#14b8a6'
-  },
-  {
-    id: 'ollama',
-    label: 'Ollama',
-    title: 'Ollama',
-    launchCommand: 'ollama',
-    initialCommand: 'ollama',
-    color: '#a78bfa'
-  },
-  {
-    id: 'opencode',
-    label: 'OpenCode',
-    title: 'OpenCode',
-    launchCommand: 'opencode',
-    initialCommand: 'opencode',
-    color: '#ec4899'
-  }
 ];
 
 const KNOWN_PROVIDER_MAP = new Map(KNOWN_AI_PROVIDERS.map((provider) => [provider.id, provider]));

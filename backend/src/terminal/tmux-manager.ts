@@ -76,13 +76,22 @@ export function listTmuxSessions(): string[] {
       .filter(name => name.startsWith(TMUX_SESSION_PREFIX))
       .map(name => name.replace(TMUX_SESSION_PREFIX, ''));
   } catch (error) {
-    // Exit code 1 with "no server running" is normal when no tmux sessions exist
-    const stderr = error instanceof Error && 'stderr' in error ? (error as any).stderr : '';
-    if (!stderr?.toString().includes('no server running')) {
+    if (!isIgnorableTmuxListError(error)) {
       console.warn('[tmux] Error listing sessions:', error);
     }
     return [];
   }
+}
+
+export function isIgnorableTmuxListError(error: unknown): boolean {
+  const stderr = error && typeof error === 'object' && 'stderr' in error
+    ? String((error as { stderr?: unknown }).stderr || '')
+    : '';
+
+  return (
+    stderr.includes('no server running') ||
+    stderr.includes('error connecting to') && stderr.includes('No such file or directory')
+  );
 }
 
 /**

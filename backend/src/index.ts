@@ -36,6 +36,7 @@ import { assertAuthConfig } from './auth/auth-service';
 import { stopCleanupInterval } from './preview/preview-logs-service';
 import { migrateOrphanedSessions } from './migrations/migrate-sessions';
 import { startMemoryMonitoring, stopMemoryMonitoring } from './utils/memory-monitor';
+import { formatStartupErrorMessage } from './startup-errors';
 
 export interface CreateServerOptions {
   logger?: FastifyServerOptions['logger'];
@@ -220,7 +221,7 @@ async function start() {
     const protocol = httpsOptions ? 'https' : 'http';
     server.log.info(`Server listening on ${protocol}://${host}:${port}`);
   } catch (error) {
-    server.log.error(error, 'Failed to start server');
+    server.log.error(error, formatStartupErrorMessage(error));
     process.exit(1);
   }
 }
