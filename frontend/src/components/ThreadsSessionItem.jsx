@@ -1,5 +1,4 @@
 import { useState, useCallback, useEffect } from 'react';
-import { getAiDisplayLabel, inferSessionAiType } from '../utils/aiProviders';
 
 /**
  * Format a relative time string (e.g., "9m", "2h", "3d")
@@ -42,10 +41,7 @@ export default function ThreadsSessionItem({
   const topic = thread.topic || session.title || 'New session';
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
-  const gitStats = thread.gitStats;
   const lastActivity = thread.lastActivityAt || session.updatedAt;
-  const detectedAiType = inferSessionAiType(session);
-  const providerLabel = getAiDisplayLabel(detectedAiType) || session.shell || 'Terminal';
   const runtimeLabel = session.isBusy ? 'Responding' : hasActivity ? 'Updated' : formatRelativeTime(lastActivity);
 
   useEffect(() => {
@@ -136,20 +132,7 @@ export default function ThreadsSessionItem({
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <>
-            <span className="threads-session-topic">{topic}</span>
-            <div className="threads-session-secondary">
-              <span className={`threads-session-provider${detectedAiType ? ` ai-${detectedAiType}` : ''}`}>
-                {providerLabel}
-              </span>
-              {gitStats && (gitStats.linesAdded > 0 || gitStats.linesRemoved > 0) && (
-                <span className="threads-session-git-stats">
-                  {gitStats.linesAdded > 0 && <span className="git-added">+{gitStats.linesAdded}</span>}
-                  {gitStats.linesRemoved > 0 && <span className="git-removed">-{gitStats.linesRemoved}</span>}
-                </span>
-              )}
-            </div>
-          </>
+          <span className="threads-session-topic">{topic}</span>
         )}
       </div>
 
@@ -197,29 +180,28 @@ export default function ThreadsSessionItem({
 
       <style>{`
         .threads-session-item {
-          min-height: 46px;
+          height: 36px;
           display: flex;
-          align-items: flex-start;
-          padding: 0 10px 0 12px;
+          align-items: center;
+          padding: 0 10px;
           cursor: pointer;
           user-select: none;
-          transition: background 0.15s ease;
+          transition: background 0.12s ease;
           color: var(--text-secondary, #a1a1aa);
           position: relative;
-          gap: 10px;
-          margin: 1px 8px;
-          border-radius: 10px;
+          gap: 8px;
+          margin: 1px 6px;
+          border-radius: 6px;
         }
 
         .threads-session-item:hover {
-          background: var(--bg-surface, #141416);
+          background: rgba(255, 255, 255, 0.05);
           color: var(--text-primary, #fafafa);
         }
 
         .threads-session-item.active {
-          background: var(--bg-elevated, #1e1e21);
+          background: rgba(255, 255, 255, 0.08);
           color: var(--text-primary, #fafafa);
-          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
         }
 
         .threads-session-item.archived {
@@ -230,102 +212,42 @@ export default function ThreadsSessionItem({
           flex: 1;
           min-width: 0;
           display: flex;
-          flex-direction: column;
-          gap: 4px;
-          padding: 8px 0;
+          align-items: center;
         }
 
         .threads-session-topic {
-          font-size: 12.5px;
-          font-weight: 600;
+          font-size: 13px;
+          font-weight: 400;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          line-height: 1.2;
-        }
-
-        .threads-session-secondary {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-          flex-wrap: wrap;
-        }
-
-        .threads-session-provider {
-          display: inline-flex;
-          align-items: center;
-          max-width: 100%;
-          min-height: 18px;
-          padding: 0 6px;
-          border-radius: 999px;
-          border: 1px solid rgba(148, 163, 184, 0.18);
-          background: rgba(15, 23, 42, 0.46);
-          font-size: 9px;
-          font-weight: 700;
           line-height: 1;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          color: var(--text-muted, #94a3b8);
-        }
-
-        .threads-session-provider.ai-claude {
-          border-color: rgba(255, 107, 43, 0.28);
-          color: #ff9a69;
-        }
-
-        .threads-session-provider.ai-codex {
-          border-color: rgba(59, 130, 246, 0.3);
-          color: #8bb8ff;
-        }
-
-        .threads-session-provider.ai-gemini {
-          border-color: rgba(34, 197, 94, 0.28);
-          color: #73e29e;
         }
 
         .threads-session-edit {
-          font-size: 12px;
-          font-weight: 500;
+          font-size: 13px;
+          font-weight: 400;
           background: var(--bg-elevated, #1e1e21);
           border: 1px solid var(--accent-primary, #f59e0b);
-          border-radius: 3px;
+          border-radius: 4px;
           padding: 2px 6px;
           color: var(--text-primary, #fafafa);
           outline: none;
           width: 100%;
         }
 
-        .threads-session-git-stats {
-          display: flex;
-          gap: 6px;
-          font-size: 10px;
-          font-family: 'JetBrains Mono', monospace;
-          white-space: nowrap;
-        }
-
-        .git-added {
-          color: var(--success, #10b981);
-        }
-
-        .git-removed {
-          color: var(--error, #f43f5e);
-        }
-
         .threads-session-meta {
           display: flex;
           align-items: center;
           flex-shrink: 0;
-          min-width: 72px;
           justify-content: flex-end;
-          padding-top: 10px;
         }
 
         .threads-session-time {
-          font-size: 11px;
-          color: var(--text-muted, #71717a);
+          font-size: 12px;
+          color: var(--text-muted, #636366);
           white-space: nowrap;
-          font-weight: 600;
+          font-weight: 400;
         }
 
         .threads-session-time.busy {
@@ -343,8 +265,8 @@ export default function ThreadsSessionItem({
         }
 
         .threads-action-btn {
-          width: 20px;
-          height: 20px;
+          width: 22px;
+          height: 22px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -353,11 +275,11 @@ export default function ThreadsSessionItem({
           color: var(--text-muted, #71717a);
           border-radius: 4px;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: all 0.12s ease;
         }
 
         .threads-action-btn:hover {
-          background: var(--bg-elevated, #1e1e21);
+          background: rgba(255, 255, 255, 0.08);
           color: var(--text-primary, #fafafa);
         }
 
@@ -372,22 +294,9 @@ export default function ThreadsSessionItem({
 
         @media (max-width: 768px) {
           .threads-session-item {
-            min-height: 48px;
-            margin: 2px 6px;
-            padding: 0 8px 0 10px;
-          }
-
-          .threads-session-topic {
-            font-size: 13px;
-          }
-
-          .threads-session-meta {
-            min-width: 38px;
-          }
-
-          .threads-action-btn {
-            width: 22px;
-            height: 22px;
+            height: 40px;
+            margin: 1px 4px;
+            padding: 0 8px;
           }
         }
       `}</style>

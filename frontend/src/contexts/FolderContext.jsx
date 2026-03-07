@@ -23,9 +23,19 @@ export function FolderProvider({ children }) {
     }
   });
 
-  // Projects state
+  // Projects state (from scanner)
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
+
+  // Sidebar projects - user-curated list of folders shown in sidebar
+  const [sidebarProjects, setSidebarProjects] = useState(() => {
+    try {
+      const stored = localStorage.getItem('sidebarProjects');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
 
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
@@ -67,6 +77,37 @@ export function FolderProvider({ children }) {
         localStorage.setItem('pinnedFolders', JSON.stringify(updated));
       } catch (e) {
         console.error('Failed to save pinned folders', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Add a project folder to sidebar
+  const addSidebarProject = useCallback((folderPath) => {
+    if (!folderPath) return;
+    setSidebarProjects(prev => {
+      if (prev.some(p => p.path.toLowerCase() === folderPath.toLowerCase())) {
+        return prev; // already exists
+      }
+      const name = folderPath.replace(/[\\/]+$/, '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Unknown';
+      const updated = [...prev, { path: folderPath, name }];
+      try {
+        localStorage.setItem('sidebarProjects', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save sidebar projects', e);
+      }
+      return updated;
+    });
+  }, []);
+
+  // Remove a project folder from sidebar
+  const removeSidebarProject = useCallback((folderPath) => {
+    setSidebarProjects(prev => {
+      const updated = prev.filter(p => p.path.toLowerCase() !== folderPath.toLowerCase());
+      try {
+        localStorage.setItem('sidebarProjects', JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save sidebar projects', e);
       }
       return updated;
     });
@@ -139,6 +180,9 @@ export function FolderProvider({ children }) {
     projectsLoading,
     loadProjects,
     addScanFolder,
+    sidebarProjects,
+    addSidebarProject,
+    removeSidebarProject,
   };
 
   return (
