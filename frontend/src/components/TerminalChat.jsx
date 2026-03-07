@@ -28,6 +28,7 @@ import {
   createExternalInputFrames,
   prepareTerminalForExternalInput,
 } from '../utils/terminalExternalInput';
+import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 
 const TERMINAL_THEMES = {
   dark: {
@@ -1644,17 +1645,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const sendTerminalInput = (text) => {
       if (!text || disposed) return;
-      capturePreviewFromInput(text);
+      const resolvedText = rewriteTerminalAgentInput(text);
+      capturePreviewFromInput(resolvedText);
       const socket = socketRef.current;
       if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(text);
-        onSendMessageRef.current?.(text);
+        socket.send(resolvedText);
+        onSendMessageRef.current?.(resolvedText);
         return;
       }
-      onSendMessageRef.current?.(text);
+      onSendMessageRef.current?.(resolvedText);
       apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
-        body: { command: text }
+        body: { command: resolvedText }
       }).catch((error) => {
         console.error('Failed to send terminal input:', error);
       });

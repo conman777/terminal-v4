@@ -291,35 +291,32 @@ export function Header({
 
       <style jsx>{`
         .app-header.redesign {
-          min-height: 54px;
+          min-height: 32px;
           display: grid;
           grid-template-columns: auto minmax(0, 1fr) auto;
           align-items: center;
-          column-gap: 14px;
-          padding: 0 14px;
-          background: linear-gradient(180deg, rgba(20, 28, 44, 0.88), rgba(11, 16, 28, 0.88));
-          border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-          box-shadow: 0 8px 32px rgba(0, 0, 0, 0.32);
-          backdrop-filter: blur(8px);
+          column-gap: 10px;
+          padding: 0 10px;
+          background: var(--bg-base, #09090b);
+          border-bottom: 1px solid var(--border-subtle, #1e1e21);
           user-select: none;
           z-index: 100;
+          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
         }
 
         .header-left {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 6px;
           flex-shrink: 0;
           min-width: 0;
           overflow: hidden;
         }
 
         .header-brand {
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          color: rgba(226, 232, 240, 0.8);
+          font-size: 11px;
+          font-weight: 400;
+          color: var(--text-muted, #71717a);
           white-space: nowrap;
         }
 
@@ -332,31 +329,27 @@ export function Header({
         .header-tabs-empty {
           display: flex;
           align-items: center;
-          height: 34px;
-          padding: 0 12px;
-          border-radius: 10px;
-          color: rgba(148, 163, 184, 0.88);
-          background: rgba(30, 41, 59, 0.45);
-          border: 1px solid rgba(148, 163, 184, 0.16);
-          font-size: 12px;
+          height: 24px;
+          padding: 0 8px;
+          color: var(--text-muted, #71717a);
+          font-family: inherit;
+          font-size: 11px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
         }
 
         .app-title {
-          font-size: 16px;
-          font-weight: 700;
+          font-size: 11px;
+          font-weight: 400;
           margin: 0;
-          color: var(--accent-primary, #f59e0b);
-          letter-spacing: -0.5px;
-          text-transform: uppercase;
+          color: var(--text-muted, #71717a);
         }
 
         .header-actions {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 2px;
           flex-shrink: 0;
           justify-self: end;
           min-width: max-content;
@@ -366,16 +359,16 @@ export function Header({
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
-          padding: 7px 10px;
-          border-radius: 10px;
-          border: 1px solid rgba(148, 163, 184, 0.18);
-          background: rgba(30, 41, 59, 0.34);
-          color: rgba(226, 232, 240, 0.9);
-          font-size: 12px;
-          font-weight: 600;
+          gap: 5px;
+          padding: 3px 8px;
+          border: none;
+          background: transparent;
+          color: var(--text-muted, #71717a);
+          font-family: inherit;
+          font-size: 11px;
+          font-weight: 400;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: color 0.1s ease;
         }
 
         .header-btn-modern span {
@@ -383,60 +376,58 @@ export function Header({
         }
 
         .header-btn-modern:hover {
-          background: rgba(56, 189, 248, 0.2);
-          border-color: rgba(56, 189, 248, 0.45);
-          color: #e2e8f0;
-          transform: translateY(-1px);
+          color: var(--text-primary, #fafafa);
         }
 
         .header-btn-modern:active {
-          transform: scale(0.97);
+          opacity: 0.7;
         }
 
         .header-btn-modern.active {
-          color: #22d3ee;
-          border-color: rgba(34, 211, 238, 0.55);
-          background: rgba(34, 211, 238, 0.18);
+          color: var(--text-primary, #fafafa);
         }
 
         .header-divider {
-          display: none;
+          width: 1px;
+          height: 14px;
+          background: var(--border-subtle, #1e1e21);
+          margin: 0 4px;
         }
 
         .header-user-badge-modern {
           display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 4px 10px 4px 4px;
-          border-radius: 20px;
-          background: rgba(30, 41, 59, 0.5);
-          border: 1px solid rgba(148, 163, 184, 0.2);
+          gap: 6px;
+          padding: 2px 8px 2px 2px;
+          background: transparent;
+          border: none;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: color 0.1s ease;
         }
 
         .header-user-badge-modern:hover {
-          background: rgba(56, 189, 248, 0.2);
-          border-color: rgba(56, 189, 248, 0.42);
+          color: var(--text-primary, #fafafa);
         }
 
         .user-avatar {
-          width: 26px;
-          height: 26px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-          color: #02131d;
+          width: 18px;
+          height: 18px;
+          border-radius: 2px;
+          background: var(--border-default, #2a2a2e);
+          color: var(--text-muted, #71717a);
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 12px;
-          font-weight: 700;
+          font-family: inherit;
+          font-size: 10px;
+          font-weight: 400;
         }
 
         .username {
-          font-size: 12px;
-          font-weight: 500;
-          color: #e2e8f0;
+          font-family: inherit;
+          font-size: 11px;
+          font-weight: 400;
+          color: var(--text-muted, #71717a);
           max-width: 100px;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -444,27 +435,23 @@ export function Header({
         }
 
         .chevron {
-          opacity: 0.5;
+          opacity: 0.35;
         }
 
         .app-header.redesign.preview-active {
-          min-height: 44px;
-          padding: 0 12px;
-        }
-
-        .app-header.redesign.preview-active .app-title {
-          font-size: 14px;
+          min-height: 28px;
+          padding: 0 8px;
         }
 
         .app-header.redesign.preview-active .header-btn-modern {
-          padding: 5px 9px;
-          font-size: 12px;
+          padding: 2px 6px;
+          font-size: 10px;
         }
 
         .app-header.redesign.preview-active .user-avatar {
-          width: 22px;
-          height: 22px;
-          font-size: 10px;
+          width: 16px;
+          height: 16px;
+          font-size: 9px;
         }
 
         @media (max-width: 1280px) {

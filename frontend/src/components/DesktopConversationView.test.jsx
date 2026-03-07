@@ -80,12 +80,11 @@ describe('DesktopConversationView', () => {
 
   it('renders background preview output in startup card', () => {
     render(<DesktopConversationView {...buildProps({ terminalPreview: 'line one\nline two' })} />);
-    expect(screen.getByText('Background output')).toBeInTheDocument();
     expect(screen.getByText(/line one/)).toBeInTheDocument();
     expect(screen.getByText(/line two/)).toBeInTheDocument();
   });
 
-  it('renders live terminal screen snapshot when available', () => {
+  it('does not render a live terminal screen snapshot inline by default', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -94,8 +93,7 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal screen')).toBeInTheDocument();
-    expect(screen.getByText(/bypass permissions/i)).toBeInTheDocument();
+    expect(screen.queryByText(/bypass permissions/i)).not.toBeInTheDocument();
   });
 
   it('shows launched-in-background status when preview output exists', () => {
@@ -114,7 +112,7 @@ describe('DesktopConversationView', () => {
 
   it('shows connecting state before transport is online', () => {
     render(<DesktopConversationView {...buildProps({ connectionState: 'connecting', isSendReady: false })} />);
-    expect(screen.getAllByText('Connecting').length).toBeGreaterThan(0);
+    expect(screen.getByText('connecting')).toBeInTheDocument();
   });
 
   it('filters bootstrap noise turns before first user message', () => {
@@ -218,7 +216,7 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getAllByText('Input required').length).toBeGreaterThan(0);
+    expect(screen.getByText('input')).toBeInTheDocument();
     expect(screen.queryByText(/Recentactivity/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/WelcomebackConor/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/claude-api/i)).not.toBeInTheDocument();
@@ -245,6 +243,26 @@ describe('DesktopConversationView', () => {
     expect(screen.queryByText(/USD 0\.1320/i)).not.toBeInTheDocument();
   });
 
+  it('filters Claude model usage footer noise from assistant turns', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'claude',
+          turns: [
+            {
+              role: 'assistant',
+              content: 'ts\\coding projects\\uplifting | 🪟 Opus 4.6 | 💰 $0.51 session / $0.00 today / $0.00 block (3h 3m left) | 🔥 $0.00/hr | 🧠 58,776 (29%)',
+              ts: 1
+            }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.queryByText(/Opus 4\.6/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/No Claude Code response yet/i)).toBeInTheDocument();
+  });
+
   it('hides Codex startup noise turns from the conversation thread', () => {
     render(
       <DesktopConversationView
@@ -265,6 +283,59 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText(/No Codex response yet/i)).toBeInTheDocument();
   });
 
+  it('hides Codex launch command user turns even after prior conversation exists', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'codex',
+          turns: [
+            { role: 'user', content: 'what do you think of this app?', ts: 1 },
+            { role: 'assistant', content: 'It looks promising.', ts: 2 },
+            { role: 'user', content: 'codex --yolo', ts: 3 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByText(/what do you think of this app/i)).toBeInTheDocument();
+    expect(screen.getByText(/It looks promising/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^codex --yolo$/i)).not.toBeInTheDocument();
+  });
+
+  it('hides Codex update prompt and wrapped launch echo from assistant turns', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'codex',
+          turns: [
+            {
+              role: 'assistant',
+              content: [
+                'code',
+                'x --',
+                'yolo',
+                '✨ Update available! 0.110.0 -> 0.111.0',
+                'Release notes: https://github.com/openai/codex/releases/latest',
+                '› 1. Update now (runs `npm install -g @openai/codex`)',
+                '2. Skip',
+                '3. Skip until next version',
+                'Press enter to continue'
+              ].join('\n'),
+              ts: 1
+            }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.queryByText(/^code$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^x --$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^yolo$/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Update available!/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/npm install -g @openai\/codex/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/No Codex response yet/i)).toBeInTheDocument();
+  });
+
   it('hides AI launch command user turn for non-Claude agents too', () => {
     render(
       <DesktopConversationView
@@ -280,6 +351,40 @@ describe('DesktopConversationView', () => {
 
     expect(screen.queryByTestId('tool-call-user')).not.toBeInTheDocument();
     expect(screen.getByText(/Normal response/)).toBeInTheDocument();
+  });
+
+  it('hides slash-command control turns from the conversation thread', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'claude',
+          turns: [
+            { role: 'user', content: '/model', ts: 1 },
+            { role: 'assistant', content: 'Normal response', ts: 2 },
+          ]
+        })}
+      />
+    );
+
+    expect(screen.queryByText('/model')).not.toBeInTheDocument();
+    expect(screen.getByText('Normal response')).toBeInTheDocument();
+  });
+
+  it('hides short chunk-fragment user turns from the conversation thread', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'claude',
+          turns: [
+            { role: 'user', content: 'el', ts: 1 },
+            { role: 'assistant', content: 'Normal response', ts: 2 },
+          ]
+        })}
+      />
+    );
+
+    expect(screen.queryByText(/^el$/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Normal response')).toBeInTheDocument();
   });
 
   it('filters generic decorated path lines for other CLI agents', () => {
@@ -333,7 +438,7 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText('Ready.')).toBeInTheDocument();
   });
 
-  it('shows user turns alongside the live terminal snapshot during mirror mode', () => {
+  it('keeps the conversation transcript visible during mirror mode', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -347,13 +452,12 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
-    expect(screen.getByText(/Continue anyway\? \[y\/N\]/i, { selector: 'pre' })).toBeInTheDocument();
     expect(screen.getByText('hey')).toBeInTheDocument();
-    expect(screen.queryByText(/noisy wrapped status line/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Continue anyway\? \[y\/N\]:/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Continue anyway\? \[y\/N\]/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
-  it('shows the sent Codex user prompt in terminal-first mirror mode', () => {
+  it('shows the sent Codex user prompt in the normal conversation thread during mirror mode', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -372,10 +476,10 @@ describe('DesktopConversationView', () => {
     );
 
     expect(screen.getByText('what do you think of this app')).toBeInTheDocument();
-    expect(screen.getByText(/what do you think of this app/i, { selector: 'pre' })).toBeInTheDocument();
+    expect(screen.queryByText(/what do you think of this app/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
-  it('shows a wide terminal snapshot for non-interactive terminal states', () => {
+  it('does not switch the main thread into terminal-first layout for mirror state', () => {
     const { container } = render(
       <DesktopConversationView
         {...buildProps({
@@ -385,16 +489,12 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
-    expect(screen.getByText(/Implement \{feature\}/i, { selector: 'pre' })).toBeInTheDocument();
-    expect(container.querySelector('.desktop-conversation-view.terminal-first')).not.toBeNull();
-    expect(container.querySelector('.desktop-thread-inner.wide-layout')).not.toBeNull();
-    expect(container.querySelector('.desktop-thread .desktop-cli-focus-screen-block')).not.toBeNull();
-    expect(container.querySelector('.desktop-conversation-terminal-panel')).toBeNull();
-    expect(screen.queryByRole('heading', { name: /Live Codex terminal/i })).not.toBeInTheDocument();
+    expect(container.querySelector('.desktop-conversation-view.terminal-first')).toBeNull();
+    expect(container.querySelector('.desktop-thread-inner.wide-layout')).toBeNull();
+    expect(container.querySelector('.desktop-thread .desktop-cli-focus-screen-block')).toBeNull();
   });
 
-  it('suppresses assistant transcript fragments while terminal mirror mode is active', () => {
+  it('still suppresses noisy assistant terminal chrome while mirror mode is active', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -409,12 +509,11 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText(/Claude Code v2\.1\.69/i, { selector: 'pre' })).toBeInTheDocument();
+    expect(screen.getByText('Implement {feature}')).toBeInTheDocument();
     expect(screen.queryByText(/\| Whatsnew \|/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
   });
 
-  it('shows the full terminal snapshot without a separate prompt card', () => {
+  it('uses a prompt notice instead of rendering the full terminal snapshot inline', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -439,14 +538,12 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.queryByText('Interactive CLI input required')).not.toBeInTheDocument();
-    expect(screen.getByText(/Claude Code v2\.1\.69/i, { selector: 'pre' })).toBeInTheDocument();
-    expect(screen.getByText(/What's new/i, { selector: 'pre' })).toBeInTheDocument();
-    expect(screen.queryByText(/What's new/i)).toHaveTextContent("What's new");
-    expect(screen.queryAllByText(/What's new/i)).toHaveLength(1);
+    expect(screen.getByText(/bypass permissions on \(shift\+tab to cycle\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code v2\.1\.69/i, { selector: 'pre' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/What's new/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
-  it('renders prompt-mode header metadata with status, mode, and working directory', () => {
+  it('renders prompt-mode header with status and working directory', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -467,14 +564,12 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getAllByText('Claude Code needs terminal input').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Input required').length).toBeGreaterThan(0);
-    expect(screen.getByText('Prompt')).toBeInTheDocument();
-    expect(screen.getByText('Working directory')).toBeInTheDocument();
+    expect(screen.getByText('input')).toBeInTheDocument();
+    expect(screen.getByText('Claude Code')).toBeInTheDocument();
     expect(screen.getAllByText(/~\\OneDrive\\Personal\\Documents\\coding projects/i).length).toBeGreaterThan(0);
   });
 
-  it('renders a live terminal snapshot section and composer guidance during prompt mode', () => {
+  it('does not render a live terminal snapshot section during prompt mode', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -494,12 +589,10 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
-    expect(screen.getByText(/Enter to send/i)).toBeInTheDocument();
-    expect(screen.getByText(/Shift\+Enter for newline/i)).toBeInTheDocument();
+    expect(screen.queryByText(/bypass permissions/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
-  it('shows the Claude startup snapshot in mirror mode for full context', () => {
+  it('does not render the Claude startup snapshot inline in mirror mode', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -510,12 +603,11 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
-    expect(screen.getByText(/claude\.ai connector needs auth/i, { selector: 'pre' })).toBeInTheDocument();
-    expect(screen.getByText(/Claude Code v2\.1\.69/i, { selector: 'pre' })).toBeInTheDocument();
+    expect(screen.queryByText(/claude\.ai connector needs auth/i, { selector: 'pre' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Claude Code v2\.1\.69/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
-  it('shows the Codex startup snapshot in mirror mode for full context', () => {
+  it('does not render the Codex startup snapshot inline in mirror mode', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -526,9 +618,8 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Live terminal snapshot')).toBeInTheDocument();
-    expect(screen.getByText(/Booting MCP server: playwright/i, { selector: 'pre' })).toBeInTheDocument();
-    expect(screen.getByText(/OpenAI Codex/i, { selector: 'pre' })).toBeInTheDocument();
+    expect(screen.queryByText(/Booting MCP server: playwright/i, { selector: 'pre' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/OpenAI Codex/i, { selector: 'pre' })).not.toBeInTheDocument();
   });
 
   it('forwards keyboard controls to raw terminal input in mirror mode', () => {
@@ -554,11 +645,13 @@ describe('DesktopConversationView', () => {
     ]);
   });
 
-  it('renders a lightweight prompt notice when prompt metadata arrives before the snapshot', () => {
+  it('renders inline prompt actions when prompt metadata arrives before the snapshot', () => {
+    const onSendRaw = vi.fn();
     render(
       <DesktopConversationView
         {...buildProps({
           showTerminalMirror: true,
+          onSendRaw,
           interactivePromptEvent: {
             type: 'prompt_required',
             prompt: 'Continue anyway? [y/N]:',
@@ -568,8 +661,34 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText(/Current prompt: Continue anyway\? \[y\/N\]:/i)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Yes' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Continue anyway\? \[y\/N\]:/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
+    expect(onSendRaw).toHaveBeenCalledWith('y\r');
+  });
+
+  it('renders numeric prompt actions from terminal snapshot in the main pane', () => {
+    const onSendRaw = vi.fn();
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'codex',
+          onSendRaw,
+          terminalScreenSnapshot: [
+            '✨ Update available! 0.110.0 -> 0.111.0',
+            'Release notes: https://github.com/openai/codex/releases/latest',
+            '› 1. Update now (runs `npm install -g @openai/codex`)',
+            '2. Skip',
+            '3. Skip until next version',
+            'Press enter to continue'
+          ].join('\n')
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /2\. Skip$/i }));
+    expect(onSendRaw).toHaveBeenCalledWith('\x1b[B\r');
+    expect(screen.getByRole('button', { name: /1\. Update now/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /3\. Skip until next version/i })).toBeInTheDocument();
   });
 
   it('renders structured tool results with the tool result payload shape', () => {

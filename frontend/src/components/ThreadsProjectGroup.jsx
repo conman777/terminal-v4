@@ -15,7 +15,8 @@ export default function ThreadsProjectGroup({
   onTopicChange,
   onCloseSession,
   defaultExpanded = true,
-  showArchived = false
+  showArchived = false,
+  allowEmpty = false
 }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
@@ -25,7 +26,7 @@ export default function ThreadsProjectGroup({
     : sessions.filter((s) => !s.thread?.archived);
 
   // Don't render empty groups
-  if (visibleSessions.length === 0) {
+  if (!allowEmpty && visibleSessions.length === 0) {
     return null;
   }
 
@@ -62,55 +63,60 @@ export default function ThreadsProjectGroup({
 
       {isExpanded && (
         <div className="threads-project-content">
-          {visibleSessions.map((session) => (
-            <ThreadsSessionItem
-              key={session.id}
-              session={session}
-              isActive={session.id === activeSessionId}
-              hasActivity={sessionActivity?.[session.id]?.needsAttention}
-              onSelect={onSelectSession}
-              onPin={onPinSession}
-              onUnpin={onUnpinSession}
-              onArchive={onArchiveSession}
-              onUnarchive={onUnarchiveSession}
-              onTopicChange={onTopicChange}
-              onClose={onCloseSession}
-            />
-          ))}
+          {visibleSessions.length === 0 ? (
+            <div className="threads-project-empty">No terminals yet</div>
+          ) : (
+            visibleSessions.map((session) => (
+              <ThreadsSessionItem
+                key={session.id}
+                session={session}
+                isActive={session.id === activeSessionId}
+                hasActivity={sessionActivity?.[session.id]?.needsAttention}
+                onSelect={onSelectSession}
+                onPin={onPinSession}
+                onUnpin={onUnpinSession}
+                onArchive={onArchiveSession}
+                onUnarchive={onUnarchiveSession}
+                onTopicChange={onTopicChange}
+                onClose={onCloseSession}
+              />
+            ))
+          )}
         </div>
       )}
 
       <style>{`
         .threads-project-group {
-          margin-bottom: 6px;
+          margin: 0 8px 6px;
         }
 
         .threads-project-header {
-          height: 34px;
+          min-height: 32px;
           display: flex;
           align-items: center;
           padding: 0 10px;
           cursor: pointer;
           user-select: none;
-          transition: background 0.15s ease;
-          border-radius: 8px;
-          margin: 2px 8px;
-          color: var(--text-secondary, #a1a1aa);
+          transition: color 0.12s ease, background 0.12s ease;
+          margin: 0;
+          color: rgba(226, 232, 240, 0.7);
           gap: 0;
+          border-radius: 12px;
+          font-family: "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
         }
 
         .threads-project-header:hover {
-          background: var(--bg-surface, #141416);
-          color: var(--text-primary, #fafafa);
+          color: #f8fafc;
+          background: rgba(255, 255, 255, 0.045);
         }
 
         .threads-project-chevron {
           display: flex;
           align-items: center;
           justify-content: center;
-          transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-          margin-right: 4px;
-          opacity: 0.5;
+          transition: transform 0.15s ease;
+          margin-right: 6px;
+          opacity: 0.42;
         }
 
         .threads-project-chevron.expanded {
@@ -121,52 +127,62 @@ export default function ThreadsProjectGroup({
           display: flex;
           align-items: center;
           justify-content: center;
+          width: 18px;
+          height: 18px;
           margin-right: 8px;
-          opacity: 0.7;
-          color: var(--accent-primary, #f59e0b);
+          opacity: 0.8;
+          color: rgba(244, 247, 251, 0.82);
         }
 
         .threads-project-name {
-          font-size: 12.5px;
-          font-weight: 600;
+          font-family: inherit;
+          font-size: 14px;
+          font-weight: 560;
           flex: 1;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+          letter-spacing: -0.01em;
         }
 
         .threads-project-count {
-          min-width: 20px;
-          height: 18px;
-          padding: 0 6px;
-          border-radius: 999px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
+          font-family: inherit;
           font-size: 10px;
-          font-weight: 700;
-          color: var(--text-muted, #94a3b8);
-          background: rgba(15, 23, 42, 0.45);
-          border: 1px solid rgba(148, 163, 184, 0.14);
+          font-weight: 650;
+          color: rgba(226, 232, 240, 0.55);
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(148, 163, 184, 0.1);
+          min-width: 18px;
+          height: 18px;
+          line-height: 16px;
+          text-align: center;
+          border-radius: 999px;
+          padding: 0 5px;
         }
 
         .threads-project-content {
-          padding: 2px 0 8px 14px;
+          padding: 4px 0 8px 28px;
+        }
+
+        .threads-project-empty {
+          padding: 8px 12px 6px;
+          color: rgba(226, 232, 240, 0.42);
+          font-size: 11px;
+          opacity: 1;
         }
 
         @media (max-width: 768px) {
           .threads-project-header {
-            height: 36px;
-            margin: 2px 6px;
-            padding: 0 8px;
+            height: 28px;
+            padding: 0 10px;
           }
 
           .threads-project-name {
-            font-size: 13px;
+            font-size: 12px;
           }
 
           .threads-project-content {
-            padding-left: 12px;
+            padding-left: 8px;
           }
         }
       `}</style>

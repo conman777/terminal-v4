@@ -29,9 +29,11 @@ export function prepareTerminalForExternalInput({
 }
 
 function shouldChunkExternalInput(text) {
+  const trimmed = typeof text === 'string' ? text.trimStart() : '';
   return !(
     typeof text !== 'string'
     || text.length === 0
+    || trimmed.startsWith('/')
     || text.startsWith('\x1b')
     || /[\x00-\x08\x0b-\x1f\x7f]/.test(text)
   );

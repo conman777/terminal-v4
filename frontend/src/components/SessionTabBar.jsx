@@ -254,28 +254,29 @@ export function SessionTabBar({
           display: flex;
           align-items: center;
           background: transparent;
-          padding: 0 6px;
-          height: 40px;
+          padding: 0;
+          height: 100%;
           flex-shrink: 0;
           position: relative;
+          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
         }
 
         .session-tab-bar-container-modern.in-header {
           background: transparent;
           border-bottom: none;
           height: 100%;
-          padding: 0 2px;
+          padding: 0;
         }
 
         .session-tab-bar-modern {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 0;
           flex: 1;
           overflow-x: auto;
           scrollbar-width: none;
           height: 100%;
-          padding: 4px 2px;
+          padding: 0;
         }
 
         .session-tab-bar-modern::-webkit-scrollbar {
@@ -283,46 +284,40 @@ export function SessionTabBar({
         }
 
         .session-tab-scroll-btn-modern {
-          width: 28px;
-          height: 28px;
+          width: 20px;
+          height: 20px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: rgba(30, 41, 59, 0.5);
-          border: 1px solid rgba(148, 163, 184, 0.25);
-          color: rgba(226, 232, 240, 0.82);
-          border-radius: 8px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
           cursor: pointer;
           z-index: 10;
-          transition: all 0.2s ease;
+          transition: color 0.1s ease;
         }
 
         .session-tab-scroll-btn-modern:hover {
-          color: #e2e8f0;
-          border-color: rgba(56, 189, 248, 0.45);
-          background: rgba(56, 189, 248, 0.18);
+          color: var(--text-primary, #fafafa);
         }
 
         .session-tab-new-modern {
           flex-shrink: 0;
-          width: 30px;
-          height: 30px;
+          width: 20px;
+          height: 20px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: rgba(30, 41, 59, 0.4);
-          border: 1px solid rgba(148, 163, 184, 0.25);
-          color: rgba(226, 232, 240, 0.85);
-          border-radius: 8px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #71717a);
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: color 0.1s ease;
           margin-left: 4px;
         }
 
         .session-tab-new-modern:hover {
-          background: rgba(34, 211, 238, 0.18);
-          border-color: rgba(34, 211, 238, 0.45);
-          color: #e2e8f0;
+          color: var(--text-primary, #fafafa);
         }
 
       `}</style>

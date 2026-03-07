@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
+import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 
 function normalizeTurnContent(content) {
   return typeof content === 'string' ? content.trim() : '';
@@ -176,8 +177,9 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
 
   // Send a message from the chat input bar.
   const handleChatSend = useCallback((text) => {
-    const trimmed = typeof text === 'string' ? text.trim() : '';
-    const textResult = sendOrQueue(text);
+    const resolvedText = rewriteTerminalAgentInput(text);
+    const trimmed = typeof resolvedText === 'string' ? resolvedText.trim() : '';
+    const textResult = sendOrQueue(resolvedText);
     const submit = () => sendOrQueue('\r');
 
     if (textResult.queued) {

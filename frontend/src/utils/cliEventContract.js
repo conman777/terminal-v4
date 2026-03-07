@@ -38,6 +38,18 @@ function normalizePromptActions(actions) {
     .filter(Boolean);
 }
 
+function normalizePromptOptions(options) {
+  if (!Array.isArray(options)) return [];
+  return options
+    .filter((option) => option && typeof option === 'object')
+    .map((option) => ({
+      label: isNonEmptyString(option.label) ? option.label.trim() : '',
+      payload: typeof option.payload === 'string' && option.payload.length > 0 ? option.payload : '',
+      kind: option.kind === 'primary' ? 'primary' : 'secondary'
+    }))
+    .filter((option) => option.label && option.payload);
+}
+
 /**
  * Convert terminal metadata payloads into canonical CLI events.
  * Supports new { type: 'cli_event', event: ... } and legacy { type: 'turn', ... }.
@@ -66,7 +78,13 @@ export function normalizeCliEventFromMeta(metaMessage) {
       ...event,
       ts: normalizeTs(event.ts),
       source: event.source || 'pty',
-      actions: event.type === 'prompt_required' ? normalizePromptActions(event.actions) : undefined
+      actions: event.type === 'prompt_required' ? normalizePromptActions(event.actions) : undefined,
+      options: event.type === 'prompt_required'
+        ? (() => {
+            const normalized = normalizePromptOptions(event.options);
+            return normalized.length > 0 ? normalized : undefined;
+          })()
+        : undefined
     };
   }
 
@@ -94,4 +112,3 @@ export function normalizeCliEventFromMeta(metaMessage) {
 
   return null;
 }
-

@@ -27,7 +27,11 @@ function buildProps(overrides = {}) {
         sessions: [buildSession('session-1', 'Implement feature'), buildSession('session-2', 'Fix layout')]
       }
     ],
-    pinnedSessions: [buildSession('session-3', 'Pinned work', { thread: { pinned: true, topic: 'Pinned work' } })],
+    projects: [
+      { name: 'terminal v4', path: 'C:\\repo' },
+      { name: 'uplifting', path: 'C:\\uplifting' }
+    ],
+    projectsLoading: false,
     archivedSessions: [buildSession('session-4', 'Archived work', { thread: { archived: true, topic: 'Archived work' } })],
     activeSessionId: 'session-1',
     sessionActivity: {},
@@ -39,17 +43,30 @@ function buildProps(overrides = {}) {
     onTopicChange: vi.fn(),
     onCloseSession: vi.fn(),
     onCreateSession: vi.fn(),
+    onAddProject: vi.fn(),
+    onOpenSettings: vi.fn(),
     onToggleSidebarMode: vi.fn(),
     ...overrides
   };
 }
 
 describe('ThreadsSidebar', () => {
-  it('renders overview counts for active, pinned, and archived sessions', () => {
+  it('renders folder groups with their terminal sessions underneath', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('3 active')).toBeInTheDocument();
-    expect(screen.getByText('1 pinned')).toBeInTheDocument();
-    expect(screen.getByText('1 archived')).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new thread/i })).toBeInTheDocument();
+    expect(screen.getByText('terminal v4')).toBeInTheDocument();
+    expect(screen.getByText('Implement feature')).toBeInTheDocument();
+    expect(screen.getByText('Fix layout')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add project' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /settings/i })).toBeInTheDocument();
+  });
+
+  it('shows scanned folders even before they have terminal sessions', () => {
+    render(<ThreadsSidebar {...buildProps()} />);
+
+    expect(screen.getByText('uplifting')).toBeInTheDocument();
+    expect(screen.getByText('No terminals yet')).toBeInTheDocument();
   });
 });

@@ -25,12 +25,12 @@ export function AddScanFolderModal({ isOpen, isLoading = false, error = '', onCl
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content add-scan-folder-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Add Scan Folder</h2>
+          <h2>Add Project</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
-        <p className="add-scan-folder-help">Enter an absolute path to scan for git repositories.</p>
+        <p className="add-scan-folder-help">Enter an absolute project path to add it to the sidebar.</p>
         <form onSubmit={handleSubmit}>
           <input
             ref={inputRef}
@@ -47,7 +47,7 @@ export function AddScanFolderModal({ isOpen, isLoading = false, error = '', onCl
               Cancel
             </button>
             <button type="submit" className="btn-primary" disabled={!path.trim() || isLoading}>
-              {isLoading ? 'Adding...' : 'Add Folder'}
+              {isLoading ? 'Adding...' : 'Add Project'}
             </button>
           </div>
         </form>

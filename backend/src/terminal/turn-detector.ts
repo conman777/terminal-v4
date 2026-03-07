@@ -9,7 +9,7 @@
  * The same ANSI-stripping / UI-chrome-filtering logic is also exposed as
  * buildTurnsFromHistory() for the HTTP /turns endpoint to process stored history.
  */
-import type { TerminalCliEvent } from './cli-events';
+import type { TerminalCliEvent, TerminalCliPromptEvent, TerminalCliPromptOption } from './cli-events';
 import { buildCliTurnEvent } from './cli-events';
 
 export interface ChatTurn {
@@ -37,6 +37,7 @@ function stripAnsi(str: string): string {
 
 function isUiChrome(line: string): boolean {
   const t = line.trim();
+  const squashed = squash(t);
   if (!t) return true;
   if (t === '[terminated]') return true;
   if (/^\[\w+\]$/.test(t)) return true;
@@ -68,6 +69,20 @@ function isUiChrome(line: string): boolean {
   if (/^\d+$/.test(t)) return true;
   if (/^[\s─═━\-─═━>│╭╰╯╮╱╲]+$/.test(t)) return true;
   if (/^[\s│]+\.[\s│.·]+$/.test(t)) return true;
+  if (
+    (t.includes('|') || /[🪟💰🔥🧠]/u.test(t))
+    && (
+      squashed.includes('opus4.6')
+      || squashed.includes('sonnet4.6')
+      || squashed.includes('claudemax')
+      || squashed.includes('gpt-5.4')
+      || squashed.includes('session/')
+      || squashed.includes('today/')
+      || squashed.includes('/hr')
+      || squashed.includes('%left')
+      || /\$\d/.test(t)
+    )
+  ) return true;
   return false;
 }
 
@@ -158,12 +173,102 @@ function isInteractiveSafetyPrompt(content: string): boolean {
   return hasChoicePrompt;
 }
 
+function buildPromptOptions(lines: string[]): TerminalCliPromptOption[] {
+  const numberedOptions = lines
+    .map((line, index) => {
+      const match = line.match(/^([>❯›]\s*)?(\d+)\.\s+(.+)$/);
+      if (!match) return null;
+      return {
+        index,
+        selected: Boolean(match[1]),
+        label: `${match[2]}. ${match[3].trim()}`
+      };
+    })
+    .filter((value): value is { index: number; selected: boolean; label: string } => Boolean(value));
+
+  if (numberedOptions.length === 0) return [];
+
+  const selectedIndex = numberedOptions.findIndex((option) => option.selected);
+  const baseIndex = selectedIndex >= 0 ? selectedIndex : 0;
+
+  return numberedOptions.map((option, index) => {
+    const delta = index - baseIndex;
+    const navigation = delta > 0
+      ? '\x1b[B'.repeat(delta)
+      : '\x1b[A'.repeat(Math.abs(delta));
+
+    return {
+      label: option.label,
+      payload: `${navigation}\r`,
+      kind: option.selected || (selectedIndex === -1 && index === 0) ? 'primary' : 'secondary'
+    };
+  });
+}
+
+function buildInteractivePromptEvent(content: string, ts: number): TerminalCliPromptEvent | null {
+  if (!content) return null;
+
+  const lines = content
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const lowerContent = content.toLowerCase();
+  const options = buildPromptOptions(lines);
+  const actions = new Set<string>();
+  const promptLine = lines.find((line) => (
+    /update available/i.test(line)
+    || /trust this folder/i.test(line)
+    || /continue anyway/i.test(line)
+    || /select an option/i.test(line)
+    || /enter to (confirm|continue)/i.test(line)
+    || /press enter to continue/i.test(line)
+    || /esc(?:ape)? to cancel/i.test(line)
+    || /\[[yYnN]\/[yYnN]\]/.test(line)
+  )) || lines[0];
+
+  if (
+    isInteractiveSafetyPrompt(content)
+    || /\[[yYnN]\/[yYnN]\]/.test(content)
+    || /trust this folder|continue anyway/i.test(content)
+  ) {
+    actions.add('yes');
+    actions.add('no');
+  }
+
+  if (/enter to (confirm|continue)|press enter to continue/i.test(lowerContent)) {
+    actions.add('enter');
+  }
+
+  if (/esc(?:ape)? to cancel/i.test(lowerContent)) {
+    actions.add('escape');
+  }
+
+  if (/shift\+tab to cycle|tab to cycle/i.test(lowerContent)) {
+    actions.add('tab');
+    actions.add('shift_tab');
+  }
+
+  if (actions.size === 0 && options.length === 0) return null;
+
+  return {
+    type: 'prompt_required',
+    prompt: promptLine,
+    actions: [...actions],
+    options: options.length > 0 ? options : undefined,
+    ts,
+    source: 'pty'
+  };
+}
+
 /**
  * Detects conversation turns from the live PTY stream.
  * One instance lives inside each ManagedTerminal for the session's lifetime.
  */
 export class TurnDetector {
   private outputBuffer = '';
+  private inputBuffer = '';
   private lastOutputTs = Date.now();
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private recentUserInputs: string[] = [];
@@ -178,13 +283,44 @@ export class TurnDetector {
   onUserInput(text: string): void {
     // Flush any pending assistant output before recording user input.
     this.flushAssistant();
-    const cleaned = stripAnsi(text).replace(/[\r\n]+$/, '').trim();
-    // Skip single-key presses, control chars, and empty strings.
-    if (cleaned.length >= 2) {
-      const turn: ChatTurn = { role: 'user', content: cleaned, ts: Date.now() };
+    const cleaned = stripAnsi(text);
+    if (!cleaned) return;
+
+    let nextBuffer = this.inputBuffer;
+    const committedLines: string[] = [];
+
+    for (let index = 0; index < cleaned.length; index += 1) {
+      const char = cleaned[index];
+
+      if (char === '\r' || char === '\n') {
+        const committed = nextBuffer.trim();
+        if (committed) {
+          committedLines.push(committed);
+        }
+        nextBuffer = '';
+        continue;
+      }
+
+      if (char === '\x7f' || char === '\b') {
+        nextBuffer = nextBuffer.slice(0, -1);
+        continue;
+      }
+
+      if (char < ' ') {
+        continue;
+      }
+
+      nextBuffer += char;
+    }
+
+    this.inputBuffer = nextBuffer;
+
+    for (const committed of committedLines) {
+      if (committed.length < 2) continue;
+      const turn: ChatTurn = { role: 'user', content: committed, ts: Date.now() };
       this.onTurn(turn);
       this.onCliEvent?.(buildCliTurnEvent(turn));
-      this.recentUserInputs.push(cleaned);
+      this.recentUserInputs.push(committed);
       if (this.recentUserInputs.length > 5) {
         this.recentUserInputs.shift();
       }
@@ -203,7 +339,8 @@ export class TurnDetector {
 
   private checkAndFlush(): void {
     if (!this.outputBuffer) return;
-    if (PROMPT_ONLY_LINE_RE.test(stripAnsi(this.outputBuffer))) {
+    const stripped = stripAnsi(this.outputBuffer);
+    if (PROMPT_ONLY_LINE_RE.test(stripped) || buildInteractivePromptEvent(extractContent(this.outputBuffer, this.recentUserInputs), this.lastOutputTs)) {
       this.flushAssistant();
     }
   }
@@ -219,14 +356,9 @@ export class TurnDetector {
     const content = extractContent(buffer, this.recentUserInputs);
     if (!content) return;
 
-    if (isInteractiveSafetyPrompt(content)) {
-      this.onCliEvent?.({
-        type: 'prompt_required',
-        prompt: content,
-        actions: ['enter', 'escape', 'yes', 'no'],
-        ts: this.lastOutputTs,
-        source: 'pty'
-      });
+    const promptEvent = buildInteractivePromptEvent(content, this.lastOutputTs);
+    if (promptEvent) {
+      this.onCliEvent?.(promptEvent);
       return;
     }
 
@@ -239,6 +371,7 @@ export class TurnDetector {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = null;
     this.outputBuffer = '';
+    this.inputBuffer = '';
     this.recentUserInputs = [];
   }
 }

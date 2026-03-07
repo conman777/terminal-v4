@@ -22,10 +22,12 @@ vi.mock('./DesktopConversationView', () => ({
 }));
 
 vi.mock('./DesktopStatusBar', () => ({
-  DesktopStatusBar: ({ isTerminalPanelOpen, onToggleTerminalPanel }) => (
-    <button type="button" aria-label="toggle-terminal-panel" onClick={onToggleTerminalPanel}>
-      {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
-    </button>
+  DesktopStatusBar: ({ isTerminalPanelOpen, onToggleTerminalPanel, showTerminalToggle = true }) => (
+    showTerminalToggle ? (
+      <button type="button" aria-label="toggle-terminal-panel" onClick={onToggleTerminalPanel}>
+        {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
+      </button>
+    ) : <div data-testid="terminal-toggle-hidden" />
   )
 }));
 
@@ -83,51 +85,56 @@ describe('TerminalPane', () => {
     handleInterruptMock.mockClear();
   });
 
-  it('does not auto-open terminal panel for interactive output', () => {
+  it('renders the terminal as the primary surface for CLI sessions', () => {
+    const { container } = render(<TerminalPane {...buildProps()} />);
+
+    expect(latestTerminalChatProps).not.toBeNull();
+    expect(screen.getByTestId('terminal-chat-mock')).toBeInTheDocument();
+    expect(screen.queryByTestId('desktop-conversation-view-mock')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-toggle-hidden')).toBeInTheDocument();
+    expect(screen.getByLabelText('Agent session controls')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Launch Claude Code' })).toBeInTheDocument();
+    expect(container.querySelector('.terminal-with-status.terminal-first')).not.toBeNull();
+    expect(container.querySelector('.desktop-terminal-runtime.terminal-first')).not.toBeNull();
+  });
+
+  it('launches the active CLI agent from the terminal-first toolbar', () => {
     render(<TerminalPane {...buildProps()} />);
 
-    const toggleButton = screen.getByRole('button', { name: 'toggle-terminal-panel' });
-    expect(toggleButton).toHaveTextContent('Open Terminal');
+    fireEvent.click(screen.getByRole('button', { name: 'Launch Claude Code' }));
+
+    expect(handleChatSendMock).toHaveBeenCalledWith('claude --dangerously-skip-permissions');
+  });
+
+  it('still renders the structured conversation view for structured sessions', () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-session-1' },
+      sessions: [{ id: 'ss-session-1', title: 'Structured Session', usesTmux: false, thread: null }],
+      sessionAiTypes: { 'ss-session-1': 'codex' }
+    })} />);
+
+    expect(screen.getByTestId('desktop-conversation-view-mock')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'toggle-terminal-panel' })).toHaveTextContent('Open Terminal');
+  });
+
+  it('does not auto-open a secondary terminal panel for CLI sessions when interactive output arrives', () => {
+    render(<TerminalPane {...buildProps()} />);
     expect(latestTerminalChatProps).not.toBeNull();
 
     act(() => {
       latestTerminalChatProps.onOutputChunk(INTERACTIVE_OUTPUT);
     });
-    expect(screen.getByRole('button', { name: 'toggle-terminal-panel' })).toHaveTextContent('Open Terminal');
-    expect(latestConversationProps.showTerminalMirror).toBe(true);
-  });
 
-  it('keeps panel hidden after manual hide even if interactive output continues', () => {
-    render(<TerminalPane {...buildProps()} />);
-    expect(latestTerminalChatProps).not.toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'toggle-terminal-panel' }));
-    expect(screen.getByRole('button', { name: 'toggle-terminal-panel' })).toHaveTextContent('Hide Terminal');
-
-    fireEvent.click(screen.getByRole('button', { name: 'toggle-terminal-panel' }));
-    expect(screen.getByRole('button', { name: 'toggle-terminal-panel' })).toHaveTextContent('Open Terminal');
-
-    act(() => {
-      latestTerminalChatProps.onOutputChunk(INTERACTIVE_OUTPUT);
-    });
-
-    expect(screen.getByRole('button', { name: 'toggle-terminal-panel' })).toHaveTextContent('Open Terminal');
-  });
-
-  it('forwards live terminal screen snapshots to conversation view', () => {
-    render(<TerminalPane {...buildProps()} />);
-    expect(latestTerminalChatProps).not.toBeNull();
-    expect(latestConversationProps).not.toBeNull();
-
-    act(() => {
-      latestTerminalChatProps.onScreenSnapshot({ text: 'Claude Code v2.1.68\n> ready' });
-    });
-
-    expect(latestConversationProps.terminalScreenSnapshot).toContain('Claude Code v2.1.68');
+    expect(screen.getByTestId('terminal-chat-mock')).toBeInTheDocument();
+    expect(screen.getByTestId('terminal-toggle-hidden')).toBeInTheDocument();
   });
 
   it('forwards canonical prompt_required events into conversation view state', () => {
-    render(<TerminalPane {...buildProps()} />);
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-session-1' },
+      sessions: [{ id: 'ss-session-1', title: 'Structured Session', usesTmux: false, thread: null }],
+      sessionAiTypes: { 'ss-session-1': 'codex' }
+    })} />);
     expect(latestTerminalChatProps).not.toBeNull();
 
     act(() => {
@@ -140,5 +147,56 @@ describe('TerminalPane', () => {
 
     expect(latestConversationProps.showTerminalMirror).toBe(true);
     expect(latestConversationProps.interactivePromptEvent?.type).toBe('prompt_required');
+  });
+
+  it('returns to conversation mode once a prompt is followed by a conversation turn', () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-session-1' },
+      sessions: [{ id: 'ss-session-1', title: 'Structured Session', usesTmux: false, thread: null }],
+      sessionAiTypes: { 'ss-session-1': 'codex' }
+    })} />);
+    expect(latestTerminalChatProps).not.toBeNull();
+
+    act(() => {
+      latestTerminalChatProps.onCliEvent({
+        type: 'prompt_required',
+        prompt: 'Continue anyway? [y/N]:',
+        actions: ['yes', 'no']
+      });
+    });
+
+    expect(latestConversationProps.showTerminalMirror).toBe(true);
+
+    act(() => {
+      latestTerminalChatProps.onCliEvent({
+        type: 'assistant_turn',
+        content: 'Environment variables downloaded.'
+      });
+    });
+
+    expect(latestConversationProps.showTerminalMirror).toBe(false);
+    expect(latestConversationProps.interactivePromptEvent).toBeNull();
+  });
+
+  it('returns to conversation mode when interactive output gives way to normal terminal output', () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-session-1' },
+      sessions: [{ id: 'ss-session-1', title: 'Structured Session', usesTmux: false, thread: null }],
+      sessionAiTypes: { 'ss-session-1': 'codex' }
+    })} />);
+    expect(latestTerminalChatProps).not.toBeNull();
+
+    act(() => {
+      latestTerminalChatProps.onOutputChunk(INTERACTIVE_OUTPUT);
+    });
+
+    expect(latestConversationProps.showTerminalMirror).toBe(false);
+
+    act(() => {
+      latestTerminalChatProps.onOutputChunk('Downloading production environment variables...\n');
+    });
+
+    expect(latestConversationProps.showTerminalMirror).toBe(false);
+    expect(latestConversationProps.interactivePromptEvent).toBeNull();
   });
 });

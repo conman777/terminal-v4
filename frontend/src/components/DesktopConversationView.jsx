@@ -72,6 +72,18 @@ function parseInteractivePromptSnapshot(snapshotText) {
   if (lines.length === 0) return null;
 
   const lowerText = text.toLowerCase();
+  const numberedOptions = lines
+    .map((line, index) => {
+      const match = line.match(/^([›>]\s*)?(\d+)\.\s+(.+)$/);
+      if (!match) return null;
+      return {
+        index,
+        isSelected: Boolean(match[1]),
+        number: match[2],
+        label: `${match[2]}. ${match[3].trim()}`
+      };
+    })
+    .filter(Boolean);
   const promptLine = [...lines].reverse().find((line) => (
     /\[[yYnN]\/[yYnN]\]/.test(line)
     || /(?:continue anyway|trust this folder|select an option|confirm|cancel)/i.test(line)
@@ -79,6 +91,23 @@ function parseInteractivePromptSnapshot(snapshotText) {
   )) || lines[lines.length - 1];
 
   const actions = [];
+  if (numberedOptions.length > 0) {
+    const selectedIndex = numberedOptions.findIndex((option) => option.isSelected);
+    const baseIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    for (let index = 0; index < numberedOptions.length; index += 1) {
+      const option = numberedOptions[index];
+      const delta = index - baseIndex;
+      const navigation = delta > 0
+        ? '\x1b[B'.repeat(delta)
+        : '\x1b[A'.repeat(Math.abs(delta));
+      actions.push({
+        label: option.label,
+        payload: `${navigation}\r`,
+        kind: option.isSelected || (selectedIndex === -1 && index === 0) ? 'primary' : 'secondary'
+      });
+    }
+  }
+
   if (/\[[yYnN]\/[yYnN]\]/.test(promptLine) || /continue anyway|trust this folder/i.test(promptLine)) {
     actions.push(
       { label: 'Yes', payload: 'y\r', kind: 'primary' },
@@ -163,6 +192,14 @@ function isLaunchCommand(content, aiType) {
   return false;
 }
 
+function isSlashCommandOnlyTurn(content) {
+  return /^\/[a-z0-9._:-]+$/i.test(content.trim());
+}
+
+function isShortFragmentTurn(content) {
+  return /^[a-z]{1,2}$/i.test(content.trim());
+}
+
 function looksLikeBootstrapNoiseText(text) {
   if (!text) return true;
   const normalized = text.toLowerCase();
@@ -224,6 +261,46 @@ function looksLikeCodexStartupLine(line, squashed) {
   return hasCodexStartupMarker && (/[^\x00-\x7F]/.test(line) || /\|/.test(line) || line.includes('\n') || squashed.includes('100%left'));
 }
 
+function looksLikeModelStatusFooter(line, squashed) {
+  const hasStatusMarkers = line.includes('|') || /[🪟💰🔥🧠]/u.test(line);
+  const hasModelOrUsage =
+    squashed.includes('opus4.6')
+    || squashed.includes('sonnet4.6')
+    || squashed.includes('claudemax')
+    || squashed.includes('gpt-5.4')
+    || squashed.includes('session/')
+    || squashed.includes('today/')
+    || squashed.includes('/hr')
+    || squashed.includes('%left')
+    || /\$\d/.test(line);
+  return hasStatusMarkers && hasModelOrUsage;
+}
+
+function stripModelStatusFooter(line) {
+  return line
+    .replace(/\s+(?:[|│]\s*)?(?:[🪟💰🔥🧠]\s*)?(?:Opus 4\.6|Sonnet 4\.6|gpt-5\.4)\b[\s\S]*$/i, '')
+    .trim();
+}
+
+function looksLikeStatusFooterResidue(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (/[|│]\s*[🪟💰🔥🧠]?\s*$/u.test(trimmed)) return true;
+  if (/^codex\s+--yolo\b/i.test(trimmed)) return true;
+  if (/\bmodel:\s*$/i.test(trimmed)) return true;
+  return false;
+}
+
+function looksLikeCodexUpdatePrompt(content) {
+  const squashed = compactText(content);
+  return (
+    squashed.includes('updateavailable!')
+    && squashed.includes('github.com/openai/codex/releases/latest')
+    && squashed.includes('@openai/codex')
+    && squashed.includes('pressentertocontinue')
+  );
+}
+
 function shouldHideMirrorScreenSnapshot(snapshot, aiType) {
   if (typeof snapshot !== 'string' || !snapshot.trim()) return false;
 
@@ -261,15 +338,21 @@ function normalizeClaudeAssistantLine(line) {
 
 function sanitizeAssistantTurnContent(content, aiType) {
   if (typeof content !== 'string') return '';
+  if (aiType === 'codex' && looksLikeCodexUpdatePrompt(content)) return '';
 
   const normalizedLines = [];
   const lines = content.split('\n');
   for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
+    let trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    trimmed = stripModelStatusFooter(trimmed);
     if (!trimmed) continue;
 
     const squashed = compactText(trimmed);
     if (looksLikeInteractiveStatusLine(trimmed, squashed)) continue;
+    if (looksLikeModelStatusFooter(trimmed, squashed)) continue;
+    if (looksLikeStatusFooterResidue(trimmed)) continue;
     if (/^\s*[>❯]\s*$/.test(trimmed)) continue;
     if (squashed.includes('microsoftwindows[version')) continue;
     if (squashed.includes('microsoftcorporation.allrightsreserved')) continue;
@@ -323,7 +406,9 @@ function buildVisibleTurns(turns, aiType) {
     if (turn.role === 'user') {
       const userContent = turn.content.trim();
       if (!userContent) continue;
-      if (!hasMeaningfulUserTurn && isLaunchCommand(userContent, aiType)) continue;
+      if (isLaunchCommand(userContent, aiType)) continue;
+      if (isSlashCommandOnlyTurn(userContent)) continue;
+      if (isShortFragmentTurn(userContent)) continue;
       hasMeaningfulUserTurn = true;
       visibleTurns.push({ ...turn, content: userContent });
       continue;
@@ -371,75 +456,26 @@ function extractWorkingDirectory(...sources) {
   return '';
 }
 
-function getConversationModeLabel(terminalViewState) {
-  switch (terminalViewState) {
-    case 'interactive_prompt':
-      return 'Prompt';
-    case 'terminal_mirror':
-      return 'Mirror';
-    case 'structured':
-      return 'Structured';
-    default:
-      return 'Conversation';
-  }
-}
-
-function getConversationStatusLabel({
+function getStatusLabel({
   interactivePrompt,
   isStreaming,
   isOffline,
   connectionState,
   isSendReady,
-  terminalViewState,
+  showTerminalMirror,
 }) {
-  if (interactivePrompt) return 'Input required';
-  if (isOffline) return 'Offline';
-  if (connectionState === 'connecting') return 'Connecting';
-  if (isStreaming) return 'Responding';
-  if (terminalViewState === 'terminal_mirror') return 'Live';
-  if (!isSendReady) return 'Preparing';
-  return 'Ready';
-}
-
-function getConversationTitle(assistantLabel, terminalViewState, interactivePrompt, isStructured) {
-  if (isStructured) return `${assistantLabel} structured session`;
-  if (interactivePrompt || terminalViewState === 'interactive_prompt') {
-    return `${assistantLabel} needs terminal input`;
-  }
-  if (terminalViewState === 'terminal_mirror') {
-    return `Live ${assistantLabel} terminal`;
-  }
-  return `${assistantLabel} conversation workspace`;
-}
-
-function getConversationSubtitle({
-  terminalViewState,
-  interactivePrompt,
-  isStructured,
-  isStreaming,
-}) {
-  if (isStructured) {
-    return 'Structured messages, tools, and approvals stay in one focused workspace.';
-  }
-  if (interactivePrompt || terminalViewState === 'interactive_prompt') {
-    return 'Use the prompt controls below or type directly into the live CLI to continue the session.';
-  }
-  if (terminalViewState === 'terminal_mirror') {
-    return 'The session is still terminal-first, so the live CLI snapshot stays front and center.';
-  }
-  if (isStreaming) {
-    return 'Readable transcript mode is active while the CLI continues running in the background.';
-  }
-  return 'Conversation mode keeps terminal-backed coding sessions readable without hiding the live context.';
+  if (interactivePrompt) return 'input';
+  if (isOffline) return 'offline';
+  if (connectionState === 'connecting') return 'connecting';
+  if (isStreaming) return 'running';
+  if (showTerminalMirror) return 'live';
+  if (!isSendReady) return 'starting';
+  return 'ready';
 }
 
 function TypingIndicator() {
   return (
-    <div className="desktop-streaming-indicator" aria-label="Assistant is responding">
-      <span className="dot" />
-      <span className="dot" />
-      <span className="dot" />
-    </div>
+    <span className="dcv-cursor-blink" aria-label="Assistant is responding">▍</span>
   );
 }
 
@@ -483,57 +519,31 @@ export function DesktopConversationView({
   const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
   const interactivePromptFromEvent = parseInteractivePromptEvent(interactivePromptEvent);
   const interactivePrompt = interactivePromptFromEvent
-    || (showTerminalMirror && hasLiveScreenSnapshot
+    || (hasLiveScreenSnapshot
       ? parseInteractivePromptSnapshot(terminalScreenSnapshot)
       : null);
   const shouldCaptureRawKeyboard = showTerminalMirror && Boolean(interactivePrompt);
-  const terminalViewState = isStructured
-    ? 'structured'
-    : interactivePrompt
-      ? 'interactive_prompt'
-      : showTerminalMirror
-        ? 'terminal_mirror'
-        : 'conversation';
-  const isTerminalFirstView = terminalViewState === 'interactive_prompt' || terminalViewState === 'terminal_mirror';
-  const shouldShowMirrorScreen = hasLiveScreenSnapshot && terminalViewState !== 'conversation';
-  const terminalFirstTurns = isStructured
-    ? []
-    : isTerminalFirstView
-      ? visibleTurns.filter((turn) => turn.role === 'user')
-      : [];
-  const displayTurns = isStructured
-    ? []
-    : terminalViewState === 'conversation'
-      ? visibleTurns
-      : [];
+  const showInteractivePromptBlock = Boolean(interactivePrompt && interactivePrompt.actions?.length > 0);
+  const shouldShowMirrorScreen = false;
+  const displayTurns = isStructured ? [] : visibleTurns;
   const isConnected = connectionState === 'online';
   const isOffline = connectionState === 'offline';
-  const modeLabel = getConversationModeLabel(terminalViewState);
-  const statusLabel = getConversationStatusLabel({
+  const statusLabel = getStatusLabel({
     interactivePrompt,
     isStreaming,
     isOffline,
     connectionState,
     isSendReady,
-    terminalViewState,
-  });
-  const viewTitle = getConversationTitle(assistantLabel, terminalViewState, interactivePrompt, isStructured);
-  const viewSubtitle = getConversationSubtitle({
-    terminalViewState,
-    interactivePrompt,
-    isStructured,
-    isStreaming,
+    showTerminalMirror,
   });
   const promptFallbackNotice =
-    interactivePrompt && !shouldShowMirrorScreen
-      ? `Current prompt: ${interactivePrompt.prompt}`
+    interactivePrompt && !showInteractivePromptBlock
+      ? `Interactive terminal prompt active: ${interactivePrompt.prompt}`
       : '';
   const workingDirectory = extractWorkingDirectory(terminalScreenSnapshot, terminalPreview);
   const hasVisibleTurns =
     displayTurns.length > 0
-    || terminalFirstTurns.length > 0
-    || Boolean(interactivePromptFromEvent)
-    || (showTerminalMirror && hasLiveScreenSnapshot)
+    || Boolean(interactivePrompt)
     || (isStructured && (
       structuredMessages.length > 0
       || structuredToolCalls.length > 0
@@ -554,17 +564,11 @@ export function DesktopConversationView({
         ? 'Connecting to terminal transport. You can still queue a launch command now.'
         : hasBackgroundOutput
           ? `${assistantLabel} launched in background. Waiting for the first conversation turn...`
-        : !isSendReady
+          : !isSendReady
           ? 'Transport is online and preparing input channel...'
         : isStreaming
           ? `${assistantLabel} is running. Waiting for the first response turn...`
           : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`);
-  const terminalSnapshotBlock = shouldShowMirrorScreen ? (
-    <div className="desktop-cli-focus-screen-block">
-      <span className="desktop-cli-focus-section-label">Live terminal snapshot</span>
-      <pre className="desktop-cli-focus-screen">{terminalScreenSnapshot}</pre>
-    </div>
-  ) : null;
 
   const scrollToBottom = useCallback(() => {
     const element = bottomRef.current;
@@ -667,40 +671,28 @@ export function DesktopConversationView({
   }, [sessionId]);
 
   return (
-    <div className={`desktop-conversation-view mode-${terminalViewState}${isTerminalFirstView ? ' terminal-first' : ''}`}>
-      <div className={`desktop-conversation-header${isTerminalFirstView ? ' compact' : ''}`}>
+    <div className="desktop-conversation-view mode-conversation">
+      <div className="desktop-conversation-header">
         <div className="desktop-conversation-header-main">
+          <span className={`dcv-status-dot status-${statusLabel}`} title={statusLabel} />
           <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
             {assistantLabel}
           </span>
-          <div className="desktop-conversation-heading">
-            <div className="desktop-conversation-title">{viewTitle}</div>
-            <div className="desktop-conversation-subtitle">{viewSubtitle}</div>
-          </div>
-        </div>
-
-        <div className="desktop-conversation-header-meta">
           {workingDirectory && (
-            <div className="desktop-conversation-path-block">
-              <span className="desktop-conversation-path-label">Working directory</span>
+            <>
+              <span className="dcv-sep" aria-hidden="true">/</span>
               <code className="desktop-conversation-path-value">{workingDirectory}</code>
-            </div>
+            </>
           )}
-
-          <div className="desktop-conversation-chip-row">
-            <span className={`desktop-conversation-chip status-${statusLabel.toLowerCase().replace(/\s+/g, '-')}`}>
-              {statusLabel}
-            </span>
-            <span className={`desktop-conversation-chip mode-${modeLabel.toLowerCase()}`}>
-              {modeLabel}
-            </span>
-          </div>
         </div>
+        <span className={`desktop-conversation-status status-${statusLabel}`}>
+          {statusLabel}
+        </span>
       </div>
 
-      <div ref={containerRef} className={`desktop-thread${isTerminalFirstView ? ' terminal-first' : ''}`} onScroll={handleScroll}>
-        <div className={`desktop-thread-inner${isTerminalFirstView ? ' wide-layout' : ''}`}>
-          {conversationNotice && !showTerminalMirror && (
+      <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
+        <div className="desktop-thread-inner">
+          {conversationNotice && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
             </div>
@@ -712,22 +704,47 @@ export function DesktopConversationView({
             </div>
           )}
 
+          {showInteractivePromptBlock && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <div className="structured-approval-prompt">
+                  <p>{interactivePrompt.prompt}</p>
+                  <div className="desktop-interactive-prompt-actions">
+                    {interactivePrompt.actions.map((action) => (
+                      <button
+                        key={`${action.label}:${action.payload}`}
+                        type="button"
+                        className={`desktop-interactive-action ${action.kind === 'primary' ? 'primary' : 'secondary'}`}
+                        onClick={() => onSendRaw?.(action.payload)}
+                        disabled={!onSendRaw}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {!hasVisibleTurns && isLoadingHistory && (
             <div className="desktop-conversation-empty">Loading conversation history...</div>
           )}
 
           {showStartupCard && (
             <div className="desktop-agent-status-card" role="status" aria-live="polite">
-              <div className="desktop-agent-status-row">
-                <span className={`desktop-agent-connection ${connectionState}`}>
-                  {isConnected ? 'Online' : isOffline ? 'Offline' : 'Connecting'}
-                </span>
-                <span className={`desktop-agent-runtime ${isStreaming ? 'busy' : 'idle'}`}>
-                  {isStreaming ? 'Agent busy' : 'Agent idle'}
-                </span>
-              </div>
+              <pre className="dcv-startup-text">
+                <span className="dcv-startup-msg">{startupMessage}</span>
+                <span className="dcv-cursor-blink">▍</span>
+              </pre>
 
-              <div className="desktop-agent-status-text">{startupMessage}</div>
+              {launchCommand && (
+                <div className="dcv-startup-cmd">
+                  <span className="dcv-prompt-char">$</span>
+                  <code>{launchCommand}</code>
+                  {launchQueued && <span className="dcv-queued-tag">queued</span>}
+                </div>
+              )}
 
               <div className="desktop-agent-actions-row">
                 {launchCommand && (
@@ -747,46 +764,18 @@ export function DesktopConversationView({
                     onClick={onOpenTerminal}
                     disabled={!onOpenTerminal}
                   >
-                    Open Terminal Panel
+                    Open Terminal
                   </button>
                 )}
               </div>
 
-              {launchCommand && (
-                <div className="desktop-agent-command-preview">
-                  <span className="desktop-agent-command-label">Startup command</span>
-                  <code>{launchCommand}</code>
-                  {launchQueued && (
-                    <span className="desktop-agent-command-queued">queued</span>
-                  )}
-                </div>
-              )}
-
-              {(hasLiveScreenSnapshot || terminalPreview) ? (
-                <div className="desktop-agent-output-preview">
-                  <span className="desktop-agent-output-label">
-                    {hasLiveScreenSnapshot ? 'Live terminal screen' : 'Background output'}
-                  </span>
-                  <pre className={hasLiveScreenSnapshot ? 'terminal-screen' : undefined}>
-                    {hasLiveScreenSnapshot ? terminalScreenSnapshot : terminalPreview}
-                  </pre>
-                </div>
-              ) : (
-                <div className="desktop-agent-output-empty">
-                  {isStreaming ? 'Listening for terminal output...' : 'No background output captured yet.'}
-                </div>
+              {terminalPreview && (
+                <pre className="desktop-agent-output-pre">
+                  {terminalPreview}
+                </pre>
               )}
             </div>
           )}
-
-          {terminalFirstTurns.map((turn, index) => (
-            <ToolCallBlock
-              key={`terminal-first-${turn.ts ?? index}-${turn.role}-${index}`}
-              item={{ type: turn.role, content: turn.content }}
-            />
-          ))}
-
-          {terminalSnapshotBlock}
 
           {displayTurns.map((turn, index) => (
             <ToolCallBlock
@@ -880,7 +869,7 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {isStreaming && !showTerminalMirror && !isStructured && (
+          {isStreaming && !isStructured && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
                 <TypingIndicator />
@@ -909,24 +898,18 @@ export function DesktopConversationView({
         </button>
       )}
 
-      <div className={`desktop-conversation-composer${isTerminalFirstView ? ' compact' : ''}`}>
-        <div className="desktop-conversation-composer-main">
-          <div className="desktop-conversation-composer-meta">
-            <span className="desktop-conversation-composer-label">Message {assistantLabel}</span>
-            <span className="desktop-conversation-composer-hint">Enter to send · Shift+Enter for newline</span>
-          </div>
-
-          <textarea
-            ref={textareaRef}
-            className="desktop-conversation-input"
-            value={inputValue}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder={`Message ${assistantLabel}...`}
-            rows={1}
-          />
-        </div>
+      <div className="desktop-conversation-composer">
+        <span className="dcv-prompt-char" aria-hidden="true">›</span>
+        <textarea
+          ref={textareaRef}
+          className="desktop-conversation-input"
+          value={inputValue}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          placeholder={`Message ${assistantLabel}...`}
+          rows={1}
+        />
 
         <div className="desktop-conversation-actions">
           {onImageUpload && (
@@ -937,7 +920,7 @@ export function DesktopConversationView({
               title="Upload image"
               aria-label="Upload image"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
                 <circle cx="8.5" cy="8.5" r="1.5" />
                 <polyline points="21 15 16 10 5 21" />
@@ -950,11 +933,11 @@ export function DesktopConversationView({
               type="button"
               className="desktop-conversation-btn stop"
               onClick={onInterrupt}
-              title="Interrupt (Ctrl+C)"
+              title="Ctrl+C"
               aria-label="Interrupt"
             >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <rect x="4" y="4" width="16" height="16" rx="2" />
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="4" y="4" width="16" height="16" rx="1" />
               </svg>
             </button>
           )}
@@ -964,11 +947,12 @@ export function DesktopConversationView({
             className="desktop-conversation-send-btn"
             onClick={handleSend}
             disabled={!inputValue.trim()}
-            aria-label="Send message"
-            title="Send message"
+            aria-label="Send"
+            title="Send"
           >
-            <svg width="17" height="17" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="5" y1="12" x2="19" y2="12" />
+              <polyline points="12 5 19 12 12 19" />
             </svg>
           </button>
         </div>

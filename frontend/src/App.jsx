@@ -163,7 +163,7 @@ function AppContent() {
 
   const {
     recentFolders, pinnedFolders, addRecentFolder, pinFolder, unpinFolder,
-    projects, projectsLoading, addScanFolder,
+    projects, selectedProjects, projectsLoading, addScanFolder,
   } = useFolders();
 
   const {
@@ -1148,7 +1148,8 @@ function AppContent() {
               isCollapsed={sidebarCollapsed}
               onToggle={toggleSidebar}
               sessionsGroupedByProject={sessionsGroupedByProject}
-              pinnedSessions={pinnedSessions}
+              projects={selectedProjects}
+              projectsLoading={projectsLoading}
               archivedSessions={archivedSessions}
               activeSessionId={activeSessionId}
               sessionActivity={sessionActivity}
@@ -1160,7 +1161,8 @@ function AppContent() {
               onTopicChange={updateSessionTopic}
               onCloseSession={closeSession}
               onCreateSession={handleRequestNewSession}
-              sidebarMode={sidebarMode}
+              onAddProject={openAddScanFolderModal}
+              onOpenSettings={handleOpenSettings}
               onToggleSidebarMode={toggleSidebarMode}
             />
           ) : (

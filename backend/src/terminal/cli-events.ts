@@ -7,6 +7,12 @@ export type TerminalCliEventType =
   | 'status'
   | 'error';
 
+export interface TerminalCliPromptOption {
+  label: string;
+  payload: string;
+  kind?: 'primary' | 'secondary';
+}
+
 export interface TerminalCliEventBase {
   type: TerminalCliEventType;
   ts: number;
@@ -22,6 +28,7 @@ export interface TerminalCliPromptEvent extends TerminalCliEventBase {
   type: 'prompt_required';
   prompt: string;
   actions: string[];
+  options?: TerminalCliPromptOption[];
 }
 
 export interface TerminalCliStatusEvent extends TerminalCliEventBase {
@@ -48,4 +55,3 @@ export function buildCliTurnEvent(turn: ChatTurn): TerminalCliTurnEvent {
     source: 'pty'
   };
 }
-

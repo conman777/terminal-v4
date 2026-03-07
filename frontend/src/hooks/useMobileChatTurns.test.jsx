@@ -150,6 +150,47 @@ describe('useMobileChatTurns', () => {
     ]);
   });
 
+  it('translates slash agent aliases before sending them to the shell', () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleChatSend('/codex');
+    });
+
+    expect(sender.mock.calls).toEqual([['codex --yolo']]);
+    expect(result.current.turns).toEqual([
+      expect.objectContaining({ role: 'user', content: 'codex --yolo' })
+    ]);
+
+    act(() => {
+      vi.advanceTimersByTime(40);
+    });
+
+    expect(sender.mock.calls).toEqual([
+      ['codex --yolo'],
+      ['\r'],
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('supports the /gemni alias for gemini launches', () => {
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
+    const sender = vi.fn(() => true);
+
+    act(() => {
+      result.current.handleRegisterSendText(sender);
+      result.current.handleChatSend('/gemni');
+    });
+
+    expect(sender).toHaveBeenCalledWith('gemini --yolo');
+    expect(result.current.turns).toEqual([
+      expect.objectContaining({ role: 'user', content: 'gemini --yolo' })
+    ]);
+  });
+
   it('deduplicates optimistic user turns when the same turn arrives from terminal metadata', () => {
     const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
     const sender = vi.fn(() => true);

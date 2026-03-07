@@ -53,6 +53,12 @@ describe('DesktopStatusBar', () => {
     expect(onToggleTerminalPanel).toHaveBeenCalledTimes(1);
   });
 
+  it('hides the terminal toggle when terminal-first mode is active', () => {
+    render(<DesktopStatusBar {...buildProps({ showTerminalToggle: false })} />);
+    expect(screen.queryByRole('button', { name: 'Show inline terminal panel' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Hide inline terminal panel' })).not.toBeInTheDocument();
+  });
+
   it('calls autocorrect toggle when autocorrect button is pressed', () => {
     render(<DesktopStatusBar {...buildProps()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Disable autocorrect' }));
@@ -61,6 +67,6 @@ describe('DesktopStatusBar', () => {
 
   it('shows a fallback AI label for unknown providers', () => {
     render(<DesktopStatusBar {...buildProps({ aiType: 'deepseek' })} />);
-    expect(screen.getByText('Deepseek')).toBeInTheDocument();
+    expect(screen.getByText('deepseek')).toBeInTheDocument();
   });
 });

@@ -25,7 +25,23 @@ export function FolderProvider({ children }) {
 
   // Projects state
   const [projects, setProjects] = useState([]);
+  const [selectedProjectPaths, setSelectedProjectPaths] = useState(() => {
+    try {
+      const stored = localStorage.getItem('selectedProjectPaths');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
   const [projectsLoading, setProjectsLoading] = useState(false);
+
+  const persistSelectedProjectPaths = useCallback((nextPaths) => {
+    try {
+      localStorage.setItem('selectedProjectPaths', JSON.stringify(nextPaths));
+    } catch (error) {
+      console.error('Failed to save selected projects', error);
+    }
+  }, []);
 
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
@@ -88,6 +104,31 @@ export function FolderProvider({ children }) {
     }
   }, []);
 
+  const selectProject = useCallback((projectPath) => {
+    const normalizedPath = typeof projectPath === 'string' ? projectPath.trim() : '';
+    if (!normalizedPath) return;
+
+    setSelectedProjectPaths((previous) => {
+      if (previous.some((entry) => entry.toLowerCase() === normalizedPath.toLowerCase())) {
+        return previous;
+      }
+      const next = [...previous, normalizedPath];
+      persistSelectedProjectPaths(next);
+      return next;
+    });
+  }, [persistSelectedProjectPaths]);
+
+  const unselectProject = useCallback((projectPath) => {
+    const normalizedPath = typeof projectPath === 'string' ? projectPath.trim() : '';
+    if (!normalizedPath) return;
+
+    setSelectedProjectPaths((previous) => {
+      const next = previous.filter((entry) => entry.toLowerCase() !== normalizedPath.toLowerCase());
+      persistSelectedProjectPaths(next);
+      return next;
+    });
+  }, [persistSelectedProjectPaths]);
+
   // Add scan folder
   const addScanFolder = useCallback(async (folderPath) => {
     const normalizedPath = typeof folderPath === 'string' ? folderPath.trim() : '';
@@ -105,6 +146,7 @@ export function FolderProvider({ children }) {
         if (data.projects) {
           setProjects(data.projects);
         }
+        selectProject(normalizedPath);
         return { ok: true };
       }
       let message = 'Failed to add scan folder';
@@ -123,11 +165,15 @@ export function FolderProvider({ children }) {
     } finally {
       setProjectsLoading(false);
     }
-  }, []);
+  }, [selectProject]);
 
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  const selectedProjects = projects.filter((project) => (
+    selectedProjectPaths.some((path) => path.toLowerCase() === project.path.toLowerCase())
+  ));
 
   const value = {
     recentFolders,
@@ -136,9 +182,13 @@ export function FolderProvider({ children }) {
     pinFolder,
     unpinFolder,
     projects,
+    selectedProjects,
+    selectedProjectPaths,
     projectsLoading,
     loadProjects,
     addScanFolder,
+    selectProject,
+    unselectProject,
   };
 
   return (

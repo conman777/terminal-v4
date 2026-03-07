@@ -73,23 +73,16 @@ export function Dropdown({
 
         .dropdown-menu {
           position: absolute;
-          top: calc(100% + 8px);
+          top: calc(100% + 4px);
           background: var(--bg-surface, #141416);
           border: 1px solid var(--border-default, #2a2a2e);
-          border-radius: 8px;
-          min-width: 180px;
-          box-shadow: var(--shadow-lg);
+          min-width: 170px;
           z-index: 2000;
           max-height: min(60vh, 340px);
           overflow-y: auto;
           overscroll-behavior: contain;
-          padding: 6px;
-          animation: dropdownFadeIn 0.2s ease-out;
-        }
-
-        @keyframes dropdownFadeIn {
-          from { opacity: 0; transform: translateY(-10px); }
-          to { opacity: 1; transform: translateY(0); }
+          padding: 4px;
+          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
         }
 
         .dropdown-menu.align-right {
@@ -104,25 +97,25 @@ export function Dropdown({
           width: 100%;
           display: flex;
           align-items: center;
-          padding: 8px 12px;
+          padding: 5px 10px;
           border: none;
           background: transparent;
-          color: var(--text-primary, #fafafa);
-          font-size: 13px;
+          color: var(--text-secondary, #a1a1aa);
+          font-family: inherit;
+          font-size: 11px;
           text-align: left;
           cursor: pointer;
-          border-radius: 4px;
-          transition: background 0.15s ease;
-          gap: 10px;
+          transition: color 0.1s ease, background 0.1s ease;
+          gap: 8px;
         }
 
         .dropdown-item:hover:not(:disabled) {
           background: var(--bg-elevated, #1e1e21);
+          color: var(--text-primary, #fafafa);
         }
 
         .dropdown-item.active {
-          color: var(--accent-primary, #f59e0b);
-          background: var(--accent-primary-dim);
+          color: var(--text-primary, #fafafa);
         }
 
         .dropdown-item.danger {
@@ -130,11 +123,11 @@ export function Dropdown({
         }
 
         .dropdown-item.danger:hover:not(:disabled) {
-          background: rgba(244, 63, 94, 0.1);
+          background: rgba(244, 63, 94, 0.08);
         }
 
         .dropdown-item:disabled {
-          opacity: 0.5;
+          opacity: 0.35;
           cursor: not-allowed;
         }
 
@@ -142,7 +135,7 @@ export function Dropdown({
           display: flex;
           align-items: center;
           justify-content: center;
-          opacity: 0.8;
+          opacity: 0.5;
         }
 
         .dropdown-item-label {
@@ -150,23 +143,21 @@ export function Dropdown({
         }
 
         .dropdown-item-badge {
+          font-family: inherit;
           font-size: 10px;
-          background: var(--bg-elevated, #1e1e21);
-          padding: 2px 6px;
-          border-radius: 10px;
           color: var(--text-muted, #71717a);
         }
 
         .dropdown-separator {
           height: 1px;
           background: var(--border-subtle, #1e1e21);
-          margin: 6px 0;
+          margin: 4px 0;
         }
 
         @media (max-width: 768px) {
           .dropdown-item {
-            min-height: 44px;
-            padding: 10px 12px;
+            min-height: 40px;
+            padding: 8px 10px;
           }
         }
       `}</style>

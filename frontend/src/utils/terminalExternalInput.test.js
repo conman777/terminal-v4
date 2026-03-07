@@ -47,6 +47,12 @@ describe('createExternalInputFrames', () => {
     ]);
   });
 
+  it('keeps slash commands atomic so interactive CLIs receive the full command at once', () => {
+    expect(createExternalInputFrames('/model')).toEqual([
+      { data: '/model', delayAfterMs: 0 },
+    ]);
+  });
+
   it('keeps control sequences opaque', () => {
     expect(createExternalInputFrames('\r')).toEqual([{ data: '\r', delayAfterMs: 0 }]);
     expect(createExternalInputFrames('\x1b[B')).toEqual([{ data: '\x1b[B', delayAfterMs: 0 }]);

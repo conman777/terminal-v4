@@ -13,6 +13,7 @@ export function DesktopStatusBar({
   gitBranch,
   onImageUpload,
   isTerminalPanelOpen = false,
+  showTerminalToggle = true,
   onToggleTerminalPanel,
   connectionState = 'connecting',
   aiType = null
@@ -57,23 +58,26 @@ export function DesktopStatusBar({
           </span>
         )}
         {aiLabel && (
-          <span className={`status-ai-chip ai-${aiType}`} title={`Assistant: ${aiLabel}`}>
-            {aiLabel}
+          <span className="status-ai-chip ultra-minimal" title={`Assistant: ${aiLabel}`}>
+            <span style={{width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', opacity: 0.6}}></span>
+            {aiLabel.toLowerCase()}
           </span>
         )}
       </div>
 
       <div className="status-bar-right">
-        <button
-          type="button"
-          className={`status-terminal-toggle ${isTerminalPanelOpen ? 'active' : ''}`}
-          onClick={onToggleTerminalPanel}
-          disabled={!onToggleTerminalPanel}
-          aria-label={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
-          title={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
-        >
-          {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
-        </button>
+        {showTerminalToggle && (
+          <button
+            type="button"
+            className={`status-terminal-toggle ${isTerminalPanelOpen ? 'active' : ''}`}
+            onClick={onToggleTerminalPanel}
+            disabled={!onToggleTerminalPanel}
+            aria-label={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
+            title={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
+          >
+            {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
+          </button>
+        )}
 
         {/* Autocorrect toggle button */}
         <button

@@ -95,6 +95,9 @@ Key files:
 - Optional tmux integration for persistence across restarts (Linux/macOS).
 - Sessions are stored per-user as JSON for history and metadata.
 - WebSocket stream (`/api/terminal/:id/ws`) is the primary IO channel.
+- PTY sessions also emit lightweight terminal metadata events (`turn`, `cli_event`)
+  over the same WebSocket channel so the frontend can render prompt cards and
+  session activity without depending entirely on terminal scraping.
 - Tmux sessions only persist across restarts if the OS service does not kill
   child processes (see Operations Notes below).
 
@@ -102,6 +105,8 @@ Key files:
 - `backend/src/terminal/terminal-manager.ts`
 - `backend/src/terminal/session-store.ts`
 - `backend/src/terminal/tmux-manager.ts`
+- `backend/src/terminal/turn-detector.ts`
+- `backend/src/terminal/cli-events.ts`
 
 ### Claude Code Manager
 - Wraps the Claude CLI using PTY to keep terminal behavior consistent.
@@ -231,16 +236,16 @@ Key files:
 
 **Terminal Components:**
 - `TerminalChat` integrates xterm.js, WebSocket IO, and WebGL rendering (optional).
-- `TerminalPane` now supports three desktop view modes:
-  - `conversation` (default): chat-only surface rendered from structured `/turns` events
-    while `TerminalChat` remains mounted in a hidden runtime layer to keep WebSocket
-    transport, image upload hooks, and send-text wiring alive.
-  - `terminal`: classic xterm.js interface.
-  - `reader`: accessible text-first terminal output view.
+- `TerminalPane` now uses two desktop shell paths:
+  - structured sessions (`ss-*`) keep the conversation-first surface.
+  - PTY/CLI sessions are terminal-first and can render a lightweight activity strip
+    above the terminal for structured prompt cards and recent assistant/status events.
 - `SplitPaneContainer` manages multi-pane terminal layouts with draggable divider.
 - `SessionTabBar` displays active terminal tabs with drag-to-reorder.
 - `ReaderView` provides accessible terminal output reading with pagination.
 - `TerminalHistoryModal` shows session history with search.
+- `CliActivityStrip` renders terminal-side UI cards for interactive prompts and
+  recent CLI activity derived from canonical `cli_event` metadata.
 
 **Preview & DevTools:**
 - `PreviewPanel` renders local/external previews with iframe sandboxing.
