@@ -1,12 +1,12 @@
 import { useState, useMemo } from 'react';
 import ThreadsProjectGroup from './ThreadsProjectGroup';
+import ThreadsSessionItem from './ThreadsSessionItem';
 
 export default function ThreadsSidebar({
   isCollapsed,
   onToggle,
   sessionsGroupedByProject,
-  projects = [],
-  projectsLoading = false,
+  pinnedSessions,
   archivedSessions,
   activeSessionId,
   sessionActivity,
@@ -18,66 +18,91 @@ export default function ThreadsSidebar({
   onTopicChange,
   onCloseSession,
   onCreateSession,
-  onAddProject = null,
-  onOpenSettings = null,
-  onToggleSidebarMode
+  projects,
+  onAddProject,
+  onOpenSettings
 }) {
   const [showArchived, setShowArchived] = useState(false);
 
-  const normalizeProjectPath = (path) => (
-    typeof path === 'string' && path.trim()
-      ? path.trim().replace(/[\\/]+$/, '').toLowerCase()
-      : null
-  );
-
-  const getProjectName = (project) => {
-    if (typeof project === 'string') {
-      const normalized = project.replace(/[\\/]+$/, '');
-      const parts = normalized.split(/[/\\]/).filter(Boolean);
-      return parts[parts.length - 1] || normalized;
-    }
-    return project?.name || project?.path || 'Unknown';
-  };
-
-  const visibleSessionGroups = useMemo(() => {
-    return sessionsGroupedByProject.map((group) => ({
-      ...group,
-      sessions: group.sessions.filter((s) => !s.thread?.archived)
-    })).filter((group) => group.sessions.length > 0);
+  // Collect all non-archived sessions from groups
+  const allSessions = useMemo(() => {
+    const sessions = [];
+    sessionsGroupedByProject.forEach((group) => {
+      group.sessions.forEach((s) => {
+        if (!s.thread?.archived) sessions.push(s);
+      });
+    });
+    return sessions;
   }, [sessionsGroupedByProject]);
 
-  const folderGroups = useMemo(() => {
-    const merged = [];
-    const seen = new Set();
-    const sessionGroupsByPath = new Map();
+  // Normalize a path for comparison
+  const normalizePath = (p) => {
+    if (!p) return '';
+    return p.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  };
 
-    visibleSessionGroups.forEach((group) => {
-      const key = normalizeProjectPath(group.projectPath) || `session:${group.projectName}`;
-      sessionGroupsByPath.set(key, group);
-    });
+  // Build project groups: user-added projects with matched sessions
+  const projectGroups = useMemo(() => {
+    if (!projects || projects.length === 0) {
+      // No user-added projects — fall back to auto-grouped sessions
+      return sessionsGroupedByProject
+        .map((group) => ({
+          ...group,
+          sessions: group.sessions.filter((s) => !s.thread?.archived)
+        }))
+        .filter((group) => group.sessions.length > 0);
+    }
 
-    projects.forEach((project) => {
-      const projectPath = typeof project === 'string' ? project : project?.path;
-      const projectName = getProjectName(project);
-      const key = normalizeProjectPath(projectPath) || `project:${projectName}`;
-      const matchedGroup = sessionGroupsByPath.get(key);
+    const matched = new Set();
+    const groups = [];
 
-      merged.push({
-        projectName,
-        projectPath: projectPath || matchedGroup?.projectPath || projectName,
-        sessions: matchedGroup?.sessions || []
+    for (const project of projects) {
+      const projPath = normalizePath(project.path);
+      const matchedSessions = allSessions.filter((session) => {
+        const sessionPath = normalizePath(
+          session.thread?.projectPath || session.groupPath || session.cwd
+        );
+        return sessionPath && sessionPath.startsWith(projPath);
       });
-      seen.add(key);
+
+      // Track matched session IDs
+      matchedSessions.forEach((s) => matched.add(s.id));
+
+      // Get project name from last path segment
+      const name = project.name || projPath.split('/').filter(Boolean).pop() || 'Unknown';
+
+      groups.push({
+        projectPath: project.path,
+        projectName: name,
+        sessions: matchedSessions
+      });
+    }
+
+    // Collect unmatched sessions into "Other"
+    const unmatched = allSessions.filter((s) => !matched.has(s.id));
+    if (unmatched.length > 0) {
+      groups.push({
+        projectPath: null,
+        projectName: 'Other',
+        sessions: unmatched
+      });
+    }
+
+    // Sort: groups with recent activity first, empty groups last
+    groups.sort((a, b) => {
+      if (a.sessions.length === 0 && b.sessions.length > 0) return 1;
+      if (b.sessions.length === 0 && a.sessions.length > 0) return -1;
+      const aTime = Math.max(0, ...a.sessions.map((s) =>
+        new Date(s.thread?.lastActivityAt || s.updatedAt || 0).getTime()
+      ));
+      const bTime = Math.max(0, ...b.sessions.map((s) =>
+        new Date(s.thread?.lastActivityAt || s.updatedAt || 0).getTime()
+      ));
+      return bTime - aTime;
     });
 
-    visibleSessionGroups.forEach((group) => {
-      const key = normalizeProjectPath(group.projectPath) || `session:${group.projectName}`;
-      if (seen.has(key)) return;
-      merged.push(group);
-    });
-
-    return merged;
-  }, [projects, visibleSessionGroups]);
+    return groups;
+  }, [projects, allSessions, sessionsGroupedByProject]);
 
   return (
     <aside className={`threads-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
@@ -85,7 +110,11 @@ export default function ThreadsSidebar({
       <div className="ts-topbar">
         {!isCollapsed && (
           <div className="ts-title">
-            <span>Codex</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="4 17 10 11 4 5" />
+              <line x1="12" y1="19" x2="20" y2="19" />
+            </svg>
+            <span>Terminal</span>
           </div>
         )}
         <button
@@ -100,66 +129,62 @@ export default function ThreadsSidebar({
         </button>
       </div>
 
-      {/* Toolbar: app actions */}
+      {/* New thread button */}
       {!isCollapsed && (
-        <div className="ts-toolbar">
-          <button className="ts-nav-item primary" onClick={onCreateSession} type="button">
-            <span className="ts-nav-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4Z" />
-              </svg>
-            </span>
+        <div className="ts-new-thread-row">
+          <button
+            className="ts-new-thread-btn"
+            onClick={onCreateSession}
+            type="button"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+            </svg>
             <span>New thread</span>
-          </button>
-          <button className="ts-nav-item" type="button" disabled title="Coming soon">
-            <span className="ts-nav-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M12 7v5l3 3" />
-              </svg>
-            </span>
-            <span>Automations</span>
-          </button>
-          <button className="ts-nav-item" type="button" disabled title="Coming soon">
-            <span className="ts-nav-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="8" cy="8" r="2" />
-                <circle cx="16" cy="8" r="2" />
-                <circle cx="8" cy="16" r="2" />
-                <circle cx="16" cy="16" r="2" />
-              </svg>
-            </span>
-            <span>Skills</span>
           </button>
         </div>
       )}
 
       {!isCollapsed && (
         <div className="threads-sidebar-content">
-          <div className="threads-section-heading">
+          {/* Threads section header */}
+          <div className="threads-section-label">
             <span>Threads</span>
-            {onAddProject && (
-              <button
-                type="button"
-                className="threads-add-project-btn"
-                onClick={onAddProject}
-                aria-label="Add project"
-                title="Add project"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            )}
           </div>
 
+          {/* Pinned section */}
+          {pinnedSessions.length > 0 && (
+            <div className="threads-section">
+              <div className="threads-section-header">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M4.456.734a1.75 1.75 0 0 1 2.826.504l.613 1.327a3.08 3.08 0 0 0 2.084 1.707l2.454.584c1.332.317 1.8 1.972.832 2.94L11.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06L10 11.06l-2.204 2.205c-.968.968-2.623.5-2.94-.832l-.584-2.454a3.08 3.08 0 0 0-1.707-2.084l-1.327-.613a1.75 1.75 0 0 1-.504-2.826L4.456.734Z" />
+                </svg>
+                <span>Pinned</span>
+              </div>
+              {pinnedSessions.map((session) => (
+                <ThreadsSessionItem
+                  key={session.id}
+                  session={session}
+                  isActive={session.id === activeSessionId}
+                  hasActivity={sessionActivity?.[session.id]?.needsAttention}
+                  onSelect={onSelectSession}
+                  onPin={onPinSession}
+                  onUnpin={onUnpinSession}
+                  onArchive={onArchiveSession}
+                  onUnarchive={onUnarchiveSession}
+                  onTopicChange={onTopicChange}
+                  onClose={onCloseSession}
+                />
+              ))}
+            </div>
+          )}
+
           {/* Project groups */}
-          {folderGroups.length > 0 ? (
-            folderGroups.map((group) => (
+          {projectGroups.length > 0 ? (
+            projectGroups.map((group) => (
               <ThreadsProjectGroup
-                key={group.projectPath || 'unknown'}
+                key={group.projectPath || 'other'}
                 projectName={group.projectName}
                 projectPath={group.projectPath}
                 sessions={group.sessions}
@@ -172,20 +197,30 @@ export default function ThreadsSidebar({
                 onUnarchiveSession={onUnarchiveSession}
                 onTopicChange={onTopicChange}
                 onCloseSession={onCloseSession}
-                allowEmpty
+                defaultExpanded={group.sessions.length > 0}
               />
             ))
-          ) : projectsLoading ? (
-            <div className="threads-empty">
-              <p>Scanning projects...</p>
-            </div>
           ) : (
             <div className="threads-empty">
               <p>No projects yet</p>
-              <button className="threads-empty-btn" onClick={onAddProject || onCreateSession}>
-                {onAddProject ? '+ Add project' : '+ New terminal'}
+              <button className="threads-empty-btn" onClick={onAddProject}>
+                + Add project
               </button>
             </div>
+          )}
+
+          {/* Add project button */}
+          {projectGroups.length > 0 && onAddProject && (
+            <button
+              className="ts-add-project-btn"
+              onClick={onAddProject}
+              type="button"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+              </svg>
+              <span>Add project</span>
+            </button>
           )}
 
           {/* Archived section */}
@@ -195,7 +230,10 @@ export default function ThreadsSidebar({
                 className="threads-section-header clickable"
                 onClick={() => setShowArchived(!showArchived)}
               >
-                <span>archived ({archivedSessions.length})</span>
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M5 8.25a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 5 8.25ZM2 2.75a.75.75 0 0 0-.75.75v1c0 .414.336.75.75.75h12a.75.75 0 0 0 .75-.75v-1a.75.75 0 0 0-.75-.75H2Zm-.5 5.75A1.5 1.5 0 0 1 3 7h10a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5H3a1.5 1.5 0 0 1-1.5-1.5v-4Z" />
+                </svg>
+                <span>Archived ({archivedSessions.length})</span>
                 <svg
                   className={`threads-section-chevron ${showArchived ? 'expanded' : ''}`}
                   width="12"
@@ -232,15 +270,18 @@ export default function ThreadsSidebar({
         </div>
       )}
 
-      {!isCollapsed && onOpenSettings && (
-        <div className="threads-sidebar-footer">
-          <button className="ts-nav-item footer" type="button" onClick={onOpenSettings}>
-            <span className="ts-nav-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06A1.65 1.65 0 0 0 15 19.4a1.65 1.65 0 0 0-1 .6 1.65 1.65 0 0 0-.33 1V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-.33-1 1.65 1.65 0 0 0-1-.6 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-.6-1 1.65 1.65 0 0 0-1-.33H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1-.33 1.65 1.65 0 0 0 .6-1 1.65 1.65 0 0 0-.33-1.82L4.3 6.46a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.6c.39-.23.84-.35 1.29-.33H10.4a1.65 1.65 0 0 0 1-.6 1.65 1.65 0 0 0 .33-1V2a2 2 0 0 1 4 0v.09c-.02.45.1.9.33 1.29.23.39.59.7 1 .93.39.23.84.35 1.29.33H19a2 2 0 0 1 0 4h-.09c-.45-.02-.9.1-1.29.33-.39.23-.7.59-.93 1-.23.39-.35.84-.33 1.29V11c-.02.45.1.9.33 1.29.23.39.59.7 1 .93.39.23.84.35 1.29.33H19a2 2 0 0 1 .4 1.45Z" />
-              </svg>
-            </span>
+      {/* Settings footer - pinned at bottom */}
+      {!isCollapsed && (
+        <div className="ts-sidebar-footer">
+          <button
+            className="ts-settings-btn"
+            onClick={onOpenSettings}
+            type="button"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
             <span>Settings</span>
           </button>
         </div>
@@ -248,33 +289,28 @@ export default function ThreadsSidebar({
 
       <style>{`
         .threads-sidebar {
-          width: 294px;
+          width: 260px;
           height: 100%;
-          background:
-            radial-gradient(circle at 18% 100%, rgba(98, 36, 96, 0.26), transparent 32%),
-            radial-gradient(circle at 0% 0%, rgba(46, 95, 168, 0.16), transparent 24%),
-            linear-gradient(180deg, rgba(22, 27, 45, 0.985), rgba(18, 20, 33, 0.985));
-          border-right: 1px solid rgba(148, 163, 184, 0.12);
-          box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.03);
+          background: #0a0a0a;
+          border-right: 1px solid rgba(255, 255, 255, 0.06);
           display: flex;
           flex-direction: column;
-          transition: width 0.2s ease, box-shadow 0.2s ease;
+          transition: width 0.2s ease;
           flex-shrink: 0;
           z-index: 50;
-          font-family: "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
         }
 
         .threads-sidebar.collapsed {
-          width: 52px;
+          width: 48px;
         }
 
+        /* ── Top bar ── */
         .ts-topbar {
-          height: 46px;
+          height: 48px;
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 0 14px;
-          border-bottom: 1px solid rgba(148, 163, 184, 0.09);
+          padding: 0 12px;
           flex-shrink: 0;
         }
 
@@ -287,17 +323,14 @@ export default function ThreadsSidebar({
           flex: 1;
           display: flex;
           align-items: center;
-          gap: 6px;
-          color: #f5f7fd;
-          font-size: 15px;
-          font-weight: 630;
-          letter-spacing: -0.01em;
+          gap: 8px;
+          color: var(--text-primary, #fafafa);
+          font-size: 14px;
+          font-weight: 600;
         }
 
         .ts-title svg {
-          opacity: 0.5;
-          width: 12px;
-          height: 12px;
+          opacity: 0.6;
         }
 
         .ts-collapse-btn {
@@ -308,145 +341,96 @@ export default function ThreadsSidebar({
           justify-content: center;
           background: transparent;
           border: none;
-          color: rgba(226, 232, 240, 0.62);
+          color: var(--text-muted, #636366);
+          border-radius: 6px;
           cursor: pointer;
-          transition: color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+          transition: all 0.12s ease;
           flex-shrink: 0;
-          border-radius: 9px;
         }
 
         .ts-collapse-btn:hover {
-          color: #fafafa;
-          background: rgba(255, 255, 255, 0.065);
-          transform: translateX(-1px);
+          background: rgba(255, 255, 255, 0.06);
+          color: var(--text-primary, #fafafa);
         }
 
-        .ts-toolbar {
-          display: flex;
-          flex-direction: column;
-          align-items: stretch;
-          gap: 2px;
-          padding: 12px 10px 8px;
+        /* ── New thread button ── */
+        .ts-new-thread-row {
+          padding: 4px 10px 8px;
           flex-shrink: 0;
         }
 
-        .ts-nav-item {
-          min-height: 36px;
+        .ts-new-thread-btn {
+          width: 100%;
+          height: 32px;
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           padding: 0 12px;
-          background: transparent;
-          border: none;
-          color: rgba(226, 232, 240, 0.78);
-          font-family: inherit;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: color 0.12s ease, background 0.12s ease, transform 0.12s ease;
-          border-radius: 12px;
-          text-align: left;
-        }
-
-        .ts-nav-item:hover:not(:disabled) {
-          color: #fafafa;
-          background: rgba(255, 255, 255, 0.055);
-        }
-
-        .ts-nav-item:disabled {
-          opacity: 0.7;
-          cursor: default;
-        }
-
-        .ts-nav-item.primary {
           background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          color: var(--text-secondary, #a1a1aa);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 400;
+          transition: all 0.12s ease;
         }
 
-        .ts-nav-item.footer {
-          color: rgba(226, 232, 240, 0.7);
+        .ts-new-thread-btn:hover {
+          background: rgba(255, 255, 255, 0.07);
+          border-color: rgba(255, 255, 255, 0.12);
+          color: var(--text-primary, #fafafa);
         }
 
-        .ts-nav-icon {
-          width: 18px;
-          height: 18px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          color: rgba(226, 232, 240, 0.68);
-          flex-shrink: 0;
-        }
-
-        .ts-nav-item:hover:not(:disabled) .ts-nav-icon,
-        .ts-nav-item.primary .ts-nav-icon {
-          color: #f4f7fb;
-        }
-
+        /* ── Content area ── */
         .threads-sidebar-content {
           flex: 1;
           overflow-y: auto;
           scrollbar-width: thin;
-          scrollbar-color: rgba(148, 163, 184, 0.32) transparent;
-          padding: 12px 0 16px;
-        }
-
-        .threads-section-heading {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          padding: 2px 16px 12px;
-          color: rgba(226, 232, 240, 0.44);
-          font-size: 11px;
-          font-weight: 650;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-        }
-
-        .threads-add-project-btn {
-          width: 26px;
-          height: 26px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          background: transparent;
-          border: none;
-          border-radius: 9px;
-          color: rgba(226, 232, 240, 0.6);
-          cursor: pointer;
-          transition: color 0.12s ease, background 0.12s ease;
-        }
-
-        .threads-add-project-btn:hover {
-          color: #fafafa;
-          background: rgba(255, 255, 255, 0.065);
+          scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+          padding: 0;
         }
 
         .threads-sidebar-content::-webkit-scrollbar {
-          width: 3px;
+          width: 4px;
         }
 
         .threads-sidebar-content::-webkit-scrollbar-thumb {
-          background: rgba(148, 163, 184, 0.2);
-          border-radius: 999px;
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 2px;
+        }
+
+        .threads-section-label {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 14px 6px;
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--text-muted, #636366);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
 
         .threads-section {
-          margin: 14px 0 0;
+          margin-bottom: 8px;
         }
 
         .threads-section-header {
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 6px 16px;
-          font-family: inherit;
+          padding: 6px 14px;
           font-size: 11px;
-          font-weight: 580;
-          color: rgba(226, 232, 240, 0.45);
+          font-weight: 600;
+          color: var(--text-muted, #636366);
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
 
         .threads-section-header.clickable {
           cursor: pointer;
-          transition: color 0.1s ease;
+          transition: color 0.12s ease;
         }
 
         .threads-section-header.clickable:hover {
@@ -463,9 +447,7 @@ export default function ThreadsSidebar({
         }
 
         .threads-section.archived {
-          border-top: 1px solid rgba(148, 163, 184, 0.1);
-          padding-top: 10px;
-          margin: 14px 12px 0;
+          margin-top: 8px;
         }
 
         .threads-empty {
@@ -474,58 +456,94 @@ export default function ThreadsSidebar({
           align-items: center;
           justify-content: center;
           padding: 40px 20px;
-          color: rgba(226, 232, 240, 0.56);
-          font-family: inherit;
+          color: var(--text-muted, #636366);
         }
 
         .threads-empty p {
-          margin: 0 0 8px;
+          margin: 0 0 12px;
           font-size: 13px;
         }
 
         .threads-empty-btn {
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(148, 163, 184, 0.18);
-          color: rgba(248, 250, 252, 0.84);
-          padding: 8px 12px;
-          border-radius: 10px;
-          font-family: inherit;
-          font-size: 12px;
-          font-weight: 500;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          color: var(--text-secondary, #a1a1aa);
+          padding: 8px 16px;
+          border-radius: 6px;
+          font-size: 13px;
+          font-weight: 400;
           cursor: pointer;
-          transition: color 0.1s ease, border-color 0.1s ease, background 0.1s ease;
+          transition: all 0.12s ease;
         }
 
         .threads-empty-btn:hover {
-          border-color: rgba(255, 255, 255, 0.22);
-          background: rgba(255, 255, 255, 0.08);
-          color: #fafafa;
+          background: rgba(255, 255, 255, 0.07);
+          color: var(--text-primary, #fafafa);
         }
 
-        .threads-sidebar-footer {
-          margin-top: auto;
-          padding: 10px 10px 14px;
-          border-top: 1px solid rgba(148, 163, 184, 0.08);
+        /* ── Add project button ── */
+        .ts-add-project-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: calc(100% - 20px);
+          margin: 6px 10px;
+          padding: 8px 10px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #636366);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 400;
+          transition: all 0.12s ease;
+        }
+
+        .ts-add-project-btn:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-secondary, #a1a1aa);
+        }
+
+        .ts-add-project-btn svg {
+          opacity: 0.6;
+        }
+
+        /* ── Settings footer ── */
+        .ts-sidebar-footer {
+          flex-shrink: 0;
+          padding: 6px 10px 10px;
+          border-top: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .ts-settings-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+          padding: 8px 10px;
+          background: transparent;
+          border: none;
+          color: var(--text-muted, #636366);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 400;
+          transition: all 0.12s ease;
+        }
+
+        .ts-settings-btn:hover {
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-secondary, #a1a1aa);
         }
 
         @media (max-width: 768px) {
           .threads-sidebar {
             width: 100%;
-            border-right: none;
           }
 
           .ts-topbar {
-            height: 36px;
-            padding: 0 10px;
-          }
-
-          .ts-toolbar {
-            height: 28px;
-            padding: 0 10px;
-          }
-
-          .threads-section-header {
-            padding: 4px 10px;
+            height: 52px;
+            padding: 0 12px;
           }
         }
       `}</style>

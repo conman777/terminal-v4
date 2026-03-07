@@ -8,7 +8,6 @@ import { MobileKeybar } from './components/MobileKeybar';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
-import Sidebar from './components/Sidebar';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import { MobileGestureHints } from './components/MobileGestureHints';
@@ -163,7 +162,8 @@ function AppContent() {
 
   const {
     recentFolders, pinnedFolders, addRecentFolder, pinFolder, unpinFolder,
-    projects, selectedProjects, projectsLoading, addScanFolder,
+    projects, projectsLoading, addScanFolder,
+    sidebarProjects, addSidebarProject, removeSidebarProject,
   } = useFolders();
 
   const {
@@ -232,6 +232,7 @@ function AppContent() {
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
   const [showAddScanFolderModal, setShowAddScanFolderModal] = useState(false);
   const [addScanFolderError, setAddScanFolderError] = useState('');
+  const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [mainTerminalFitToken, setMainTerminalFitToken] = useState(0);
   const mainTerminalFitRafRef = useRef(null);
   const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
@@ -520,26 +521,6 @@ function AppContent() {
     }
   });
 
-  // Sidebar mode: 'explorer' or 'threads'
-  const [sidebarMode, setSidebarMode] = useState(() => {
-    try {
-      return localStorage.getItem('sidebarMode') || 'threads';
-    } catch {
-      return 'threads';
-    }
-  });
-
-  const toggleSidebarMode = useCallback(() => {
-    setSidebarMode((prev) => {
-      const newMode = prev === 'explorer' ? 'threads' : 'explorer';
-      try {
-        localStorage.setItem('sidebarMode', newMode);
-      } catch {
-        // Ignore localStorage errors
-      }
-      return newMode;
-    });
-  }, []);
 
   // Terminal font size (synced with server)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
@@ -1000,6 +981,16 @@ function AppContent() {
     setAddScanFolderError(result?.error || 'Failed to add scan folder');
   }, [addScanFolder, closeAddScanFolderModal]);
 
+  // Add project to sidebar (user-curated list)
+  const openAddProjectModal = useCallback(() => {
+    setShowAddProjectModal(true);
+  }, []);
+
+  const handleAddProjectSelect = useCallback((folderPath) => {
+    addSidebarProject(folderPath);
+    setShowAddProjectModal(false);
+  }, [addSidebarProject]);
+
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
     isMobile && viewportHeight
@@ -1095,6 +1086,13 @@ function AppContent() {
         onClose={closeAddScanFolderModal}
         onSubmit={handleSubmitAddScanFolder}
       />
+      <FolderBrowserModal
+        isOpen={showAddProjectModal}
+        onClose={() => setShowAddProjectModal(false)}
+        currentPath={projectInfo?.cwd || recentFolders[0] || ''}
+        recentFolders={recentFolders}
+        onSelect={handleAddProjectSelect}
+      />
 
       {isMobile && (
         <>
@@ -1143,46 +1141,26 @@ function AppContent() {
       {/* Desktop layout with sidebar */}
       {!isMobile && (
         <>
-          {sidebarMode === 'threads' ? (
-            <ThreadsSidebar
-              isCollapsed={sidebarCollapsed}
-              onToggle={toggleSidebar}
-              sessionsGroupedByProject={sessionsGroupedByProject}
-              projects={selectedProjects}
-              projectsLoading={projectsLoading}
-              archivedSessions={archivedSessions}
-              activeSessionId={activeSessionId}
-              sessionActivity={sessionActivity}
-              onSelectSession={handleSelectSession}
-              onPinSession={pinSession}
-              onUnpinSession={unpinSession}
-              onArchiveSession={archiveSession}
-              onUnarchiveSession={unarchiveSession}
-              onTopicChange={updateSessionTopic}
-              onCloseSession={closeSession}
-              onCreateSession={handleRequestNewSession}
-              onAddProject={openAddScanFolderModal}
-              onOpenSettings={handleOpenSettings}
-              onToggleSidebarMode={toggleSidebarMode}
-            />
-          ) : (
-            <Sidebar
-              isCollapsed={sidebarCollapsed}
-              onToggle={toggleSidebar}
-              recentFolders={recentFolders}
-              pinnedFolders={pinnedFolders}
-              projects={projects}
-              projectsLoading={projectsLoading}
-              onFolderSelect={handleSidebarFolderSelect}
-              onPinFolder={pinFolder}
-              onUnpinFolder={unpinFolder}
-              currentPath={projectInfo?.cwd}
-              onAddScanFolder={openAddScanFolderModal}
-              sidebarMode={sidebarMode}
-              onToggleSidebarMode={toggleSidebarMode}
-              onCreateSession={handleRequestNewSession}
-            />
-          )}
+          <ThreadsSidebar
+            isCollapsed={sidebarCollapsed}
+            onToggle={toggleSidebar}
+            sessionsGroupedByProject={sessionsGroupedByProject}
+            pinnedSessions={pinnedSessions}
+            archivedSessions={archivedSessions}
+            activeSessionId={activeSessionId}
+            sessionActivity={sessionActivity}
+            onSelectSession={handleSelectSession}
+            onPinSession={pinSession}
+            onUnpinSession={unpinSession}
+            onArchiveSession={archiveSession}
+            onUnarchiveSession={unarchiveSession}
+            onTopicChange={updateSessionTopic}
+            onCloseSession={closeSession}
+            onCreateSession={handleRequestNewSession}
+            projects={sidebarProjects}
+            onAddProject={openAddProjectModal}
+            onOpenSettings={handleOpenSettings}
+          />
           <div className="main-container">
             <Header
               isMobile={false}

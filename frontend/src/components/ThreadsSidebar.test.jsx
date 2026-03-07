@@ -8,8 +8,10 @@ function buildSession(id, title, overrides = {}) {
     title,
     shell: 'claude',
     updatedAt: '2026-03-05T18:00:00.000Z',
+    cwd: 'C:\\repo',
     thread: {
       topic: title,
+      projectPath: 'C:\\repo',
       ...overrides.thread
     },
     ...overrides
@@ -27,12 +29,8 @@ function buildProps(overrides = {}) {
         sessions: [buildSession('session-1', 'Implement feature'), buildSession('session-2', 'Fix layout')]
       }
     ],
-    projects: [
-      { name: 'terminal v4', path: 'C:\\repo' },
-      { name: 'uplifting', path: 'C:\\uplifting' }
-    ],
-    projectsLoading: false,
-    archivedSessions: [buildSession('session-4', 'Archived work', { thread: { archived: true, topic: 'Archived work' } })],
+    pinnedSessions: [buildSession('session-3', 'Pinned work', { thread: { pinned: true, topic: 'Pinned work', projectPath: 'C:\\repo' } })],
+    archivedSessions: [buildSession('session-4', 'Archived work', { thread: { archived: true, topic: 'Archived work', projectPath: 'C:\\repo' } })],
     activeSessionId: 'session-1',
     sessionActivity: {},
     onSelectSession: vi.fn(),
@@ -43,30 +41,47 @@ function buildProps(overrides = {}) {
     onTopicChange: vi.fn(),
     onCloseSession: vi.fn(),
     onCreateSession: vi.fn(),
+    projects: [{ path: 'C:\\repo', name: 'terminal v4' }],
     onAddProject: vi.fn(),
     onOpenSettings: vi.fn(),
-    onToggleSidebarMode: vi.fn(),
     ...overrides
   };
 }
 
 describe('ThreadsSidebar', () => {
-  it('renders folder groups with their terminal sessions underneath', () => {
+  it('renders new thread button and threads section', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('Codex')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /new thread/i })).toBeInTheDocument();
-    expect(screen.getByText('terminal v4')).toBeInTheDocument();
-    expect(screen.getByText('Implement feature')).toBeInTheDocument();
-    expect(screen.getByText('Fix layout')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add project' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /settings/i })).toBeInTheDocument();
+    expect(screen.getByText('New thread')).toBeInTheDocument();
+    expect(screen.getByText('Threads')).toBeInTheDocument();
   });
 
-  it('shows scanned folders even before they have terminal sessions', () => {
+  it('renders add project button', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('uplifting')).toBeInTheDocument();
-    expect(screen.getByText('No terminals yet')).toBeInTheDocument();
+    expect(screen.getByText('Add project')).toBeInTheDocument();
+  });
+
+  it('renders settings button', () => {
+    render(<ThreadsSidebar {...buildProps()} />);
+
+    expect(screen.getByText('Settings')).toBeInTheDocument();
+  });
+
+  it('shows empty state when no projects and no sessions', () => {
+    render(<ThreadsSidebar {...buildProps({
+      projects: [],
+      sessionsGroupedByProject: [],
+      pinnedSessions: [],
+      archivedSessions: []
+    })} />);
+
+    expect(screen.getByText('No projects yet')).toBeInTheDocument();
+  });
+
+  it('renders pinned section when pinned sessions exist', () => {
+    render(<ThreadsSidebar {...buildProps()} />);
+
+    expect(screen.getByText('Pinned')).toBeInTheDocument();
   });
 });
