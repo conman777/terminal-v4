@@ -14,6 +14,7 @@ export default function ThreadsProjectGroup({
   onUnarchiveSession,
   onTopicChange,
   onCloseSession,
+  onCreateSession,
   defaultExpanded = true,
   showArchived = false
 }) {
@@ -54,6 +55,21 @@ export default function ThreadsProjectGroup({
 
         {visibleSessions.length > 0 && (
           <span className="threads-project-count" aria-hidden="true">{visibleSessions.length}</span>
+        )}
+
+        {onCreateSession && (
+          <button
+            type="button"
+            className="threads-project-add-btn"
+            onClick={(e) => { e.stopPropagation(); onCreateSession(projectPath); }}
+            title="New terminal"
+            aria-label="New terminal in this project"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
         )}
       </div>
 
@@ -96,13 +112,13 @@ export default function ThreadsProjectGroup({
           transition: background 0.12s ease;
           border-radius: 6px;
           margin: 1px 6px;
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--sidebar-text, var(--text-secondary, #a1a1aa));
           gap: 0;
         }
 
         .threads-project-header:hover {
-          background: rgba(255, 255, 255, 0.05);
-          color: var(--text-primary, #fafafa);
+          background: var(--sidebar-hover, rgba(255, 255, 255, 0.05));
+          color: var(--sidebar-text, var(--text-primary, #fafafa));
         }
 
         .threads-project-chevron {
@@ -124,7 +140,7 @@ export default function ThreadsProjectGroup({
           justify-content: center;
           margin-right: 8px;
           opacity: 0.5;
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--sidebar-text, var(--text-secondary, #a1a1aa));
         }
 
         .threads-project-name {
@@ -139,7 +155,33 @@ export default function ThreadsProjectGroup({
         .threads-project-count {
           font-size: 12px;
           font-weight: 400;
-          color: var(--text-muted, #636366);
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
+        }
+
+        .threads-project-add-btn {
+          width: 22px;
+          height: 22px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
+          border-radius: 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: all 0.12s ease;
+          margin-left: 4px;
+          flex-shrink: 0;
+        }
+
+        .threads-project-header:hover .threads-project-add-btn {
+          opacity: 1;
+        }
+
+        .threads-project-add-btn:hover {
+          background: var(--sidebar-hover, rgba(255, 255, 255, 0.08));
+          color: var(--sidebar-text, var(--text-primary, #fafafa));
         }
 
         .threads-project-content {
@@ -149,7 +191,7 @@ export default function ThreadsProjectGroup({
         .threads-project-empty {
           padding: 6px 20px;
           font-size: 12px;
-          color: var(--text-muted, #636366);
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
           font-style: italic;
         }
 

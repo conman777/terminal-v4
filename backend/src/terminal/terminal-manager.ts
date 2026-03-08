@@ -20,6 +20,7 @@ import {
   deleteSession,
   loadAllSessions,
   updateSessionMetadata,
+  updateThreadMetadata,
   getSessionMetadata,
   listSessionMetadata,
   deleteSessionMetadata,
@@ -48,6 +49,13 @@ import {
   type ManagedTerminal,
   type PersistedSession
 } from './types';
+import { WorkspaceCopySandboxRuntime } from '../sandbox/workspace-copy-sandbox-runtime';
+import type {
+  SandboxMode,
+  SandboxRuntime,
+  TerminalSandboxInfo,
+  TerminalSandboxPolicy
+} from '../sandbox/sandbox-types';
 
 // Re-export types for external consumers
 export type { ProjectType, ProjectInfo } from './types';
@@ -64,6 +72,38 @@ function normaliseNewlines(input: string): string {
     return input.replace(/\r?\n/g, '\r\n');
   }
   return input;
+}
+
+function normalizeWorkspaceRoot(cwd: string, workspaceRoot?: string): string | null {
+  const candidate = workspaceRoot || cwd;
+  try {
+    const resolved = path.resolve(candidate);
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      return resolved;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function createSandboxPolicy(
+  cwd: string,
+  mode: SandboxMode = 'off',
+  workspaceRoot?: string,
+  previous?: Partial<TerminalSandboxInfo>
+): TerminalSandboxPolicy {
+  if (mode === 'off') {
+    return {
+      mode,
+      workspaceRoot: previous?.workspaceRoot ?? null
+    };
+  }
+
+  return {
+    mode,
+    workspaceRoot: normalizeWorkspaceRoot(cwd, workspaceRoot) ?? previous?.workspaceRoot ?? cwd
+  };
 }
 
 const DEFAULT_PERSIST_HISTORY_CHARS = 2_000_000;
@@ -99,6 +139,7 @@ export interface TerminalManagerOptions {
   useTmux?: boolean; // Enable tmux for persistent sessions (auto-detected if not specified)
   idleTimeoutMs?: number; // 0 disables idle timeout
   maxActiveSessions?: number; // 0 disables limit
+  sandboxRuntime?: SandboxRuntime;
 }
 
 /**
@@ -231,6 +272,7 @@ export class TerminalManager {
   #useTmux: boolean;
   #idleTimeoutMs: number;
   #maxActiveSessions: number;
+  #sandboxRuntime: SandboxRuntime;
 
   constructor(options: TerminalManagerOptions = {}) {
     this.#spawnTerminal = options.spawnTerminal ?? ptySpawner;
@@ -244,6 +286,7 @@ export class TerminalManager {
     }
     this.#idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.#maxActiveSessions = options.maxActiveSessions ?? DEFAULT_MAX_ACTIVE_SESSIONS;
+    this.#sandboxRuntime = options.sandboxRuntime ?? new WorkspaceCopySandboxRuntime();
   }
 
   async initialize(): Promise<void> {
@@ -312,6 +355,7 @@ export class TerminalManager {
             cwd: metadata.cwd || tmuxCwd,
             createdAt: metadata.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString(),
+            sandbox: metadata.sandbox,
             history: []
           };
           userSessions.set(tmuxId, recovered);
@@ -445,6 +489,7 @@ export class TerminalManager {
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         history,
+        sandbox: session.sandbox,
         thread: session.thread
       };
       await saveSession(session.userId, persisted);
@@ -563,6 +608,7 @@ export class TerminalManager {
           isActive: true,
           isBusy: this.#isSessionBusy(session, now),
           usesTmux: session.usesTmux,
+          sandbox: session.sandbox,
           thread: session.thread
         };
       });
@@ -594,6 +640,7 @@ export class TerminalManager {
           isActive: false,
           isBusy: false,
           usesTmux: false,
+          sandbox: session.sandbox,
           thread: session.thread
         };
       });
@@ -619,7 +666,8 @@ export class TerminalManager {
         title: trimmed,
         shell: session.shell,
         cwd: session.cwd,
-        createdAt: session.createdAt
+        createdAt: session.createdAt,
+        sandbox: session.sandbox
       }).catch((error) => {
         console.error(`Failed to update session metadata for ${id}:`, error);
       });
@@ -636,6 +684,7 @@ export class TerminalManager {
         isActive: true,
         isBusy: this.#isSessionBusy(session),
         usesTmux: session.usesTmux,
+        sandbox: session.sandbox,
         thread: session.thread
       };
     }
@@ -660,7 +709,8 @@ export class TerminalManager {
       title: trimmed,
       shell: updated.shell,
       cwd: updated.cwd,
-      createdAt: updated.createdAt
+      createdAt: updated.createdAt,
+      sandbox: updated.sandbox
     });
 
     return {
@@ -675,6 +725,7 @@ export class TerminalManager {
       isActive: false,
       isBusy: false,
       usesTmux: false,
+      sandbox: updated.sandbox,
       thread: updated.thread
     };
   }
@@ -726,7 +777,8 @@ export class TerminalManager {
         history,
         usesTmux: session.usesTmux,
         currentCols: session.currentCols,
-        currentRows: session.currentRows
+        currentRows: session.currentRows,
+        sandbox: session.sandbox
       };
     }
 
@@ -743,7 +795,8 @@ export class TerminalManager {
         createdAt: persisted.createdAt,
         updatedAt: persisted.updatedAt,
         history,
-        usesTmux: false
+        usesTmux: false,
+        sandbox: persisted.sandbox
       };
     }
 
@@ -993,6 +1046,20 @@ export class TerminalManager {
     } catch {
       cwd = defaultCwd;
     }
+    const sandboxPolicy = createSandboxPolicy(cwd, options.sandboxMode, options.workspaceRoot);
+    const launch = this.#sandboxRuntime.prepareTerminalLaunch({
+      sessionId: id,
+      userId,
+      shell,
+      cwd,
+      cols,
+      rows,
+      env: options.env,
+      sandbox: sandboxPolicy
+    });
+    cwd = launch.cwd;
+    const launchShell = launch.shell;
+    const launchEnv = launch.env;
 
     // Use tmux if available for persistent sessions
     const usesTmux = this.#useTmux;
@@ -1002,19 +1069,19 @@ export class TerminalManager {
       console.log(`[TerminalManager] Creating tmux-backed session ${id}`);
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
-        shell,
+        shell: launchShell,
         cols,
         rows,
         cwd,
-        env: options.env
+        env: launchEnv
       });
     } else {
       ptyProcess = this.#spawnTerminal({
-        shell,
+        shell: launchShell,
         cols,
         rows,
         cwd,
-        env: options.env
+        env: launchEnv
       });
     }
 
@@ -1027,7 +1094,7 @@ export class TerminalManager {
       id,
       userId,
       title,
-      shell,
+      shell: launchShell,
       cwd,
       createdAt,
       updatedAt: createdAt,
@@ -1036,6 +1103,8 @@ export class TerminalManager {
       bufferCharCount: 0,
       subscribers: new Set(),
       inputBuffer: '',
+      firstCommandBuffer: '',
+      firstCommandCaptured: false,
       dataHandler,
       exitHandler,
       clientDimensions: new Map(),
@@ -1044,6 +1113,7 @@ export class TerminalManager {
       currentRows: rows,
       nextEventSeq: 1,
       usesTmux,
+      sandbox: launch.sandbox,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now()
     };
@@ -1086,7 +1156,13 @@ export class TerminalManager {
     this.#resetIdleTimer(session);
 
     // Save metadata index entry (survives session file corruption)
-    updateSessionMetadata(userId, id, { title, shell, cwd, createdAt }).catch((error) => {
+    updateSessionMetadata(userId, id, {
+      title,
+      shell: launchShell,
+      cwd,
+      createdAt,
+      sandbox: launch.sandbox
+    }).catch((error) => {
       console.error(`Failed to save session metadata for ${id}:`, error);
     });
     // Persist an initial session file so tmux sessions don't get "recovered" after restarts
@@ -1129,6 +1205,7 @@ export class TerminalManager {
     session.outputBatcher?.flush();
 
     this.#processInputForCwd(session, input);
+    this.#captureFirstCommand(session, input);
     session.turnDetector?.onUserInput(input);
     session.process.write(normaliseNewlines(input));
     this.#recordSessionActivity(session);
@@ -1519,6 +1596,23 @@ export class TerminalManager {
     } catch {
       cwd = defaultCwd;
     }
+    const sandboxPolicy = createSandboxPolicy(
+      cwd,
+      persisted.sandbox?.mode ?? 'off',
+      persisted.sandbox?.workspaceRoot ?? undefined,
+      persisted.sandbox
+    );
+    const launch = this.#sandboxRuntime.prepareTerminalLaunch({
+      sessionId: id,
+      userId,
+      shell: persisted.shell,
+      cwd,
+      cols,
+      rows,
+      sandbox: sandboxPolicy
+    });
+    cwd = launch.cwd;
+    const launchShell = launch.shell;
 
     // Spawn the process - if tmux session exists, reattach to it
     const usesTmux = this.#useTmux;
@@ -1529,7 +1623,7 @@ export class TerminalManager {
       console.log(`[TerminalManager] Reattaching to existing tmux session ${id}`);
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
-        shell: persisted.shell,
+        shell: launchShell,
         cols,
         rows,
         cwd
@@ -1539,7 +1633,7 @@ export class TerminalManager {
       console.log(`[TerminalManager] Creating new tmux session for restored session ${id}`);
       ptyProcess = spawnTmuxWithPty(ptySpawn, {
         sessionId: id,
-        shell: persisted.shell,
+        shell: launchShell,
         cols,
         rows,
         cwd
@@ -1547,7 +1641,7 @@ export class TerminalManager {
     } else {
       // Non-tmux fallback
       ptyProcess = this.#spawnTerminal({
-        shell: persisted.shell,
+        shell: launchShell,
         cols,
         rows,
         cwd
@@ -1566,7 +1660,7 @@ export class TerminalManager {
       id: persisted.id,
       userId,
       title: persisted.title,
-      shell: persisted.shell,
+      shell: launchShell,
       cwd,
       createdAt: persisted.createdAt,
       updatedAt: new Date().toISOString(),
@@ -1577,6 +1671,8 @@ export class TerminalManager {
       bufferCharCount: hasTmuxSession ? 0 : restoredHistory.reduce((sum, entry) => sum + entry.text.length, 0),
       subscribers: new Set(),
       inputBuffer: '',
+      firstCommandBuffer: '',
+      firstCommandCaptured: true, // Restored sessions already have a name
       dataHandler,
       exitHandler,
       clientDimensions: new Map(),
@@ -1585,6 +1681,7 @@ export class TerminalManager {
       currentRows: rows,
       nextEventSeq,
       usesTmux,
+      sandbox: launch.sandbox,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now(),
       thread: persisted.thread
@@ -1628,6 +1725,74 @@ export class TerminalManager {
     this.#resetIdleTimer(session);
 
     return this.getSession(userId, id);
+  }
+
+  #captureFirstCommand(session: ManagedTerminal, input: string): void {
+    if (session.firstCommandCaptured || !input) return;
+
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i];
+
+      // Enter pressed — commit the buffered command as thread topic
+      if (char === '\r' || char === '\n') {
+        const command = session.firstCommandBuffer.trim();
+        session.firstCommandCaptured = true;
+        session.firstCommandBuffer = '';
+
+        if (!command) return; // Skip empty Enter presses
+
+        // Truncate to 80 chars for sidebar display
+        const topic = command.length > 80 ? command.slice(0, 77) + '...' : command;
+
+        // Persist async — fire and forget
+        updateThreadMetadata(session.userId, session.id, { topic })
+          .then((persisted) => {
+            if (persisted?.thread) {
+              this.syncThreadMetadata(session.userId, session.id, persisted.thread);
+              // Notify WebSocket subscribers so sidebar updates live
+              const metaEvent = {
+                text: JSON.stringify({
+                  __terminal_meta: true,
+                  type: 'threadUpdate',
+                  thread: persisted.thread
+                }),
+                ts: Date.now(),
+                seq: undefined
+              };
+              session.subscribers.forEach((sub) => sub(metaEvent));
+            }
+          })
+          .catch(() => { /* updateThreadMetadata already logs */ });
+        return;
+      }
+
+      // Handle backspace
+      if (char === '\x7f' || char === '\b') {
+        session.firstCommandBuffer = session.firstCommandBuffer.slice(0, -1);
+        continue;
+      }
+
+      // Skip escape sequences
+      if (char === '\x1b') {
+        if (input[i + 1] === '[') {
+          let j = i + 2;
+          while (j < input.length) {
+            const code = input.charCodeAt(j);
+            if (code >= 0x40 && code <= 0x7e) { j++; break; }
+            j++;
+          }
+          i = j - 1;
+        } else {
+          i++;
+        }
+        continue;
+      }
+
+      // Skip other control characters
+      if (char.charCodeAt(0) < 32) continue;
+
+      session.firstCommandBuffer += char;
+    }
   }
 
   #processInputForCwd(session: ManagedTerminal, input: string): void {

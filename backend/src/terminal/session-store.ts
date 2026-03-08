@@ -3,6 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalStreamEvent } from './terminal-types';
 import { ensureDataDir } from '../utils/data-dir';
+import type { TerminalSandboxInfo } from '../sandbox/sandbox-types';
 
 export interface ThreadGitStats {
   linesAdded: number;
@@ -27,6 +28,7 @@ export interface PersistedSession {
   createdAt: string;
   updatedAt: string;
   history: TerminalStreamEvent[];
+  sandbox?: TerminalSandboxInfo;
   thread?: ThreadMetadata;
 }
 
@@ -68,6 +70,7 @@ export interface SessionMetadata {
   shell: string;
   cwd: string;
   createdAt: string;
+  sandbox?: TerminalSandboxInfo;
 }
 
 export interface SessionMetadataIndex {
@@ -148,7 +151,7 @@ async function saveMetadataIndex(userId: string, index: SessionMetadataIndex): P
 export async function updateSessionMetadata(
   userId: string,
   sessionId: string,
-  metadata: { title: string; shell: string; cwd: string; createdAt: string }
+  metadata: SessionMetadata
 ): Promise<void> {
   await enqueueMetadataWrite(userId, async () => {
     const index = await loadMetadataIndex(userId);

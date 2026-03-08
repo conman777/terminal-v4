@@ -9,6 +9,7 @@ import {
 import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
 import { verifyAccessToken, isAllowedUsername } from '../auth/auth-service';
+import { getUserSandboxDefaultMode } from './settings-routes';
 
 const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_WS_MAX_BUFFERED_BYTES || '', 10);
@@ -125,7 +126,10 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
 
     const session = (() => {
       try {
-        return deps.terminalManager.createSession(userId, result.data);
+        return deps.terminalManager.createSession(userId, {
+          ...result.data,
+          sandboxMode: result.data.sandboxMode ?? getUserSandboxDefaultMode(userId)
+        });
       } catch (error) {
         reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
         return null;
@@ -139,7 +143,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         shell: session.shell,
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
-        usesTmux: session.usesTmux
+        usesTmux: session.usesTmux,
+        sandbox: session.sandbox
       }
     });
   });
@@ -785,7 +790,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         title: session.title,
         shell: session.shell,
         createdAt: session.createdAt,
-        updatedAt: session.updatedAt
+        updatedAt: session.updatedAt,
+        sandbox: session.sandbox
       }
     });
   });

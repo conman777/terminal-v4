@@ -1,5 +1,4 @@
 import { useCallback, useState, useRef, useEffect, memo } from 'react';
-import { getAiDisplayLabel, inferSessionAiType } from '../utils/aiProviders';
 
 /**
  * Individual session tab with drag support and right-click menu.
@@ -114,15 +113,9 @@ export const SessionTab = memo(function SessionTab({
     isActive && 'active',
     hasUnread && !isActive && 'has-unread',
     isBusy && 'busy',
-    isReady && 'ready',
     isDragging && 'dragging',
     isDragOver && 'drag-over',
-    aiType && `ai-${aiType}`,
   ].filter(Boolean).join(' ');
-  const detectedAiType = inferSessionAiType(session, aiType);
-  const providerLabel = getAiDisplayLabel(detectedAiType) || session.shell || 'Terminal';
-  const statusClass = isBusy ? 'busy' : 'idle';
-  const statusLabel = isBusy ? 'Busy' : 'Idle';
 
   return (
     <div
@@ -138,54 +131,33 @@ export const SessionTab = memo(function SessionTab({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       data-session-id={session.id}
-      title={`Session ID: ${session.id}`}
       role="tab"
       aria-selected={isActive}
       tabIndex={isActive ? 0 : -1}
     >
-      <span className={`tab-status-dot-modern ${statusClass}`} />
-
-      <div className="tab-copy-modern">
-        {isRenaming ? (
-          <input
-            ref={inputRef}
-            className="tab-rename-input-modern"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onBlur={handleRenameSubmit}
-            onKeyDown={handleRenameKeyDown}
-            onClick={(e) => e.stopPropagation()}
-            maxLength={60}
-          />
-        ) : (
-          <>
-            <span className="tab-title-modern">{session.title}</span>
-            <span className="tab-meta-modern">
-              <span className={`tab-provider-label-modern${detectedAiType ? ` ai-${detectedAiType}` : ''}`}>
-                {providerLabel}
-              </span>
-              {(showStatusLabels || isBusy) && (
-                <span className={`tab-status-label-modern ${statusClass}`} aria-hidden="true">
-                  {statusLabel}
-                </span>
-              )}
-            </span>
-          </>
-        )}
-      </div>
-
-      {hasUnread && !isActive && (
-        <span className="tab-unread-dot-modern" aria-hidden="true" />
+      {isRenaming ? (
+        <input
+          ref={inputRef}
+          className="tab-rename-input"
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onBlur={handleRenameSubmit}
+          onKeyDown={handleRenameKeyDown}
+          onClick={(e) => e.stopPropagation()}
+          maxLength={60}
+        />
+      ) : (
+        <span className="tab-title">{session.title}</span>
       )}
 
       <button
         type="button"
-        className="tab-close-btn-modern"
+        className="tab-close-btn"
         onClick={handleClose}
         aria-label={`Close ${session.title}`}
         tabIndex={-1}
       >
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />
         </svg>
@@ -200,168 +172,53 @@ export const SessionTab = memo(function SessionTab({
           padding: 0 10px;
           background: transparent;
           border: none;
-          border-bottom: 1px solid transparent;
-          color: var(--text-muted, #71717a);
+          border-bottom: 2px solid transparent;
+          color: var(--text-muted, #52525b);
           font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
-          font-size: 11px;
+          font-size: 12px;
           font-weight: 400;
           white-space: nowrap;
           cursor: pointer;
           transition: color 0.1s ease;
           position: relative;
           user-select: none;
-          overflow: hidden;
           flex-shrink: 0;
           margin-bottom: -1px;
         }
 
         .session-tab-item:hover:not(.active) {
-          color: var(--text-primary, #fafafa);
+          color: var(--text-secondary, #a1a1aa);
         }
 
         .session-tab-item.active {
           color: var(--text-primary, #fafafa);
-          border-bottom-color: var(--text-muted, #71717a);
-        }
-
-        .session-tab-item.ai-claude.active {
-          border-bottom-color: #d4845a;
-        }
-
-        .session-tab-item.ai-codex.active {
-          border-bottom-color: #7a9ec7;
-        }
-
-        .session-tab-item.ai-gemini.active {
-          border-bottom-color: #6bab82;
-        }
-
-        .session-tab-item.ai-claude.drag-over,
-        .session-tab-item.ai-codex.drag-over,
-        .session-tab-item.ai-gemini.drag-over {
-          color: var(--text-primary, #fafafa);
+          border-bottom-color: var(--text-muted, #52525b);
         }
 
         .session-tab-item.has-unread:not(.active) {
           color: var(--text-primary, #fafafa);
         }
 
-        .session-tab-item.busy:not(.active) {
-          color: var(--text-secondary, #a1a1aa);
-        }
-
-        .session-tab-item.busy.active {
+        .session-tab-item.drag-over {
           color: var(--text-primary, #fafafa);
+          border-bottom-color: var(--text-muted, #52525b);
         }
 
-        .tab-status-dot-modern {
-          width: 4px;
-          height: 4px;
-          border-radius: 50%;
-          flex-shrink: 0;
-          transition: background 0.2s ease;
+        .session-tab-item.dragging {
+          opacity: 0.3;
         }
 
-        .tab-status-dot-modern.busy {
-          background: #7a9ec7;
-          animation: tabDotPulse 2s ease-in-out infinite;
-        }
-
-        @keyframes tabDotPulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.3; }
-        }
-
-        .tab-status-dot-modern.idle {
-          background: var(--text-muted, #52525b);
-          opacity: 0.5;
-        }
-
-        .session-tab-item.ai-claude .tab-status-dot-modern.idle {
-          background: #d4845a;
-          opacity: 0.6;
-        }
-
-        .session-tab-item.ai-codex .tab-status-dot-modern.idle {
-          background: #7a9ec7;
-          opacity: 0.6;
-        }
-
-        .session-tab-item.ai-gemini .tab-status-dot-modern.idle {
-          background: #6bab82;
-          opacity: 0.6;
-        }
-
-        .tab-title-modern {
-          min-width: 20px;
-          max-width: 160px;
+        .tab-title {
+          max-width: 180px;
           overflow: hidden;
           text-overflow: ellipsis;
           font-family: inherit;
-          font-size: 11px;
-          font-weight: 400;
+          font-size: inherit;
+          font-weight: inherit;
           color: inherit;
         }
 
-        .tab-copy-modern {
-          min-width: 0;
-          display: flex;
-          flex-direction: column;
-          gap: 1px;
-          flex: 1;
-        }
-
-        .tab-meta-modern {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          min-width: 0;
-        }
-
-        .tab-provider-label-modern {
-          max-width: 120px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-family: inherit;
-          font-size: 9px;
-          line-height: 1;
-          color: var(--text-muted, #71717a);
-        }
-
-        .tab-provider-label-modern.ai-claude {
-          color: #d4845a;
-        }
-
-        .tab-provider-label-modern.ai-codex {
-          color: #7a9ec7;
-        }
-
-        .tab-provider-label-modern.ai-gemini {
-          color: #6bab82;
-        }
-
-        .tab-status-label-modern {
-          font-family: inherit;
-          font-size: 9px;
-          line-height: 1;
-          color: var(--text-muted, #71717a);
-          flex-shrink: 0;
-        }
-
-        .tab-status-label-modern.busy {
-          color: #7a9ec7;
-        }
-
-        .tab-unread-dot-modern {
-          width: 4px;
-          height: 4px;
-          border-radius: 50%;
-          background: var(--text-primary, #fafafa);
-          flex-shrink: 0;
-        }
-
-        .tab-close-btn-modern {
+        .tab-close-btn {
           width: 16px;
           height: 16px;
           display: flex;
@@ -371,38 +228,32 @@ export const SessionTab = memo(function SessionTab({
           border: none;
           color: inherit;
           opacity: 0;
-          transition: opacity 0.1s ease, color 0.1s ease;
+          border-radius: 3px;
+          transition: opacity 0.1s ease, background 0.1s ease;
           cursor: pointer;
         }
 
-        .session-tab-item:hover .tab-close-btn-modern {
-          opacity: 0.4;
+        .session-tab-item:hover .tab-close-btn {
+          opacity: 0.35;
         }
 
-        .tab-close-btn-modern:hover {
+        .tab-close-btn:hover {
           opacity: 1 !important;
+          background: rgba(244, 63, 94, 0.1);
           color: var(--error, #f43f5e);
         }
 
-        .tab-rename-input-modern {
+        .tab-rename-input {
           background: var(--bg-base, #09090b);
           border: 1px solid var(--border-default, #2a2a2e);
           color: var(--text-primary, #fafafa);
           font-family: inherit;
-          font-size: 11px;
-          padding: 0 4px;
-          height: 18px;
-          width: 100px;
+          font-size: 12px;
+          padding: 1px 6px;
+          height: 20px;
+          width: 120px;
           outline: none;
-        }
-
-        .session-tab-item.dragging {
-          opacity: 0.3;
-        }
-
-        .session-tab-item.drag-over {
-          color: var(--text-primary, #fafafa);
-          border-bottom-color: var(--text-muted, #71717a);
+          border-radius: 3px;
         }
       `}</style>
     </div>

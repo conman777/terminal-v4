@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../database/db';
+import { SANDBOX_MODES, type SandboxMode } from '../sandbox/sandbox-types';
 
 interface UserSettings {
   groqApiKey: string | null;
@@ -10,6 +11,7 @@ interface UserSettings {
   terminalWebglEnabled: boolean | null;
   theme: string | null;
   tabOrder: string[] | null;
+  sandboxDefaultMode: SandboxMode;
 }
 
 interface UpdateSettingsBody {
@@ -21,6 +23,7 @@ interface UpdateSettingsBody {
   terminalWebglEnabled?: boolean | null;
   theme?: string | null;
   tabOrder?: string[] | null;
+  sandboxDefaultMode?: SandboxMode | null;
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -33,7 +36,17 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order FROM user_settings WHERE user_id = ?').get(userId) as { groq_api_key: string | null; openai_api_key: string | null; preview_url: string | null; terminal_font_size: number | null; sidebar_collapsed: number | null; terminal_webgl_enabled: number | null; theme: string | null; tab_order: string | null } | undefined;
+    const row = db.prepare('SELECT groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, sandbox_default_mode FROM user_settings WHERE user_id = ?').get(userId) as {
+      groq_api_key: string | null;
+      openai_api_key: string | null;
+      preview_url: string | null;
+      terminal_font_size: number | null;
+      sidebar_collapsed: number | null;
+      terminal_webgl_enabled: number | null;
+      theme: string | null;
+      tab_order: string | null;
+      sandbox_default_mode: SandboxMode | null;
+    } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
     const groqApiKey = row?.groq_api_key;
@@ -58,7 +71,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         ? null
         : row?.terminal_webgl_enabled === 1,
       theme: row?.theme || 'dark',
-      tabOrder
+      tabOrder,
+      sandboxDefaultMode: row?.sandbox_default_mode && SANDBOX_MODES.includes(row.sandbox_default_mode)
+        ? row.sandbox_default_mode
+        : 'off'
     };
   });
 
@@ -70,7 +86,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, openaiApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder } = request.body || {};
+    const { groqApiKey, openaiApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder, sandboxDefaultMode } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -129,6 +145,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
+    if (sandboxDefaultMode !== undefined && sandboxDefaultMode !== null && !SANDBOX_MODES.includes(sandboxDefaultMode)) {
+      reply.code(400).send({ error: `Sandbox mode must be one of: ${SANDBOX_MODES.join(', ')}` });
+      return;
+    }
+
     const db = getDatabase();
     const now = new Date().toISOString();
 
@@ -172,11 +193,15 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('tab_order = ?');
         values.push(tabOrder ? JSON.stringify(tabOrder) : null);
       }
+      if (sandboxDefaultMode !== undefined) {
+        updates.push('sandbox_default_mode = ?');
+        values.push(sandboxDefaultMode ?? 'off');
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, openai_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, sandbox_default_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         openaiApiKey || null,
@@ -186,6 +211,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
         theme || 'dark',
         tabOrder ? JSON.stringify(tabOrder) : null,
+        sandboxDefaultMode || 'off',
         now
       );
     }
@@ -205,4 +231,12 @@ export function getUserOpenAIApiKey(userId: string): string | null {
   const db = getDatabase();
   const row = db.prepare('SELECT openai_api_key FROM user_settings WHERE user_id = ?').get(userId) as { openai_api_key: string | null } | undefined;
   return row?.openai_api_key || null;
+}
+
+export function getUserSandboxDefaultMode(userId: string): SandboxMode {
+  const db = getDatabase();
+  const row = db.prepare('SELECT sandbox_default_mode FROM user_settings WHERE user_id = ?').get(userId) as { sandbox_default_mode: SandboxMode | null } | undefined;
+  return row?.sandbox_default_mode && SANDBOX_MODES.includes(row.sandbox_default_mode)
+    ? row.sandbox_default_mode
+    : 'off';
 }

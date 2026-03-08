@@ -130,6 +130,26 @@ function AppContent() {
   const { logout, user } = useAuth();
   const { setTheme } = useTheme();
 
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+
+    const applyWindowActiveState = () => {
+      const isActive = !document.hidden && document.hasFocus();
+      document.documentElement.setAttribute('data-window-active', isActive ? 'true' : 'false');
+    };
+
+    applyWindowActiveState();
+    window.addEventListener('focus', applyWindowActiveState);
+    window.addEventListener('blur', applyWindowActiveState);
+    document.addEventListener('visibilitychange', applyWindowActiveState);
+
+    return () => {
+      window.removeEventListener('focus', applyWindowActiveState);
+      window.removeEventListener('blur', applyWindowActiveState);
+      document.removeEventListener('visibilitychange', applyWindowActiveState);
+    };
+  }, []);
+
   // Context hooks
   const {
     sessions,
@@ -731,9 +751,19 @@ function AppContent() {
     setKeybarHeight(Math.max(0, Math.round(height)));
   }, []);
 
-  const handleRequestNewSession = useCallback(() => {
-    setShowNewSessionModal(true);
-  }, []);
+  const handleRequestNewSession = useCallback(async (projectPath) => {
+    if (projectPath) {
+      // Create directly in the project directory
+      try {
+        const session = await createSession({ cwd: projectPath });
+        if (session?.id) {
+          addSessionToDesktop(session.id);
+        }
+      } catch { /* createSession already logs */ }
+    } else {
+      setShowNewSessionModal(true);
+    }
+  }, [createSession]);
 
   const handleCloseNewSessionModal = useCallback(() => {
     setShowNewSessionModal(false);
@@ -1200,7 +1230,11 @@ function AppContent() {
                   className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
                   style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
                 >
-                  {activeSessions.length === 0 ? (
+                  {loadingSessions ? (
+                    <div className="empty-state">
+                      <p>Loading sessions…</p>
+                    </div>
+                  ) : activeSessions.length === 0 ? (
                     <div className="empty-state">
                       <h2>Welcome to Terminal</h2>
                       <p>Create a new terminal session to get started.</p>

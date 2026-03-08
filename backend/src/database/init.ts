@@ -146,6 +146,12 @@ function runMigrations(db: Database.Database): void {
         CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id);
         CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id);
       `
+    },
+    {
+      name: '012_add_sandbox_default_mode',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN sandbox_default_mode TEXT DEFAULT 'off';
+      `
     }
   ];
 

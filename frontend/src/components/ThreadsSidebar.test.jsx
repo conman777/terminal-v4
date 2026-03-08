@@ -79,6 +79,18 @@ describe('ThreadsSidebar', () => {
     expect(screen.getByText('No projects yet')).toBeInTheDocument();
   });
 
+  it('renders manually added projects without sessions', () => {
+    render(<ThreadsSidebar {...buildProps({
+      projects: [{ path: 'C:\\manual-project', name: 'manual-project' }],
+      sessionsGroupedByProject: [],
+      pinnedSessions: [],
+      archivedSessions: []
+    })} />);
+
+    expect(screen.getByText('manual-project')).toBeInTheDocument();
+    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+  });
+
   it('renders pinned section when pinned sessions exist', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 

@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { SessionTabBar } from './SessionTabBar';
 import { Dropdown } from './Dropdown';
 import { MobileHeader } from './MobileHeader';
-import { DesktopSwitcher } from './DesktopSwitcher';
 import { useTheme } from '../contexts/ThemeContext';
 
 export function Header({
@@ -170,37 +168,7 @@ export function Header({
 
   return (
     <header className={`app-header redesign${showPreview ? ' preview-active' : ''}`}>
-      <div className="header-left">
-        <span className="header-brand">Terminal V4</span>
-        {desktopSwitcherProps ? (
-          <DesktopSwitcher
-            {...desktopSwitcherProps}
-            variant="header"
-          />
-        ) : null}
-      </div>
-
-      <div className="header-tabs-area">
-        {orderedSessions.length > 0 ? (
-          <SessionTabBar
-            sessions={orderedSessions}
-            activeSessionId={activeSessionId}
-            sessionActivity={sessionActivity}
-            onSelectSession={onSelectSession}
-            onCreateSession={onCreateSession}
-            onCloseSession={onCloseSession}
-            onRenameSession={onRenameSession}
-            onReorderSessions={onReorderSessions}
-            inHeader
-            showStatusLabels={showTabStatusLabels}
-            sessionAiTypes={sessionAiTypes}
-            onSetSessionAiType={onSetSessionAiType}
-          />
-        ) : (
-          <div className="header-tabs-empty">No active sessions</div>
-        )}
-      </div>
-
+      <div className="header-spacer" />
       <div className="header-actions">
         <button
           className={`header-btn-modern ${showPreview ? 'active' : ''}`}
@@ -208,11 +176,10 @@ export function Header({
           onClick={onTogglePreview}
           title={showPreview ? 'Hide Browser' : 'Show Browser'}
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" />
             <line x1="12" y1="3" x2="12" y2="21" />
           </svg>
-          <span>Browser</span>
         </button>
 
         <button
@@ -222,7 +189,7 @@ export function Header({
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
         >
           {theme === 'dark' ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="5" />
               <line x1="12" y1="1" x2="12" y2="3" />
               <line x1="12" y1="21" x2="12" y2="23" />
@@ -234,44 +201,24 @@ export function Header({
               <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
             </svg>
           ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
             </svg>
           )}
         </button>
 
-        <div className="header-divider" />
-
         <Dropdown
           trigger={
             <button className="header-btn-modern" type="button">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-              </svg>
-              <span>Tools</span>
-              <svg className="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="1.2" r="1" />
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="12" cy="22.8" r="1" />
               </svg>
             </button>
           }
           items={toolsItems}
         />
-
-        <button
-          className={`header-btn-modern system-resources-btn${showSystemResources ? ' active' : ''}`}
-          onClick={onToggleSystemResources}
-          title="System Resources"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="3" width="7" height="7" rx="1" />
-            <rect x="14" y="3" width="7" height="7" rx="1" />
-            <rect x="14" y="14" width="7" height="7" rx="1" />
-            <rect x="3" y="14" width="7" height="7" rx="1" />
-          </svg>
-        </button>
 
         <Dropdown
           trigger={
@@ -279,10 +226,6 @@ export function Header({
               <div className="user-avatar">
                 {user?.username?.charAt(0).toUpperCase() || 'U'}
               </div>
-              <span className="username">{user?.username}</span>
-              <svg className="chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
             </div>
           }
           items={userItems}
@@ -291,128 +234,65 @@ export function Header({
 
       <style jsx>{`
         .app-header.redesign {
-          min-height: 32px;
-          display: grid;
-          grid-template-columns: auto minmax(0, 1fr) auto;
+          min-height: 36px;
+          display: flex;
           align-items: center;
-          column-gap: 10px;
-          padding: 0 10px;
-          background: var(--bg-base, #09090b);
-          border-bottom: 1px solid var(--border-subtle, #1e1e21);
+          padding: 0 6px;
+          background: var(--terminal-chrome-bg, #17191c);
+          border-bottom: none;
           user-select: none;
           z-index: 100;
           font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
         }
 
-        .header-left {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-          min-width: 0;
-          overflow: hidden;
-        }
-
-        .header-brand {
-          font-size: 11px;
-          font-weight: 400;
-          color: var(--text-muted, #71717a);
-          white-space: nowrap;
-        }
-
-        .header-tabs-area {
-          width: 100%;
-          min-width: 0;
-          overflow: hidden;
-        }
-
-        .header-tabs-empty {
-          display: flex;
-          align-items: center;
-          height: 24px;
-          padding: 0 8px;
-          color: var(--text-muted, #71717a);
-          font-family: inherit;
-          font-size: 11px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .app-title {
-          font-size: 11px;
-          font-weight: 400;
-          margin: 0;
-          color: var(--text-muted, #71717a);
+        .header-spacer {
+          flex: 1;
         }
 
         .header-actions {
           display: flex;
           align-items: center;
-          gap: 2px;
+          gap: 1px;
           flex-shrink: 0;
-          justify-self: end;
-          min-width: max-content;
         }
 
         .header-btn-modern {
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 5px;
-          padding: 3px 8px;
+          width: 28px;
+          height: 28px;
+          padding: 0;
           border: none;
           background: transparent;
-          color: var(--text-muted, #71717a);
-          font-family: inherit;
-          font-size: 11px;
-          font-weight: 400;
+          color: var(--text-muted, #52525b);
           cursor: pointer;
-          transition: color 0.1s ease;
-        }
-
-        .header-btn-modern span {
-          display: inline;
+          border-radius: 4px;
+          transition: color 0.1s ease, background 0.1s ease;
         }
 
         .header-btn-modern:hover {
-          color: var(--text-primary, #fafafa);
-        }
-
-        .header-btn-modern:active {
-          opacity: 0.7;
+          color: var(--text-secondary, #a1a1aa);
+          background: rgba(255,255,255,0.04);
         }
 
         .header-btn-modern.active {
           color: var(--text-primary, #fafafa);
         }
 
-        .header-divider {
-          width: 1px;
-          height: 14px;
-          background: var(--border-subtle, #1e1e21);
-          margin: 0 4px;
-        }
-
         .header-user-badge-modern {
           display: flex;
           align-items: center;
-          gap: 6px;
-          padding: 2px 8px 2px 2px;
+          padding: 2px;
           background: transparent;
           border: none;
           cursor: pointer;
-          transition: color 0.1s ease;
-        }
-
-        .header-user-badge-modern:hover {
-          color: var(--text-primary, #fafafa);
         }
 
         .user-avatar {
-          width: 18px;
-          height: 18px;
-          border-radius: 2px;
+          width: 20px;
+          height: 20px;
+          border-radius: 4px;
           background: var(--border-default, #2a2a2e);
           color: var(--text-muted, #71717a);
           display: flex;
@@ -420,50 +300,16 @@ export function Header({
           justify-content: center;
           font-family: inherit;
           font-size: 10px;
-          font-weight: 400;
+          font-weight: 500;
+          transition: opacity 0.1s ease;
         }
 
-        .username {
-          font-family: inherit;
-          font-size: 11px;
-          font-weight: 400;
-          color: var(--text-muted, #71717a);
-          max-width: 100px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .chevron {
-          opacity: 0.35;
+        .header-user-badge-modern:hover .user-avatar {
+          opacity: 0.8;
         }
 
         .app-header.redesign.preview-active {
-          min-height: 28px;
-          padding: 0 8px;
-        }
-
-        .app-header.redesign.preview-active .header-btn-modern {
-          padding: 2px 6px;
-          font-size: 10px;
-        }
-
-        .app-header.redesign.preview-active .user-avatar {
-          width: 16px;
-          height: 16px;
-          font-size: 9px;
-        }
-
-        @media (max-width: 1280px) {
-          .header-brand {
-            display: none;
-          }
-        }
-
-        @media (max-width: 1500px) {
-          .header-btn-modern span {
-            display: none;
-          }
+          min-height: 32px;
         }
       `}</style>
     </header>

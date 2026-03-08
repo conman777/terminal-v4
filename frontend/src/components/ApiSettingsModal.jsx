@@ -5,6 +5,7 @@ import PasskeyManager from './PasskeyManager';
 
 export default function ApiSettingsModal({ isOpen, onClose }) {
   const { user } = useAuth();
+  const [sandboxDefaultMode, setSandboxDefaultMode] = useState('off');
   const [groqApiKey, setGroqApiKey] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [hasExistingGroqKey, setHasExistingGroqKey] = useState(false);
@@ -13,6 +14,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
   const [maskedOpenAIKey, setMaskedOpenAIKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingSandbox, setIsSavingSandbox] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
@@ -40,12 +42,33 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
       setHasExistingOpenAIKey(data.hasOpenAIApiKey);
       setMaskedGroqKey(data.groqApiKey || '');
       setMaskedOpenAIKey(data.openaiApiKey || '');
+      setSandboxDefaultMode(data.sandboxDefaultMode || 'off');
       setGroqApiKey('');
       setOpenaiApiKey('');
     } catch (err) {
       setError('Failed to load settings');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleToggleSandbox = async () => {
+    const nextMode = sandboxDefaultMode === 'workspace-write' ? 'off' : 'workspace-write';
+    setIsSavingSandbox(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await apiPatch('/api/settings', { sandboxDefaultMode: nextMode });
+      setSandboxDefaultMode(nextMode);
+      setSuccess(
+        nextMode === 'workspace-write'
+          ? 'Sandbox mode enabled for new terminals'
+          : 'Sandbox mode disabled for new terminals'
+      );
+    } catch (err) {
+      setError(err.message || 'Failed to update sandbox mode');
+    } finally {
+      setIsSavingSandbox(false);
     }
   };
 
@@ -225,6 +248,32 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                   placeholder={hasExistingOpenAIKey ? 'Enter new key to replace' : 'sk-...'}
                   autoComplete="off"
                 />
+              </div>
+
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />
+
+              <div className="form-group">
+                <label>Sandbox New Terminals</label>
+                <p className="form-help">
+                  When enabled, new terminal sessions default to the sandbox workspace copy instead of the original host folder.
+                </p>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className={sandboxDefaultMode === 'workspace-write' ? 'btn-primary' : 'btn-secondary'}
+                    onClick={handleToggleSandbox}
+                    disabled={isSavingSandbox}
+                  >
+                    {isSavingSandbox
+                      ? 'Saving...'
+                      : sandboxDefaultMode === 'workspace-write'
+                        ? 'On'
+                        : 'Off'}
+                  </button>
+                  <span style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>
+                    Current default: {sandboxDefaultMode === 'workspace-write' ? 'Sandboxed' : 'Host'}
+                  </span>
+                </div>
               </div>
 
               <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />

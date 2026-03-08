@@ -22,33 +22,38 @@ interface ScanResponse {
   fromCache: boolean;
 }
 
-// Default directories to scan for git repos
-const DEFAULT_SCAN_DIRECTORIES = [
-  os.homedir(),
-  path.join(os.homedir(), 'Documents'),
-  path.join(os.homedir(), 'code'),
-  path.join(os.homedir(), 'Code'),
-  path.join(os.homedir(), 'projects'),
-  path.join(os.homedir(), 'Projects'),
-  path.join(os.homedir(), 'dev'),
-  path.join(os.homedir(), 'Developer'),
-  path.join(os.homedir(), 'workspace'),
-  path.join(os.homedir(), 'repos'),
-  path.join(os.homedir(), 'src'),
-  path.join(os.homedir(), 'GitHub'),
-  // OneDrive paths
-  path.join(os.homedir(), 'OneDrive', 'Documents'),
-  path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents'),
-  path.join(os.homedir(), 'OneDrive', 'Personal', 'Documents', 'coding projects'),
-  // Windows common paths
-  'C:\\Users',
-  'C:\\code',
-  'C:\\projects',
-  'C:\\dev',
-  'D:\\code',
-  'D:\\projects',
-  'D:\\dev',
-];
+interface ScanDirectoryOptions {
+  includePlainDirectoriesAtRoot?: boolean;
+}
+
+function getDefaultScanDirectories(homeDir: string = os.homedir()): string[] {
+  return [
+    homeDir,
+    path.join(homeDir, 'Documents'),
+    path.join(homeDir, 'code'),
+    path.join(homeDir, 'Code'),
+    path.join(homeDir, 'projects'),
+    path.join(homeDir, 'Projects'),
+    path.join(homeDir, 'dev'),
+    path.join(homeDir, 'Developer'),
+    path.join(homeDir, 'workspace'),
+    path.join(homeDir, 'repos'),
+    path.join(homeDir, 'src'),
+    path.join(homeDir, 'GitHub'),
+    // OneDrive paths
+    path.join(homeDir, 'OneDrive', 'Documents'),
+    path.join(homeDir, 'OneDrive', 'Personal', 'Documents'),
+    path.join(homeDir, 'OneDrive', 'Personal', 'Documents', 'coding projects'),
+    // Windows common paths
+    'C:\\Users',
+    'C:\\code',
+    'C:\\projects',
+    'C:\\dev',
+    'D:\\code',
+    'D:\\projects',
+    'D:\\dev',
+  ];
+}
 
 // Custom user directories (will be populated from settings)
 let customScanDirectories: string[] = [];
@@ -58,6 +63,19 @@ let projectCache: ProjectCache | null = null;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const MAX_PROJECTS = 100;
 const MAX_DEPTH = 4;
+const PLAIN_PROJECT_ROOT_NAMES = new Set([
+  'code',
+  'Code',
+  'projects',
+  'Projects',
+  'dev',
+  'Developer',
+  'workspace',
+  'repos',
+  'src',
+  'GitHub',
+  'coding projects',
+]);
 
 // Directories to skip when scanning
 const SKIP_DIRS = new Set([
@@ -106,14 +124,40 @@ function getLastModified(dirPath: string): number | undefined {
   }
 }
 
+function isGitRepository(dirPath: string): boolean {
+  return fs.existsSync(path.join(dirPath, '.git'));
+}
+
+function buildProject(dirPath: string, name?: string): Project {
+  const project: Project = {
+    path: dirPath,
+    name: name || path.basename(dirPath),
+    lastModified: getLastModified(dirPath),
+  };
+
+  if (isGitRepository(dirPath)) {
+    project.branch = getGitBranch(dirPath);
+  }
+
+  return project;
+}
+
+function isPlainProjectRoot(dirPath: string): boolean {
+  const normalizedPath = path.normalize(dirPath);
+  const baseName = path.basename(normalizedPath);
+  return PLAIN_PROJECT_ROOT_NAMES.has(baseName);
+}
+
 /**
  * Recursively scan a directory for git repos
  */
 async function scanDirectory(
   dirPath: string,
   depth: number,
-  foundProjects: Project[]
+  foundProjects: Project[],
+  options: ScanDirectoryOptions = {}
 ): Promise<void> {
+  const { includePlainDirectoriesAtRoot = false } = options;
   if (depth > MAX_DEPTH || foundProjects.length >= MAX_PROJECTS) {
     return;
   }
@@ -145,17 +189,14 @@ async function scanDirectory(
       // Check if subdirectory contains .git
       const gitPath = path.join(fullPath, '.git');
       if (fs.existsSync(gitPath)) {
-        const project: Project = {
-          path: fullPath,
-          name: entry.name,
-          branch: getGitBranch(fullPath),
-          lastModified: getLastModified(fullPath),
-        };
-        foundProjects.push(project);
+        foundProjects.push(buildProject(fullPath, entry.name));
         // Don't recurse into this directory (it's a repo)
       } else {
+        if (includePlainDirectoriesAtRoot && depth === 0) {
+          foundProjects.push(buildProject(fullPath, entry.name));
+        }
         // Recurse into subdirectory
-        await scanDirectory(fullPath, depth + 1, foundProjects);
+        await scanDirectory(fullPath, depth + 1, foundProjects, options);
       }
 
       if (foundProjects.length >= MAX_PROJECTS) {
@@ -216,10 +257,21 @@ async function scanForGitRepos(): Promise<Project[]> {
   const foundProjects: Project[] = [];
   const scannedPaths = new Set<string>();
 
-  // Combine default and custom directories
-  const allDirectories = [...DEFAULT_SCAN_DIRECTORIES, ...customScanDirectories];
+  const allDirectories = [
+    ...customScanDirectories.map((dirPath) => ({
+      path: dirPath,
+      includeRootAsProject: true,
+      includePlainDirectoriesAtRoot: true,
+    })),
+    ...getDefaultScanDirectories().map((dirPath) => ({
+      path: dirPath,
+      includeRootAsProject: false,
+      includePlainDirectoriesAtRoot: isPlainProjectRoot(dirPath),
+    })),
+  ];
 
-  for (const scanDir of allDirectories) {
+  for (const scanTarget of allDirectories) {
+    const scanDir = scanTarget.path;
     if (!fs.existsSync(scanDir)) continue;
 
     // Resolve to real path to handle symlinks
@@ -234,7 +286,16 @@ async function scanForGitRepos(): Promise<Project[]> {
     if (scannedPaths.has(realPath)) continue;
     scannedPaths.add(realPath);
 
-    await scanDirectory(realPath, 0, foundProjects);
+    if (scanTarget.includeRootAsProject) {
+      foundProjects.push(buildProject(realPath));
+      if (foundProjects.length >= MAX_PROJECTS) {
+        break;
+      }
+    }
+
+    await scanDirectory(realPath, 0, foundProjects, {
+      includePlainDirectoriesAtRoot: scanTarget.includePlainDirectoriesAtRoot,
+    });
 
     if (foundProjects.length >= MAX_PROJECTS) {
       break;

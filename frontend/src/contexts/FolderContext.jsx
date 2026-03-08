@@ -3,6 +3,18 @@ import { apiFetch } from '../utils/api';
 
 const FolderContext = createContext(null);
 
+function getProjectNameFromPath(folderPath) {
+  return folderPath.replace(/[\\/]+$/, '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Unknown';
+}
+
+function appendSidebarProject(prev, folderPath) {
+  if (!folderPath) return prev;
+  if (prev.some((project) => project.path.toLowerCase() === folderPath.toLowerCase())) {
+    return prev;
+  }
+  return [...prev, { path: folderPath, name: getProjectNameFromPath(folderPath) }];
+}
+
 export function FolderProvider({ children }) {
   // Folder state
   const [recentFolders, setRecentFolders] = useState(() => {
@@ -86,11 +98,7 @@ export function FolderProvider({ children }) {
   const addSidebarProject = useCallback((folderPath) => {
     if (!folderPath) return;
     setSidebarProjects(prev => {
-      if (prev.some(p => p.path.toLowerCase() === folderPath.toLowerCase())) {
-        return prev; // already exists
-      }
-      const name = folderPath.replace(/[\\/]+$/, '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || 'Unknown';
-      const updated = [...prev, { path: folderPath, name }];
+      const updated = appendSidebarProject(prev, folderPath);
       try {
         localStorage.setItem('sidebarProjects', JSON.stringify(updated));
       } catch (e) {
@@ -146,6 +154,15 @@ export function FolderProvider({ children }) {
         if (data.projects) {
           setProjects(data.projects);
         }
+        setSidebarProjects(prev => {
+          const updated = appendSidebarProject(prev, normalizedPath);
+          try {
+            localStorage.setItem('sidebarProjects', JSON.stringify(updated));
+          } catch (e) {
+            console.error('Failed to save sidebar projects', e);
+          }
+          return updated;
+        });
         return { ok: true };
       }
       let message = 'Failed to add scan folder';

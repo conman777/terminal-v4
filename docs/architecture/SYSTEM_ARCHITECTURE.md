@@ -94,6 +94,14 @@ Key files:
 - Uses `@homebridge/node-pty-prebuilt-multiarch` to spawn real PTYs.
 - Optional tmux integration for persistence across restarts (Linux/macOS).
 - Sessions are stored per-user as JSON for history and metadata.
+- Terminal creation now passes through a sandbox runtime abstraction.
+- The current default runtime is a local workspace-copy sandbox for sandboxed
+  sessions: it copies the selected workspace into the app data directory and
+  launches the PTY against that copy, keeping terminal-driven file mutations
+  away from the original host folder.
+- Session metadata carries sandbox mode and workspace root so stronger
+  container-backed runtimes can replace the current runtime without changing
+  the terminal API shape.
 - WebSocket stream (`/api/terminal/:id/ws`) is the primary IO channel.
 - PTY sessions also emit lightweight terminal metadata events (`turn`, `cli_event`)
   over the same WebSocket channel so the frontend can render prompt cards and
@@ -152,7 +160,8 @@ Key files:
 
 ### File + Project Services
 - File manager supports list, upload, download, rename, delete, unzip.
-- Project scanner finds git repositories and tracks custom scan paths.
+- Project scanner finds git repositories, surfaces direct project folders from common project roots, and tracks custom scan paths.
+- Explicitly added scan directories are treated as projects even when they are not git repositories yet.
 - Path resolution uses helpers in `path-security.ts`.
 
 Key files:
@@ -184,6 +193,7 @@ Key files:
   - Preview URL preferences
   - Terminal font size (8-32)
   - Sidebar collapse state
+  - Default sandbox mode for new terminal sessions
 - `/api/transcribe` uses Groq Whisper for voice input with support for multiple audio formats.
 - Browser settings are persisted in the user settings table.
 

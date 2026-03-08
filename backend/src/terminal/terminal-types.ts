@@ -1,6 +1,7 @@
 import type { EventEmitter } from 'node:events';
 import type { ThreadMetadata } from './session-store';
 import type { CwdSource } from './session-resolver';
+import type { SandboxMode, TerminalSandboxInfo } from '../sandbox/sandbox-types';
 
 export interface TerminalStreamEvent {
   text: string;
@@ -22,6 +23,7 @@ export interface TerminalSessionSummary {
   isActive: boolean;
   isBusy?: boolean;
   usesTmux: boolean;
+  sandbox?: TerminalSandboxInfo;
   thread?: ThreadMetadata;
 }
 
@@ -35,6 +37,7 @@ export interface TerminalSessionSnapshot {
   usesTmux: boolean;
   currentCols?: number;
   currentRows?: number;
+  sandbox?: TerminalSandboxInfo;
 }
 
 export interface TerminalCreateOptions {
@@ -45,6 +48,8 @@ export interface TerminalCreateOptions {
   cols?: number;
   rows?: number;
   shell?: string;
+  sandboxMode?: SandboxMode;
+  workspaceRoot?: string;
   /** Command to execute immediately after terminal starts */
   initialCommand?: string;
 }

@@ -24,28 +24,12 @@ import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
 import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
+import { getTerminalTheme } from '../utils/terminalTheme';
 import {
   createExternalInputFrames,
   prepareTerminalForExternalInput,
 } from '../utils/terminalExternalInput';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
-
-const TERMINAL_THEMES = {
-  dark: {
-    background: '#1e1e1e',
-    foreground: '#d4d4d4',
-    cursor: '#d4d4d4',
-    cursorAccent: '#1e1e1e',
-    selectionBackground: 'rgba(255, 255, 255, 0.15)',
-  },
-  light: {
-    background: '#fafaf9',
-    foreground: '#1e1e1e',
-    cursor: '#1e1e1e',
-    cursorAccent: '#fafaf9',
-    selectionBackground: 'rgba(0, 0, 0, 0.12)',
-  }
-};
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
 const DEFAULT_ANSI_PALETTE = (() => {
@@ -152,7 +136,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const MAX_MESSAGE_QUEUE = 500;
   const DROP_NOTICE_INTERVAL_MS = 5000;
   const LARGE_PASTE_THRESHOLD = 5000;
-  const { activeSessionId, sessions, restoreSession, registerTerminalSender, unregisterTerminalSender, updateSessionTopic } = useTerminalSession();
+  const { activeSessionId, sessions, restoreSession, registerTerminalSender, unregisterTerminalSender, updateSessionTopic, syncSessionThread } = useTerminalSession();
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
   const [isScrollMode, setIsScrollMode] = useState(false);
@@ -836,7 +820,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
-    const newTheme = TERMINAL_THEMES[theme] || TERMINAL_THEMES.dark;
+    const newTheme = getTerminalTheme(theme);
     term.options.theme = newTheme;
     try {
       term.refresh(0, term.rows - 1);
@@ -1401,7 +1385,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       letterSpacing: 0,
       lineHeight: 1.2,
       scrollback,
-      theme: TERMINAL_THEMES[theme] || TERMINAL_THEMES.dark,
+      theme: getTerminalTheme(theme),
       allowProposedApi: true,
       windowOptions: {
         setWinSizePixels: false, raiseWin: false, lowerWin: false, refreshWin: false,
@@ -2775,6 +2759,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (msg.type === 'cwd' && msg.cwd) {
               onCwdChange?.(msg.cwd);
+              return true;
+            }
+            if (msg.type === 'threadUpdate' && msg.thread) {
+              syncSessionThread(sessionId, msg.thread);
               return true;
             }
             return false;

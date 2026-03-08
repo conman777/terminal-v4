@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SANDBOX_MODES } from '../sandbox/sandbox-types';
 
 export const terminalCreateRequestSchema = z.object({
   cwd: z.string().optional(),
@@ -6,6 +7,8 @@ export const terminalCreateRequestSchema = z.object({
   rows: z.number().int().positive().max(500).optional(),
   title: z.string().min(1).max(80).optional(),
   shell: z.string().min(1).optional(),
+  sandboxMode: z.enum(SANDBOX_MODES).optional(),
+  workspaceRoot: z.string().min(1).max(4096).optional(),
   initialCommand: z.string().max(1000).optional()
 });
 

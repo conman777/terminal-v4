@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { ContextMenu } from './ContextMenu';
 
 /**
  * Format a relative time string (e.g., "9m", "2h", "3d")
@@ -36,6 +37,7 @@ export default function ThreadsSessionItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [isTouch, setIsTouch] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null);
 
   const thread = session.thread || {};
   const topic = thread.topic || session.title || 'New session';
@@ -109,11 +111,39 @@ export default function ThreadsSessionItem({
     onClose?.(session.id);
   }, [session.id, onClose]);
 
+  const handleContextMenu = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  const contextMenuItems = contextMenu ? [
+    {
+      label: 'Rename',
+      onClick: () => { setEditValue(topic); setIsEditing(true); }
+    },
+    {
+      label: isPinned ? 'Unpin' : 'Pin',
+      onClick: () => isPinned ? onUnpin?.(session.id) : onPin?.(session.id)
+    },
+    {
+      label: isArchived ? 'Unarchive' : 'Archive',
+      onClick: () => isArchived ? onUnarchive?.(session.id) : onArchive?.(session.id)
+    },
+    { separator: true },
+    {
+      label: 'Close',
+      danger: true,
+      onClick: () => onClose?.(session.id)
+    }
+  ] : [];
+
   return (
     <div
       className={`threads-session-item ${isActive ? 'active' : ''} ${isArchived ? 'archived' : ''}`}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
+      onContextMenu={handleContextMenu}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       title={undefined}
@@ -188,6 +218,15 @@ export default function ThreadsSessionItem({
         )}
       </div>
 
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenuItems}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
       <style>{`
         .threads-session-item {
           height: 36px;
@@ -197,7 +236,7 @@ export default function ThreadsSessionItem({
           cursor: pointer;
           user-select: none;
           transition: background 0.12s ease;
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--sidebar-text, var(--text-secondary, #a1a1aa));
           position: relative;
           gap: 8px;
           margin: 1px 6px;
@@ -205,13 +244,13 @@ export default function ThreadsSessionItem({
         }
 
         .threads-session-item:hover {
-          background: rgba(255, 255, 255, 0.05);
-          color: var(--text-primary, #fafafa);
+          background: var(--sidebar-hover, rgba(255, 255, 255, 0.05));
+          color: var(--sidebar-text, var(--text-primary, #fafafa));
         }
 
         .threads-session-item.active {
-          background: rgba(255, 255, 255, 0.08);
-          color: var(--text-primary, #fafafa);
+          background: var(--sidebar-active, rgba(255, 255, 255, 0.08));
+          color: var(--sidebar-text, var(--text-primary, #fafafa));
         }
 
         .threads-session-item.archived {
@@ -237,7 +276,7 @@ export default function ThreadsSessionItem({
         .threads-session-edit {
           font-size: 13px;
           font-weight: 400;
-          background: var(--bg-elevated, #1e1e21);
+          background: var(--sidebar-active, var(--bg-elevated, #1e1e21));
           border: 1px solid var(--accent-primary, #f59e0b);
           border-radius: 4px;
           padding: 2px 6px;
@@ -270,7 +309,7 @@ export default function ThreadsSessionItem({
 
         .threads-session-time {
           font-size: 12px;
-          color: var(--text-muted, #636366);
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
           white-space: nowrap;
           font-weight: 400;
         }
@@ -289,15 +328,15 @@ export default function ThreadsSessionItem({
           justify-content: center;
           background: transparent;
           border: none;
-          color: var(--text-muted, #71717a);
+          color: var(--sidebar-text-muted, var(--text-muted, #71717a));
           border-radius: 4px;
           cursor: pointer;
           transition: all 0.12s ease;
         }
 
         .threads-action-btn:hover {
-          background: rgba(255, 255, 255, 0.08);
-          color: var(--text-primary, #fafafa);
+          background: var(--sidebar-hover, rgba(255, 255, 255, 0.08));
+          color: var(--sidebar-text, var(--text-primary, #fafafa));
         }
 
         .threads-action-btn.active {

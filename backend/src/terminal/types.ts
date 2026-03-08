@@ -1,6 +1,7 @@
 import type { TerminalProcess, TerminalStreamEvent } from './terminal-types';
 import type { PersistedSession, ThreadMetadata } from './session-store';
 import type { TurnDetector } from './turn-detector';
+import type { TerminalSandboxInfo } from '../sandbox/sandbox-types';
 
 // Terminal dimension constants
 export const DEFAULT_COLS = 120;
@@ -41,6 +42,8 @@ export interface ManagedTerminal {
   bufferCharCount: number;
   subscribers: Set<(event: TerminalStreamEvent | null) => void>;
   inputBuffer: string;
+  firstCommandBuffer: string;
+  firstCommandCaptured: boolean;
   saveTimer?: NodeJS.Timeout;
   saveInProgress?: boolean;  // Prevent concurrent saves
   pendingSave?: boolean;     // Track if save requested while another in progress
@@ -52,6 +55,7 @@ export interface ManagedTerminal {
   currentRows: number;
   nextEventSeq: number;
   usesTmux: boolean;
+  sandbox: TerminalSandboxInfo;
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
   turnDetector?: TurnDetector; // Detects conversation turns from the PTY stream
   lastActivityAt: number;

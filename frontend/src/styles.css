@@ -10,6 +10,8 @@
   --bg-primary: #020617;
   --bg-surface: #0f172a;
   --bg-elevated: #1e293b;
+  --terminal-chrome-bg: #17191c;
+  --terminal-bg: #17191c;
   --bg-overlay: rgba(2, 6, 23, 0.86);
 
   /* Primary accent - cyan */
@@ -105,6 +107,8 @@
   --bg-primary: #f8fafc;
   --bg-surface: #eef2ff;
   --bg-elevated: #e2e8f0;
+  --terminal-chrome-bg: #f1f3f5;
+  --terminal-bg: #f1f3f5;
   --bg-overlay: rgba(248, 250, 252, 0.9);
 
   --accent-primary: #0891b2;
@@ -1211,7 +1215,7 @@ button {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: #0c0c0c;
+  background: var(--terminal-bg, var(--bg-surface, #0f172a));
   touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
   transition: box-shadow var(--transition-base);
 }
@@ -1338,8 +1342,8 @@ button {
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--terminal-bg, var(--bg-surface, #0f172a));
+  color: var(--text-primary, #f8fafc);
   padding: 8px 12px 4px;
   position: absolute;
   top: 0;
@@ -1388,8 +1392,8 @@ button {
 }
 
 .reader-view-cursor {
-  background: var(--cursor-bg, #d4d4d4);
-  color: var(--cursor-fg, #1e1e1e);
+  background: var(--cursor-bg, var(--text-primary, #f8fafc));
+  color: var(--cursor-fg, var(--terminal-bg, #0f172a));
   animation: reader-view-cursor-blink 1.2s step-end infinite;
 }
 
@@ -1646,11 +1650,18 @@ button {
   right: 0;
   bottom: 0;
   overflow: hidden;
+  background: var(--terminal-bg, var(--bg-surface, #0f172a));
 }
 
 .xterm {
   height: 100%;
   width: 100%;
+}
+
+.xterm .xterm-screen,
+.xterm .xterm-viewport {
+  background: var(--terminal-bg, var(--bg-surface, #0f172a)) !important;
+  background-color: var(--terminal-bg, var(--bg-surface, #0f172a)) !important;
 }
 
 .xterm-viewport {
@@ -1820,7 +1831,7 @@ button {
 
 .terminal-input input {
   flex: 1;
-  background: var(--bg-base);
+  background: var(--bg-surface);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   padding: 12px 16px;
@@ -11624,44 +11635,9 @@ textarea:focus-visible {
   flex-direction: column;
 }
 
-/* Per-AI terminal pane background tints */
-.pane-ai-claude .xterm-scrollable-element {
-  background-color: #1e1a10 !important;
-}
-.pane-ai-codex .xterm-scrollable-element {
-  background-color: #12151e !important;
-}
-.pane-ai-gemini .xterm-scrollable-element {
-  background-color: #12181a !important;
-}
+/* Per-AI terminal pane background tints removed for unified background */
 
-/* Per-AI pane header bar tints */
-.pane-ai-claude .ph-bar {
-  background: rgba(255, 107, 43, 0.06);
-  border-bottom-color: rgba(255, 107, 43, 0.22);
-}
-.pane-ai-codex .ph-bar {
-  background: rgba(59, 130, 246, 0.06);
-  border-bottom-color: rgba(59, 130, 246, 0.22);
-}
-.pane-ai-gemini .ph-bar {
-  background: rgba(34, 197, 94, 0.06);
-  border-bottom-color: rgba(34, 197, 94, 0.22);
-}
-
-/* Per-AI status bar tints */
-.pane-ai-claude .desktop-status-bar {
-  background: rgba(255, 107, 43, 0.06);
-  border-top-color: rgba(255, 107, 43, 0.22);
-}
-.pane-ai-codex .desktop-status-bar {
-  background: rgba(59, 130, 246, 0.06);
-  border-top-color: rgba(59, 130, 246, 0.22);
-}
-.pane-ai-gemini .desktop-status-bar {
-  background: rgba(34, 197, 94, 0.06);
-  border-top-color: rgba(34, 197, 94, 0.22);
-}
+/* Per-AI pane header bar and status bar tints removed for unified background */
 
 /* Per-AI mobile status bar tints */
 .pane-ai-claude .mobile-status-bar {
@@ -12284,8 +12260,8 @@ textarea:focus-visible {
   justify-content: space-between;
   height: 36px;
   padding: 0 10px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border-subtle);
+  background: var(--terminal-chrome-bg, #17191c);
+  border-top: none;
   font-size: 11px;
   font-weight: 500;
   flex-shrink: 0;

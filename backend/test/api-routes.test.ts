@@ -23,7 +23,14 @@ async function withApp<T>(
     shell: 'bash',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    history: []
+    history: [],
+    usesTmux: false,
+    sandbox: {
+      mode: 'off',
+      workspaceRoot: null,
+      runtimeId: null,
+      runtimeKind: 'local-host'
+    }
   };
 
   class StubTerminalManager implements TerminalManagerContract {
@@ -76,6 +83,31 @@ describe('API routes', () => {
         title: 'Terminal 1'
       });
       expect(terminalManager.createSession).toHaveBeenCalled();
+    });
+  });
+
+  it('passes sandbox options when creating a terminal session', async () => {
+    await withApp(async ({ app, terminalManager, accessToken }) => {
+      const response = await supertest(app.server)
+        .post('/api/terminal')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          sandboxMode: 'workspace-write',
+          workspaceRoot: process.cwd()
+        })
+        .expect(201);
+
+      expect(response.body.session.sandbox).toMatchObject({
+        mode: 'off',
+        runtimeKind: 'local-host'
+      });
+      expect(terminalManager.createSession).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          sandboxMode: 'workspace-write',
+          workspaceRoot: process.cwd()
+        })
+      );
     });
   });
 
@@ -160,6 +192,23 @@ describe('API routes', () => {
         .expect(404);
 
       expect(response.body.error).toBe('Terminal session not found');
+    });
+  });
+
+  it('persists the default sandbox mode in user settings', async () => {
+    await withApp(async ({ app, accessToken }) => {
+      await supertest(app.server)
+        .patch('/api/settings')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ sandboxDefaultMode: 'workspace-write' })
+        .expect(200);
+
+      const response = await supertest(app.server)
+        .get('/api/settings')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      expect(response.body.sandboxDefaultMode).toBe('workspace-write');
     });
   });
 });
