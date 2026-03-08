@@ -3,7 +3,7 @@ import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
 import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, showTabStatusLabels, onTabStatusLabelsChange }) {
+export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, onOpenApiSettings, showTabStatusLabels, onTabStatusLabelsChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -222,6 +222,23 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             </div>
             <small>Show explicit Busy/Done/Idle labels in tab chips.</small>
           </div>
+          <div className="form-group">
+            <label>Voice Input</label>
+            <div className="settings-inline-actions">
+              <div>
+                <div className="settings-inline-title">Groq cloud transcription</div>
+                <small>Manage the API key used by the Groq cloud microphone button.</small>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                onClick={onOpenApiSettings}
+                disabled={!onOpenApiSettings}
+              >
+                Open API Settings
+              </button>
+            </div>
+          </div>
 
         </div>
         <div className="modal-footer">
@@ -251,6 +268,20 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             setShowFolderBrowser(false);
           }}
         />
+        <style>{`
+          .settings-inline-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+          }
+
+          .settings-inline-title {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 4px;
+          }
+        `}</style>
       </div>
     </div>
   );

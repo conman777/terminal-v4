@@ -17,6 +17,7 @@ export default function ThreadsSidebar({
   onArchiveSession,
   onUnarchiveSession,
   onTopicChange,
+  onRenameSession,
   onCloseSession,
   onCreateSession,
   onCloseProject,
@@ -147,6 +148,7 @@ export default function ThreadsSidebar({
                 onArchiveSession={onArchiveSession}
                 onUnarchiveSession={onUnarchiveSession}
                 onTopicChange={onTopicChange}
+                onRenameSession={onRenameSession}
                 onCloseSession={onCloseSession}
                 onCreateSession={onCreateSession}
                 onCloseProject={onCloseProject}

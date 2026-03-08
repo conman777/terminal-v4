@@ -116,4 +116,38 @@ describe('useSessionActivity', () => {
 
     expect(result.current.activity['session-a'].isBusy).toBe(false);
   });
+
+  it('does not restore busy from an older backend snapshot after a local idle transition', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    const snapshotTs = Date.now() - 5000;
+
+    act(() => {
+      result.current.setBusy('session-a', true, { lastActivityAt: snapshotTs });
+    });
+
+    expect(result.current.activity['session-a']).toEqual(expect.objectContaining({
+      isBusy: true,
+      lastActivity: snapshotTs
+    }));
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+      result.current.setBusy('session-a', false);
+    });
+
+    const localIdleTs = result.current.activity['session-a'].lastActivity;
+    expect(result.current.activity['session-a']).toEqual(expect.objectContaining({
+      isBusy: false
+    }));
+    expect(localIdleTs).toBeGreaterThan(snapshotTs);
+
+    act(() => {
+      result.current.setBusy('session-a', true, { lastActivityAt: snapshotTs });
+    });
+
+    expect(result.current.activity['session-a']).toEqual(expect.objectContaining({
+      isBusy: false,
+      lastActivity: localIdleTs
+    }));
+  });
 });

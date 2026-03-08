@@ -204,6 +204,7 @@ function AppContent() {
     isDragging,
     initializePaneWithSession,
     setPaneSession,
+    reconcilePaneSessions,
     focusPane,
     splitPane,
     closePane,
@@ -518,6 +519,11 @@ function AppContent() {
     return orderedSessions.filter(s => ownedByActive.has(s.id) || !ownedByOthers.has(s.id));
   }, [orderedSessions, desktops, activeDesktopId]);
 
+  const visibleDesktopSessions = useMemo(
+    () => desktopOrderedSessions.filter((session) => !session.thread?.archived),
+    [desktopOrderedSessions]
+  );
+
   const handleReorderSessions = useCallback((newOrder) => {
     setTabOrder(newOrder);
   }, []);
@@ -735,10 +741,27 @@ function AppContent() {
     const panes = legacyLayout?.panes || [];
     const activePane = panes.find((pane) => pane.id === legacyLayout?.activePaneId);
     if (!activePane) return;
+    const assignedToOtherPane = panes.some(
+      (pane) => pane.id !== activePane.id && pane.sessionId === activeSessionId
+    );
+    if (assignedToOtherPane) return;
     if (panes.length > 1 && activePane.sessionId) return;
     if (activePane.sessionId === activeSessionId) return;
     initializePaneWithSession(activeSessionId);
   }, [activeSessionId, initializePaneWithSession, legacyLayout]);
+
+  const desktopPaneAssignmentSignature = useMemo(
+    () => (legacyLayout?.panes || []).map((pane) => `${pane.id}:${pane.sessionId ?? ''}`).join('|'),
+    [legacyLayout]
+  );
+  const visibleDesktopSessionSignature = useMemo(
+    () => visibleDesktopSessions.map((session) => session.id).join('|'),
+    [visibleDesktopSessions]
+  );
+
+  useEffect(() => {
+    reconcilePaneSessions(visibleDesktopSessions.map((session) => session.id));
+  }, [desktopPaneAssignmentSignature, reconcilePaneSessions, visibleDesktopSessionSignature, visibleDesktopSessions]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
@@ -760,6 +783,11 @@ function AppContent() {
       selectSession(newSessionId);
     }
   }, [focusPane, setPaneSession, selectSession]);
+
+  const handleRenameThread = useCallback(async (sessionId, title) => {
+    await renameSession(sessionId, title);
+    await updateSessionTopic(sessionId, title, false);
+  }, [renameSession, updateSessionTopic]);
 
   const handlePaneFocus = useCallback((paneId) => {
     const sessionId = focusPane(paneId);
@@ -1122,6 +1150,10 @@ function AppContent() {
             onFontSizeChange={updateTerminalFontSize}
             terminalWebglEnabled={terminalWebglEnabled}
             onWebglChange={updateTerminalWebglEnabled}
+            onOpenApiSettings={() => {
+              setShowSettings(false);
+              setShowApiSettings(true);
+            }}
             showTabStatusLabels={showTabStatusLabels}
             onTabStatusLabelsChange={updateShowTabStatusLabels}
           />
@@ -1244,6 +1276,7 @@ function AppContent() {
             onArchiveSession={archiveSession}
             onUnarchiveSession={unarchiveSession}
             onTopicChange={updateSessionTopic}
+            onRenameSession={handleRenameThread}
             onCloseSession={closeSession}
             onCreateSession={handleRequestNewSession}
             onCloseProject={handleCloseProject}
@@ -1307,7 +1340,7 @@ function AppContent() {
                       <SplitPaneContainer
                         layout={legacyLayout}
                         paneLayout={paneLayout}
-                        sessions={activeSessions}
+                        sessions={visibleDesktopSessions}
                         onPaneSessionSelect={handlePaneSessionSelect}
                         onPaneSplit={splitPane}
                         onPaneClose={closePane}

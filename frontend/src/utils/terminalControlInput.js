@@ -1,5 +1,5 @@
 const CONTROL_RESPONSE_RE =
-  /(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[\s\S]*?\x1b\\|\x1b\[\??[\d;]*[cnR]|\x1b\[[IO])/g;
+  /(?:\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[\s\S]*?\x1b\\|\x1b\[(?:\?|>)?[\d;]*[cnR]|\x1b\[[IO])/g;
 
 export function isTerminalControlResponseInput(input) {
   if (!input) return false;

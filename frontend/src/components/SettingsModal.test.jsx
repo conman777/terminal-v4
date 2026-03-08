@@ -76,4 +76,14 @@ describe('SettingsModal', () => {
       }
     );
   });
+
+  it('exposes the API settings path for Groq voice configuration', () => {
+    const onOpenApiSettings = vi.fn();
+
+    render(<SettingsModal {...buildProps({ onOpenApiSettings })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open API Settings' }));
+
+    expect(onOpenApiSettings).toHaveBeenCalledTimes(1);
+  });
 });

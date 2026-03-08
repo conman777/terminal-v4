@@ -33,6 +33,7 @@ export default function ThreadsSessionItem({
   onArchive,
   onUnarchive,
   onTopicChange,
+  onRenameSession,
   onClose
 }) {
   const [isHovered, setIsHovered] = useState(false);
@@ -77,10 +78,14 @@ export default function ThreadsSessionItem({
   const handleEditSubmit = useCallback(() => {
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== topic) {
-      onTopicChange?.(session.id, trimmed);
+      if (onRenameSession) {
+        onRenameSession(session.id, trimmed);
+      } else {
+        onTopicChange?.(session.id, trimmed);
+      }
     }
     setIsEditing(false);
-  }, [editValue, topic, session.id, onTopicChange]);
+  }, [editValue, onRenameSession, topic, session.id, onTopicChange]);
 
   const handleEditKeyDown = useCallback((e) => {
     if (e.key === 'Enter') {
@@ -186,6 +191,22 @@ export default function ThreadsSessionItem({
 
         {showActions && (
           <div className="threads-session-actions">
+            <button
+              type="button"
+              className="threads-action-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditValue(topic);
+                setIsEditing(true);
+              }}
+              title="Rename session"
+              aria-label="Rename session"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+              </svg>
+            </button>
             <button
               type="button"
               className={`threads-action-btn ${isPinned ? 'active' : ''}`}

@@ -13,6 +13,7 @@ describe('isTerminalControlResponseInput', () => {
 
   it('detects device attribute replies', () => {
     expect(isTerminalControlResponseInput('\x1b[?1;2c')).toBe(true);
+    expect(isTerminalControlResponseInput('\x1b[>0;276;0c')).toBe(true);
   });
 
   it('keeps arrow keys and normal commands interactive', () => {

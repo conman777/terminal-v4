@@ -238,4 +238,32 @@ describe('TerminalPane', () => {
     expect(latestConversationProps.showTerminalMirror).toBe(false);
     expect(latestConversationProps.interactivePromptEvent).toBeNull();
   });
+
+  it('shows only visible pane sessions and prompts to select when the assigned session is unavailable', () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-2', sessionId: 'archived-session' },
+      canClose: true,
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Active terminal',
+          usesTmux: false,
+          thread: { archived: false, topic: 'Active terminal' }
+        },
+        {
+          id: 'archived-session',
+          title: 'Archived terminal',
+          usesTmux: false,
+          thread: { archived: true, topic: 'Archived terminal' }
+        }
+      ]
+    })} />);
+
+    expect(screen.getByText('Select terminal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /select terminal/i }));
+
+    expect(screen.getByText('Active terminal')).toBeInTheDocument();
+    expect(screen.queryByText('Archived terminal')).not.toBeInTheDocument();
+  });
 });

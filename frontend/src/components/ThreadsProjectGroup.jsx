@@ -13,6 +13,7 @@ export default function ThreadsProjectGroup({
   onArchiveSession,
   onUnarchiveSession,
   onTopicChange,
+  onRenameSession,
   onCloseSession,
   onCreateSession,
   onCloseProject,
@@ -108,6 +109,7 @@ export default function ThreadsProjectGroup({
                 onArchive={onArchiveSession}
                 onUnarchive={onUnarchiveSession}
                 onTopicChange={onTopicChange}
+                onRenameSession={onRenameSession}
                 onClose={onCloseSession}
               />
             ))

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { reconcilePaneSessionIds } from '../utils/paneSessionAssignments';
 
 const PaneLayoutContext = createContext(null);
 
@@ -298,6 +299,29 @@ export function PaneLayoutProvider({ children }) {
     return sessionId;
   }, []);
 
+  const reconcilePaneSessions = useCallback((visibleSessionIds) => {
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
+      const newRoot = cloneNode(layout.root);
+      const panes = getAllPanes(newRoot);
+      const nextAssignments = reconcilePaneSessionIds(panes, visibleSessionIds);
+      let changed = false;
+
+      panes.forEach((pane, index) => {
+        const nextSessionId = nextAssignments[index]?.sessionId ?? null;
+        if ((pane.sessionId ?? null) !== nextSessionId) {
+          pane.sessionId = nextSessionId;
+          changed = true;
+        }
+      });
+
+      if (!changed) {
+        return layout;
+      }
+
+      return { ...layout, root: newRoot };
+    }));
+  }, []);
+
   // Handle pane focus
   const focusPane = useCallback((paneId) => {
     setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => ({
@@ -538,6 +562,7 @@ export function PaneLayoutProvider({ children }) {
     // Pane actions
     initializePaneWithSession,
     setPaneSession,
+    reconcilePaneSessions,
     focusPane,
     splitPane,
     closePane,

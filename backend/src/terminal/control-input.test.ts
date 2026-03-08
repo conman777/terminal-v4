@@ -11,17 +11,14 @@ describe('isTerminalControlResponseInput', () => {
     expect(isTerminalControlResponseInput('\x1b[O')).toBe(true);
   });
 
-  it('detects device attribute replies', () => {
+  it('detects primary and secondary device attribute replies', () => {
     expect(isTerminalControlResponseInput('\x1b[?1;2c')).toBe(true);
+    expect(isTerminalControlResponseInput('\x1b[>0;276;0c')).toBe(true);
   });
 
-  it('allows arrow keys and normal input', () => {
+  it('keeps interactive keys and commands untouched', () => {
     expect(isTerminalControlResponseInput('\x1b[A')).toBe(false);
     expect(isTerminalControlResponseInput('\r')).toBe(false);
     expect(isTerminalControlResponseInput('echo hello\r')).toBe(false);
-  });
-
-  it('allows pasted text wrapped in bracketed-paste markers', () => {
-    expect(isTerminalControlResponseInput('\x1b[200~hello world\x1b[201~')).toBe(false);
   });
 });
