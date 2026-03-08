@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { ContextMenu } from './ContextMenu';
+import { getPreferredSessionTopic } from '../utils/sessionTopic';
 
 /**
  * Format a relative time string (e.g., "9m", "2h", "3d")
@@ -41,7 +42,7 @@ export default function ThreadsSessionItem({
   const [contextMenu, setContextMenu] = useState(null);
 
   const thread = session.thread || {};
-  const topic = thread.topic || session.title || 'New session';
+  const topic = getPreferredSessionTopic(thread.topic, session.title || 'New session');
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
   const sessionAge = formatRelativeTime(session.createdAt);

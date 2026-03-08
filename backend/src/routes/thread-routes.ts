@@ -10,6 +10,7 @@ import {
   createDefaultThreadMetadata,
   type ThreadGitStats
 } from '../terminal/session-store';
+import { extractTopicFromTerminalText } from '../terminal/session-topic';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
 
 const execFileAsync = promisify(execFile);
@@ -305,7 +306,7 @@ export async function registerThreadRoutes(app: FastifyInstance, deps: CoreRoute
     const rawHistory = history.map((e) => e.text || '').join('');
     const plainText = stripAnsi(rawHistory);
 
-    const topic = extractTopicFromText(plainText);
+    const topic = extractTopicFromTerminalText(plainText);
     if (!topic) {
       reply.code(400).send({ error: 'Could not extract a topic from session history' });
       return;

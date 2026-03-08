@@ -84,7 +84,7 @@ export default function ThreadsSidebar({
         <div className="ts-new-thread-row">
           <button
             className="ts-new-thread-btn"
-            onClick={onCreateSession}
+            onClick={() => onCreateSession?.()}
             type="button"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

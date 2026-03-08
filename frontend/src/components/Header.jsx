@@ -232,7 +232,7 @@ export function Header({
         />
       </div>
 
-      <style jsx>{`
+      <style>{`
         .app-header.redesign {
           min-height: 36px;
           display: flex;

@@ -337,7 +337,7 @@ export function SessionSelector({
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .session-selector-modern {
           position: relative;
           display: inline-block;

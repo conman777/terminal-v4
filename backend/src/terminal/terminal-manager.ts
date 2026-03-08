@@ -28,6 +28,7 @@ import {
   type ThreadMetadata
 } from './session-store';
 import { resolveSessionPaths } from './session-resolver';
+import { deriveTopicFromSubmittedInput } from './session-topic';
 import {
   isTmuxAvailable,
   tmuxSessionExists,
@@ -1768,13 +1769,12 @@ export class TerminalManager {
       // Enter pressed — commit the buffered command as thread topic
       if (char === '\r' || char === '\n') {
         const command = session.firstCommandBuffer.trim();
-        session.firstCommandCaptured = true;
         session.firstCommandBuffer = '';
 
         if (!command) return; // Skip empty Enter presses
-
-        // Truncate to 80 chars for sidebar display
-        const topic = command.length > 80 ? command.slice(0, 77) + '...' : command;
+        const topic = deriveTopicFromSubmittedInput(command);
+        if (!topic) return;
+        session.firstCommandCaptured = true;
 
         // Persist async — fire and forget
         updateThreadMetadata(session.userId, session.id, { topic })

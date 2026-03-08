@@ -592,7 +592,7 @@ export function MobileHeader({
               <button
                 type="button"
                 className="mobile-header-tab-add"
-                onClick={onCreateSession}
+                onClick={() => onCreateSession?.()}
                 aria-label="New terminal"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">

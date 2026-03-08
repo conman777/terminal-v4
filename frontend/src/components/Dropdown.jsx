@@ -59,7 +59,7 @@ export function Dropdown({
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .dropdown-container {
           position: relative;
           display: inline-block;

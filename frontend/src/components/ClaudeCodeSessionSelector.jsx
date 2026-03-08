@@ -103,7 +103,7 @@ export default function ClaudeCodeSessionSelector({
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .claude-selector-modern {
           position: relative;
           display: inline-block;

@@ -30,6 +30,7 @@ import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
+import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 
 function isDynamicImportFetchError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -397,7 +398,7 @@ function AppContent() {
     // Auto-generate topic once, on the first idle transition, if no topic yet
     if (!isBusy && sessionId && !topicGeneratedRef.current.has(sessionId)) {
       const session = sessionsRef.current?.find((s) => s.id === sessionId);
-      if (session && !session.thread?.topic) {
+      if (session && !isMeaningfulSessionTopic(session.thread?.topic)) {
         topicGeneratedRef.current.add(sessionId);
         void generateSessionTopic(sessionId).then((ok) => {
           if (!ok) {
@@ -439,7 +440,7 @@ function AppContent() {
     if (!Array.isArray(sessions) || sessions.length === 0) return;
     hasInitializedTopicsRef.current = true;
     sessions.forEach((session) => {
-      if (!session.thread?.topic && !topicGeneratedRef.current.has(session.id)) {
+      if (!isMeaningfulSessionTopic(session.thread?.topic) && !topicGeneratedRef.current.has(session.id)) {
         topicGeneratedRef.current.add(session.id);
         void generateSessionTopic(session.id).then((ok) => {
           if (!ok) {
@@ -755,7 +756,11 @@ function AppContent() {
     setKeybarHeight(Math.max(0, Math.round(height)));
   }, []);
 
-  const handleRequestNewSession = useCallback(async (projectPath) => {
+  const handleRequestNewSession = useCallback(async (projectPathOrEvent) => {
+    const projectPath = typeof projectPathOrEvent === 'string'
+      ? projectPathOrEvent
+      : '';
+
     if (projectPath) {
       // Create directly in the project directory
       try {
@@ -767,7 +772,7 @@ function AppContent() {
     } else {
       setShowNewSessionModal(true);
     }
-  }, [createSession]);
+  }, [addSessionToDesktop, createSession, setShowNewSessionModal]);
 
   const handleCloseNewSessionModal = useCallback(() => {
     setShowNewSessionModal(false);
@@ -776,7 +781,8 @@ function AppContent() {
   const handleCreateSessionFromFolder = useCallback(async (path, aiOptionId = 'cli', tabName = '') => {
     setShowNewSessionModal(false);
     if (!path) return;
-    const selectedAi = NEW_TAB_AI_OPTIONS.find((option) => option.id === aiOptionId) || NEW_TAB_AI_OPTIONS[0];
+    const newTabAiOptions = getNewTabAiOptions(customAiProviders);
+    const selectedAi = newTabAiOptions.find((option) => option.id === aiOptionId) || newTabAiOptions[0];
     const request = { cwd: path };
     if (selectedAi.command) {
       request.initialCommand = selectedAi.command;
@@ -797,7 +803,7 @@ function AppContent() {
         }
       }
     } catch { /* createSession already logs */ }
-  }, [createSession]);
+  }, [addSessionToDesktop, createSession, customAiProviders]);
 
   const handleSetSessionAiType = useCallback((sessionId, aiType) => {
     setSessionAiTypes(prev => {
@@ -1263,7 +1269,7 @@ function AppContent() {
                     <div className="empty-state">
                       <h2>Welcome to Terminal</h2>
                       <p>Create a new terminal session to get started.</p>
-                      <button className="btn-primary" onClick={handleRequestNewSession}>
+                      <button className="btn-primary" onClick={() => handleRequestNewSession()}>
                         + New Terminal
                       </button>
                     </div>

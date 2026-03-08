@@ -51,6 +51,22 @@ describe('ThreadsSessionItem', () => {
     expect(screen.getByText('Implement feature')).toBeInTheDocument();
   });
 
+  it('falls back to the session title when the saved topic is a launcher command', () => {
+    render(<ThreadsSessionItem {...buildProps({
+      session: {
+        ...buildProps().session,
+        title: 'Uplifting',
+        thread: {
+          topic: 'codex --yolo',
+          lastActivityAt: '2026-03-05T18:00:00.000Z'
+        }
+      }
+    })} />);
+
+    expect(screen.getByText('Uplifting')).toBeInTheDocument();
+    expect(screen.queryByText('codex --yolo')).not.toBeInTheDocument();
+  });
+
   it('shows a responding status for busy sessions', () => {
     render(<ThreadsSessionItem {...buildProps({ isBusy: true })} />);
 

@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { getPreferredSessionTopic } from '../utils/sessionTopic';
 
 /**
  * Format a timestamp as relative time (e.g., "2m ago", "1h ago")
@@ -307,7 +308,7 @@ export function MobileDrawer({
                             className={`mobile-drawer-thread-item-modern${isActive ? ' active' : ''}`}
                             onClick={() => handleSelectSession(session.id)}
                           >
-                            <span className="thread-item-title-modern">{session.thread?.topic || session.title || 'Terminal'}</span>
+                            <span className="thread-item-title-modern">{getPreferredSessionTopic(session.thread?.topic, session.title || 'Terminal')}</span>
                             {relativeTime && (
                               <span className="thread-item-time-modern">{relativeTime}</span>
                             )}

@@ -148,4 +148,13 @@ describe('MobileHeader', () => {
     fireEvent.click(within(picker).getByRole('button', { name: /terminal 4/i }));
     expect(onSelectSession).toHaveBeenCalledWith('session-4');
   });
+
+  it('opens the new terminal flow without forwarding the click event', () => {
+    const onCreateSession = vi.fn();
+    render(<MobileHeader {...buildProps({ onCreateSession })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /new terminal/i }));
+
+    expect(onCreateSession).toHaveBeenCalledWith();
+  });
 });

@@ -215,7 +215,7 @@ export function SessionTabBar({
         <button
           type="button"
           className="session-tab-new-modern"
-          onClick={onCreateSession}
+          onClick={() => onCreateSession?.()}
           aria-label="New terminal"
           title="New terminal (Cmd+T)"
         >

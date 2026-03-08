@@ -519,7 +519,7 @@ export function SystemResourcesView() {
         </div>
       )}
 
-      <style jsx>{`
+      <style>{`
         .system-resources-view {
           height: 100%;
           overflow-y: auto;
