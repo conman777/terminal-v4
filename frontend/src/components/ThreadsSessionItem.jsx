@@ -41,8 +41,8 @@ export default function ThreadsSessionItem({
   const topic = thread.topic || session.title || 'New session';
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
-  const lastActivity = thread.lastActivityAt || session.updatedAt;
-  const runtimeLabel = session.isBusy ? 'Responding' : hasActivity ? 'Updated' : formatRelativeTime(lastActivity);
+  const sessionAge = formatRelativeTime(session.createdAt);
+  const isBusy = session.isBusy || false;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -118,6 +118,16 @@ export default function ThreadsSessionItem({
       onMouseLeave={() => setIsHovered(false)}
       title={undefined}
     >
+      {/* Busy spinner */}
+      {isBusy && (
+        <div className="threads-session-spinner" aria-label="Working">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+            <path d="M14 8a6 6 0 0 0-6-6" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+        </div>
+      )}
+
       {/* Topic/title */}
       <div className="threads-session-content">
         {isEditing ? (
@@ -136,10 +146,10 @@ export default function ThreadsSessionItem({
         )}
       </div>
 
-      {/* Time and actions */}
+      {/* Session age and actions */}
       <div className="threads-session-meta">
-        {!showActions && (
-          <span className={`threads-session-time${session.isBusy ? ' busy' : hasActivity ? ' attention' : ''}`}>{runtimeLabel}</span>
+        {!showActions && sessionAge && (
+          <span className="threads-session-time">{sessionAge}</span>
         )}
 
         {showActions && (
@@ -243,19 +253,26 @@ export default function ThreadsSessionItem({
           justify-content: flex-end;
         }
 
+        .threads-session-spinner {
+          flex-shrink: 0;
+          width: 14px;
+          height: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+
         .threads-session-time {
           font-size: 12px;
           color: var(--text-muted, #636366);
           white-space: nowrap;
           font-weight: 400;
-        }
-
-        .threads-session-time.busy {
-          color: #93c5fd;
-        }
-
-        .threads-session-time.attention {
-          color: #fbbf24;
         }
 
         .threads-session-actions {

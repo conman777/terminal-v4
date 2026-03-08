@@ -532,28 +532,7 @@ export const TerminalPane = memo(function TerminalPane({
         {pane.sessionId ? (
           <div className={`terminal-with-status${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
             <div className={`desktop-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
-              {useTerminalFirstLayout && (
-                <div className="terminal-agent-toolbar" aria-label="Agent session controls">
-                  <div className="terminal-agent-toolbar-meta">
-                    <div className="terminal-agent-copy">
-                      <strong>{currentSession?.title || currentAiLabel}</strong>
-                      <span>{currentCwd || projectInfo?.cwd || 'No working directory'}</span>
-                    </div>
-                  </div>
-                  <div className="terminal-agent-toolbar-actions">
-                    {launchCommand && (
-                      <button
-                        type="button"
-                        className="terminal-agent-btn"
-                        onClick={handleLaunchAgent}
-                      >
-                        {`Launch ${currentAiLabel}`}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-              {useTerminalFirstLayout && (
+                {useTerminalFirstLayout && (
                 <CliActivityStrip
                   interactivePromptEvent={interactivePromptEvent}
                   terminalScreenSnapshot={terminalScreenSnapshot}

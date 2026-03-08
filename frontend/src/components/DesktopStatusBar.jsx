@@ -15,7 +15,6 @@ export function DesktopStatusBar({
   isTerminalPanelOpen = false,
   showTerminalToggle = true,
   onToggleTerminalPanel,
-  connectionState = 'connecting',
   aiType = null
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
@@ -26,18 +25,9 @@ export function DesktopStatusBar({
   const displayName = folderName || sessionTitle || '';
   const aiLabel = getAiDisplayLabel(aiType);
 
-  const connectionLabel = connectionState === 'online'
-    ? 'Online'
-    : connectionState === 'offline'
-      ? 'Offline'
-      : 'Connecting';
-
   return (
     <div className="desktop-status-bar">
       <div className="status-bar-left">
-        <span className={`status-connection ${connectionState}`} title={connectionLabel}>
-          {connectionLabel}
-        </span>
         {displayName && (
           <span className="status-cwd" title={cwd || sessionTitle}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
