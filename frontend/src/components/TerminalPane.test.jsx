@@ -266,4 +266,34 @@ describe('TerminalPane', () => {
     expect(screen.getByText('Active terminal')).toBeInTheDocument();
     expect(screen.queryByText('Archived terminal')).not.toBeInTheDocument();
   });
+
+  it('uses the preferred thread topic in the split session switcher', () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'session-2' },
+      canClose: true,
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Terminal 5',
+          usesTmux: false,
+          thread: { archived: false, topic: 'this should only show this sho...' }
+        },
+        {
+          id: 'session-2',
+          title: 'Terminal 6',
+          usesTmux: false,
+          thread: { archived: false, topic: 'discard local changes' }
+        }
+      ]
+    })} />);
+
+    expect(screen.getByRole('button', { name: 'discard local changes' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'discard local changes' }));
+
+    expect(screen.getByText('this should only show this sho...')).toBeInTheDocument();
+    expect(screen.getAllByText('discard local changes').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Terminal 5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Terminal 6')).not.toBeInTheDocument();
+  });
 });
