@@ -23,6 +23,7 @@ function formatRelativeTime(isoString) {
 
 export default function ThreadsSessionItem({
   session,
+  isBusy,
   isActive,
   hasActivity,
   onSelect,
@@ -44,7 +45,7 @@ export default function ThreadsSessionItem({
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
   const sessionAge = formatRelativeTime(session.createdAt);
-  const isBusy = session.isBusy || false;
+  const resolvedIsBusy = typeof isBusy === 'boolean' ? isBusy : Boolean(session.isBusy);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -149,7 +150,7 @@ export default function ThreadsSessionItem({
       title={undefined}
     >
       {/* Busy spinner */}
-      {isBusy && (
+      {resolvedIsBusy && (
         <div className="threads-session-spinner" aria-label="Working">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
             <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />

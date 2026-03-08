@@ -59,6 +59,8 @@ export interface ManagedTerminal {
   outputBatcher?: any;       // OutputBatcher instance for batching PTY output
   turnDetector?: TurnDetector; // Detects conversation turns from the PTY stream
   lastActivityAt: number;
+  busyUntilAt: number;
+  recentOutputTail: string;
   idleTimer?: NodeJS.Timeout;
   thread?: ThreadMetadata;   // Thread metadata for grouping/organizing sessions
 }

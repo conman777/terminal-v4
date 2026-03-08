@@ -96,4 +96,24 @@ describe('useSessionActivity', () => {
     });
     expect(result.current.activity['session-a'].isBusy).toBe(false);
   });
+
+  it('does not extend stale backend busy timestamps when a snapshot timestamp is provided', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    const snapshotTs = Date.now() - 7000;
+
+    act(() => {
+      result.current.setBusy('session-a', true, { lastActivityAt: snapshotTs });
+    });
+
+    expect(result.current.activity['session-a']).toEqual(expect.objectContaining({
+      isBusy: true,
+      lastActivity: snapshotTs
+    }));
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(result.current.activity['session-a'].isBusy).toBe(false);
+  });
 });

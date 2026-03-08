@@ -3,10 +3,12 @@ import {
   AI_TYPE_OPTIONS,
   COMMON_LAUNCH_PREFIXES,
   NEW_TAB_AI_OPTIONS,
+  createCustomAiProvider,
   getAiCapabilities,
   getAiDisplayLabel,
   getAiInitialCommand,
   getAiLaunchCommand,
+  getAiTypeOptions,
   inferSessionAiType,
   rewriteTerminalAgentInput,
   resolveSlashAgentCommand
@@ -39,6 +41,14 @@ describe('aiProviders', () => {
     expect(getAiDisplayLabel('deepseek')).toBe('Deepseek');
     expect(getAiLaunchCommand('deepseek')).toBe('deepseek');
     expect(getAiCapabilities('deepseek').supportsStructuredEvents).toBe(false);
+  });
+
+  it('supports custom providers with explicit launch commands', () => {
+    const customProvider = createCustomAiProvider('Qwen 3', 'qwen --fast');
+    expect(customProvider?.id).toBe('qwen-3');
+    expect(getAiDisplayLabel('qwen-3', [customProvider])).toBe('Qwen 3');
+    expect(getAiInitialCommand('qwen-3', [customProvider])).toBe('qwen --fast');
+    expect(getAiTypeOptions([customProvider]).some((option) => option.id === 'qwen-3')).toBe(true);
   });
 
   it('exposes extended provider options for new tabs and context menus', () => {

@@ -15,6 +15,7 @@ export default function ThreadsProjectGroup({
   onTopicChange,
   onCloseSession,
   onCreateSession,
+  onCloseProject,
   defaultExpanded = true,
   showArchived = false
 }) {
@@ -71,6 +72,24 @@ export default function ThreadsProjectGroup({
             </svg>
           </button>
         )}
+
+        {onCloseProject && projectPath && (
+          <button
+            type="button"
+            className="threads-project-close-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCloseProject(projectPath, visibleSessions.map((session) => session.id));
+            }}
+            title="Close project"
+            aria-label="Close project"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {isExpanded && (
@@ -80,6 +99,7 @@ export default function ThreadsProjectGroup({
               <ThreadsSessionItem
                 key={session.id}
                 session={session}
+                isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
                 isActive={session.id === activeSessionId}
                 hasActivity={sessionActivity?.[session.id]?.needsAttention}
                 onSelect={onSelectSession}
@@ -175,11 +195,30 @@ export default function ThreadsProjectGroup({
           flex-shrink: 0;
         }
 
-        .threads-project-header:hover .threads-project-add-btn {
+        .threads-project-close-btn {
+          width: 22px;
+          height: 22px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
+          border-radius: 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: all 0.12s ease;
+          margin-left: 4px;
+          flex-shrink: 0;
+        }
+
+        .threads-project-header:hover .threads-project-add-btn,
+        .threads-project-header:hover .threads-project-close-btn {
           opacity: 1;
         }
 
-        .threads-project-add-btn:hover {
+        .threads-project-add-btn:hover,
+        .threads-project-close-btn:hover {
           background: var(--sidebar-hover, rgba(255, 255, 255, 0.08));
           color: var(--sidebar-text, var(--text-primary, #fafafa));
         }

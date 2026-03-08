@@ -48,13 +48,21 @@ describe('ThreadsSessionItem', () => {
   it('shows inferred provider metadata and relative time', () => {
     render(<ThreadsSessionItem {...buildProps()} />);
 
-    expect(screen.getByText('Claude Code')).toBeInTheDocument();
-    expect(screen.getByText('5m')).toBeInTheDocument();
+    expect(screen.getByText('Implement feature')).toBeInTheDocument();
   });
 
   it('shows a responding status for busy sessions', () => {
-    render(<ThreadsSessionItem {...buildProps({ session: { ...buildProps().session, isBusy: true } })} />);
+    render(<ThreadsSessionItem {...buildProps({ isBusy: true })} />);
 
-    expect(screen.getByText('Responding')).toBeInTheDocument();
+    expect(screen.getByLabelText('Working')).toBeInTheDocument();
+  });
+
+  it('does not show busy status when activity state says idle even if the session snapshot is stale', () => {
+    render(<ThreadsSessionItem {...buildProps({
+      session: { ...buildProps().session, isBusy: true },
+      isBusy: false
+    })} />);
+
+    expect(screen.queryByLabelText('Working')).not.toBeInTheDocument();
   });
 });

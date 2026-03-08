@@ -41,6 +41,7 @@ function buildProps(overrides = {}) {
     onTopicChange: vi.fn(),
     onCloseSession: vi.fn(),
     onCreateSession: vi.fn(),
+    onCloseProject: vi.fn(),
     projects: [{ path: 'C:\\repo', name: 'terminal v4' }],
     onAddProject: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -91,9 +92,37 @@ describe('ThreadsSidebar', () => {
     expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
   });
 
+  it('does not duplicate a manual project when a session group uses forward slashes', () => {
+    render(<ThreadsSidebar {...buildProps({
+      projects: [{ path: 'C:\\repo\\uplifting', name: 'uplifting' }],
+      sessionsGroupedByProject: [
+        {
+          projectName: 'uplifting',
+          projectPath: 'C:/repo/uplifting',
+          sessions: [buildSession('session-1', 'Implement feature', { thread: { projectPath: 'C:/repo/uplifting' } })]
+        }
+      ],
+      pinnedSessions: [],
+      archivedSessions: []
+    })} />);
+
+    expect(screen.getAllByText('uplifting')).toHaveLength(1);
+    expect(screen.getByText('Implement feature')).toBeInTheDocument();
+  });
+
   it('renders pinned section when pinned sessions exist', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
     expect(screen.getByText('Pinned')).toBeInTheDocument();
+  });
+
+  it('calls onCloseProject with the project path and session ids', async () => {
+    const onCloseProject = vi.fn();
+
+    render(<ThreadsSidebar {...buildProps({ onCloseProject })} />);
+
+    await screen.getByLabelText('Close project').click();
+
+    expect(onCloseProject).toHaveBeenCalledWith('C:\\repo', ['session-1', 'session-2']);
   });
 });

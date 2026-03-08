@@ -24,6 +24,9 @@ function LayoutNode({
   onSessionBusyChange,
   projectInfo,
   sessionAiTypes,
+  customAiProviders,
+  onSetSessionAiType,
+  onAddCustomAiProvider,
   paneCount,
   currentDesktopId,
   fitSignal
@@ -56,6 +59,9 @@ function LayoutNode({
         onSessionBusyChange={onSessionBusyChange}
         projectInfo={projectInfo}
         sessionAiTypes={sessionAiTypes}
+        customAiProviders={customAiProviders}
+        onSetSessionAiType={onSetSessionAiType}
+        onAddCustomAiProvider={onAddCustomAiProvider}
         currentDesktopId={currentDesktopId}
         fitSignal={fitSignal}
       />
@@ -99,6 +105,9 @@ function LayoutNode({
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
             sessionAiTypes={sessionAiTypes}
+            customAiProviders={customAiProviders}
+            onSetSessionAiType={onSetSessionAiType}
+            onAddCustomAiProvider={onAddCustomAiProvider}
             paneCount={paneCount}
             currentDesktopId={currentDesktopId}
             fitSignal={fitSignal}
@@ -131,6 +140,9 @@ export function SplitPaneContainer({
   onSessionBusyChange,
   projectInfo,
   sessionAiTypes,
+  customAiProviders,
+  onSetSessionAiType,
+  onAddCustomAiProvider,
   paneLayout,
   currentDesktopId,
   fitSignal
@@ -191,6 +203,9 @@ export function SplitPaneContainer({
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
             sessionAiTypes={sessionAiTypes}
+            customAiProviders={customAiProviders}
+            onSetSessionAiType={onSetSessionAiType}
+            onAddCustomAiProvider={onAddCustomAiProvider}
             currentDesktopId={currentDesktopId}
             fitSignal={fitSignal}
           />
@@ -224,6 +239,9 @@ export function SplitPaneContainer({
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
           sessionAiTypes={sessionAiTypes}
+          customAiProviders={customAiProviders}
+          onSetSessionAiType={onSetSessionAiType}
+          onAddCustomAiProvider={onAddCustomAiProvider}
           paneCount={paneCount}
           currentDesktopId={currentDesktopId}
           fitSignal={fitSignal}
@@ -265,6 +283,9 @@ export function SplitPaneContainer({
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
           sessionAiTypes={sessionAiTypes}
+          customAiProviders={customAiProviders}
+          onSetSessionAiType={onSetSessionAiType}
+          onAddCustomAiProvider={onAddCustomAiProvider}
           fitSignal={fitSignal}
         />
       ))}

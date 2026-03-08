@@ -49,6 +49,8 @@ import {
   type ManagedTerminal,
   type PersistedSession
 } from './types';
+import { outputIndicatesIdlePrompt } from './busy-state';
+import { isTerminalControlResponseInput } from './control-input';
 import { WorkspaceCopySandboxRuntime } from '../sandbox/workspace-copy-sandbox-runtime';
 import type {
   SandboxMode,
@@ -416,12 +418,18 @@ export class TerminalManager {
   }
 
   #recordSessionActivity(session: ManagedTerminal): void {
-    session.lastActivityAt = Date.now();
+    const now = Date.now();
+    session.lastActivityAt = now;
+    session.busyUntilAt = now + DEFAULT_BUSY_WINDOW_MS;
     this.#resetIdleTimer(session);
   }
 
   #isSessionBusy(session: ManagedTerminal, now = Date.now()): boolean {
-    return now - session.lastActivityAt <= DEFAULT_BUSY_WINDOW_MS;
+    return session.busyUntilAt > now;
+  }
+
+  #markSessionIdle(session: ManagedTerminal): void {
+    session.busyUntilAt = 0;
   }
 
   #expireIdleSession(session: ManagedTerminal): void {
@@ -965,6 +973,7 @@ export class TerminalManager {
     this.#recordSessionActivity(session);
     this.#applyOsc7Cwd(session, chunk);
     session.turnDetector?.onPtyOutput(chunk, Date.now());
+    session.recentOutputTail = `${session.recentOutputTail}${chunk}`.slice(-512);
     const event: TerminalStreamEvent = {
       text: chunk,
       ts: Date.now(),
@@ -990,6 +999,10 @@ export class TerminalManager {
           session.cwd = detectedPath;
         }
       }
+    }
+
+    if (outputIndicatesIdlePrompt(session.recentOutputTail)) {
+      this.#markSessionIdle(session);
     }
 
     // Schedule save to disk
@@ -1115,7 +1128,9 @@ export class TerminalManager {
       usesTmux,
       sandbox: launch.sandbox,
       outputBatcher: undefined, // Will be initialized below
-      lastActivityAt: Date.now()
+      lastActivityAt: Date.now(),
+      busyUntilAt: 0,
+      recentOutputTail: ''
     };
 
     // Create output batcher for this session
@@ -1131,6 +1146,9 @@ export class TerminalManager {
           ts: turn.ts,
           seq: undefined
         };
+        if (turn.role === 'assistant') {
+          this.#markSessionIdle(session);
+        }
         session.subscribers.forEach((sub) => sub(metaEvent));
       },
       (event: TerminalCliEvent) => {
@@ -1139,6 +1157,9 @@ export class TerminalManager {
           ts: event.ts,
           seq: undefined
         };
+        if (event.type === 'prompt_required') {
+          this.#markSessionIdle(session);
+        }
         session.subscribers.forEach((sub) => sub(metaEvent));
       }
     );
@@ -1199,6 +1220,9 @@ export class TerminalManager {
     const session = this.#sessions.get(id);
     if (!session || session.userId !== userId) {
       throw new Error(`Terminal session ${id} not found`);
+    }
+    if (isTerminalControlResponseInput(input)) {
+      return;
     }
 
     // Flush output buffer before processing input for better responsiveness
@@ -1684,6 +1708,8 @@ export class TerminalManager {
       sandbox: launch.sandbox,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now(),
+      busyUntilAt: 0,
+      recentOutputTail: '',
       thread: persisted.thread
     };
 
@@ -1700,6 +1726,9 @@ export class TerminalManager {
           ts: turn.ts,
           seq: undefined
         };
+        if (turn.role === 'assistant') {
+          this.#markSessionIdle(session);
+        }
         session.subscribers.forEach((sub) => sub(metaEvent));
       },
       (event: TerminalCliEvent) => {
@@ -1708,6 +1737,9 @@ export class TerminalManager {
           ts: event.ts,
           seq: undefined
         };
+        if (event.type === 'prompt_required') {
+          this.#markSessionIdle(session);
+        }
         session.subscribers.forEach((sub) => sub(metaEvent));
       }
     );

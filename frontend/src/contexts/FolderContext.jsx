@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { apiFetch } from '../utils/api';
+import { normalizeProjectPath } from '../utils/projectPaths';
 
 const FolderContext = createContext(null);
 
@@ -9,7 +10,8 @@ function getProjectNameFromPath(folderPath) {
 
 function appendSidebarProject(prev, folderPath) {
   if (!folderPath) return prev;
-  if (prev.some((project) => project.path.toLowerCase() === folderPath.toLowerCase())) {
+  const normalizedPath = normalizeProjectPath(folderPath);
+  if (prev.some((project) => normalizeProjectPath(project.path) === normalizedPath)) {
     return prev;
   }
   return [...prev, { path: folderPath, name: getProjectNameFromPath(folderPath) }];
@@ -111,7 +113,8 @@ export function FolderProvider({ children }) {
   // Remove a project folder from sidebar
   const removeSidebarProject = useCallback((folderPath) => {
     setSidebarProjects(prev => {
-      const updated = prev.filter(p => p.path.toLowerCase() !== folderPath.toLowerCase());
+      const normalizedPath = normalizeProjectPath(folderPath);
+      const updated = prev.filter(p => normalizeProjectPath(p.path) !== normalizedPath);
       try {
         localStorage.setItem('sidebarProjects', JSON.stringify(updated));
       } catch (e) {

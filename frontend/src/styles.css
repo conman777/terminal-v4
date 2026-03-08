@@ -12340,6 +12340,26 @@ textarea:focus-visible {
   flex-shrink: 0;
 }
 
+.status-git-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+}
+
+.git-stat-added {
+  color: #4ade80;
+}
+
+.git-stat-removed {
+  color: #f87171;
+}
+
 .status-ai-chip {
   display: inline-flex;
   align-items: center;

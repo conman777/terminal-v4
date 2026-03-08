@@ -31,48 +31,76 @@ async function detectGitRoot(cwd: string): Promise<string | null> {
 }
 
 /**
- * Get git diff stats for a session's working directory
- * Uses execFile to avoid shell injection
+ * Find the merge-base commit to diff against.
+ * On feature branches, diffs against the default branch (origin/main or origin/master).
+ * On main/master, returns null so we fall back to uncommitted changes only.
+ */
+async function findDiffBase(cwd: string): Promise<string | null> {
+  try {
+    const { stdout: branchOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, timeout: 5000 });
+    const currentBranch = branchOut.trim();
+
+    if (currentBranch === 'main' || currentBranch === 'master') return null;
+
+    for (const candidate of ['origin/main', 'origin/master']) {
+      try {
+        await execFileAsync('git', ['rev-parse', '--verify', candidate], { cwd, timeout: 5000 });
+        const { stdout } = await execFileAsync('git', ['merge-base', candidate, 'HEAD'], { cwd, timeout: 5000 });
+        return stdout.trim() || null;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // Not a git repo or other error
+  }
+  return null;
+}
+
+/** Parse git diff --stat summary line into linesAdded / linesRemoved */
+function parseGitDiffStat(output: string): ThreadGitStats | null {
+  const match = output.match(/(\d+) insertions?\(\+\).*?(\d+) deletions?\(-\)/);
+  if (match) {
+    return { linesAdded: parseInt(match[1], 10), linesRemoved: parseInt(match[2], 10) };
+  }
+  const insertions = output.match(/(\d+) insertions?\(\+\)/);
+  const deletions = output.match(/(\d+) deletions?\(-\)/);
+  if (insertions || deletions) {
+    return {
+      linesAdded: insertions ? parseInt(insertions[1], 10) : 0,
+      linesRemoved: deletions ? parseInt(deletions[1], 10) : 0
+    };
+  }
+  return null;
+}
+
+/**
+ * Get git diff stats for a session's working directory.
+ * On feature branches: total branch diff vs default branch (origin/main or origin/master).
+ * On main/master or if no remote: uncommitted changes only.
  */
 async function getGitDiffStats(cwd: string): Promise<ThreadGitStats | null> {
   try {
-    // Try to get diff against HEAD first
-    let result: string;
+    // Strategy 1: Branch-level diff against merge-base with default branch
+    const diffBase = await findDiffBase(cwd);
+    if (diffBase) {
+      try {
+        const { stdout } = await execFileAsync('git', ['diff', '--stat', diffBase], { cwd, timeout: 10000 });
+        const stats = parseGitDiffStat(stdout);
+        if (stats) return stats;
+      } catch {
+        // Fall through to next strategy
+      }
+    }
+
+    // Strategy 2: Uncommitted changes (works on main or repos without remote)
     try {
-      const { stdout } = await execFileAsync('git', ['diff', '--stat', 'HEAD'], {
-        cwd,
-        timeout: 10000
-      });
-      result = stdout;
+      const { stdout } = await execFileAsync('git', ['diff', '--stat', 'HEAD'], { cwd, timeout: 10000 });
+      return parseGitDiffStat(stdout);
     } catch {
-      // Fall back to just diff if no HEAD (new repo)
-      const { stdout } = await execFileAsync('git', ['diff', '--stat'], {
-        cwd,
-        timeout: 10000
-      });
-      result = stdout;
+      const { stdout } = await execFileAsync('git', ['diff', '--stat'], { cwd, timeout: 10000 });
+      return parseGitDiffStat(stdout);
     }
-
-    // Parse output like: "15 files changed, 450 insertions(+), 200 deletions(-)"
-    const match = result.match(/(\d+) insertions?\(\+\).*?(\d+) deletions?\(-\)/);
-    if (match) {
-      return {
-        linesAdded: parseInt(match[1], 10),
-        linesRemoved: parseInt(match[2], 10)
-      };
-    }
-
-    // Try parsing simpler format: "X insertions(+)" or "Y deletions(-)"
-    const insertions = result.match(/(\d+) insertions?\(\+\)/);
-    const deletions = result.match(/(\d+) deletions?\(-\)/);
-    if (insertions || deletions) {
-      return {
-        linesAdded: insertions ? parseInt(insertions[1], 10) : 0,
-        linesRemoved: deletions ? parseInt(deletions[1], 10) : 0
-      };
-    }
-
-    return null;
   } catch {
     return null;
   }

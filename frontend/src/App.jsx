@@ -29,7 +29,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
-import { NEW_TAB_AI_OPTIONS } from './utils/aiProviders';
+import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
 
 function isDynamicImportFetchError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -455,6 +455,10 @@ function AppContent() {
     try { return JSON.parse(localStorage.getItem('sessionAiTypes') || '{}'); }
     catch { return {}; }
   });
+  const [customAiProviders, setCustomAiProviders] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('customAiProviders') || '[]'); }
+    catch { return []; }
+  });
 
   // Tab reorder state - stores session IDs in user-defined order, persisted server-side
   const [tabOrder, setTabOrder] = useState([]);
@@ -808,6 +812,19 @@ function AppContent() {
     });
   }, []);
 
+  const handleAddCustomAiProvider = useCallback((label, command) => {
+    const provider = createCustomAiProvider(label, command, customAiProviders);
+    if (!provider) return null;
+
+    setCustomAiProviders((prev) => {
+      const next = [...prev, provider];
+      localStorage.setItem('customAiProviders', JSON.stringify(next));
+      return next;
+    });
+
+    return provider;
+  }, [customAiProviders]);
+
   // Keyboard shortcuts (desktop only)
   useKeyboardShortcuts({
     onToggleSidebar: toggleSidebar,
@@ -1021,6 +1038,13 @@ function AppContent() {
     setShowAddProjectModal(false);
   }, [addSidebarProject]);
 
+  const handleCloseProject = useCallback((projectPath, sessionIds = []) => {
+    sessionIds.forEach((sessionId) => {
+      closeSession(sessionId);
+    });
+    removeSidebarProject(projectPath);
+  }, [closeSession, removeSidebarProject]);
+
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
   const layoutStyle =
     isMobile && viewportHeight
@@ -1038,7 +1062,7 @@ function AppContent() {
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
-    sessionAiTypes, onSetSessionAiType: handleSetSessionAiType,
+    sessionAiTypes, onSetSessionAiType: handleSetSessionAiType, customAiProviders,
   };
 
   const headerModalProps = {
@@ -1106,7 +1130,7 @@ function AppContent() {
         recentFolders={recentFolders}
         onSelect={handleCreateSessionFromFolder}
         showAiSelector={true}
-        aiOptions={NEW_TAB_AI_OPTIONS}
+        aiOptions={getNewTabAiOptions(customAiProviders)}
         defaultAiOptionId="cli"
       />
       <AddScanFolderModal
@@ -1187,6 +1211,7 @@ function AppContent() {
             onTopicChange={updateSessionTopic}
             onCloseSession={closeSession}
             onCreateSession={handleRequestNewSession}
+            onCloseProject={handleCloseProject}
             projects={sidebarProjects}
             onAddProject={openAddProjectModal}
             onOpenSettings={handleOpenSettings}
@@ -1265,6 +1290,9 @@ function AppContent() {
                         onSessionBusyChange={handleSessionBusyChange}
                         projectInfo={projectInfo}
                         sessionAiTypes={sessionAiTypes}
+                        customAiProviders={customAiProviders}
+                        onSetSessionAiType={handleSetSessionAiType}
+                        onAddCustomAiProvider={handleAddCustomAiProvider}
                         currentDesktopId={activeDesktopId}
                         fitSignal={mainTerminalFitToken}
                       />

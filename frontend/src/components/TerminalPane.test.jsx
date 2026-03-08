@@ -22,13 +22,20 @@ vi.mock('./DesktopConversationView', () => ({
 }));
 
 vi.mock('./DesktopStatusBar', () => ({
-  DesktopStatusBar: ({ isTerminalPanelOpen, onToggleTerminalPanel, showTerminalToggle = true }) => (
-    showTerminalToggle ? (
-      <button type="button" aria-label="toggle-terminal-panel" onClick={onToggleTerminalPanel}>
-        {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
-      </button>
-    ) : <div data-testid="terminal-toggle-hidden" />
-  )
+  DesktopStatusBar: (props) => {
+    return (
+      <div>
+        {props.showTerminalToggle ? (
+          <button type="button" aria-label="toggle-terminal-panel" onClick={props.onToggleTerminalPanel}>
+            {props.isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
+          </button>
+        ) : <div data-testid="terminal-toggle-hidden" />}
+        <button type="button" aria-label="status-launch-ai" onClick={props.onLaunchAi}>Launch</button>
+        <button type="button" aria-label="status-select-codex" onClick={() => props.onSelectAiType?.('codex')}>Codex</button>
+        <button type="button" aria-label="status-add-custom-ai" onClick={() => props.onAddCustomAiCommand?.('Qwen 3', 'qwen --fast')}>Add custom</button>
+      </div>
+    );
+  }
 }));
 
 vi.mock('../hooks/useMobileChatTurns', () => ({
@@ -41,6 +48,12 @@ vi.mock('../hooks/useMobileChatTurns', () => ({
     handleChatSend: handleChatSendMock,
     handleRawSend: vi.fn(),
     handleInterrupt: handleInterruptMock,
+  })
+}));
+
+vi.mock('../contexts/TerminalSessionContext', () => ({
+  useTerminalSession: () => ({
+    refreshSessionGitStats: vi.fn()
   })
 }));
 
@@ -92,8 +105,7 @@ describe('TerminalPane', () => {
     expect(screen.getByTestId('terminal-chat-mock')).toBeInTheDocument();
     expect(screen.queryByTestId('desktop-conversation-view-mock')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-toggle-hidden')).toBeInTheDocument();
-    expect(screen.getByLabelText('Agent session controls')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Launch Claude Code' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'status-launch-ai' })).toBeInTheDocument();
     expect(container.querySelector('.terminal-with-status.terminal-first')).not.toBeNull();
     expect(container.querySelector('.desktop-terminal-runtime.terminal-first')).not.toBeNull();
   });
@@ -101,9 +113,36 @@ describe('TerminalPane', () => {
   it('launches the active CLI agent from the terminal-first toolbar', () => {
     render(<TerminalPane {...buildProps()} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Launch Claude Code' }));
+    fireEvent.click(screen.getByRole('button', { name: 'status-launch-ai' }));
 
     expect(handleChatSendMock).toHaveBeenCalledWith('claude --dangerously-skip-permissions');
+  });
+
+  it('updates the current session AI type from the footer selector', () => {
+    const onSetSessionAiType = vi.fn();
+    render(<TerminalPane {...buildProps({ onSetSessionAiType })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'status-select-codex' }));
+
+    expect(onSetSessionAiType).toHaveBeenCalledWith('session-1', 'codex');
+    expect(handleChatSendMock).toHaveBeenCalledWith('codex --yolo');
+  });
+
+  it('adds and launches a custom AI command from the footer', () => {
+    const onSetSessionAiType = vi.fn();
+    const onAddCustomAiProvider = vi.fn(() => ({
+      id: 'qwen-3',
+      label: 'Qwen 3',
+      initialCommand: 'qwen --fast'
+    }));
+
+    render(<TerminalPane {...buildProps({ onSetSessionAiType, onAddCustomAiProvider })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'status-add-custom-ai' }));
+
+    expect(onAddCustomAiProvider).toHaveBeenCalledWith('Qwen 3', 'qwen --fast');
+    expect(onSetSessionAiType).toHaveBeenCalledWith('session-1', 'qwen-3');
+    expect(handleChatSendMock).toHaveBeenCalledWith('qwen --fast');
   });
 
   it('still renders the structured conversation view for structured sessions', () => {

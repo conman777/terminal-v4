@@ -24,6 +24,8 @@ import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
 import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
+import { cliEventIndicatesTerminalIdle, outputIndicatesTerminalIdle } from '../utils/terminalBusyState';
+import { isTerminalControlResponseInput } from '../utils/terminalControlInput';
 import { getTerminalTheme } from '../utils/terminalTheme';
 import {
   createExternalInputFrames,
@@ -169,6 +171,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const onScrollDirectionRef = useRef(onScrollDirection);
   const onSendMessageRef = useRef(onSendMessage);
   const onOutputChunkRef = useRef(onOutputChunk);
+  const onActivityChangeRef = useRef(onActivityChange);
   const onScreenSnapshotRef = useRef(onScreenSnapshot);
   const onCliEventRef = useRef(onCliEvent);
   const usesTmuxRef = useRef(Boolean(usesTmux));
@@ -242,6 +245,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const lastScreenSnapshotRef = useRef('');
   const restoreRetryAttemptedRef = useRef(false);
   const restoreAttempt2Ref = useRef(false);
+  const idlePromptProbeRef = useRef('');
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const getHistoryConfig = useCallback(() => ({
@@ -258,6 +262,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     historyStateRef.current.maxHistoryEvents = config.maxEvents;
     historyStateRef.current.maxHistoryChars = config.maxChars;
   }, [getHistoryConfig]);
+
+  const reflectIdlePromptState = useCallback((text) => {
+    if (typeof text !== 'string' || text.length === 0) return;
+    idlePromptProbeRef.current = `${idlePromptProbeRef.current}${text}`.slice(-512);
+    if (outputIndicatesTerminalIdle(idlePromptProbeRef.current)) {
+      onActivityChangeRef.current?.(false);
+    }
+  }, []);
 
   const resetHistoryCache = useCallback(() => {
     historyEntriesRef.current = [];
@@ -1015,6 +1027,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [onOutputChunk]);
 
   useEffect(() => {
+    onActivityChangeRef.current = onActivityChange;
+  }, [onActivityChange]);
+
+  useEffect(() => {
     onScreenSnapshotRef.current = onScreenSnapshot;
   }, [onScreenSnapshot]);
 
@@ -1241,6 +1257,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   useEffect(() => {
     previewInputLineRef.current = '';
+    idlePromptProbeRef.current = '';
   }, [sessionId]);
 
   // Reset loading state when session changes
@@ -2061,6 +2078,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           .filter((item) => item && typeof item.text === 'string' && item.text.length > 0);
         if (pendingChunks.length === 0) return;
         const pendingText = pendingChunks.map((item) => item.text).join('');
+        reflectIdlePromptState(pendingText);
         onOutputChunkRef.current?.(pendingText);
         const shouldAppendReader = viewModeRef.current === 'reader' || !isMobile;
         if (viewModeRef.current === 'reader') {
@@ -2121,7 +2139,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           applyServerPtySize(historyPage.currentCols, historyPage.currentRows);
           clearReader();
           const historyText = historyTextRef.current;
-          if (historyText) onOutputChunkRef.current?.(historyText);
+          if (historyText) {
+            reflectIdlePromptState(historyText);
+            onOutputChunkRef.current?.(historyText);
+          }
           await writeHistoryChunks(historyText);
           if (disposed) return;
           if (viewModeRef.current === 'reader') {
@@ -2194,7 +2215,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const historyText = historyTextRef.current;
           term.reset();
           clearReader();
-          if (historyText) onOutputChunkRef.current?.(historyText);
+          if (historyText) {
+            reflectIdlePromptState(historyText);
+            onOutputChunkRef.current?.(historyText);
+          }
           await writeHistoryChunks(historyText);
           if (disposed) return;
           if (viewModeRef.current === 'reader') {
@@ -2235,11 +2259,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           );
           const history = historyPage?.history || null;
           if (!history || history.length === 0) return;
-          history.forEach((entry) => appendHistoryEntry(entry));
-          const combined = history.map((entry) => entry.text || '').join('');
-          if (combined) {
-            onOutputChunkRef.current?.(combined);
-            const buffer = term.buffer?.active;
+            history.forEach((entry) => appendHistoryEntry(entry));
+            const combined = history.map((entry) => entry.text || '').join('');
+            if (combined) {
+              reflectIdlePromptState(combined);
+              onOutputChunkRef.current?.(combined);
+              const buffer = term.buffer?.active;
             const baseY = buffer?.baseY || 0;
             const viewportYBefore = buffer?.viewportY ?? 0;
             const wasAtBottom = buffer ? baseY === buffer.viewportY : true;
@@ -2691,6 +2716,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           const enqueueTerminalWrite = (data, seq) => {
             if (!data) return;
+            reflectIdlePromptState(data);
             onOutputChunkRef.current?.(data);
             pendingWrite += data;
             if (Number.isFinite(seq) && seq > 0) {
@@ -2717,6 +2743,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
             const cliEvent = normalizeCliEventFromMeta(msg);
             if (cliEvent) {
+              if (cliEventIndicatesTerminalIdle(cliEvent)) {
+                onActivityChangeRef.current?.(false);
+              }
               onCliEventRef.current?.(cliEvent);
               if (cliEvent.type === 'user_turn' || cliEvent.type === 'assistant_turn') {
                 onTurn?.({
@@ -2997,8 +3026,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (disposed) return;
         if (term._isComposing && term._isComposing()) return;
 
-        const isQueryResponse = /^\x1b\[[\?>\d;]*[cn]$/.test(data) || /^\x1b\]/.test(data);
-        if (isQueryResponse) return;
+        if (isTerminalControlResponseInput(data)) return;
 
         exitCopyModeIfActive();
         markUserInput();

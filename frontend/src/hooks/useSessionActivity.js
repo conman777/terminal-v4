@@ -122,7 +122,7 @@ export function useSessionActivity() {
 
     setActivity(prev => {
       const current = normalizeActivityState(prev[sessionId]);
-      const nextLastActivity = busy ? now : (activityTs || current.lastActivity);
+      const nextLastActivity = activityTs || (busy ? now : current.lastActivity);
 
       if (current.isBusy === busy && current.lastActivity === nextLastActivity) {
         return prev;

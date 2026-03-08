@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import ThreadsProjectGroup from './ThreadsProjectGroup';
 import ThreadsSessionItem from './ThreadsSessionItem';
+import { normalizeProjectPath } from '../utils/projectPaths';
 
 export default function ThreadsSidebar({
   isCollapsed,
@@ -18,6 +19,7 @@ export default function ThreadsSidebar({
   onTopicChange,
   onCloseSession,
   onCreateSession,
+  onCloseProject,
   projects,
   onAddProject,
   onOpenSettings
@@ -37,12 +39,12 @@ export default function ThreadsSidebar({
   const visibleProjectGroups = useMemo(() => {
     const groupedPaths = new Set(
       projectGroups
-        .map((group) => (group.projectPath || '').toLowerCase())
+        .map((group) => normalizeProjectPath(group.projectPath))
         .filter(Boolean)
     );
 
     const manualGroups = projects
-      .filter((project) => !groupedPaths.has((project.path || '').toLowerCase()))
+      .filter((project) => !groupedPaths.has(normalizeProjectPath(project.path)))
       .map((project) => ({
         projectName: project.name,
         projectPath: project.path,
@@ -114,6 +116,7 @@ export default function ThreadsSidebar({
                 <ThreadsSessionItem
                   key={session.id}
                   session={session}
+                  isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
                   isActive={session.id === activeSessionId}
                   hasActivity={sessionActivity?.[session.id]?.needsAttention}
                   onSelect={onSelectSession}
@@ -146,6 +149,7 @@ export default function ThreadsSidebar({
                 onTopicChange={onTopicChange}
                 onCloseSession={onCloseSession}
                 onCreateSession={onCreateSession}
+                onCloseProject={onCloseProject}
                 defaultExpanded={group.sessions.length > 0}
               />
             ))
@@ -201,6 +205,7 @@ export default function ThreadsSidebar({
                     <ThreadsSessionItem
                       key={session.id}
                       session={session}
+                      isBusy={Boolean(sessionActivity?.[session.id]?.isBusy)}
                       isActive={session.id === activeSessionId}
                       hasActivity={sessionActivity?.[session.id]?.needsAttention}
                       onSelect={onSelectSession}
