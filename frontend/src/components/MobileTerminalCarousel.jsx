@@ -16,6 +16,7 @@ export function MobileTerminalCarousel({
   fontSize,
   webglEnabled,
   onScrollDirection,
+  onViewportStateChange,
   onRegisterFocusTerminal,
   onSessionBusyChange,
   sessionAiTypes,
@@ -75,16 +76,26 @@ export function MobileTerminalCarousel({
     setTriggerScrollToBottom(() => trigger);
   }, []);
 
+  const handleTerminalViewportStateChange = useCallback((atBottom) => {
+    if (chatMode) return;
+    setIsTerminalScrolledUp(!atBottom);
+    onViewportStateChange?.(atBottom);
+  }, [chatMode, onViewportStateChange]);
+
+  const handleChatViewportStateChange = useCallback((atBottom) => {
+    if (!chatMode) return;
+    onViewportStateChange?.(atBottom);
+  }, [chatMode, onViewportStateChange]);
+
   const handleScrollDirection = useCallback((direction) => {
-    if (direction === 'up') setIsTerminalScrolledUp(true);
-    else if (direction === 'down') setIsTerminalScrolledUp(false);
     onScrollDirection?.(direction);
   }, [onScrollDirection]);
 
   const handleScrollToBottom = useCallback(() => {
     triggerScrollToBottom?.();
     setIsTerminalScrolledUp(false);
-  }, [triggerScrollToBottom]);
+    onViewportStateChange?.(true);
+  }, [onViewportStateChange, triggerScrollToBottom]);
 
   const handleActivityChange = useCallback((isBusy) => {
     setIsClaudeBusy(isBusy);
@@ -179,6 +190,11 @@ export function MobileTerminalCarousel({
     setSelectionActions(null);
   }, [currentSession?.id]);
 
+  useEffect(() => {
+    setIsTerminalScrolledUp(false);
+    onViewportStateChange?.(true);
+  }, [chatMode, currentSession?.id, onViewportStateChange, viewMode]);
+
   const {
     turns,
     isLoading: isChatHistoryLoading,
@@ -255,6 +271,7 @@ export function MobileTerminalCarousel({
           usesTmux={currentSession?.usesTmux}
           viewMode={viewMode}
           onScrollDirection={handleScrollDirection}
+          onViewportStateChange={handleTerminalViewportStateChange}
           onRegisterImageUpload={handleRegisterImageUpload}
           onRegisterHistoryPanel={handleRegisterHistoryPanel}
           onRegisterSelectionActions={handleRegisterSelectionActions}
@@ -277,6 +294,7 @@ export function MobileTerminalCarousel({
           onInterrupt={handleInterrupt}
           onImageUpload={triggerImageUpload ?? undefined}
           sessionId={currentSession?.id ?? null}
+          onViewportStateChange={handleChatViewportStateChange}
         />
       )}
 

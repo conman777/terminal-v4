@@ -7,7 +7,7 @@ import { useRef, useEffect, useState, useCallback } from 'react';
  * Supports auto-scrolling to bottom as new content arrives.
  * Supports keyboard input - keystrokes are forwarded to the terminal.
  */
-export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, onScrollDirection, onLoadMore, onInput, isMobile }) {
+export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, onScrollDirection, onViewportStateChange, onLoadMore, onInput, isMobile }) {
   const containerRef = useRef(null);
   const inputRef = useRef(null);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -21,8 +21,9 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
   useEffect(() => {
     if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
+      onViewportStateChange?.(true);
     }
-  }, [content, autoScroll]);
+  }, [content, autoScroll, onViewportStateChange]);
 
   // Force scroll to bottom when switching into reader view
   useEffect(() => {
@@ -31,9 +32,10 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     requestAnimationFrame(() => {
       if (containerRef.current) {
         containerRef.current.scrollTop = containerRef.current.scrollHeight;
+        onViewportStateChange?.(true);
       }
     });
-  }, [scrollToken]);
+  }, [scrollToken, onViewportStateChange]);
 
   // Focus on mount and when switching to reader view so keyboard works
   useEffect(() => {
@@ -149,6 +151,7 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     // Check if user is near the bottom (within 50px tolerance)
     const isAtBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 50;
     setAutoScroll(isAtBottom);
+    onViewportStateChange?.(isAtBottom);
 
     if (onLoadMore && el.scrollTop <= 40) {
       onLoadMore();

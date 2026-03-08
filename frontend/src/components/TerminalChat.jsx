@@ -32,6 +32,7 @@ import {
   prepareTerminalForExternalInput,
 } from '../utils/terminalExternalInput';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
+import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
 const DEFAULT_ANSI_PALETTE = (() => {
@@ -110,7 +111,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -169,13 +170,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const requestAuthoritativeResizeRef = useRef(null);
   const requestPriorityResizeRef = useRef(null);
   const onScrollDirectionRef = useRef(onScrollDirection);
+  const onViewportStateChangeRef = useRef(onViewportStateChange);
   const onSendMessageRef = useRef(onSendMessage);
   const onOutputChunkRef = useRef(onOutputChunk);
   const onActivityChangeRef = useRef(onActivityChange);
   const onScreenSnapshotRef = useRef(onScreenSnapshot);
   const onCliEventRef = useRef(onCliEvent);
   const usesTmuxRef = useRef(Boolean(usesTmux));
-  const webglEnabledRef = useRef(webglEnabled !== false);
+  const webglEnabledRef = useRef(resolveTerminalWebglEnabled(webglEnabled));
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
   const isPrimaryRef = useRef(isPrimary);
@@ -493,7 +495,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return;
     }
     if (options.jumpToLive) {
-      jumpToLive();
+      if (viewModeRef.current === 'reader') {
+        setReaderScrollToken((value) => value + 1);
+        onViewportStateChangeRef.current?.(true);
+      } else {
+        jumpToLive();
+        onViewportStateChangeRef.current?.(true);
+      }
     }
     setMobileInputEnabled(true);
   }, [isMobile, jumpToLive, setMobileInputEnabled]);
@@ -1019,6 +1027,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [onScrollDirection]);
 
   useEffect(() => {
+    onViewportStateChangeRef.current = onViewportStateChange;
+  }, [onViewportStateChange]);
+
+  useEffect(() => {
     onSendMessageRef.current = onSendMessage;
   }, [onSendMessage]);
 
@@ -1103,7 +1115,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [syncPtySize]);
 
   useEffect(() => {
-    webglEnabledRef.current = webglEnabled !== false;
+    webglEnabledRef.current = resolveTerminalWebglEnabled(webglEnabled);
   }, [webglEnabled]);
 
   useEffect(() => {
@@ -1352,14 +1364,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
   }, [onRegisterSendText, setMobileInputEnabled]);
 
+  const jumpToLatestOutput = useCallback(() => {
+    if (viewModeRef.current === 'reader') {
+      setReaderScrollToken((value) => value + 1);
+      onViewportStateChangeRef.current?.(true);
+      return;
+    }
+
+    jumpToLive();
+    onViewportStateChangeRef.current?.(true);
+  }, [jumpToLive]);
+
   // Register scroll-to-bottom function for external callers (e.g. floating button)
   useEffect(() => {
     if (onRegisterScrollToBottom) {
       onRegisterScrollToBottom(() => {
-        xtermRef.current?.scrollToBottom();
+        jumpToLatestOutput();
       });
     }
-  }, [onRegisterScrollToBottom]);
+  }, [jumpToLatestOutput, onRegisterScrollToBottom]);
 
   // Update document.title with active session name
   useEffect(() => {
@@ -1902,7 +1925,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }, 200);
 
       const initWebglAddon = () => {
-        const shouldEnableWebgl = webglEnabledRef.current && !isMobile;
+        const shouldEnableWebgl = resolveTerminalWebglEnabled(webglEnabledRef.current) && !isMobile;
         if (!shouldEnableWebgl || webglAddonRef.current) {
           return;
         }
@@ -2338,6 +2361,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         scheduleIncrementalResync(delay);
       };
       const scrollDisposer = term.onScroll((newPos) => {
+        const baseY = term.buffer?.active?.baseY ?? 0;
+        onViewportStateChangeRef.current?.(newPos >= baseY);
         if (onScrollDirectionRef.current && !disposed) {
           const isUserScrolling = touchStateRef.current !== null;
           if (!isUserScrolling) {
@@ -3292,7 +3317,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (!term) return;
     if (!term.element) return;
 
-    const shouldEnableWebgl = webglEnabledRef.current && !isMobile;
+    const shouldEnableWebgl = resolveTerminalWebglEnabled(webglEnabledRef.current) && !isMobile;
     if (shouldEnableWebgl) {
       if (!webglAddonRef.current) {
         try {
@@ -3504,6 +3529,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           scrollToken={readerScrollToken}
           fontSize={fontSize || (isMobile ? 16 : 14)}
           onScrollDirection={onScrollDirection}
+          onViewportStateChange={onViewportStateChange}
           onLoadMore={handleReaderLoadMore}
           onInput={handleReaderInput}
           isMobile={isMobile}
@@ -3519,8 +3545,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           <button
             type="button"
             className="terminal-copy-mode-exit"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
-            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
+            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
           >
             Return to live
           </button>
@@ -3608,8 +3634,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           </button>
           <button
             className="scroll-btn scroll-live"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
-            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLive(); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
+            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
             aria-label="Jump to live output"
             title="Jump to live output"
           >

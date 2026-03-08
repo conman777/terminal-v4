@@ -3,6 +3,7 @@ import ToolCallBlock from './ToolCallBlock';
 import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
+import { useConversationScroll } from '../hooks/useConversationScroll';
 
 function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
@@ -507,11 +508,7 @@ export function DesktopConversationView({
   onApprove = null,
 }) {
   const [inputValue, setInputValue] = useState('');
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const containerRef = useRef(null);
-  const bottomRef = useRef(null);
   const textareaRef = useRef(null);
-  const autoScrollRef = useRef(true);
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const isStructured = mode === 'structured';
   const visibleTurns = isStructured ? [] : buildVisibleTurns(turns, aiType);
@@ -569,17 +566,18 @@ export function DesktopConversationView({
         : isStreaming
           ? `${assistantLabel} is running. Waiting for the first response turn...`
           : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`);
-
-  const scrollToBottom = useCallback(() => {
-    const element = bottomRef.current;
-    if (!element || typeof element.scrollIntoView !== 'function') return;
-    element.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  useEffect(() => {
-    if (!autoScrollRef.current) return;
-    scrollToBottom();
-  }, [turns, structuredMessages, structuredToolCalls, pendingApproval, isStreaming, scrollToBottom]);
+  const {
+    containerRef,
+    bottomRef,
+    autoScrollRef,
+    showScrollBtn,
+    handleScroll,
+    jumpToBottom,
+    markShouldStickToBottom,
+  } = useConversationScroll({
+    deps: [turns, structuredMessages, structuredToolCalls, pendingApproval, isStreaming],
+    followBehavior: 'auto',
+  });
 
   useEffect(() => {
     if (!shouldCaptureRawKeyboard) return undefined;
@@ -610,14 +608,6 @@ export function DesktopConversationView({
     };
   }, [onSendRaw, shouldCaptureRawKeyboard]);
 
-  const handleScroll = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
-    autoScrollRef.current = atBottom;
-    setShowScrollBtn(!atBottom);
-  }, []);
-
   const handleInputChange = useCallback((event) => {
     setInputValue(event.target.value);
     const element = event.target;
@@ -632,7 +622,7 @@ export function DesktopConversationView({
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    autoScrollRef.current = true;
+    markShouldStickToBottom();
   }, [inputValue, onSend]);
 
   const handleKeyDown = useCallback((event) => {
@@ -885,9 +875,7 @@ export function DesktopConversationView({
           type="button"
           className="desktop-conversation-scroll-btn"
           onClick={() => {
-            autoScrollRef.current = true;
-            setShowScrollBtn(false);
-            scrollToBottom();
+            jumpToBottom();
           }}
           aria-label="Scroll to latest message"
           title="Scroll to latest message"

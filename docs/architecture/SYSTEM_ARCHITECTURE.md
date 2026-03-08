@@ -246,6 +246,8 @@ Key files:
 
 **Terminal Components:**
 - `TerminalChat` integrates xterm.js, WebSocket IO, and WebGL rendering (optional).
+  Linux desktop browsers are forced onto the canvas renderer because xterm's
+  WebGL path has produced terminal corruption in that environment.
 - `TerminalPane` now uses two desktop shell paths:
   - structured sessions (`ss-*`) keep the conversation-first surface.
   - PTY/CLI sessions are terminal-first and can render a lightweight activity strip

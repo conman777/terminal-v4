@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
+import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 
 export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, showTabStatusLabels, onTabStatusLabelsChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
-  const resolvedWebglEnabled = terminalWebglEnabled !== false;
+  const resolvedWebglEnabled = resolveTerminalWebglEnabled(terminalWebglEnabled);
+  const webglGuardReason = getTerminalRendererGuardReason();
+  const webglLocked = Boolean(webglGuardReason);
   const resolvedShowTabStatusLabels = showTabStatusLabels !== false;
   const dropdownRef = useRef(null);
 
@@ -182,7 +185,9 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
               <button
                 type="button"
                 className={`mode-btn ${resolvedWebglEnabled ? 'active' : ''}`}
+                disabled={webglLocked}
                 onClick={() => onWebglChange?.(true)}
+                title={webglGuardReason || 'Use the GPU-accelerated renderer'}
               >
                 WebGL
               </button>
@@ -190,11 +195,12 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
                 type="button"
                 className={`mode-btn ${!resolvedWebglEnabled ? 'active' : ''}`}
                 onClick={() => onWebglChange?.(false)}
+                title={webglLocked ? 'Stable renderer for this device' : 'Use the stable canvas renderer'}
               >
                 Canvas
               </button>
             </div>
-            <small>Use WebGL for GPU acceleration; switch to Canvas if you see glitches.</small>
+            <small>{webglGuardReason || 'Use WebGL for GPU acceleration; switch to Canvas if you see glitches.'}</small>
           </div>
           <div className="form-group">
             <label>Tab Status Labels</label>

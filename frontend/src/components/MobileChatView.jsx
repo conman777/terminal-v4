@@ -1,9 +1,10 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { TerminalMicButton } from './TerminalMicButton';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { apiFetch } from '../utils/api';
+import { useConversationScroll } from '../hooks/useConversationScroll';
 import './MobileChatView.css';
 
 function SparkleIcon({ size = 14 }) {
@@ -68,31 +69,24 @@ export function MobileChatView({
   onImageUpload,
   sessionId,
   isLoadingHistory = false,
+  onViewportStateChange,
 }) {
   const { theme } = useTheme();
   const [inputValue, setInputValue] = useState('');
   const [isMicRecording, setIsMicRecording] = useState(false);
-  const [showScrollBtn, setShowScrollBtn] = useState(false);
-  const bottomRef = useRef(null);
-  const containerRef = useRef(null);
-  const autoScrollRef = useRef(true);
   const textareaRef = useRef(null);
-  const lastTurnTsRef = useRef(null);
-
-  // Auto-scroll to bottom, but pause if user has scrolled up
-  useEffect(() => {
-    if (autoScrollRef.current && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [turns, isStreaming]);
-
-  const handleScroll = useCallback(() => {
-    if (!containerRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-    const atBottom = scrollHeight - scrollTop - clientHeight < 80;
-    autoScrollRef.current = atBottom;
-    setShowScrollBtn(!atBottom);
-  }, []);
+  const {
+    containerRef,
+    bottomRef,
+    showScrollBtn,
+    handleScroll,
+    jumpToBottom,
+    markShouldStickToBottom,
+  } = useConversationScroll({
+    deps: [turns, isStreaming],
+    followBehavior: 'auto',
+    onViewportStateChange,
+  });
 
   const handleSend = useCallback(() => {
     const text = inputValue.trim();
@@ -102,7 +96,7 @@ export function MobileChatView({
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
-    autoScrollRef.current = true;
+    markShouldStickToBottom();
   }, [inputValue, onSend]);
 
   const handleKeyDown = useCallback((e) => {
@@ -197,9 +191,7 @@ export function MobileChatView({
           type="button"
           className="mobile-scroll-bottom-btn chat-scroll-bottom-btn"
           onClick={() => {
-            autoScrollRef.current = true;
-            setShowScrollBtn(false);
-            bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+            jumpToBottom();
           }}
           aria-label="Scroll to bottom"
         >

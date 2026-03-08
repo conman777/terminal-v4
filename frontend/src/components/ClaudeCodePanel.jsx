@@ -11,6 +11,7 @@ export default function ClaudeCodePanel({
   fontSize,
   webglEnabled,
   onScrollDirection,
+  onViewportStateChange,
   onRegisterFocusTerminal,
   usesTmux,
   chatMode = false
@@ -29,6 +30,16 @@ export default function ClaudeCodePanel({
   const handleActivityChange = useCallback((isBusy) => {
     setIsClaudeBusy(isBusy);
   }, []);
+
+  const handleTerminalViewportStateChange = useCallback((atBottom) => {
+    if (chatMode) return;
+    onViewportStateChange?.(atBottom);
+  }, [chatMode, onViewportStateChange]);
+
+  const handleChatViewportStateChange = useCallback((atBottom) => {
+    if (!chatMode) return;
+    onViewportStateChange?.(atBottom);
+  }, [chatMode, onViewportStateChange]);
 
   if (!sessionId) {
     return (
@@ -65,6 +76,7 @@ export default function ClaudeCodePanel({
           webglEnabled={webglEnabled}
           usesTmux={usesTmux}
           onScrollDirection={onScrollDirection}
+          onViewportStateChange={handleTerminalViewportStateChange}
           onRegisterFocusTerminal={onRegisterFocusTerminal}
           onActivityChange={handleActivityChange}
           onRegisterSendText={handleRegisterSendText}
@@ -81,6 +93,7 @@ export default function ClaudeCodePanel({
           onSend={handleChatSend}
           onInterrupt={handleInterrupt}
           sessionId={sessionId}
+          onViewportStateChange={handleChatViewportStateChange}
         />
       )}
     </div>

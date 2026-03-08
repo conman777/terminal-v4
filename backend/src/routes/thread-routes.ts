@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { threadUpdateRequestSchema } from './schemas';
+import { getGitDiffStats as readGitDiffStats } from './git-stats';
 import {
   updateThreadMetadata,
   getThreadMetadata,
@@ -261,7 +262,7 @@ export async function registerThreadRoutes(app: FastifyInstance, deps: CoreRoute
     }
 
     const [gitStats, projectPath] = await Promise.all([
-      getGitDiffStats(session.cwd),
+      readGitDiffStats(session.cwd),
       detectGitRoot(session.cwd)
     ]);
 

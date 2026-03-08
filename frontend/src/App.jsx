@@ -31,6 +31,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
+import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 
 function isDynamicImportFetchError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -278,6 +279,7 @@ function AppContent() {
 
   const mainContentRef = useRef(null);
   const focusTerminalRef = useRef(null);
+  const mobileViewportAtBottomRef = useRef(true);
   const previousActiveSessionRef = useRef(null);
   const isMobile = useMobileDetect();
   const viewportHeight = useViewportHeight();
@@ -345,10 +347,20 @@ function AppContent() {
     setMobileView(normalizedView);
   }, [activeSessionId, activeSessions, keybarOpen]);
 
+  const handleMobileViewportStateChange = useCallback((atBottom) => {
+    mobileViewportAtBottomRef.current = atBottom;
+    if (atBottom) {
+      resetScrollDirection();
+    }
+  }, [resetScrollDirection]);
+
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
     // Don't collapse header when keybar is open or in preview mode - user needs access to header controls
     if (keybarOpen || mobileView === 'preview') {
+      return;
+    }
+    if (mobileViewportAtBottomRef.current && direction === 'down') {
       return;
     }
     handleScrollDirection(direction);
@@ -512,8 +524,14 @@ function AppContent() {
 
   // Reset header collapse when switching mobile views
   useEffect(() => {
+    mobileViewportAtBottomRef.current = true;
     resetScrollDirection();
   }, [mobileView, resetScrollDirection]);
+
+  useEffect(() => {
+    mobileViewportAtBottomRef.current = true;
+    resetScrollDirection();
+  }, [chatMode, mobileVisibleSessionId, resetScrollDirection]);
 
   // Track focused session for recency ordering and unread state
   useEffect(() => {
@@ -563,10 +581,10 @@ function AppContent() {
   const [terminalWebglEnabled, setTerminalWebglEnabled] = useState(() => {
     try {
       const stored = localStorage.getItem('terminalWebglEnabled');
-      if (stored !== null) return stored === 'true';
-      return true;
+      if (stored !== null) return resolveTerminalWebglEnabled(stored === 'true');
+      return resolveTerminalWebglEnabled(true);
     } catch {
-      return true;
+      return resolveTerminalWebglEnabled(true);
     }
   });
   const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
@@ -578,6 +596,15 @@ function AppContent() {
       return true;
     }
   });
+
+  useEffect(() => {
+    if (resolveTerminalWebglEnabled(true)) return;
+    try {
+      localStorage.setItem('terminalWebglEnabled', 'false');
+    } catch {
+      // Ignore storage failures
+    }
+  }, []);
 
   // Fetch settings from server on mount
   useEffect(() => {
@@ -604,9 +631,10 @@ function AppContent() {
             }
           }
           if (data.terminalWebglEnabled !== null && data.terminalWebglEnabled !== undefined) {
-            setTerminalWebglEnabled(data.terminalWebglEnabled);
+            const resolvedWebglEnabled = resolveTerminalWebglEnabled(data.terminalWebglEnabled);
+            setTerminalWebglEnabled(resolvedWebglEnabled);
             try {
-              localStorage.setItem('terminalWebglEnabled', String(data.terminalWebglEnabled));
+              localStorage.setItem('terminalWebglEnabled', String(resolvedWebglEnabled));
             } catch { /* ignore */ }
           }
           if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
@@ -657,16 +685,17 @@ function AppContent() {
   }, [terminalFontSizeStorageKey]);
 
   const updateTerminalWebglEnabled = useCallback((enabled) => {
-    setTerminalWebglEnabled(enabled);
+    const resolvedEnabled = resolveTerminalWebglEnabled(enabled);
+    setTerminalWebglEnabled(resolvedEnabled);
     try {
-      localStorage.setItem('terminalWebglEnabled', String(enabled));
+      localStorage.setItem('terminalWebglEnabled', String(resolvedEnabled));
     } catch (e) {
       console.error('Failed to save terminal WebGL setting to localStorage', e);
     }
     apiFetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ terminalWebglEnabled: enabled })
+      body: JSON.stringify({ terminalWebglEnabled: resolvedEnabled })
     }).catch(e => console.error('Failed to save terminal WebGL setting to server', e));
   }, []);
 
@@ -1379,6 +1408,7 @@ function AppContent() {
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
                   onScrollDirection={handleScrollDirectionSafe}
+                  onViewportStateChange={handleMobileViewportStateChange}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
                   sessionAiTypes={sessionAiTypes}
@@ -1399,6 +1429,7 @@ function AppContent() {
                   fontSize={terminalFontSize}
                   webglEnabled={terminalWebglEnabled}
                   onScrollDirection={handleScrollDirectionSafe}
+                  onViewportStateChange={handleMobileViewportStateChange}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   usesTmux={activeClaudeSession?.usesTmux}
                   chatMode={chatMode}
