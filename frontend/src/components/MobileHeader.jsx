@@ -2,11 +2,11 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import { MobileDrawer } from './MobileDrawer';
 import { ContextMenu } from './ContextMenu';
 import { Dropdown } from './Dropdown';
-import { useLongPress } from '../hooks/useLongPress';
 import { MobileViewTabs } from './MobileViewTabs';
 import { MobileSessionPicker } from './MobileSessionPicker';
 import { useTheme } from '../contexts/ThemeContext';
 import { AI_TYPE_OPTIONS } from '../utils/aiProviders';
+import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
 
 const EDGE_SWIPE_ZONE_PX = 28;
 const HORIZONTAL_SWIPE_THRESHOLD_PX = 56;
@@ -14,75 +14,10 @@ const VERTICAL_SWIPE_THRESHOLD_PX = 64;
 const SWIPE_AXIS_BIAS_PX = 18;
 const MAX_GESTURE_DURATION_MS = 700;
 
-// Separate component for mobile tab to use hooks properly
-function MobileTab({
-  session,
-  isActive,
-  isBusy,
-  hasUnread,
-  showStatusLabels,
-  aiType,
-  onSelect,
-  onLongPress,
-  isRenaming,
-  renameValue,
-  onRenameChange,
-  onRenameSubmit,
-  onRenameKeyDown,
-  inputRef
-}) {
-  const longPressHandlers = useLongPress((coords) => {
-    onLongPress(session.id, coords);
-  });
-
-  if (isRenaming) {
-    return (
-      <input
-        ref={inputRef}
-        type="text"
-        className="mobile-header-tab-input"
-        value={renameValue}
-        onChange={(e) => onRenameChange(e.target.value)}
-        onBlur={onRenameSubmit}
-        onKeyDown={onRenameKeyDown}
-        autoFocus
-      />
-    );
-  }
-
-  const tabClasses = [
-    'mobile-header-tab',
-    isActive && 'active',
-    isBusy && 'busy',
-    hasUnread && !isActive && 'unread',
-    aiType && `ai-${aiType}`,
-  ].filter(Boolean).join(' ');
-
-  return (
-    <button
-      type="button"
-      className={tabClasses}
-      onClick={() => onSelect(session.id)}
-      {...longPressHandlers}
-    >
-      <span className={`mobile-header-tab-status${isBusy ? ' busy' : ' idle'}`} />
-      <span className="mobile-header-tab-label">{session.title || 'Terminal'}</span>
-      {showStatusLabels && (
-        <span className={`mobile-header-tab-status-label ${isBusy ? 'busy' : 'idle'}`} aria-hidden="true">
-          {isBusy ? 'Busy' : 'Idle'}
-        </span>
-      )}
-      {hasUnread && !isActive && <span className="mobile-header-tab-unread-dot" aria-hidden="true" />}
-    </button>
-  );
-}
-
 export function MobileHeader({
   activeSessions,
-  inactiveSessions,
   activeSessionId,
   onSelectSession,
-  onRestoreSession,
   onCreateSession,
   onRenameSession,
   onCloseSession,
@@ -104,37 +39,32 @@ export function MobileHeader({
   previewUrl,
   showFileManager,
   onToggleFileManager,
-  onNavigateToPath,
   isNavCollapsed = false,
   sessionActivity,
   sessionsGroupedByProject,
-  showTabStatusLabels = false,
   sessionAiTypes,
   onSetSessionAiType,
   chatMode = false,
   onToggleChatMode,
 }) {
   const { theme, toggleTheme } = useTheme();
+  const visibleActiveSessions = activeSessions.filter((session) => !session.thread?.archived);
+  const activeVisibleSession = visibleActiveSessions.find((session) => session.id === activeSessionId) || null;
+  const activeSessionDisplay = getSessionDisplayInfo(activeVisibleSession, 'New terminal');
+  const activeSessionSubtitle = getCompactSessionSubtitle(activeVisibleSession, 'New terminal');
+  const activeActivity = activeVisibleSession ? sessionActivity?.[activeVisibleSession.id] : null;
+  const activeSessionIsBusy = typeof activeActivity?.isBusy === 'boolean'
+    ? activeActivity.isBusy
+    : Boolean(activeVisibleSession?.isBusy);
+  const sessionCountLabel = `${visibleActiveSessions.length} live terminal${visibleActiveSessions.length === 1 ? '' : 's'}`;
   const [showDrawer, setShowDrawer] = useState(false);
   const [tabContextMenu, setTabContextMenu] = useState(null);
-  const [renamingSessionId, setRenamingSessionId] = useState(null);
-  const [renameValue, setRenameValue] = useState('');
-  const [hasOverflow, setHasOverflow] = useState(false);
   const [previewOpened, setPreviewOpened] = useState(() => mobileView === 'preview' && Boolean(previewUrl));
   const [showSessionPicker, setShowSessionPicker] = useState(false);
-  const tabsRef = useRef(null);
   const headerRef = useRef(null);
-  const renameInputRef = useRef(null);
-  const overflowRef = useRef(null);
   const sessionActionsButtonRef = useRef(null);
-  // Track user scrolling to prevent auto-scroll interruption
-  const userScrollingRef = useRef(false);
-  const scrollTimeoutRef = useRef(null);
   const topRowGestureRef = useRef(null);
 
-  // Update --mobile-header-height CSS variable
-  // Set initial header height synchronously before first paint to prevent
-  // the layout from starting with padding-top: 0 and then jumping.
   useLayoutEffect(() => {
     if (!headerRef.current) return;
     const height = Math.round(headerRef.current.getBoundingClientRect().height || 0);
@@ -153,17 +83,13 @@ export function MobileHeader({
       }
     };
 
-    // Initial update
     updateHeight();
-
-    // Use ResizeObserver for changes in height (e.g. row toggles)
     const observer = new ResizeObserver(updateHeight);
     observer.observe(headerRef.current);
 
     return () => observer.disconnect();
   }, []);
 
-  // Force a height re-sync when header row composition changes.
   useEffect(() => {
     if (!headerRef.current) return;
     const raf = requestAnimationFrame(() => {
@@ -171,63 +97,24 @@ export function MobileHeader({
       document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
     });
     return () => cancelAnimationFrame(raf);
-  }, [mobileView, previewOpened, previewUrl, activeSessions.length, isNavCollapsed]);
-
-  // Check if tabs overflow
-  const updateOverflowState = useCallback(() => {
-    const el = tabsRef.current;
-    if (!el) return;
-    // Use 2px threshold for Retina displays with subpixel rendering
-    const OVERFLOW_THRESHOLD = 2;
-    setHasOverflow(el.scrollWidth > el.clientWidth + OVERFLOW_THRESHOLD);
-  }, []);
-
-  // Update overflow state on mount and when sessions change
-  useEffect(() => {
-    updateOverflowState();
-    const el = tabsRef.current;
-    if (el) {
-      el.addEventListener('scroll', updateOverflowState);
-      window.addEventListener('resize', updateOverflowState);
-      return () => {
-        el.removeEventListener('scroll', updateOverflowState);
-        window.removeEventListener('resize', updateOverflowState);
-      };
-    }
-  }, [activeSessions.length, updateOverflowState]);
-
-  const handleTabLongPress = useCallback((sessionId, coords) => {
-    setTabContextMenu({ sessionId, x: coords.x, y: coords.y });
-  }, []);
+  }, [mobileView, previewOpened, previewUrl, visibleActiveSessions.length, isNavCollapsed, chatMode]);
 
   const handleStartRename = useCallback((sessionId) => {
-    const session = activeSessions.find(s => s.id === sessionId);
-    if (session) {
-      setRenameValue(session.title || 'Terminal');
-      setRenamingSessionId(sessionId);
+    const session = visibleActiveSessions.find((item) => item.id === sessionId);
+    if (!session) return;
+
+    const nextName = window.prompt('Rename terminal', getSessionDisplayInfo(session, 'New terminal').primaryLabel);
+    if (typeof nextName !== 'string') {
       setTabContextMenu(null);
+      return;
     }
-  }, [activeSessions]);
 
-  const handleRenameSubmit = useCallback(() => {
-    if (renamingSessionId) {
-      const trimmed = renameValue.trim();
-      if (trimmed) {
-        onRenameSession(renamingSessionId, trimmed);
-      }
-      setRenamingSessionId(null);
-      setRenameValue('');
+    const trimmed = nextName.trim();
+    if (trimmed) {
+      onRenameSession(sessionId, trimmed);
     }
-  }, [renamingSessionId, renameValue, onRenameSession]);
-
-  const handleRenameKeyDown = useCallback((e) => {
-    if (e.key === 'Enter') {
-      handleRenameSubmit();
-    } else if (e.key === 'Escape') {
-      setRenamingSessionId(null);
-      setRenameValue('');
-    }
-  }, [handleRenameSubmit]);
+    setTabContextMenu(null);
+  }, [onRenameSession, visibleActiveSessions]);
 
   const handleCloseFromMenu = useCallback((sessionId) => {
     onCloseSession(sessionId);
@@ -242,37 +129,6 @@ export function MobileHeader({
     const x = rect ? Math.round(rect.left + (rect.width / 2)) : fallbackX;
     const y = rect ? Math.round(rect.bottom + 6) : fallbackY;
     setTabContextMenu({ sessionId: activeSessionId, x, y });
-  }, [activeSessionId]);
-
-  // Handle user manual scrolling to prevent auto-scroll interruption
-  const handleUserScroll = useCallback(() => {
-    userScrollingRef.current = true;
-    if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-    scrollTimeoutRef.current = setTimeout(() => {
-      userScrollingRef.current = false;
-    }, 150);
-  }, []);
-
-  // Auto-scroll active tab into view (but don't interrupt user scrolling)
-  useEffect(() => {
-    // Don't auto-scroll if user is actively scrolling tabs manually
-    if (userScrollingRef.current) return;
-
-    if (tabsRef.current && activeSessionId) {
-      const activeTab = tabsRef.current.querySelector('.mobile-header-tab.active');
-      if (activeTab && typeof activeTab.scrollIntoView === 'function') {
-        const prefersReducedMotion = (
-          typeof window !== 'undefined' &&
-          typeof window.matchMedia === 'function' &&
-          window.matchMedia('(prefers-reduced-motion: reduce)').matches
-        );
-        activeTab.scrollIntoView({
-          behavior: prefersReducedMotion ? 'auto' : 'smooth',
-          inline: 'center',
-          block: 'nearest'
-        });
-      }
-    }
   }, [activeSessionId]);
 
   const handleTopRowTouchStart = useCallback((event) => {
@@ -329,31 +185,78 @@ export function MobileHeader({
     topRowGestureRef.current = null;
   }, []);
 
-  // Track when preview is opened
   useEffect(() => {
     if (mobileView === 'preview' && previewUrl) {
       setPreviewOpened(true);
     }
-    // Reset when leaving preview mode
     if (mobileView === 'terminal') {
       setPreviewOpened(false);
     }
   }, [mobileView, previewUrl]);
 
-  // Reset preview opened state when preview URL is cleared
   useEffect(() => {
     if (!previewUrl) {
       setPreviewOpened(false);
     }
   }, [previewUrl]);
 
-  useEffect(() => {
-    if (activeSessions.length <= 3) {
-      setShowSessionPicker(false);
-    }
-  }, [activeSessions.length]);
+  const isPreviewView = mobileView === 'preview';
+  const showInlineViewTabs = Boolean(previewUrl && previewOpened);
+  const showSessionRail = !showInlineViewTabs && !isPreviewView;
 
-  const toolsItems = [
+  const overflowItems = [
+    !isPreviewView && !chatMode ? {
+      label: 'Preview',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="12" y1="3" x2="12" y2="21" />
+        </svg>
+      ),
+      onClick: () => onViewChange?.('preview')
+    } : null,
+    isPreviewView ? {
+      label: 'Back to terminal',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+      ),
+      onClick: () => onViewChange?.('terminal')
+    } : null,
+    !isPreviewView && !chatMode ? {
+      label: keybarOpen ? 'Hide keyboard bar' : 'Show keyboard bar',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
+          <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
+        </svg>
+      ),
+      onClick: () => onToggleKeybar?.(),
+      active: keybarOpen
+    } : null,
+    {
+      label: theme === 'dark' ? 'Light mode' : 'Dark mode',
+      icon: theme === 'dark' ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      ),
+      onClick: toggleTheme
+    },
     {
       label: 'Process Manager',
       icon: (
@@ -366,27 +269,6 @@ export function MobileHeader({
       onClick: onOpenProcessManager
     },
     {
-      label: 'Bookmarks',
-      icon: (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-        </svg>
-      ),
-      onClick: onOpenBookmarks
-    },
-    {
-      label: 'Notes',
-      icon: (
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-          <polyline points="14 2 14 8 20 8" />
-          <line x1="16" y1="13" x2="8" y2="13" />
-          <line x1="16" y1="17" x2="8" y2="17" />
-        </svg>
-      ),
-      onClick: onOpenNotes
-    },
-    {
       label: 'File Manager',
       icon: (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -396,9 +278,7 @@ export function MobileHeader({
       active: showFileManager,
       onClick: onToggleFileManager
     }
-  ];
-  const isPreviewView = mobileView === 'preview';
-  const showInlineViewTabs = Boolean(previewUrl && previewOpened);
+  ].filter(Boolean);
 
   return (
     <>
@@ -432,11 +312,15 @@ export function MobileHeader({
               previewUrl={previewUrl}
             />
           ) : (
-            <span className="mobile-header-title">{isPreviewView ? 'Preview' : chatMode ? 'Conversation' : 'Terminal'}</span>
+            <div className="mobile-header-title-block">
+              <span className="mobile-header-title">{isPreviewView ? 'Preview' : chatMode ? 'Conversation' : 'Terminal'}</span>
+              {!isPreviewView && (
+                <span className="mobile-header-caption">{sessionCountLabel}</span>
+              )}
+            </div>
           )}
 
           <div className="mobile-header-actions-right">
-            {/* Chat/Terminal mode toggle - visible when not in preview view */}
             {!isPreviewView && (
               <button
                 type="button"
@@ -456,95 +340,68 @@ export function MobileHeader({
                 )}
               </button>
             )}
-
-            {/* Preview toggle is hidden while already in preview view or in chat mode */}
-            {!isPreviewView && !chatMode && (
-              <button
-                className={`mobile-header-btn-modern ${mobileView === 'preview' ? 'active' : ''}`}
-                onClick={() => onViewChange?.('preview')}
-                aria-label="Preview"
-                title="Preview"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <line x1="12" y1="3" x2="12" y2="21" />
-                </svg>
-              </button>
-            )}
-
             <Dropdown
-              trigger={
-                <button className="mobile-header-btn-modern" type="button" aria-label="Tools">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="7" height="7" />
-                    <rect x="14" y="3" width="7" height="7" />
-                    <rect x="14" y="14" width="7" height="7" />
-                    <rect x="3" y="14" width="7" height="7" />
+              trigger={(
+                <button className="mobile-header-btn-modern" type="button" aria-label="More actions">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="12" cy="19" r="2" />
                   </svg>
                 </button>
-              }
-              items={toolsItems}
+              )}
+              items={overflowItems}
               align="right"
             />
+          </div>
+        </div>
 
+        {showSessionRail && (
+          <div className="mobile-header-session-rail">
             <button
-              className="mobile-header-btn-modern"
-              onClick={toggleTheme}
-              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={theme === 'dark' ? 'Light mode' : 'Dark mode'}
+              type="button"
+              className={`mobile-header-session-switcher${activeSessionIsBusy ? ' busy' : ''}`}
+              onClick={() => setShowSessionPicker(true)}
+              aria-label="Open session picker"
             >
-              {theme === 'dark' ? (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="5" />
-                  <line x1="12" y1="1" x2="12" y2="3" />
-                  <line x1="12" y1="21" x2="12" y2="23" />
-                  <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-                  <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-                  <line x1="1" y1="12" x2="3" y2="12" />
-                  <line x1="21" y1="12" x2="23" y2="12" />
-                  <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-                  <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                </svg>
+              <span className={`mobile-header-session-dot ${activeSessionIsBusy ? 'busy' : 'idle'}`} aria-hidden="true" />
+              <span className="mobile-header-session-copy">
+                <span className="mobile-header-session-name">
+                  {activeVisibleSession ? activeSessionDisplay.primaryLabel : 'No active terminal'}
+                </span>
+                {activeVisibleSession && activeSessionSubtitle && (
+                  <span className="mobile-header-session-subtitle">{activeSessionSubtitle}</span>
+                )}
+              </span>
+              {visibleActiveSessions.length > 1 && (
+                <span className="mobile-header-session-count" aria-hidden="true">{visibleActiveSessions.length}</span>
               )}
+              <svg className="mobile-header-session-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
             </button>
 
-            {!isPreviewView && !chatMode && (
-              <button
-                className={`mobile-header-btn-modern ${keybarOpen ? 'active' : ''}`}
-                onClick={onToggleKeybar}
-                aria-label="Keyboard"
-                title="Keyboard"
-                type="button"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
-                  <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
-                </svg>
-              </button>
-            )}
-            {activeSessions.length > 3 && !isPreviewView && (
-              <button
-                className="mobile-header-session-picker-btn"
-                onClick={() => setShowSessionPicker(true)}
-                aria-label="Open session picker"
-                title="Open session picker"
-                type="button"
-              >
-                {activeSessions.length} sessions
-              </button>
-            )}
-            {activeSessionId && !isPreviewView && !chatMode && (
+            <button
+              type="button"
+              className="mobile-header-session-icon"
+              onClick={() => onCreateSession?.()}
+              aria-label="New terminal"
+              title="New terminal"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+            </button>
+
+            {activeVisibleSession && (
               <button
                 ref={sessionActionsButtonRef}
-                className="mobile-header-btn-modern"
+                type="button"
+                className="mobile-header-session-icon"
                 onClick={handleOpenActiveSessionMenu}
                 aria-label="Session actions"
                 title="Session actions"
-                type="button"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                   <circle cx="12" cy="5" r="2" />
@@ -554,56 +411,7 @@ export function MobileHeader({
               </button>
             )}
           </div>
-        </div>
-
-        {/* Second row for session tabs - only when not showing view tabs in top row */}
-        {(mobileView === 'terminal' || mobileView === 'preview') && !(previewUrl && previewOpened) && (
-          <div className="mobile-header-tabs-row">
-            <div className="mobile-header-tabs-modern" ref={tabsRef} onScroll={handleUserScroll}>
-              {activeSessions.map((session) => (
-                (() => {
-                  const activityState = sessionActivity?.[session.id];
-                  const isActive = session.id === activeSessionId;
-                  const backendBusy = typeof session?.isBusy === 'boolean'
-                    ? session.isBusy
-                    : Boolean(activityState?.isBusy);
-                  const isBusy = isActive ? backendBusy : false;
-                  return (
-                <MobileTab
-                  key={session.id}
-                  session={session}
-                  isActive={isActive}
-                  isBusy={isBusy}
-                  hasUnread={Boolean(activityState?.hasUnread)}
-                  showStatusLabels={showTabStatusLabels}
-                  aiType={sessionAiTypes?.[session.id]}
-                  onSelect={onSelectSession}
-                  onLongPress={handleTabLongPress}
-                  isRenaming={renamingSessionId === session.id}
-                  renameValue={renameValue}
-                  onRenameChange={setRenameValue}
-                  onRenameSubmit={handleRenameSubmit}
-                  onRenameKeyDown={handleRenameKeyDown}
-                  inputRef={renameInputRef}
-                />
-                  );
-                })()
-              ))}
-              <button
-                type="button"
-                className="mobile-header-tab-add"
-                onClick={() => onCreateSession?.()}
-                aria-label="New terminal"
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              </button>
-            </div>
-          </div>
         )}
-
       </header>
 
       <MobileDrawer
@@ -621,13 +429,10 @@ export function MobileHeader({
         onFolderSelect={onFolderSelect}
         currentPath={currentPath}
         onAddScanFolder={onAddScanFolder}
-        onNavigateToPath={onNavigateToPath}
         mobileView={mobileView}
         onViewChange={onViewChange}
         previewUrl={previewUrl}
-        inactiveSessions={inactiveSessions}
-        onRestoreSession={onRestoreSession}
-        activeSessions={activeSessions}
+        activeSessions={visibleActiveSessions}
         activeSessionId={activeSessionId}
         sessionActivity={sessionActivity}
         onSelectSession={onSelectSession}
@@ -637,7 +442,7 @@ export function MobileHeader({
       <MobileSessionPicker
         isOpen={showSessionPicker}
         onClose={() => setShowSessionPicker(false)}
-        sessions={activeSessions}
+        sessions={visibleActiveSessions}
         activeSessionId={activeSessionId}
         sessionActivity={sessionActivity}
         sessionAiTypes={sessionAiTypes}
@@ -659,14 +464,14 @@ export function MobileHeader({
               onClick: () => handleStartRename(tabContextMenu.sessionId)
             },
             { separator: true },
-            ...AI_TYPE_OPTIONS.map(opt => ({
-              label: opt.label,
+            ...AI_TYPE_OPTIONS.map((option) => ({
+              label: option.label,
               icon: (
-                <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: opt.color, flexShrink: 0 }} />
+                <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: option.color, flexShrink: 0 }} />
               ),
-              active: (sessionAiTypes?.[tabContextMenu.sessionId] ?? null) === opt.id,
+              active: (sessionAiTypes?.[tabContextMenu.sessionId] ?? null) === option.id,
               onClick: () => {
-                onSetSessionAiType?.(tabContextMenu.sessionId, opt.id);
+                onSetSessionAiType?.(tabContextMenu.sessionId, option.id);
                 setTabContextMenu(null);
               }
             })),

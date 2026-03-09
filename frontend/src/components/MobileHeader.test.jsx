@@ -12,10 +12,8 @@ vi.mock('../contexts/ThemeContext', () => ({
 function buildProps(overrides = {}) {
   return {
     activeSessions: [{ id: 'session-1', title: 'Terminal 1', isBusy: false }],
-    inactiveSessions: [],
     activeSessionId: 'session-1',
     onSelectSession: vi.fn(),
-    onRestoreSession: vi.fn(),
     onCreateSession: vi.fn(),
     onRenameSession: vi.fn(),
     onCloseSession: vi.fn(),
@@ -149,6 +147,26 @@ describe('MobileHeader', () => {
     expect(onSelectSession).toHaveBeenCalledWith('session-4');
   });
 
+  it('shows a single active-session switcher instead of persistent session tabs', () => {
+    const { container } = render(
+      <MobileHeader
+        {...buildProps({
+          activeSessions: [
+            { id: 'session-1', title: 'Terminal 1', isBusy: false, thread: { topic: 'explain this codebase' } },
+            { id: 'session-2', title: 'Terminal 2', isBusy: false, thread: { topic: 'background terminal' } }
+          ],
+          activeSessionId: 'session-1'
+        })}
+      />
+    );
+
+    expect(container.querySelector('.mobile-header-tabs-row')).toBeNull();
+    const pickerButton = screen.getByRole('button', { name: /open session picker/i });
+    expect(pickerButton).toBeInTheDocument();
+    expect(within(pickerButton).getByText('explain this codebase')).toBeInTheDocument();
+    expect(screen.queryByText('background terminal')).not.toBeInTheDocument();
+  });
+
   it('opens the new terminal flow without forwarding the click event', () => {
     const onCreateSession = vi.fn();
     render(<MobileHeader {...buildProps({ onCreateSession })} />);
@@ -156,5 +174,129 @@ describe('MobileHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: /new terminal/i }));
 
     expect(onCreateSession).toHaveBeenCalledWith();
+  });
+
+  it('shows preferred thread topics in the session rail and seeds rename from the visible topic', () => {
+    const onRenameSession = vi.fn();
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('review upstream diff');
+
+    render(
+      <MobileHeader
+        {...buildProps({
+          onRenameSession,
+          activeSessions: [
+            {
+              id: 'session-1',
+              title: 'Terminal 1',
+              isBusy: false,
+              thread: { topic: 'discard local changes' }
+            }
+          ],
+          activeSessionId: 'session-1'
+        })}
+      />
+    );
+
+    const pickerButton = screen.getByRole('button', { name: /open session picker/i });
+    expect(within(pickerButton).getByText('discard local changes')).toBeInTheDocument();
+    expect(screen.queryByText('Terminal 1')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /session actions/i }));
+    fireEvent.click(screen.getByText('Rename'));
+
+    expect(onRenameSession).toHaveBeenCalledWith('session-1', 'review upstream diff');
+    promptSpy.mockRestore();
+  });
+
+  it('shows a compact project subtitle in the session rail instead of a raw path', () => {
+    render(
+      <MobileHeader
+        {...buildProps({
+          activeSessions: [
+            {
+              id: 'session-1',
+              title: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              isBusy: false,
+              thread: { topic: 'ship the header polish' }
+            }
+          ],
+          activeSessionId: 'session-1'
+        })}
+      />
+    );
+
+    const pickerButton = screen.getByRole('button', { name: /open session picker/i });
+    expect(within(pickerButton).getByText('uplifting')).toBeInTheDocument();
+    expect(within(pickerButton).queryByText(/OneDrive/)).not.toBeInTheDocument();
+  });
+
+  it('shows busy state for the active session from shared session activity', () => {
+    render(
+      <MobileHeader
+        {...buildProps({
+          activeSessions: [
+            {
+              id: 'session-1',
+              title: 'Current session',
+              isBusy: false,
+              thread: { topic: 'current session' }
+            }
+          ],
+          activeSessionId: 'session-1',
+          sessionActivity: {
+            'session-1': {
+              isBusy: true
+            }
+          }
+        })}
+      />
+    );
+
+    const pickerButton = screen.getByRole('button', { name: /open session picker/i });
+    expect(pickerButton).toHaveClass('busy');
+    expect(within(pickerButton).queryByText('Busy')).not.toBeInTheDocument();
+    expect(within(pickerButton).getByText('current session')).toBeInTheDocument();
+  });
+
+  it('filters archived sessions out of the primary mobile controls', () => {
+    render(
+      <MobileHeader
+        {...buildProps({
+          activeSessions: [
+            {
+              id: 'session-1',
+              title: 'Terminal 1',
+              isBusy: false,
+              thread: { topic: 'visible one', archived: false }
+            },
+            {
+              id: 'session-2',
+              title: 'Terminal 2',
+              isBusy: false,
+              thread: { topic: 'visible two', archived: false }
+            },
+            {
+              id: 'session-3',
+              title: 'Terminal 3',
+              isBusy: false,
+              thread: { topic: 'visible three', archived: false }
+            },
+            {
+              id: 'session-4',
+              title: 'Terminal 4',
+              isBusy: false,
+              thread: { topic: 'archived thread', archived: true }
+            }
+          ],
+          activeSessionId: 'session-1'
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /open session picker/i }));
+
+    expect(screen.queryByText('archived thread')).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: /session picker/i })).toHaveTextContent('visible one');
   });
 });

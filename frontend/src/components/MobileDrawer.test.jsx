@@ -22,8 +22,6 @@ function buildProps(overrides = {}) {
     mobileView: 'terminal',
     onViewChange: vi.fn(),
     previewUrl: '',
-    inactiveSessions: [],
-    onRestoreSession: vi.fn(),
     activeSessions: [],
     activeSessionId: null,
     sessionActivity: {},
@@ -116,5 +114,95 @@ describe('MobileDrawer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /show mobile gesture help/i }));
     expect(screen.queryByText('Swipe right from the left edge to open the drawer.')).not.toBeInTheDocument();
+  });
+
+  it('filters archived sessions from the live threads list', () => {
+    render(<MobileDrawer {...buildProps({
+      sessionsGroupedByProject: [
+        {
+          projectName: 'terminal-v4',
+          projectPath: 'C:\\repo',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'Terminal 1',
+              updatedAt: '2026-03-09T10:00:00.000Z',
+              thread: { topic: 'visible thread', archived: false }
+            },
+            {
+              id: 'session-2',
+              title: 'Terminal 2',
+              updatedAt: '2026-03-09T10:01:00.000Z',
+              thread: { topic: 'archived thread', archived: true }
+            }
+          ]
+        }
+      ]
+    })} />);
+
+    expect(screen.getByText('visible thread')).toBeInTheDocument();
+    expect(screen.queryByText('archived thread')).not.toBeInTheDocument();
+  });
+
+  it('shows the active session summary with derived labels', () => {
+    render(<MobileDrawer {...buildProps({
+      activeSessions: [
+        {
+          id: 'session-1',
+          title: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+          cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+          updatedAt: '2026-03-09T10:00:00.000Z',
+          thread: { topic: 'ship mobile header', archived: false }
+        }
+      ],
+      activeSessionId: 'session-1'
+    })} />);
+
+    expect(screen.getByText('Current session')).toBeInTheDocument();
+    expect(screen.getByText('ship mobile header')).toBeInTheDocument();
+    expect(screen.getByText('uplifting')).toBeInTheDocument();
+  });
+
+  it('surfaces API settings and browser settings actions from the More section', () => {
+    const onOpenApiSettings = vi.fn();
+    const onOpenBrowserSettings = vi.fn();
+
+    render(<MobileDrawer {...buildProps({ onOpenApiSettings, onOpenBrowserSettings })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'API Settings' }));
+    expect(onOpenApiSettings).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Browser Settings' }));
+    expect(onOpenBrowserSettings).toHaveBeenCalled();
+  });
+
+  it('shows compact session subtitles instead of raw paths in the live list', () => {
+    render(<MobileDrawer {...buildProps({
+      sessionsGroupedByProject: [
+        {
+          projectName: 'uplifting',
+          projectPath: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              updatedAt: '2026-03-09T10:00:00.000Z',
+              thread: { topic: 'ship mobile polish', archived: false }
+            }
+          ]
+        }
+      ]
+    })} />);
+
+    const upliftingLabels = screen.getAllByText('uplifting');
+    expect(upliftingLabels.length).toBeGreaterThan(0);
+    expect(screen.queryByText(/OneDrive/)).not.toBeInTheDocument();
+  });
+
+  it('does not render a recent terminals section', () => {
+    render(<MobileDrawer {...buildProps()} />);
+
+    expect(screen.queryByText('Recent terminals')).not.toBeInTheDocument();
   });
 });

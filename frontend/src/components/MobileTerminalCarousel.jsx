@@ -5,6 +5,7 @@ import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { MobileChatView } from './MobileChatView';
 import { ContextMenu } from './ContextMenu';
 import { useLongPress } from '../hooks/useLongPress';
+import { getAiInitialCommand } from '../utils/aiProviders';
 
 export function MobileTerminalCarousel({
   sessions,
@@ -20,6 +21,9 @@ export function MobileTerminalCarousel({
   onRegisterFocusTerminal,
   onSessionBusyChange,
   sessionAiTypes,
+  customAiProviders = [],
+  onSetSessionAiType,
+  onAddCustomAiProvider,
   chatMode = false,
   onChatModeChange,
 }) {
@@ -207,6 +211,24 @@ export function MobileTerminalCarousel({
     chatMode,
   });
 
+  const handleSelectAiType = useCallback((nextAiType) => {
+    if (!currentSession?.id) return;
+    onSetSessionAiType?.(currentSession.id, nextAiType);
+    const launchCommand = getAiInitialCommand(nextAiType, customAiProviders);
+    if (launchCommand) {
+      handleChatSend(launchCommand);
+    }
+  }, [currentSession?.id, customAiProviders, handleChatSend, onSetSessionAiType]);
+
+  const handleAddCustomAiCommand = useCallback((label, command) => {
+    const provider = onAddCustomAiProvider?.(label, command);
+    if (!provider?.id || !currentSession?.id) return;
+    onSetSessionAiType?.(currentSession.id, provider.id);
+    if (provider.initialCommand) {
+      handleChatSend(provider.initialCommand);
+    }
+  }, [currentSession?.id, handleChatSend, onAddCustomAiProvider, onSetSessionAiType]);
+
   useEffect(() => {
     try {
       localStorage.setItem('mobileTerminalViewMode', viewMode);
@@ -307,6 +329,16 @@ export function MobileTerminalCarousel({
           viewMode={viewMode}
           onToggleViewMode={handleToggleViewMode}
           isConnected={isConnected}
+          aiType={currentAiType}
+          customAiProviders={customAiProviders}
+          onSelectAiType={handleSelectAiType}
+          onAddCustomAiCommand={handleAddCustomAiCommand}
+          onLaunchAi={() => {
+            const launchCommand = getAiInitialCommand(currentAiType, customAiProviders);
+            if (launchCommand) {
+              handleChatSend(launchCommand);
+            }
+          }}
         />
       )}
 

@@ -1445,6 +1445,9 @@ function AppContent() {
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
                   onSessionBusyChange={handleSessionBusyChange}
                   sessionAiTypes={sessionAiTypes}
+                  customAiProviders={customAiProviders}
+                  onSetSessionAiType={handleSetSessionAiType}
+                  onAddCustomAiProvider={handleAddCustomAiProvider}
                   chatMode={chatMode}
                   onChatModeChange={setChatMode}
                 />

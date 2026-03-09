@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
 
 const SWIPE_CLOSE_THRESHOLD = 64;
 const SWIPE_AXIS_BIAS = 16;
@@ -64,11 +65,18 @@ export function MobileSessionPicker({
     };
   }, [isOpen, onClose]);
 
+  const selectableSessions = useMemo(
+    () => sessions.filter((session) => !session.thread?.archived),
+    [sessions]
+  );
+
   const filteredSessions = useMemo(() => {
     const trimmed = query.trim().toLowerCase();
-    if (!trimmed) return sessions;
-    return sessions.filter((session) => (session.title || 'Terminal').toLowerCase().includes(trimmed));
-  }, [query, sessions]);
+    if (!trimmed) return selectableSessions;
+    return selectableSessions.filter((session) => (
+      getSessionDisplayInfo(session, 'Terminal').primaryLabel.toLowerCase().includes(trimmed)
+    ));
+  }, [query, selectableSessions]);
 
   const handleTouchStart = (event) => {
     const touch = event.touches?.[0];
@@ -137,7 +145,7 @@ export function MobileSessionPicker({
           </button>
         </div>
 
-        {sessions.length > 6 && (
+        {selectableSessions.length > 6 && (
           <div className="mobile-session-picker-search">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8" />
@@ -160,12 +168,14 @@ export function MobileSessionPicker({
             filteredSessions.map((session) => {
               const isActive = session.id === activeSessionId;
               const activity = sessionActivity?.[session.id];
-              const isBusy = typeof session?.isBusy === 'boolean'
-                ? session.isBusy
-                : Boolean(activity?.isBusy);
+              const isBusy = typeof activity?.isBusy === 'boolean'
+                ? activity.isBusy
+                : Boolean(session?.isBusy);
               const lastActivity = activity?.lastActivity || session.updatedAt;
               const relativeTime = formatRelativeTime(lastActivity);
               const aiType = sessionAiTypes?.[session.id] || null;
+              const display = getSessionDisplayInfo(session, 'Terminal');
+              const subtitle = getCompactSessionSubtitle(session, 'Terminal');
 
               return (
                 <button
@@ -175,7 +185,10 @@ export function MobileSessionPicker({
                   onClick={() => handleSelectSession(session.id)}
                 >
                   <div className="mobile-session-picker-item-main">
-                    <div className="mobile-session-picker-item-title">{session.title || 'Terminal'}</div>
+                    <div className="mobile-session-picker-item-title">{display.primaryLabel}</div>
+                    {subtitle && (
+                      <div className="mobile-session-picker-item-subtitle">{subtitle}</div>
+                    )}
                     <div className="mobile-session-picker-item-meta">
                       <span className={`mobile-session-picker-ai-dot${aiType ? ` ai-${aiType}` : ''}`} />
                       <span className={`mobile-session-picker-item-status ${isBusy ? 'busy' : 'idle'}`}>
