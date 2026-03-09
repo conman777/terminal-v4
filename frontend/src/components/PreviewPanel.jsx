@@ -2681,6 +2681,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {selectedTerminalSession ? (
                 <TerminalChat
                   key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
+                  surface={isMobile ? 'mobile' : 'desktop'}
                   sessionId={selectedTerminalSession}
                   keybarOpen={false}
                   viewportHeight={null}
@@ -3588,6 +3589,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {selectedTerminalSession ? (
                 <TerminalChat
                   key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
+                  surface={isMobile ? 'mobile' : 'desktop'}
                   sessionId={selectedTerminalSession}
                     keybarOpen={false}
                     viewportHeight={null}

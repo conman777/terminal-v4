@@ -102,6 +102,7 @@ describe('TerminalPane', () => {
     const { container } = render(<TerminalPane {...buildProps()} />);
 
     expect(latestTerminalChatProps).not.toBeNull();
+    expect(latestTerminalChatProps.surface).toBe('desktop');
     expect(screen.getByTestId('terminal-chat-mock')).toBeInTheDocument();
     expect(screen.queryByTestId('desktop-conversation-view-mock')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-toggle-hidden')).toBeInTheDocument();

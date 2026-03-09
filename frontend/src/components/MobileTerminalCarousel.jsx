@@ -282,9 +282,10 @@ export function MobileTerminalCarousel({
         aria-hidden={chatMode ? 'true' : undefined}
         {...longPressHandlers}
       >
-        <TerminalChat
-          key={`${currentSession.id}-${refreshToken}`}
-          sessionId={currentSession.id}
+          <TerminalChat
+            key={`${currentSession.id}-${refreshToken}`}
+            surface="mobile"
+            sessionId={currentSession.id}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}
           onUrlDetected={onUrlDetected}

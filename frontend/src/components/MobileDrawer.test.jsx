@@ -255,6 +255,29 @@ describe('MobileDrawer', () => {
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
   });
 
+  it('does not render a preview button when no preview is available', () => {
+    render(<MobileDrawer {...buildProps({ previewUrl: '' })} />);
+
+    expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+  });
+
+  it('switches to preview when a preview url is available', () => {
+    const onViewChange = vi.fn();
+    const onClose = vi.fn();
+
+    render(<MobileDrawer {...buildProps({
+      previewUrl: 'https://example.com',
+      onViewChange,
+      onClose,
+    })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(onViewChange).toHaveBeenCalledWith('preview');
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('shows a ready indicator for inactive threads with completed activity', () => {
     render(<MobileDrawer {...buildProps({
       activeSessionId: 'session-2',

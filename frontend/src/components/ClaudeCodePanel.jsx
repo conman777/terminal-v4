@@ -68,6 +68,7 @@ export default function ClaudeCodePanel({
         aria-hidden={chatMode ? 'true' : undefined}
       >
         <TerminalChat
+          surface="mobile"
           sessionId={sessionId}
           keybarOpen={keybarOpen}
           viewportHeight={viewportHeight}

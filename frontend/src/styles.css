@@ -1220,6 +1220,16 @@ button {
   transition: box-shadow var(--transition-base);
 }
 
+.terminal-chat-mobile {
+  --terminal-scroll-buttons-bottom: 64px;
+  --terminal-scroll-buttons-right: 6px;
+}
+
+.terminal-chat-desktop {
+  --terminal-scroll-buttons-bottom: 52px;
+  --terminal-scroll-buttons-right: 14px;
+}
+
 .terminal-chat.scroll-mode {
   touch-action: none;
 }
@@ -1543,7 +1553,7 @@ button {
   }
 }
 
-.layout.mobile .terminal-image-btn {
+.layout.mobile .terminal-chat-mobile .terminal-image-btn {
   display: none !important;
 }
 
@@ -1700,8 +1710,8 @@ button {
 /* Mobile scroll buttons - slim vertical strip, left of scrollbar */
 .terminal-scroll-buttons {
   position: absolute;
-  right: 14px; /* Clear the scrollbar */
-  bottom: 52px; /* Above status bar */
+  right: var(--terminal-scroll-buttons-right, 14px);
+  bottom: var(--terminal-scroll-buttons-bottom, 52px);
   display: flex;
   flex-direction: column;
   z-index: 100; /* Below modals (1000+) but above terminal content */
@@ -1712,13 +1722,11 @@ button {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 
-.terminal-scroll-buttons.mobile {
-  bottom: 64px;
-  right: 6px;
+.terminal-chat-mobile .terminal-scroll-buttons.mobile {
   opacity: 0.7;
 }
 
-.terminal-scroll-buttons.mobile .scroll-btn {
+.terminal-chat-mobile .terminal-scroll-buttons.mobile .scroll-btn {
   width: 44px;
   height: 48px;
 }
@@ -13734,7 +13742,7 @@ textarea:focus-visible {
 }
 
 /* Hide floating image button on desktop when using status bar */
-.layout:not(.mobile) .terminal-image-btn {
+.layout:not(.mobile) .terminal-chat-desktop .terminal-image-btn {
   display: none !important;
 }
 

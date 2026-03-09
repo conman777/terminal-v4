@@ -621,6 +621,7 @@ export const TerminalPane = memo(function TerminalPane({
               >
                 <TerminalChat
                   key={`${pane.sessionId}-${refreshToken}`}
+                  surface="desktop"
                   sessionId={pane.sessionId}
                   keybarOpen={keybarOpen}
                   viewportHeight={viewportHeight}

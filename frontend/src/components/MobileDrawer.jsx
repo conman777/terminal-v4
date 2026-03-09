@@ -250,7 +250,7 @@ export function MobileDrawer({
 
   const viewTabs = [
     { key: 'terminal', label: 'Terminal' },
-    { key: 'preview', label: 'Preview', disabled: !previewUrl }
+    ...(previewUrl ? [{ key: 'preview', label: 'Preview' }] : [])
   ];
 
   const menuItems = [

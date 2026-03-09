@@ -2,19 +2,25 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileTerminalCarousel } from './MobileTerminalCarousel';
 
+let latestTerminalChatProps = null;
+
 vi.mock('../hooks/useSwipeGesture', () => ({
   useSwipeGesture: () => ({ containerRef: { current: null } })
 }));
 
 vi.mock('./TerminalChat', () => ({
-  TerminalChat: ({ sessionId, onViewportStateChange, onRegisterScrollToBottom }) => (
+  TerminalChat: (props) => {
+    latestTerminalChatProps = props;
+    const { sessionId, onViewportStateChange, onRegisterScrollToBottom } = props;
+    return (
     <div data-testid="mobile-carousel-terminal">
       {sessionId}
       <button type="button" onClick={() => onViewportStateChange?.(false)}>mark-terminal-scrolled-up</button>
       <button type="button" onClick={() => onViewportStateChange?.(true)}>mark-terminal-at-bottom</button>
       <button type="button" onClick={() => onRegisterScrollToBottom?.(vi.fn())}>register-scroll</button>
     </div>
-  )
+    );
+  }
 }));
 
 vi.mock('./MobileChatView', () => ({
@@ -68,6 +74,7 @@ describe('MobileTerminalCarousel', () => {
 
     expect(screen.getByTestId('mobile-carousel-terminal')).toHaveTextContent('session-1');
     expect(screen.getByTestId('mobile-carousel-status')).toHaveTextContent('session-1');
+    expect(latestTerminalChatProps?.surface).toBe('mobile');
   });
 
   it('shows and hides the jump-to-latest button from actual viewport state', () => {

@@ -201,8 +201,8 @@ describe('MobileHeader', () => {
     expect(within(pickerButton).getByText('discard local changes')).toBeInTheDocument();
     expect(screen.queryByText('Terminal 1')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /session actions/i }));
-    fireEvent.click(screen.getByText('Rename'));
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rename session' }));
 
     expect(onRenameSession).toHaveBeenCalledWith('session-1', 'review upstream diff');
     promptSpy.mockRestore();
@@ -323,5 +323,23 @@ describe('MobileHeader', () => {
     expect(onToggleFileManager).toHaveBeenCalledTimes(1);
     expect(onSelectSession).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: /open session picker/i })).toHaveTextContent('active thread');
+  });
+
+  it('does not offer preview from the header overflow when there is no preview URL', () => {
+    render(<MobileHeader {...buildProps({ previewUrl: '' })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
+
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+  });
+
+  it('offers preview from the header overflow when a preview URL exists', () => {
+    const onViewChange = vi.fn();
+    render(<MobileHeader {...buildProps({ previewUrl: 'https://example.com', onViewChange })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+
+    expect(onViewChange).toHaveBeenCalledWith('preview');
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -33,6 +33,7 @@ import {
 } from '../utils/terminalExternalInput';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
+import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
 const DEFAULT_ANSI_PALETTE = (() => {
@@ -111,7 +112,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true, surface }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -128,7 +129,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputFlushRef = useRef(null);
   const mobileInputRef = useRef(null);
   const { theme } = useTheme();
-  const isMobile = useMobileDetect();
+  const detectedIsMobile = useMobileDetect();
+  const terminalSurface = useMemo(
+    () => resolveTerminalSurface(surface, detectedIsMobile),
+    [surface, detectedIsMobile]
+  );
+  const platformConfig = useMemo(
+    () => getTerminalPlatformConfig({
+      surface: terminalSurface,
+      fontSize,
+      webglEnabled: resolveTerminalWebglEnabled(webglEnabled),
+    }),
+    [fontSize, terminalSurface, webglEnabled]
+  );
+  const isMobile = platformConfig.isMobile;
   const isIOS = typeof navigator !== 'undefined' && (
     /iPad|iPhone|iPod/.test(navigator.userAgent || '') ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
@@ -177,7 +191,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const onScreenSnapshotRef = useRef(onScreenSnapshot);
   const onCliEventRef = useRef(onCliEvent);
   const usesTmuxRef = useRef(Boolean(usesTmux));
-  const webglEnabledRef = useRef(resolveTerminalWebglEnabled(webglEnabled));
+  const webglEnabledRef = useRef(platformConfig.webglEnabled);
   const scrollModeRef = useRef(false);
   const viewModeRef = useRef(viewMode);
   const isPrimaryRef = useRef(isPrimary);
@@ -198,26 +212,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const droppedEventCountRef = useRef(0);
   const tailModeRef = useRef(false);
   const lastDropNoticeAtRef = useRef(0);
-  const HISTORY_PAGE_EVENTS_DESKTOP = 5000;
-  const HISTORY_PAGE_CHARS_DESKTOP = 1_000_000;
-  const HISTORY_MAX_EVENTS_DESKTOP = 100_000;
-  const HISTORY_MAX_CHARS_DESKTOP = 20_000_000;
-  const HISTORY_PAGE_EVENTS_MOBILE = 1000;
-  const HISTORY_PAGE_CHARS_MOBILE = 300_000;
-  const HISTORY_MAX_EVENTS_MOBILE = 10_000;
-  const HISTORY_MAX_CHARS_MOBILE = 2_000_000;
-  const SCROLLBACK_DESKTOP = 100000;
-  const SCROLLBACK_MOBILE = 10000;
-  const READER_MAX_LINES_MOBILE = 2000;
   const MIN_FIT_CONTAINER_WIDTH = 50;
   const MIN_FIT_CONTAINER_HEIGHT = 30;
-  const HISTORY_WRITE_CHUNK_DESKTOP = 120000;
-  const HISTORY_WRITE_CHUNK_MOBILE = 80000;
   const historyStateRef = useRef({
-    pageEvents: isMobile ? HISTORY_PAGE_EVENTS_MOBILE : HISTORY_PAGE_EVENTS_DESKTOP,
-    pageChars: isMobile ? HISTORY_PAGE_CHARS_MOBILE : HISTORY_PAGE_CHARS_DESKTOP,
-    maxHistoryEvents: isMobile ? HISTORY_MAX_EVENTS_MOBILE : HISTORY_MAX_EVENTS_DESKTOP,
-    maxHistoryChars: isMobile ? HISTORY_MAX_CHARS_MOBILE : HISTORY_MAX_CHARS_DESKTOP,
+    pageEvents: platformConfig.history.pageEvents,
+    pageChars: platformConfig.history.pageChars,
+    maxHistoryEvents: platformConfig.history.maxEvents,
+    maxHistoryChars: platformConfig.history.maxChars,
     exhausted: false,
     loading: false,
     lastCount: 0,
@@ -251,11 +252,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
   const getHistoryConfig = useCallback(() => ({
-    pageEvents: isMobile ? HISTORY_PAGE_EVENTS_MOBILE : HISTORY_PAGE_EVENTS_DESKTOP,
-    pageChars: isMobile ? HISTORY_PAGE_CHARS_MOBILE : HISTORY_PAGE_CHARS_DESKTOP,
-    maxEvents: isMobile ? HISTORY_MAX_EVENTS_MOBILE : HISTORY_MAX_EVENTS_DESKTOP,
-    maxChars: isMobile ? HISTORY_MAX_CHARS_MOBILE : HISTORY_MAX_CHARS_DESKTOP
-  }), [isMobile]);
+    pageEvents: platformConfig.history.pageEvents,
+    pageChars: platformConfig.history.pageChars,
+    maxEvents: platformConfig.history.maxEvents,
+    maxChars: platformConfig.history.maxChars
+  }), [platformConfig]);
 
   const applyHistoryConfig = useCallback(() => {
     const config = getHistoryConfig();
@@ -654,7 +655,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const cursorLine = buffer.baseY + buffer.cursorY;
     const cursorColumn = Math.min(buffer.cursorX, cols);
     const nullCell = buffer.getNullCell();
-    const maxLines = isMobile ? READER_MAX_LINES_MOBILE : bufferLineCount;
+    const maxLines = platformConfig.readerMaxLines ?? bufferLineCount;
     const startLine = bufferLineCount > maxLines ? bufferLineCount - maxLines : 0;
     const lines = [];
     let lastNonEmpty = -1;
@@ -815,7 +816,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const textLines = visibleLines.map((lineSegments) => lineSegments.map((segment) => segment.text).join(''));
     replaceReaderBuffer(textLines.join('\n'));
     setReaderLines(visibleLines);
-  }, [isMobile, replaceReaderBuffer]);
+  }, [platformConfig.readerMaxLines, replaceReaderBuffer]);
 
   const scheduleReaderSync = useCallback(() => {
     if (readerSyncRef.current) return;
@@ -1115,8 +1116,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [syncPtySize]);
 
   useEffect(() => {
-    webglEnabledRef.current = resolveTerminalWebglEnabled(webglEnabled);
-  }, [webglEnabled]);
+    webglEnabledRef.current = platformConfig.webglEnabled;
+  }, [platformConfig.webglEnabled]);
 
   useEffect(() => {
     applyHistoryConfig();
@@ -1408,9 +1409,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let lastResizeRequestKey = '';
 
     const scrollback = performanceMode
-      ? (isMobile ? SCROLLBACK_MOBILE : SCROLLBACK_DESKTOP)
-      : (isMobile ? SCROLLBACK_MOBILE * 2 : SCROLLBACK_DESKTOP * 3);
-    const defaultTerminalFontSize = fontSize || (isMobile ? 16 : 14);
+      ? platformConfig.scrollback
+      : platformConfig.scrollback * (isMobile ? 2 : 3);
+    const defaultTerminalFontSize = platformConfig.fontSize;
     const terminalFontFamily = isMobile
       ? 'ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace'
       : '"JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace';
@@ -1925,7 +1926,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }, 200);
 
       const initWebglAddon = () => {
-        const shouldEnableWebgl = resolveTerminalWebglEnabled(webglEnabledRef.current) && !isMobile;
+        const shouldEnableWebgl = platformConfig.webglEnabled;
         if (!shouldEnableWebgl || webglAddonRef.current) {
           return;
         }
@@ -2038,11 +2039,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       // Scroll direction detection for header collapse
       let lastScrollPos = 0;
       let scrollThrottleTimer = null;
-      const fetchHistoryPage = async ({ beforeTs, afterTs, beforeSeq, afterSeq } = {}) => {
+      const fetchHistoryPage = async ({ beforeTs, afterTs, beforeSeq, afterSeq, mode = 'page' } = {}) => {
         const state = historyStateRef.current;
+        const historyEvents = mode === 'initial'
+          ? platformConfig.history.initialEvents
+          : state.pageEvents;
+        const historyChars = mode === 'initial'
+          ? platformConfig.history.initialChars
+          : state.pageChars;
         const params = new URLSearchParams();
-        params.set('historyEvents', String(state.pageEvents));
-        params.set('historyChars', String(state.pageChars));
+        params.set('historyEvents', String(historyEvents));
+        params.set('historyChars', String(historyChars));
         if (Number.isFinite(beforeSeq) && beforeSeq > 0) {
           params.set('beforeSeq', String(beforeSeq));
         }
@@ -2071,7 +2078,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           resolve();
           return;
         }
-        const chunkSize = isMobile ? HISTORY_WRITE_CHUNK_MOBILE : HISTORY_WRITE_CHUNK_DESKTOP;
+        const chunkSize = platformConfig.history.writeChunkChars;
         let offset = 0;
         const writeNext = () => {
           if (disposed) {
@@ -2150,7 +2157,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         setIsLoadingHistory(true);
 
         try {
-          const historyPage = await fetchHistoryPage();
+          const historyPage = await fetchHistoryPage({ mode: 'initial' });
           if (!historyPage) {
             setIsLoadingHistory(false);
             return;
@@ -3310,14 +3317,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Note: fontSize intentionally excluded - handled by separate effect below
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, onUrlDetected, isMobile]);
+  }, [sessionId, onUrlDetected, isMobile, platformConfig.fontSize, platformConfig.scrollback, platformConfig.webglEnabled]);
 
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
     if (!term.element) return;
 
-    const shouldEnableWebgl = resolveTerminalWebglEnabled(webglEnabledRef.current) && !isMobile;
+    const shouldEnableWebgl = platformConfig.webglEnabled;
     if (shouldEnableWebgl) {
       if (!webglAddonRef.current) {
         try {
@@ -3349,18 +3356,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       webglAddonRef.current = null;
       scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
     }
-  }, [webglEnabled, isMobile, scheduleViewportRefresh]);
+  }, [platformConfig.webglEnabled, scheduleViewportRefresh]);
 
   // Handle font size changes without recreating terminal
   useEffect(() => {
     if (!xtermRef.current || !fitAddonRef.current) return;
     const term = xtermRef.current;
-    const newSize = fontSize || (isMobile ? 16 : 14);
+    const newSize = platformConfig.fontSize;
     if (term.options.fontSize !== newSize) {
       term.options.fontSize = newSize;
       scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true, clearAtlas: true });
     }
-  }, [fontSize, isMobile, scheduleViewportRefresh]);
+  }, [platformConfig.fontSize, scheduleViewportRefresh]);
 
   // Handle keybar/viewport changes with debounced fit
   // Use shorter debounce on mobile for faster keyboard response
@@ -3485,7 +3492,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   return (
     <div
-      className={`terminal-chat${isScrollMode ? ' scroll-mode' : ''}`}
+      className={`terminal-chat ${platformConfig.rootClassName}${isScrollMode ? ' scroll-mode' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleImageDrop}
@@ -3527,7 +3534,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           lines={readerLines}
           lineHeight={readerLineHeight}
           scrollToken={readerScrollToken}
-          fontSize={fontSize || (isMobile ? 16 : 14)}
+          fontSize={platformConfig.fontSize}
           onScrollDirection={onScrollDirection}
           onViewportStateChange={onViewportStateChange}
           onLoadMore={handleReaderLoadMore}

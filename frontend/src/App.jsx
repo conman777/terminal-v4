@@ -331,6 +331,9 @@ function AppContent() {
     const normalizedView = view === 'preview' || view === 'claude' || view === 'terminal'
       ? view
       : 'terminal';
+    if (normalizedView === 'preview' && !previewUrl) {
+      return;
+    }
     if (normalizedView === 'preview' && keybarOpen) {
       setKeybarOpen(false);
     }
@@ -342,7 +345,7 @@ function AppContent() {
       }
     }
     setMobileView(normalizedView);
-  }, [activeSessionId, activeSessions, keybarOpen]);
+  }, [activeSessionId, activeSessions, keybarOpen, previewUrl]);
 
   const handleMobileViewportStateChange = useCallback((atBottom) => {
     mobileViewportAtBottomRef.current = atBottom;
@@ -534,6 +537,13 @@ function AppContent() {
     mobileViewportAtBottomRef.current = true;
     resetScrollDirection();
   }, [chatMode, mobileVisibleSessionId, resetScrollDirection]);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    if (mobileView !== 'preview') return;
+    if (previewUrl) return;
+    setMobileView('terminal');
+  }, [isMobile, mobileView, previewUrl]);
 
   // Track focused session for recency ordering and unread state
   useEffect(() => {

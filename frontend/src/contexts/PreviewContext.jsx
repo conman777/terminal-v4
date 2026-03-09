@@ -137,6 +137,11 @@ export function PreviewProvider({ children }) {
   const setPreviewUrlWithSource = useCallback((nextUrl, source) => {
     const normalized = sanitizePreviewUrl(nextUrl) || null;
     const current = previewUrlRef.current || null;
+
+    if (!normalized && typeof nextUrl === 'string' && nextUrl.trim()) {
+      return;
+    }
+
     if (normalized === current) return;
 
     // For auto-detected URLs, validate the new port is actually listening
