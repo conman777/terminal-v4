@@ -7,11 +7,8 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
   const { user } = useAuth();
   const [sandboxDefaultMode, setSandboxDefaultMode] = useState('off');
   const [groqApiKey, setGroqApiKey] = useState('');
-  const [openaiApiKey, setOpenaiApiKey] = useState('');
   const [hasExistingGroqKey, setHasExistingGroqKey] = useState(false);
-  const [hasExistingOpenAIKey, setHasExistingOpenAIKey] = useState(false);
   const [maskedGroqKey, setMaskedGroqKey] = useState('');
-  const [maskedOpenAIKey, setMaskedOpenAIKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingSandbox, setIsSavingSandbox] = useState(false);
@@ -39,12 +36,9 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
     try {
       const data = await apiGet('/api/settings');
       setHasExistingGroqKey(data.hasGroqApiKey);
-      setHasExistingOpenAIKey(data.hasOpenAIApiKey);
       setMaskedGroqKey(data.groqApiKey || '');
-      setMaskedOpenAIKey(data.openaiApiKey || '');
       setSandboxDefaultMode(data.sandboxDefaultMode || 'off');
       setGroqApiKey('');
-      setOpenaiApiKey('');
     } catch (err) {
       setError('Failed to load settings');
     } finally {
@@ -131,9 +125,6 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
       if (groqApiKey.trim()) {
         payload.groqApiKey = groqApiKey;
       }
-      if (openaiApiKey.trim()) {
-        payload.openaiApiKey = openaiApiKey;
-      }
       if (Object.keys(payload).length === 0) {
         setError('Enter at least one API key to save');
         return;
@@ -142,7 +133,6 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
       await apiPatch('/api/settings', payload);
       setSuccess('API key settings saved successfully');
       setGroqApiKey('');
-      setOpenaiApiKey('');
       await loadSettings();
     } catch (err) {
       setError(err.message || 'Failed to save settings');
@@ -159,22 +149,6 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
       await apiPatch('/api/settings', { groqApiKey: null });
       setSuccess('Groq API key removed');
       setGroqApiKey('');
-      await loadSettings();
-    } catch (err) {
-      setError(err.message || 'Failed to remove API key');
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleClearOpenAI = async () => {
-    setIsSaving(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      await apiPatch('/api/settings', { openaiApiKey: null });
-      setSuccess('OpenAI API key removed');
-      setOpenaiApiKey('');
       await loadSettings();
     } catch (err) {
       setError(err.message || 'Failed to remove API key');
@@ -226,31 +200,6 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                   autoComplete="off"
                 />
               </div>
-
-              <div className="form-group">
-                <label htmlFor="openai-api-key">OpenAI API Key</label>
-                <p className="form-help">
-                  Used for OpenAI search and image generation routes. Get your key from{' '}
-                  <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
-                    platform.openai.com
-                  </a>
-                </p>
-                {hasExistingOpenAIKey && (
-                  <div className="existing-key">
-                    Current key: <code>{maskedOpenAIKey}</code>
-                  </div>
-                )}
-                <input
-                  id="openai-api-key"
-                  type="password"
-                  value={openaiApiKey}
-                  onChange={(e) => setOpenaiApiKey(e.target.value)}
-                  placeholder={hasExistingOpenAIKey ? 'Enter new key to replace' : 'sk-...'}
-                  autoComplete="off"
-                />
-              </div>
-
-              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />
 
               <div className="form-group">
                 <label>Sandbox New Terminals</label>
@@ -395,19 +344,10 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
               Remove Groq Key
             </button>
           )}
-          {hasExistingOpenAIKey && (
-            <button
-              className="btn-danger"
-              onClick={handleClearOpenAI}
-              disabled={isSaving}
-            >
-              Remove OpenAI Key
-            </button>
-          )}
           <button
             className="btn-primary"
             onClick={handleSave}
-            disabled={isSaving || (!groqApiKey.trim() && !openaiApiKey.trim())}
+            disabled={isSaving || !groqApiKey.trim()}
           >
             {isSaving ? 'Saving...' : 'Save Key'}
           </button>

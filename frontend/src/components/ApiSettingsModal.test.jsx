@@ -37,9 +37,7 @@ describe('ApiSettingsModal', () => {
       if (url === '/api/settings') {
         return {
           hasGroqApiKey: false,
-          hasOpenAIApiKey: false,
           groqApiKey: null,
-          openaiApiKey: null,
           sandboxDefaultMode: 'workspace-write'
         };
       }
@@ -61,9 +59,7 @@ describe('ApiSettingsModal', () => {
       if (url === '/api/settings') {
         return {
           hasGroqApiKey: false,
-          hasOpenAIApiKey: false,
           groqApiKey: null,
-          openaiApiKey: null,
           sandboxDefaultMode: 'off'
         };
       }

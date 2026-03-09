@@ -144,7 +144,7 @@ describe('MobileDrawer', () => {
     expect(screen.queryByText('archived thread')).not.toBeInTheDocument();
   });
 
-  it('shows the active session summary with derived labels', () => {
+  it('shows the active session inside the threads section with derived labels', () => {
     render(<MobileDrawer {...buildProps({
       activeSessions: [
         {
@@ -155,12 +155,27 @@ describe('MobileDrawer', () => {
           thread: { topic: 'ship mobile header', archived: false }
         }
       ],
+      sessionsGroupedByProject: [
+        {
+          projectName: 'uplifting',
+          projectPath: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\uplifting',
+              updatedAt: '2026-03-09T10:00:00.000Z',
+              thread: { topic: 'ship mobile header', archived: false }
+            }
+          ]
+        }
+      ],
       activeSessionId: 'session-1'
     })} />);
 
-    expect(screen.getByText('Current session')).toBeInTheDocument();
-    expect(screen.getByText('ship mobile header')).toBeInTheDocument();
-    expect(screen.getByText('uplifting')).toBeInTheDocument();
+    expect(screen.getByText('Live threads')).toBeInTheDocument();
+    expect(screen.getAllByText('ship mobile header').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('uplifting').length).toBeGreaterThan(0);
   });
 
   it('surfaces API settings and browser settings actions from the More section', () => {
