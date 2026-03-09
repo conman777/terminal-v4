@@ -73,15 +73,6 @@ export function MobileDrawer({
   const [searchQuery, setSearchQuery] = useState('');
   const [showGestureHelp, setShowGestureHelp] = useState(false);
 
-  const activeSession = activeSessions.find((session) => session.id === activeSessionId) || activeSessions[0] || null;
-  const activeSessionDisplay = getSessionDisplayInfo(activeSession, 'No active terminal');
-  const activeSessionSubtitle = getCompactSessionSubtitle(activeSession, 'No active terminal');
-  const activeSessionBusy = activeSession
-    ? (typeof sessionActivity?.[activeSession.id]?.isBusy === 'boolean'
-      ? sessionActivity[activeSession.id].isBusy
-      : Boolean(activeSession.isBusy))
-    : false;
-
   const visibleThreadGroups = useMemo(() => {
     return (sessionsGroupedByProject || [])
       .map((group) => ({
@@ -236,60 +227,18 @@ export function MobileDrawer({
     }
   };
 
-  const moreActions = [
-    {
-      label: 'New Terminal',
-      onClick: () => {
-        onCreateSession();
-        onClose();
-      },
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      )
-    },
-    {
-      label: 'Terminal',
-      onClick: () => handleViewChange('terminal'),
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="4 17 10 11 4 5" />
-          <line x1="12" y1="19" x2="20" y2="19" />
-        </svg>
-      )
-    },
-    {
-      label: 'Claude',
-      onClick: () => handleViewChange('claude'),
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 16v-4" />
-          <path d="M12 8h.01" />
-        </svg>
-      )
-    },
-    {
-      label: 'Preview',
-      onClick: () => handleViewChange('preview'),
-      disabled: !previewUrl,
-      icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <line x1="12" y1="3" x2="12" y2="21" />
-        </svg>
-      )
-    },
+  const viewTabs = [
+    { key: 'terminal', label: 'Terminal' },
+    { key: 'claude', label: 'Claude' },
+    { key: 'preview', label: 'Preview', disabled: !previewUrl }
+  ];
+
+  const actionItems = [
     {
       label: 'Process Manager',
-      onClick: () => {
-        onOpenProcessManager?.();
-        onClose();
-      },
+      onClick: () => { onOpenProcessManager?.(); onClose(); },
       icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
           <line x1="8" y1="21" x2="16" y2="21" />
           <line x1="12" y1="17" x2="12" y2="21" />
@@ -297,49 +246,59 @@ export function MobileDrawer({
       )
     },
     {
-      label: 'API Settings',
-      onClick: () => {
-        onOpenApiSettings?.();
-        onClose();
-      },
+      label: 'Bookmarks',
+      onClick: () => { onOpenBookmarks?.(); onClose(); },
       icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+        </svg>
+      )
+    },
+    {
+      label: 'Notes',
+      onClick: () => { onOpenNotes?.(); onClose(); },
+      icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+        </svg>
+      )
+    }
+  ];
+
+  const settingsItems = [
+    {
+      label: 'API Settings',
+      onClick: () => { onOpenApiSettings?.(); onClose(); },
+      icon: (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 2l3.09 6.26L22 9l-5 4.87L18.18 22 12 18.56 5.82 22 7 13.87 2 9l6.91-.74L12 2z" />
         </svg>
       )
     },
     {
       label: 'Browser Settings',
-      onClick: () => {
-        onOpenBrowserSettings?.();
-        onClose();
-      },
+      onClick: () => { onOpenBrowserSettings?.(); onClose(); },
       icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="10" />
           <path d="M2 12h20" />
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z" />
-          <circle cx="12" cy="12" r="10" />
         </svg>
       )
     },
     {
       label: 'Settings',
-      onClick: () => {
-        onOpenSettings();
-        onClose();
-      },
+      onClick: () => { onOpenSettings(); onClose(); },
       icon: (
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
       )
     }
-  ];
-
-  const utilityLinks = [
-    { label: 'Bookmarks', onClick: () => { onOpenBookmarks?.(); onClose(); } },
-    { label: 'Notes', onClick: () => { onOpenNotes?.(); onClose(); } }
   ];
 
   return (
@@ -357,6 +316,7 @@ export function MobileDrawer({
         onTouchEnd={handleDrawerSwipeEnd}
         onTouchCancel={() => { drawerSwipeRef.current = null; }}
       >
+        {/* Header */}
         <div className="mobile-drawer-header-modern">
           <div className="mobile-drawer-header-copy">
             <h2>Workspace</h2>
@@ -371,109 +331,118 @@ export function MobileDrawer({
         </div>
 
         <div className="mobile-drawer-content-modern">
-          {activeSession && (
-            <div className="mobile-drawer-section-modern">
-              <div className="mobile-drawer-section-title-modern">Current session</div>
-              <button
-                type="button"
-                className={`mobile-drawer-hero-modern${activeSessionBusy ? ' busy' : ''}`}
-                onClick={() => handleSelectSession(activeSession.id)}
-              >
-                <div className="mobile-drawer-hero-badge">
-                  <span className={`mobile-drawer-hero-dot ${activeSessionBusy ? 'busy' : 'idle'}`} />
-                  <span>{activeSessionBusy ? 'Busy' : 'Idle'}</span>
-                </div>
-                <div className="mobile-drawer-hero-main">
-                  <span className="mobile-drawer-hero-title">{activeSessionDisplay.primaryLabel}</span>
-                  {activeSessionSubtitle && (
-                    <span className="mobile-drawer-hero-subtitle">{activeSessionSubtitle}</span>
-                  )}
-                </div>
-                <span className="mobile-drawer-hero-cta">Open</span>
-              </button>
-            </div>
-          )}
 
-          {visibleThreadGroups.length > 0 && (
-            <div className="mobile-drawer-section-modern">
-              <div className="mobile-drawer-section-title-modern">Live threads</div>
-              <div className="mobile-drawer-threads-modern">
+          {/* Section 1: View Switcher */}
+          <div className="md-view-switcher">
+            {viewTabs.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                className={`md-view-tab${mobileView === tab.key ? ' active' : ''}${tab.disabled ? ' disabled' : ''}`}
+                onClick={() => !tab.disabled && handleViewChange(tab.key)}
+                disabled={tab.disabled}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Section 2: Threads */}
+          <div className="md-section">
+            <div className="md-section-header">
+              <span className="md-section-title">Threads</span>
+              <span className="md-thread-count">{activeSessions.length}</span>
+            </div>
+
+            <button
+              type="button"
+              className="md-new-terminal-btn"
+              onClick={() => { onCreateSession(); onClose(); }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19" />
+                <line x1="5" y1="12" x2="19" y2="12" />
+              </svg>
+              <span>New Terminal</span>
+            </button>
+
+            {visibleThreadGroups.length > 0 && (
+              <div className="md-thread-list">
                 {visibleThreadGroups.map((group) => (
-                  <div key={group.projectPath || group.projectName} className="mobile-drawer-project-modern">
-                    <div className="mobile-drawer-project-header-modern">
-                      <span className="mobile-drawer-project-icon-modern"><FolderGlyph /></span>
-                      <span className="mobile-drawer-project-name-modern">{group.projectName}</span>
-                      <span className="mobile-drawer-project-count-modern">{group.sessions.length}</span>
+                  <div key={group.projectPath || group.projectName} className="md-thread-group">
+                    <div className="md-group-header">
+                      <FolderGlyph />
+                      <span className="md-group-name">{group.projectName}</span>
                     </div>
-                    <div className="mobile-drawer-project-sessions-modern">
-                      {group.sessions.map((session) => {
-                        const display = getSessionDisplayInfo(session, 'Terminal');
-                        const subtitle = getCompactSessionSubtitle(session, 'Terminal');
-                        const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
-                        const relativeTime = formatRelativeTime(lastActivity);
-                        const isActive = session.id === activeSessionId;
-                        const isBusy = typeof sessionActivity?.[session.id]?.isBusy === 'boolean'
-                          ? sessionActivity[session.id].isBusy
-                          : Boolean(session.isBusy);
-                        return (
-                          <button
-                            key={session.id}
-                            type="button"
-                            className={`mobile-drawer-thread-item-modern${isActive ? ' active' : ''}`}
-                            onClick={() => handleSelectSession(session.id)}
-                          >
-                            <div className="thread-item-main-modern">
-                              <span className="thread-item-title-modern">{display.primaryLabel}</span>
-                              {subtitle && (
-                                <span className="thread-item-subtitle-modern">{subtitle}</span>
-                              )}
-                            </div>
-                            <div className="thread-item-meta-modern">
-                              <span className={`thread-item-status-modern ${isBusy ? 'busy' : 'idle'}`}>
-                                {isBusy ? 'Busy' : 'Idle'}
-                              </span>
-                              {relativeTime && <span className="thread-item-time-modern">{relativeTime}</span>}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {group.sessions.map((session) => {
+                      const display = getSessionDisplayInfo(session, 'Terminal');
+                      const subtitle = getCompactSessionSubtitle(session, 'Terminal');
+                      const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
+                      const relativeTime = formatRelativeTime(lastActivity);
+                      const isActive = session.id === activeSessionId;
+                      const isBusy = typeof sessionActivity?.[session.id]?.isBusy === 'boolean'
+                        ? sessionActivity[session.id].isBusy
+                        : Boolean(session.isBusy);
+                      return (
+                        <button
+                          key={session.id}
+                          type="button"
+                          className={`md-thread-item${isActive ? ' active' : ''}`}
+                          onClick={() => handleSelectSession(session.id)}
+                        >
+                          <span className={`md-thread-dot ${isBusy ? 'busy' : 'idle'}`} />
+                          <div className="md-thread-info">
+                            <span className="md-thread-title">{display.primaryLabel}</span>
+                            {subtitle && <span className="md-thread-sub">{subtitle}</span>}
+                          </div>
+                          {relativeTime && <span className="md-thread-time">{relativeTime}</span>}
+                        </button>
+                      );
+                    })}
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
 
-          <div className="mobile-drawer-section-modern">
-            <div className="mobile-drawer-section-title-modern">More</div>
-            <div className="mobile-drawer-grid-modern two-column">
-              {moreActions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  className={`mobile-drawer-grid-btn-modern compact${action.disabled ? ' disabled' : ''}${action.label === 'Terminal' && mobileView === 'terminal' ? ' active' : ''}${action.label === 'Claude' && mobileView === 'claude' ? ' active' : ''}${action.label === 'Preview' && mobileView === 'preview' ? ' active' : ''}`}
-                  onClick={action.onClick}
-                  disabled={action.disabled}
-                >
-                  <div className="grid-btn-icon-modern">{action.icon}</div>
-                  <span>{action.label}</span>
+            {visibleThreadGroups.length === 0 && (
+              <div className="md-empty-state">No active threads</div>
+            )}
+          </div>
+
+          {/* Section 3: Actions */}
+          <div className="md-section">
+            <span className="md-section-title">Tools</span>
+            <div className="md-action-list">
+              {actionItems.map((item) => (
+                <button key={item.label} type="button" className="md-action-row" onClick={item.onClick}>
+                  <span className="md-action-icon">{item.icon}</span>
+                  <span className="md-action-label">{item.label}</span>
+                  <svg className="md-action-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
                 </button>
               ))}
             </div>
-            <div className="mobile-drawer-inline-links-modern">
-              {utilityLinks.map((link) => (
-                <button key={link.label} type="button" className="mobile-drawer-link-chip-modern" onClick={link.onClick}>
-                  {link.label}
+            <div className="md-action-divider" />
+            <div className="md-action-list">
+              {settingsItems.map((item) => (
+                <button key={item.label} type="button" className="md-action-row" onClick={item.onClick}>
+                  <span className="md-action-icon">{item.icon}</span>
+                  <span className="md-action-label">{item.label}</span>
+                  <svg className="md-action-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6" />
+                  </svg>
                 </button>
               ))}
             </div>
           </div>
 
-          <div className="mobile-drawer-section-modern">
-            <button className="mobile-drawer-section-collapsible-modern" onClick={() => setProjectsExpanded(!projectsExpanded)} type="button">
-              <div className="collapsible-icon-modern"><FolderGlyph /></div>
-              <span className="collapsible-title-modern">Projects</span>
-              <div className={`collapsible-chevron-modern ${projectsExpanded ? 'expanded' : ''}`}>
+          {/* Projects (collapsible) */}
+          <div className="md-section">
+            <button className="md-collapsible-header" onClick={() => setProjectsExpanded(!projectsExpanded)} type="button">
+              <div className="md-collapsible-icon"><FolderGlyph /></div>
+              <span className="md-collapsible-title">Projects</span>
+              <div className={`md-collapsible-chevron${projectsExpanded ? ' expanded' : ''}`}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="6 9 12 15 18 9" />
                 </svg>
@@ -481,18 +450,18 @@ export function MobileDrawer({
             </button>
 
             {projectsExpanded && (
-              <div className="mobile-drawer-projects-modern">
+              <div className="md-projects-body">
                 {(projects.length > 0 || onAddScanFolder) && (
-                  <div className="mobile-drawer-project-toolbar-modern">
+                  <div className="md-project-toolbar">
                     {projects.length > 0 && (
-                      <div className="mobile-drawer-search-modern">
-                        <svg className="search-icon-modern" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <div className="md-search-wrap">
+                        <svg className="md-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <circle cx="11" cy="11" r="8" />
                           <line x1="21" y1="21" x2="16.65" y2="16.65" />
                         </svg>
                         <input
                           type="text"
-                          className="mobile-drawer-search-input-modern"
+                          className="md-search-input"
                           placeholder="Search projects..."
                           value={searchQuery}
                           onChange={(event) => setSearchQuery(event.target.value)}
@@ -502,11 +471,8 @@ export function MobileDrawer({
                     {onAddScanFolder && (
                       <button
                         type="button"
-                        className="mobile-drawer-project-add-modern"
-                        onClick={() => {
-                          onAddScanFolder?.();
-                          onClose();
-                        }}
+                        className="md-add-project-btn"
+                        onClick={() => { onAddScanFolder?.(); onClose(); }}
                       >
                         Add project
                       </button>
@@ -514,30 +480,27 @@ export function MobileDrawer({
                   </div>
                 )}
 
-                <div className="projects-list-modern">
+                <div className="md-projects-list">
                   {projectsLoading && projects.length === 0 ? (
-                    <div className="empty-state-modern">Scanning...</div>
+                    <div className="md-empty-state">Scanning...</div>
                   ) : projects.length === 0 ? (
-                    <div className="empty-state-modern">No projects found</div>
+                    <div className="md-empty-state">No projects found</div>
                   ) : filteredProjects.length === 0 ? (
-                    <div className="empty-state-modern">No matches found</div>
+                    <div className="md-empty-state">No matches found</div>
                   ) : (
                     filteredProjects.map((project) => (
                       <button
                         key={project.path}
-                        className={`project-item-modern ${normalizePath(project.path) === currentNormalized ? 'active' : ''}`}
-                        onClick={() => {
-                          onFolderSelect(project.path);
-                          onClose();
-                        }}
+                        className={`md-project-item${normalizePath(project.path) === currentNormalized ? ' active' : ''}`}
+                        onClick={() => { onFolderSelect(project.path); onClose(); }}
                         type="button"
                       >
-                        <div className="project-item-info-modern">
-                          <span className="project-name-modern">{project.name}</span>
-                          <span className="project-path-modern">{project.path}</span>
+                        <div className="md-project-info">
+                          <span className="md-project-name">{project.name}</span>
+                          <span className="md-project-path">{project.path}</span>
                         </div>
                         {project.branch && (
-                          <div className="project-branch-modern">
+                          <div className="md-project-branch">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                               <line x1="6" y1="3" x2="6" y2="15" />
                               <circle cx="18" cy="6" r="3" />
@@ -556,6 +519,7 @@ export function MobileDrawer({
           </div>
         </div>
 
+        {/* Footer */}
         <div className="mobile-drawer-footer-modern">
           <button
             type="button"
