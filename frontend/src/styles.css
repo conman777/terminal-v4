@@ -12658,6 +12658,8 @@ textarea:focus-visible {
   flex-direction: column;
   height: 100%;
   position: relative;
+  overflow: hidden;
+  background: var(--terminal-bg, var(--bg-surface, #17191c));
 }
 
 .terminal-with-status .desktop-terminal-stack {
@@ -12666,6 +12668,7 @@ textarea:focus-visible {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background: inherit;
 }
 
 .terminal-with-status .desktop-terminal-runtime {
@@ -12687,8 +12690,8 @@ textarea:focus-visible {
   flex: 0 0 clamp(180px, 34vh, 360px);
   height: auto;
   overflow: hidden;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--bg-base);
+  border-top: none;
+  background: transparent;
 }
 
 .terminal-with-status.terminal-first .desktop-terminal-stack,
@@ -12844,7 +12847,7 @@ textarea:focus-visible {
   pointer-events: auto;
   overflow: hidden;
   border-top: none;
-  background: var(--bg-base);
+  background: transparent;
 }
 
 .terminal-with-status .desktop-terminal-runtime .terminal-chat {

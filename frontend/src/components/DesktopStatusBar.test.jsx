@@ -22,6 +22,9 @@ function buildProps(overrides = {}) {
     cwd: 'C:\\Users\\conor\\project',
     gitBranch: 'main',
     onImageUpload: vi.fn(),
+    composerValue: '',
+    onComposerChange: vi.fn(),
+    onComposerSubmit: vi.fn(),
     isTerminalPanelOpen: false,
     onToggleTerminalPanel: vi.fn(),
     connectionState: 'online',
@@ -98,5 +101,20 @@ describe('DesktopStatusBar', () => {
 
     expect(promptSpy).toHaveBeenCalledTimes(2);
     expect(onAddCustomAiCommand).toHaveBeenCalledWith('Qwen 3', 'qwen --fast');
+  });
+
+  it('submits composer text when Enter is pressed', () => {
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...buildProps({ composerValue: 'Explain this repo', onComposerSubmit })} />);
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
+
+    expect(onComposerSubmit).toHaveBeenCalledWith('Explain this repo');
+  });
+
+  it('disables the send button when the composer is empty', () => {
+    render(<DesktopStatusBar {...buildProps({ composerValue: '   ' })} />);
+
+    expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
   });
 });

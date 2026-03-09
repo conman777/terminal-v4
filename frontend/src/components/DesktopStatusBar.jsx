@@ -21,7 +21,12 @@ export function DesktopStatusBar({
   aiOptions = AI_TYPE_OPTIONS,
   onSelectAiType,
   onAddCustomAiCommand,
-  onLaunchAi
+  onLaunchAi,
+  composerValue = '',
+  onComposerChange,
+  onComposerSubmit,
+  composerPlaceholder = 'Send a command or prompt',
+  composerDisabled = false
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
@@ -37,6 +42,8 @@ export function DesktopStatusBar({
     ?? AI_TYPE_OPTIONS[0];
   const aiLabel = aiType ? (selectedAiOption?.label || getAiDisplayLabel(aiType)) : null;
   const canLaunchSelectedAi = Boolean(aiType && onLaunchAi);
+  const hasGitStats = Boolean(gitStats && (gitStats.linesAdded > 0 || gitStats.linesRemoved > 0));
+  const showMetaRow = Boolean(gitBranch || hasGitStats || showTerminalToggle);
 
   useEffect(() => {
     if (!isAiMenuOpen) return undefined;
@@ -67,47 +74,96 @@ export function DesktopStatusBar({
     setIsAiMenuOpen(false);
   }
 
-  return (
-    <div className="desktop-status-bar">
-      <div className="status-bar-left">
-        {displayName && (
-          <span className="status-cwd" title={cwd || sessionTitle}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
-            {displayName}
-          </span>
-        )}
-        {gitBranch && (
-          <span className="status-git-branch" title={`Branch: ${gitBranch}`}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            {gitBranch}
-          </span>
-        )}
-        {gitStats && (gitStats.linesAdded > 0 || gitStats.linesRemoved > 0) && (
-          <span className="status-git-stats" title={`${gitStats.linesAdded} additions, ${gitStats.linesRemoved} deletions`}>
-            {gitStats.linesAdded > 0 && (
-              <span className="git-stat-added">+{gitStats.linesAdded.toLocaleString()}</span>
-            )}
-            {gitStats.linesRemoved > 0 && (
-              <span className="git-stat-removed">-{gitStats.linesRemoved.toLocaleString()}</span>
-            )}
-          </span>
-        )}
-        {aiLabel && (
-          <span className="status-ai-chip ultra-minimal" title={`Assistant: ${aiLabel}`}>
-            <span style={{width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', opacity: 0.6}}></span>
-            {aiLabel.toLowerCase()}
-          </span>
-        )}
-      </div>
+  function handleComposerSubmit(event) {
+    event?.preventDefault?.();
+    if (composerDisabled) return;
+    if (!composerValue.trim()) return;
+    onComposerSubmit?.(composerValue);
+  }
 
-      <div className="status-bar-right">
+  function handleComposerKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleComposerSubmit(event);
+    }
+  }
+
+  const canSubmitComposer = !composerDisabled && Boolean(composerValue.trim()) && typeof onComposerSubmit === 'function';
+
+  return (
+    <div className="desktop-status-bar desktop-status-bar-shell">
+      {showMetaRow && (
+        <div className="status-bar-meta-row">
+          <div className="status-bar-left">
+            {gitBranch && (
+              <span className="status-git-branch" title={`Branch: ${gitBranch}`}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="6" y1="3" x2="6" y2="15" />
+                  <circle cx="18" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <path d="M18 9a9 9 0 0 1-9 9" />
+                </svg>
+                {gitBranch}
+              </span>
+            )}
+            {hasGitStats && (
+              <span className="status-git-stats" title={`${gitStats.linesAdded} additions, ${gitStats.linesRemoved} deletions`}>
+                {gitStats.linesAdded > 0 && (
+                  <span className="git-stat-added">+{gitStats.linesAdded.toLocaleString()}</span>
+                )}
+                {gitStats.linesRemoved > 0 && (
+                  <span className="git-stat-removed">-{gitStats.linesRemoved.toLocaleString()}</span>
+                )}
+              </span>
+            )}
+          </div>
+
+          <div className="status-bar-top-actions">
+            {showTerminalToggle && (
+              <button
+                type="button"
+                className={`status-terminal-toggle ${isTerminalPanelOpen ? 'active' : ''}`}
+                onClick={onToggleTerminalPanel}
+                disabled={!onToggleTerminalPanel}
+                aria-label={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
+                title={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
+              >
+                {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <form className={`status-composer-shell${composerDisabled ? ' disabled' : ''}`} onSubmit={handleComposerSubmit}>
+        <textarea
+          className="status-composer-input"
+          value={composerValue}
+          onChange={(event) => onComposerChange?.(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
+          placeholder={composerPlaceholder}
+          aria-label="Command composer"
+          rows={1}
+          disabled={composerDisabled}
+        />
+
+        <div className="status-bar-right">
+        <div className="status-context-chips">
+          {displayName && (
+            <span className="status-cwd" title={cwd || sessionTitle}>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              {displayName}
+            </span>
+          )}
+          {aiLabel && (
+            <span className="status-ai-chip ultra-minimal" title={`Assistant: ${aiLabel}`}>
+              <span style={{width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', opacity: 0.6}}></span>
+              {aiLabel.toLowerCase()}
+            </span>
+          )}
+        </div>
         <div className="status-ai-controls" ref={aiMenuRef}>
           <button
             type="button"
@@ -180,19 +236,6 @@ export function DesktopStatusBar({
           )}
         </div>
 
-        {showTerminalToggle && (
-          <button
-            type="button"
-            className={`status-terminal-toggle ${isTerminalPanelOpen ? 'active' : ''}`}
-            onClick={onToggleTerminalPanel}
-            disabled={!onToggleTerminalPanel}
-            aria-label={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
-            title={isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
-          >
-            {isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
-          </button>
-        )}
-
         {/* Autocorrect toggle button */}
         <button
           type="button"
@@ -223,14 +266,146 @@ export function DesktopStatusBar({
         {/* Mic buttons - local Whisper + Groq cloud */}
         <TerminalMicButton sessionId={sessionId} provider="local" inline />
         <TerminalMicButton sessionId={sessionId} provider="groq" inline />
-      </div>
+        <button
+          type="submit"
+          className={`status-send-btn ${canSubmitComposer ? '' : 'disabled'}`}
+          disabled={!canSubmitComposer}
+          aria-label="Send to terminal"
+          title="Send to terminal"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M3.4 20.4 21.85 12 3.4 3.6l.05 6.4 12.25 2-12.25 2-.05 6.4Z" />
+          </svg>
+        </button>
+        </div>
+      </form>
 
       <style>{`
+        .desktop-status-bar-shell {
+          display: flex;
+          flex-direction: column;
+          align-items: stretch;
+          justify-content: flex-start;
+          gap: 10px;
+          height: auto;
+          min-height: 132px;
+          padding: 8px 18px 18px;
+          background: transparent;
+          border-top: none;
+        }
+
+        .status-bar-meta-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          max-width: 880px;
+          width: 100%;
+          margin: 0 auto;
+        }
+
+        .status-bar-top-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .desktop-status-bar-shell .status-bar-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 1;
+          flex-wrap: wrap;
+          min-width: 0;
+          overflow: visible;
+        }
+
+        .status-composer-shell {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          max-width: 880px;
+          width: 100%;
+          margin: 0 auto;
+          padding: 16px 18px 12px;
+          border-radius: 20px;
+          background:
+            linear-gradient(180deg, rgba(16, 21, 31, 0.96), rgba(11, 15, 23, 0.98));
+          border: 1px solid rgba(255, 255, 255, 0.05);
+          box-shadow:
+            0 18px 40px rgba(0, 0, 0, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.025);
+        }
+
+        .status-composer-shell.disabled {
+          opacity: 0.7;
+        }
+
+        .status-composer-shell:focus-within {
+          border-color: rgba(255, 255, 255, 0.05);
+          box-shadow:
+            0 18px 40px rgba(0, 0, 0, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.025);
+        }
+
+        .status-composer-input {
+          width: 100%;
+          min-height: 62px;
+          max-height: 180px;
+          resize: none;
+          padding: 0;
+          margin: 0;
+          border: none;
+          background: transparent;
+          color: var(--text-primary);
+          font: inherit;
+          font-size: 16px;
+          line-height: 1.45;
+          appearance: none;
+          -webkit-appearance: none;
+          outline: none;
+          box-shadow: none;
+        }
+
+        .status-composer-input:focus,
+        .status-composer-input:focus-visible,
+        .status-composer-input:active {
+          outline: none !important;
+          border: none !important;
+          box-shadow: none !important;
+        }
+
+        .status-composer-input::placeholder {
+          color: rgba(255, 255, 255, 0.34);
+        }
+
         .status-ai-controls {
           position: relative;
           display: flex;
           align-items: center;
           gap: 6px;
+        }
+
+        .status-bar-right {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          padding-top: 10px;
+          border-top: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .status-context-chips {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          min-width: 0;
+        }
+
+        .desktop-status-bar-shell .terminal-mic-inline-container {
+          display: inline-flex;
         }
 
         .status-ai-selector,
@@ -338,6 +513,50 @@ export function DesktopStatusBar({
           font-size: 14px;
           font-weight: 700;
           color: var(--accent-primary);
+        }
+
+        .status-send-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 34px;
+          height: 34px;
+          border-radius: 999px;
+          border: 1px solid rgba(99, 179, 237, 0.24);
+          background: rgba(99, 179, 237, 0.14);
+          color: #dbeafe;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          margin-left: auto;
+        }
+
+        .status-send-btn:hover:not(:disabled) {
+          background: rgba(99, 179, 237, 0.22);
+          border-color: rgba(99, 179, 237, 0.4);
+          transform: translateY(-1px);
+        }
+
+        .status-send-btn.disabled,
+        .status-send-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+          transform: none;
+        }
+
+        @media (max-width: 1120px) {
+          .desktop-status-bar-shell {
+            min-height: 144px;
+            padding: 8px 16px 16px;
+          }
+
+          .status-bar-meta-row,
+          .status-composer-shell {
+            max-width: none;
+          }
+
+          .status-bar-right {
+            justify-content: flex-start;
+          }
         }
       `}</style>
     </div>

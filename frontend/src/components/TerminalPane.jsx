@@ -89,6 +89,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [refreshToken, setRefreshToken] = useState(0);
   const [isSessionBusy, setIsSessionBusy] = useState(false);
   const [launchQueued, setLaunchQueued] = useState(false);
+  const [composerValue, setComposerValue] = useState('');
   const [viewModeNotice, setViewModeNotice] = useState('');
   const [isNoticePersistent, setIsNoticePersistent] = useState(false);
   const [terminalPreview, setTerminalPreview] = useState('');
@@ -170,6 +171,7 @@ export const TerminalPane = memo(function TerminalPane({
     setIsTerminalPanelOpen(false);
     setConnectionState('connecting');
     setLaunchQueued(false);
+    setComposerValue('');
     setTerminalPreview('');
     setTerminalScreenSnapshot('');
     setInteractivePromptEvent(null);
@@ -359,6 +361,23 @@ export const TerminalPane = memo(function TerminalPane({
   const handleLaunchAgent = useCallback(() => {
     launchAiType(currentAiType);
   }, [currentAiType, launchAiType]);
+
+  const handleComposerSubmit = useCallback((text) => {
+    if (!pane.sessionId) return;
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    if (!trimmed) return;
+
+    const result = handleChatSend(trimmed);
+    setComposerValue('');
+
+    if (result?.queued) {
+      setIsNoticePersistent(false);
+      setViewModeNotice('Terminal is still connecting. Command queued.');
+    } else if (viewModeNotice) {
+      setIsNoticePersistent(false);
+      setViewModeNotice('');
+    }
+  }, [handleChatSend, pane.sessionId, viewModeNotice]);
 
   const handleSelectAiType = useCallback((nextAiType) => {
     if (!pane.sessionId) return;
@@ -660,11 +679,20 @@ export const TerminalPane = memo(function TerminalPane({
               onSelectAiType={handleSelectAiType}
               onAddCustomAiCommand={handleAddCustomAiCommand}
               onLaunchAi={handleLaunchAgent}
+              composerValue={composerValue}
+              onComposerChange={setComposerValue}
+              onComposerSubmit={handleComposerSubmit}
+              composerPlaceholder={currentAiType ? `Ask ${currentSessionLabel.toLowerCase()} or send a terminal command` : 'Send a command or prompt to this terminal'}
+              composerDisabled={!pane.sessionId}
             />
           </div>
         ) : (
-          <div className="pane-empty">
-            <p>Select a session or drag one here</p>
+          <div className="pane-empty pane-home">
+            <div className="pane-home-copy">
+              <span className="pane-home-kicker">Workspace</span>
+              <h2>Select a terminal to get started</h2>
+              <p>Pick an active thread from the sidebar, or create a new terminal to start sending prompts and commands.</p>
+            </div>
           </div>
         )}
       </div>
@@ -755,6 +783,52 @@ export const TerminalPane = memo(function TerminalPane({
         .ph-session-chevron {
           opacity: 0.5;
           flex-shrink: 0;
+        }
+
+        .pane-home {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 100%;
+          padding: 32px;
+          background:
+            radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 32%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+        }
+
+        .pane-home-copy {
+          max-width: 420px;
+          text-align: center;
+        }
+
+        .pane-home-kicker {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 4px 10px;
+          border-radius: 999px;
+          border: 1px solid rgba(56, 189, 248, 0.18);
+          background: rgba(56, 189, 248, 0.08);
+          color: rgba(147, 197, 253, 0.88);
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          margin-bottom: 14px;
+        }
+
+        .pane-home h2 {
+          margin: 0 0 10px;
+          font-size: 24px;
+          line-height: 1.1;
+          color: var(--text-primary);
+        }
+
+        .pane-home p {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 14px;
+          line-height: 1.6;
         }
 
         /* ── Session dropdown menu ── */

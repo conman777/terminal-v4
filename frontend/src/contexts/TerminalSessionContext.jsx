@@ -25,6 +25,7 @@ export function TerminalSessionProvider({ children }) {
   const isMountedRef = useRef(true);
   const restoreInFlightRef = useRef(new Set());
   const lastActivityRef = useRef(Date.now());
+  const activeSessionIdRef = useRef(activeSessionId);
   const lastCwdRef = useRef(null);
   const terminalSendersRef = useRef(new Map());
   const liveTerminalCountRef = useRef(0);
@@ -119,6 +120,10 @@ export function TerminalSessionProvider({ children }) {
     [activeSessionsForThreads]
   );
 
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
   // Load sessions
   const loadSessions = useCallback(async () => {
     if (!isMountedRef.current) return;
@@ -150,8 +155,9 @@ export function TerminalSessionProvider({ children }) {
     if (!isMountedRef.current) return;
 
     try {
-      const url = activeSessionId
-        ? `/api/state?sessionId=${activeSessionId}`
+      const selectedSessionId = activeSessionIdRef.current;
+      const url = selectedSessionId
+        ? `/api/state?sessionId=${selectedSessionId}`
         : '/api/state';
 
       const response = await apiFetch(url);
@@ -171,14 +177,14 @@ export function TerminalSessionProvider({ children }) {
           lastCwdRef.current = data.projectInfo.cwd;
           addRecentFolder(data.projectInfo.cwd);
         }
-      } else if (!activeSessionId && isMountedRef.current) {
+      } else if (!selectedSessionId && isMountedRef.current) {
         setProjectInfo(null);
         lastCwdRef.current = null;
       }
     } catch (error) {
       console.error('Failed to fetch app state:', error);
     }
-  }, [activeSessionId, addRecentFolder]);
+  }, [addRecentFolder]);
 
   // Session CRUD operations
   const createSession = useCallback(async (options = {}) => {

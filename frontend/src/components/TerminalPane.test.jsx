@@ -25,6 +25,12 @@ vi.mock('./DesktopStatusBar', () => ({
   DesktopStatusBar: (props) => {
     return (
       <div>
+        <input
+          aria-label="composer"
+          value={props.composerValue || ''}
+          onChange={(event) => props.onComposerChange?.(event.target.value)}
+        />
+        <button type="button" aria-label="status-send-composer" onClick={() => props.onComposerSubmit?.(props.composerValue)}>Send composer</button>
         {props.showTerminalToggle ? (
           <button type="button" aria-label="toggle-terminal-panel" onClick={props.onToggleTerminalPanel}>
             {props.isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
@@ -144,6 +150,17 @@ describe('TerminalPane', () => {
     expect(onAddCustomAiProvider).toHaveBeenCalledWith('Qwen 3', 'qwen --fast');
     expect(onSetSessionAiType).toHaveBeenCalledWith('session-1', 'qwen-3');
     expect(handleChatSendMock).toHaveBeenCalledWith('qwen --fast');
+  });
+
+  it('sends composer text to the terminal session', () => {
+    render(<TerminalPane {...buildProps()} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'composer' }), {
+      target: { value: 'Review the current project structure' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'status-send-composer' }));
+
+    expect(handleChatSendMock).toHaveBeenCalledWith('Review the current project structure');
   });
 
   it('still renders the structured conversation view for structured sessions', () => {
