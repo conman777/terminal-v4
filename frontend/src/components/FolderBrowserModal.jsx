@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
 
@@ -7,6 +7,12 @@ function resolveInitialAiOptionId(options, preferredId) {
     return preferredId;
   }
   return options[0]?.id || 'cli';
+}
+
+function buildAiOptionsSignature(options) {
+  return options
+    .map((option) => `${option.id}:${option.label}:${option.title ?? ''}:${option.command ?? ''}`)
+    .join('|');
 }
 
 export function FolderBrowserModal({
@@ -19,7 +25,14 @@ export function FolderBrowserModal({
   aiOptions = NEW_TAB_AI_OPTIONS,
   defaultAiOptionId = 'cli'
 }) {
-  const resolvedAiOptions = showAiSelector && aiOptions.length > 0 ? aiOptions : NEW_TAB_AI_OPTIONS;
+  const resolvedAiOptions = useMemo(
+    () => (showAiSelector && aiOptions.length > 0 ? aiOptions : NEW_TAB_AI_OPTIONS),
+    [showAiSelector, aiOptions]
+  );
+  const aiOptionsSignature = useMemo(
+    () => buildAiOptionsSignature(resolvedAiOptions),
+    [resolvedAiOptions]
+  );
   const [path, setPath] = useState(currentPath || '');
   const [folders, setFolders] = useState([]);
   const [parent, setParent] = useState(null);
@@ -61,7 +74,7 @@ export function FolderBrowserModal({
       setTabName('');
       setSelectedAiOptionId(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId));
     }
-  }, [isOpen, currentPath, loadDirectory, resolvedAiOptions, defaultAiOptionId]);
+  }, [isOpen, currentPath, loadDirectory, aiOptionsSignature, defaultAiOptionId]);
 
   const handleFolderClick = (folderName) => {
     const separator = path.includes('\\') ? '\\' : '/';

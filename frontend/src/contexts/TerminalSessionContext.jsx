@@ -507,6 +507,42 @@ export function TerminalSessionProvider({ children }) {
     }
   }, []);
 
+  const listSessionGitBranches = useCallback(async (sessionId) => {
+    if (!sessionId) return null;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/git-branches`);
+      if (!response.ok) {
+        throw new Error(`Failed to get git branches (${response.status})`);
+      }
+      return await response.json();
+    } catch (error) {
+      console.error('Failed to list git branches', error);
+      return null;
+    }
+  }, []);
+
+  const checkoutSessionGitBranch = useCallback(async (sessionId, branch) => {
+    if (!sessionId || !branch) return null;
+
+    try {
+      const response = await apiFetch(`/api/terminal/${sessionId}/git-checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branch })
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to checkout git branch (${response.status})`);
+      }
+      const data = await response.json();
+      await refreshSessionGitStats(sessionId);
+      return data;
+    } catch (error) {
+      console.error('Failed to checkout git branch', error);
+      return null;
+    }
+  }, [refreshSessionGitStats]);
+
   useEffect(() => {
     sessions.forEach((session) => {
       if (session.thread?.projectPath) return;
@@ -762,6 +798,8 @@ export function TerminalSessionProvider({ children }) {
     generateSessionTopic,
     detectSessionProject,
     refreshSessionGitStats,
+    listSessionGitBranches,
+    checkoutSessionGitBranch,
 
     // Activity tracking
     trackActivity

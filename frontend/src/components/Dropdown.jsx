@@ -88,7 +88,7 @@ export function Dropdown({
           overflow-y: auto;
           overscroll-behavior: contain;
           padding: 4px;
-          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
+          font-family: var(--font-ui);
         }
 
         .dropdown-menu.align-right {

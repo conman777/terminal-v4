@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { TurnDetector, type ChatTurn } from './turn-detector';
 import type { TerminalCliEvent } from './cli-events';
 import { EventEmitter } from 'node:events';
+import { promisify } from 'node:util';
 import { spawn as ptySpawn } from '@homebridge/node-pty-prebuilt-multiarch';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -50,6 +52,7 @@ import {
   type ManagedTerminal,
   type PersistedSession
 } from './types';
+import { parseGitBranchList, type TerminalGitBranchInfo } from './git-branches';
 import { outputIndicatesIdlePrompt } from './busy-state';
 import { isTerminalControlResponseInput } from './control-input';
 import { WorkspaceCopySandboxRuntime } from '../sandbox/workspace-copy-sandbox-runtime';
@@ -62,6 +65,8 @@ import type {
 
 // Re-export types for external consumers
 export type { ProjectType, ProjectInfo } from './types';
+
+const execFileAsync = promisify(execFile);
 
 function detectShell(): string {
   if (process.platform === 'win32') {
@@ -1439,6 +1444,42 @@ export class TerminalManager {
       cwd,
       projectType: 'unknown'
     };
+  }
+
+  async listGitBranches(userId: string, id: string): Promise<TerminalGitBranchInfo | null> {
+    const session = this.#sessions.get(id);
+    if (!session || session.userId !== userId) {
+      return null;
+    }
+
+    try {
+      const [currentBranchResult, branchesResult] = await Promise.all([
+        execFileAsync('git', ['branch', '--show-current'], { cwd: session.cwd, timeout: 5000 }),
+        execFileAsync('git', ['branch', '--format=%(refname:short)'], { cwd: session.cwd, timeout: 5000 })
+      ]);
+
+      return {
+        currentBranch: currentBranchResult.stdout.trim() || null,
+        branches: parseGitBranchList(branchesResult.stdout)
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async checkoutGitBranch(userId: string, id: string, branch: string): Promise<TerminalGitBranchInfo | null> {
+    const session = this.#sessions.get(id);
+    if (!session || session.userId !== userId) {
+      return null;
+    }
+
+    const trimmedBranch = branch.trim();
+    if (!trimmedBranch) {
+      throw new Error('Branch cannot be empty');
+    }
+
+    await execFileAsync('git', ['checkout', trimmedBranch], { cwd: session.cwd, timeout: 15000 });
+    return this.listGitBranches(userId, id);
   }
 
   close(userId: string, id: string): boolean {

@@ -174,7 +174,7 @@ export const SessionTab = memo(function SessionTab({
           border: none;
           border-bottom: 2px solid transparent;
           color: var(--text-muted, #52525b);
-          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
+          font-family: var(--font-ui);
           font-size: 12px;
           font-weight: 400;
           white-space: nowrap;

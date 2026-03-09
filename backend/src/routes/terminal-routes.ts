@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import {
   terminalCreateRequestSchema,
+  terminalGitCheckoutRequestSchema,
   terminalInputRequestSchema,
   terminalRenameRequestSchema,
   terminalResizeRequestSchema
@@ -203,6 +204,50 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
     reply.send(projectInfo);
+  });
+
+  app.get<{ Params: TerminalIdParams }>('/api/terminal/:id/git-branches', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const branchInfo = await deps.terminalManager.listGitBranches(userId, request.params.id);
+    if (!branchInfo) {
+      reply.code(404).send({ error: 'Git branches not available for this terminal' });
+      return;
+    }
+
+    reply.send(branchInfo);
+  });
+
+  app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/git-checkout', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
+    const result = terminalGitCheckoutRequestSchema.safeParse(request.body);
+    if (!result.success) {
+      reply.code(400).send({
+        error: 'Invalid git checkout body',
+        details: result.error.flatten()
+      });
+      return;
+    }
+
+    try {
+      const branchInfo = await deps.terminalManager.checkoutGitBranch(userId, request.params.id, result.data.branch);
+      if (!branchInfo) {
+        reply.code(404).send({ error: 'Git branches not available for this terminal' });
+        return;
+      }
+      reply.send(branchInfo);
+    } catch (error) {
+      reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.post<{ Params: TerminalIdParams }>('/api/terminal/:id/input', async (request, reply) => {

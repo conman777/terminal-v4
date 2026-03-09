@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DesktopStatusBar } from './DesktopStatusBar';
 
 const toggleAutocorrectMock = vi.fn();
@@ -15,16 +15,29 @@ vi.mock('./TerminalMicButton', () => ({
   TerminalMicButton: () => <span data-testid="terminal-mic-mock" />
 }));
 
+const uploadScreenshotMock = vi.fn();
+const getImageFileFromDataTransferMock = vi.fn();
+
+vi.mock('../utils/api', () => ({
+  uploadScreenshot: (...args) => uploadScreenshotMock(...args)
+}));
+
+vi.mock('../utils/clipboardImage', () => ({
+  getImageFileFromDataTransfer: (...args) => getImageFileFromDataTransferMock(...args)
+}));
+
 function buildProps(overrides = {}) {
   return {
     sessionId: 'session-1',
     sessionTitle: 'Terminal 1',
     cwd: 'C:\\Users\\conor\\project',
     gitBranch: 'main',
-    onImageUpload: vi.fn(),
     composerValue: '',
+    composerAttachments: [],
     onComposerChange: vi.fn(),
     onComposerSubmit: vi.fn(),
+    onComposerAttachmentAdd: vi.fn(),
+    onComposerAttachmentRemove: vi.fn(),
     isTerminalPanelOpen: false,
     onToggleTerminalPanel: vi.fn(),
     connectionState: 'online',
@@ -35,6 +48,8 @@ function buildProps(overrides = {}) {
 describe('DesktopStatusBar', () => {
   beforeEach(() => {
     toggleAutocorrectMock.mockClear();
+    uploadScreenshotMock.mockReset();
+    getImageFileFromDataTransferMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -66,7 +81,7 @@ describe('DesktopStatusBar', () => {
 
   it('shows a fallback AI label for unknown providers', () => {
     render(<DesktopStatusBar {...buildProps({ aiType: 'deepseek' })} />);
-    expect(screen.getByText('deepseek')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Choose AI coder' })).toHaveAttribute('title', 'Assistant: Deepseek');
   });
 
   it('lets the user choose a different AI coder from the footer menu', () => {
@@ -116,5 +131,45 @@ describe('DesktopStatusBar', () => {
     render(<DesktopStatusBar {...buildProps({ composerValue: '   ' })} />);
 
     expect(screen.getByRole('button', { name: 'Send to terminal' })).toBeDisabled();
+  });
+
+  it('uploads pasted images into the composer as file paths', async () => {
+    const onComposerAttachmentAdd = vi.fn();
+    const imageFile = new File(['image'], 'capture.png', { type: 'image/png' });
+    getImageFileFromDataTransferMock.mockResolvedValue(imageFile);
+    uploadScreenshotMock.mockResolvedValue('/tmp/paste-image.png');
+
+    render(<DesktopStatusBar {...buildProps({ composerValue: 'Look at this', onComposerAttachmentAdd })} />);
+
+    fireEvent.paste(screen.getByRole('textbox', { name: 'Command composer' }), {
+      clipboardData: {
+        getData: () => '',
+        items: []
+      }
+    });
+
+    await waitFor(() => {
+      expect(onComposerAttachmentAdd).toHaveBeenCalledWith({
+        name: 'capture.png',
+        path: '/tmp/paste-image.png'
+      });
+    });
+  });
+
+  it('renders runtime info and lets the user switch git branches', () => {
+    const onSelectGitBranch = vi.fn();
+    render(<DesktopStatusBar {...buildProps({
+      runtimeInfo: { label: 'Opus 4.6 · Ctx 11%' },
+      gitBranches: ['main', 'feature/ui'],
+      currentGitBranch: 'main',
+      onSelectGitBranch
+    })} />);
+
+    expect(screen.getByText('Opus 4.6 · Ctx 11%')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select git branch' }));
+    fireEvent.click(screen.getByRole('button', { name: 'feature/ui' }));
+
+    expect(onSelectGitBranch).toHaveBeenCalledWith('feature/ui');
   });
 });

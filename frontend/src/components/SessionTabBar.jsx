@@ -258,7 +258,7 @@ export function SessionTabBar({
           height: 100%;
           flex-shrink: 0;
           position: relative;
-          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
+          font-family: var(--font-ui);
         }
 
         .session-tab-bar-container-modern.in-header {

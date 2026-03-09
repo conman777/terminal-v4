@@ -242,7 +242,7 @@ export function Header({
           border-bottom: none;
           user-select: none;
           z-index: 100;
-          font-family: "Cascadia Mono", "SFMono-Regular", "Fira Code", Consolas, monospace;
+          font-family: var(--font-ui);
         }
 
         .header-spacer {

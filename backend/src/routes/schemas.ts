@@ -39,6 +39,12 @@ export const terminalRenameRequestSchema = z.object({
 
 export type TerminalRenameRequestBody = z.infer<typeof terminalRenameRequestSchema>;
 
+export const terminalGitCheckoutRequestSchema = z.object({
+  branch: z.string().trim().min(1, 'branch cannot be empty').max(255, 'branch too long')
+});
+
+export type TerminalGitCheckoutRequestBody = z.infer<typeof terminalGitCheckoutRequestSchema>;
+
 export const bookmarkCreateRequestSchema = z.object({
   name: z
     .string({ error: 'name must be a string' })
