@@ -106,16 +106,6 @@ describe('MobileDrawer', () => {
     expect(screen.getByRole('dialog', { name: /mobile menu/i })).toBeInTheDocument();
   });
 
-  it('toggles gesture help content from footer button', () => {
-    render(<MobileDrawer {...buildProps()} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /show mobile gesture help/i }));
-    expect(screen.getByText('Swipe right from the left edge to open the drawer.')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /show mobile gesture help/i }));
-    expect(screen.queryByText('Swipe right from the left edge to open the drawer.')).not.toBeInTheDocument();
-  });
-
   it('filters archived sessions from the live threads list', () => {
     render(<MobileDrawer {...buildProps({
       sessionsGroupedByProject: [
@@ -173,22 +163,26 @@ describe('MobileDrawer', () => {
       activeSessionId: 'session-1'
     })} />);
 
-    expect(screen.getByText('Live threads')).toBeInTheDocument();
+    expect(screen.getByText('Threads')).toBeInTheDocument();
     expect(screen.getAllByText('ship mobile header').length).toBeGreaterThan(0);
     expect(screen.getAllByText('uplifting').length).toBeGreaterThan(0);
   });
 
-  it('surfaces API settings and browser settings actions from the More section', () => {
-    const onOpenApiSettings = vi.fn();
-    const onOpenBrowserSettings = vi.fn();
+  it('surfaces primary utility actions from the simplified drawer', () => {
+    const onOpenProcessManager = vi.fn();
+    const onOpenBookmarks = vi.fn();
+    const onOpenNotes = vi.fn();
 
-    render(<MobileDrawer {...buildProps({ onOpenApiSettings, onOpenBrowserSettings })} />);
+    render(<MobileDrawer {...buildProps({ onOpenProcessManager, onOpenBookmarks, onOpenNotes })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'API Settings' }));
-    expect(onOpenApiSettings).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Process Manager' }));
+    expect(onOpenProcessManager).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Browser Settings' }));
-    expect(onOpenBrowserSettings).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Bookmarks' }));
+    expect(onOpenBookmarks).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+    expect(onOpenNotes).toHaveBeenCalled();
   });
 
   it('shows compact session subtitles instead of raw paths in the live list', () => {
@@ -219,5 +213,73 @@ describe('MobileDrawer', () => {
     render(<MobileDrawer {...buildProps()} />);
 
     expect(screen.queryByText('Recent terminals')).not.toBeInTheDocument();
+  });
+
+  it('does not render a separate current session hero card', () => {
+    render(<MobileDrawer {...buildProps({
+      activeSessions: [
+        {
+          id: 'session-1',
+          title: 'Terminal 1',
+          updatedAt: '2026-03-09T10:00:00.000Z',
+          thread: { topic: 'active mobile thread', archived: false }
+        }
+      ],
+      sessionsGroupedByProject: [
+        {
+          projectName: 'terminal-v4',
+          projectPath: 'C:\\repo',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'Terminal 1',
+              updatedAt: '2026-03-09T10:00:00.000Z',
+              thread: { topic: 'active mobile thread', archived: false }
+            }
+          ]
+        }
+      ],
+      activeSessionId: 'session-1'
+    })} />);
+
+    expect(screen.queryByText('Current session')).not.toBeInTheDocument();
+    expect(screen.getByText('active mobile thread')).toBeInTheDocument();
+  });
+
+  it('renders the simplified drawer shell', () => {
+    render(<MobileDrawer {...buildProps({ previewUrl: 'https://example.com' })} />);
+
+    expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+  });
+
+  it('shows a ready indicator for inactive threads with completed activity', () => {
+    render(<MobileDrawer {...buildProps({
+      activeSessionId: 'session-2',
+      sessionActivity: {
+        'session-1': {
+          isBusy: false,
+          needsAttention: true
+        }
+      },
+      sessionsGroupedByProject: [
+        {
+          projectName: 'uplifting',
+          projectPath: 'C:\\repo\\uplifting',
+          sessions: [
+            {
+              id: 'session-1',
+              title: 'Terminal 1',
+              updatedAt: '2026-03-09T10:00:00.000Z',
+              thread: { topic: 'review mobile pass', archived: false }
+            }
+          ]
+        }
+      ]
+    })} />);
+
+    expect(screen.getByLabelText('Ready to review')).toBeInTheDocument();
   });
 });

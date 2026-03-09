@@ -11,7 +11,7 @@ const EMPTY_ACTIVITY_STATE = Object.freeze({
 function normalizeActivityState(value = {}) {
   return {
     hasUnread: Boolean(value.hasUnread),
-    needsAttention: Boolean(value.hasUnread),
+    needsAttention: Boolean(value.hasUnread || value.needsAttention),
     lastActivity: value.lastActivity || 0,
     isBusy: Boolean(value.isBusy)
   };
@@ -127,8 +127,13 @@ export function useSessionActivity() {
       }
 
       const nextLastActivity = activityTs || now;
+      const completedOffscreen = current.isBusy && !busy && focusedSessionRef.current !== sessionId;
 
-      if (current.isBusy === busy && current.lastActivity === nextLastActivity) {
+      if (
+        current.isBusy === busy
+        && current.lastActivity === nextLastActivity
+        && (!completedOffscreen || current.hasUnread)
+      ) {
         return prev;
       }
 
@@ -136,6 +141,7 @@ export function useSessionActivity() {
         ...prev,
         [sessionId]: normalizeActivityState({
           ...current,
+          hasUnread: completedOffscreen ? true : current.hasUnread,
           isBusy: busy,
           lastActivity: nextLastActivity
         })

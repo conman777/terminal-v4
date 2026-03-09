@@ -8,6 +8,7 @@ import { MobileKeybar } from './components/MobileKeybar';
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
+import { FileManager } from './components/FileManager';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import { MobileGestureHints } from './components/MobileGestureHints';
@@ -87,11 +88,6 @@ const PreviewPanel = lazyWithChunkRecovery(
   () => import('./components/PreviewPanel'),
   'PreviewPanel',
   (module) => module.PreviewPanel
-);
-const FileManager = lazyWithChunkRecovery(
-  () => import('./components/FileManager'),
-  'FileManager',
-  (module) => module.FileManager
 );
 const SettingsModal = lazyWithChunkRecovery(
   () => import('./components/SettingsModal'),

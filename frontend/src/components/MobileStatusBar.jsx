@@ -241,7 +241,6 @@ export function MobileStatusBar({
                     <line x1="9" y1="9" x2="15" y2="9" />
                     <line x1="9" y1="15" x2="15" y2="15" />
                   </svg>
-                  <span>Type</span>
                 </button>
 
                 <div className="mobile-status-ai-controls" ref={aiMenuRef}>
@@ -327,6 +326,7 @@ export function MobileStatusBar({
                   )}
                   items={moreItems}
                   align="right"
+                  direction="up"
                 />
               </>
             )}

@@ -118,7 +118,7 @@ describe('MobileSessionPicker', () => {
     expect(screen.getByText('discard local changes').closest('.mobile-session-picker-item'))
       .not.toHaveTextContent('Busy');
     expect(screen.getByText('this should only show this sho...').closest('.mobile-session-picker-item'))
-      .toHaveTextContent('Busy');
+      .toContainElement(screen.getByLabelText('Working'));
   });
 
   it('hides archived sessions from the picker list', () => {
@@ -161,5 +161,19 @@ describe('MobileSessionPicker', () => {
 
     expect(screen.getByText('uplifting')).toBeInTheDocument();
     expect(screen.queryByText(/OneDrive/)).not.toBeInTheDocument();
+  });
+
+  it('shows a ready indicator for inactive sessions with completed activity', () => {
+    render(<MobileSessionPicker {...buildProps({
+      activeSessionId: 'session-2',
+      sessionActivity: {
+        'session-1': {
+          isBusy: false,
+          needsAttention: true
+        }
+      }
+    })} />);
+
+    expect(screen.getByLabelText('Ready to review')).toBeInTheDocument();
   });
 });

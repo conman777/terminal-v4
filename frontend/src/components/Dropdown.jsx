@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
 
-export function Dropdown({ 
-  trigger, 
-  items, 
-  align = 'right', 
+export function Dropdown({
+  trigger,
+  items,
+  align = 'right',
+  direction = 'down',
   className = '',
-  closeOnSelect = true 
+  closeOnSelect = true
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef(null);
@@ -32,7 +33,7 @@ export function Dropdown({
       </div>
       
       {isOpen && (
-        <div className={`dropdown-menu align-${align}`}>
+        <div className={`dropdown-menu align-${align} dir-${direction}`}>
           {items.map((item, index) => {
             if (item.separator) {
               return <div key={`sep-${index}`} className="dropdown-separator" />;
@@ -69,6 +70,11 @@ export function Dropdown({
           cursor: pointer;
           display: flex;
           align-items: center;
+        }
+
+        .dropdown-menu.dir-up {
+          top: auto;
+          bottom: calc(100% + 4px);
         }
 
         .dropdown-menu {

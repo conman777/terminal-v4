@@ -150,4 +150,23 @@ describe('useSessionActivity', () => {
       lastActivity: localIdleTs
     }));
   });
+
+  it('marks an unfocused session as needing attention when work completes', () => {
+    const { result } = renderHook(() => useSessionActivity());
+
+    act(() => {
+      result.current.setFocusedSession('session-a');
+      result.current.setBusy('session-b', true);
+    });
+
+    act(() => {
+      result.current.setBusy('session-b', false);
+    });
+
+    expect(result.current.activity['session-b']).toEqual(expect.objectContaining({
+      isBusy: false,
+      hasUnread: true,
+      needsAttention: true
+    }));
+  });
 });

@@ -3552,12 +3552,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           </button>
         </div>
       )}
-      {(shouldShowMirrorBadge || shouldShowOwnerBadge) && (
-        <div className={`terminal-pty-role-badge ${shouldShowMirrorBadge ? 'mirror' : 'owner'}`}>
-          <span>{ptyBadgeLabel}</span>
-          {ptyBadgeDims && <span className="terminal-pty-role-dims">{ptyBadgeDims}</span>}
-        </div>
-      )}
       {showCopiedBanner && (
         <div className="terminal-copy-feedback-banner" role="status" aria-live="polite">
           Copied

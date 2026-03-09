@@ -30,6 +30,26 @@ function formatRelativeTime(timestamp) {
   return `${Math.floor(days / 7)}w ago`;
 }
 
+function SessionStateIndicator({ isBusy, showReady }) {
+  if (!isBusy && !showReady) return null;
+
+  return (
+    <span
+      className={`mobile-session-state-indicator${isBusy ? ' busy' : ' ready'}`}
+      aria-label={isBusy ? 'Working' : 'Ready to review'}
+    >
+      {isBusy ? (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+          <path d="M14 8a6 6 0 0 0-6-6" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      ) : (
+        <span className="mobile-session-state-dot" aria-hidden="true" />
+      )}
+    </span>
+  );
+}
+
 export function MobileSessionPicker({
   isOpen,
   onClose,
@@ -171,11 +191,13 @@ export function MobileSessionPicker({
               const isBusy = typeof activity?.isBusy === 'boolean'
                 ? activity.isBusy
                 : Boolean(session?.isBusy);
+              const hasAttention = Boolean(activity?.needsAttention);
               const lastActivity = activity?.lastActivity || session.updatedAt;
               const relativeTime = formatRelativeTime(lastActivity);
               const aiType = sessionAiTypes?.[session.id] || null;
               const display = getSessionDisplayInfo(session, 'Terminal');
               const subtitle = getCompactSessionSubtitle(session, 'Terminal');
+              const showReady = !isBusy && hasAttention && !isActive;
 
               return (
                 <button
@@ -191,9 +213,7 @@ export function MobileSessionPicker({
                     )}
                     <div className="mobile-session-picker-item-meta">
                       <span className={`mobile-session-picker-ai-dot${aiType ? ` ai-${aiType}` : ''}`} />
-                      <span className={`mobile-session-picker-item-status ${isBusy ? 'busy' : 'idle'}`}>
-                        {isBusy ? 'Busy' : 'Idle'}
-                      </span>
+                      <SessionStateIndicator isBusy={isBusy} showReady={showReady} />
                       {relativeTime && (
                         <span className="mobile-session-picker-item-time">{relativeTime}</span>
                       )}

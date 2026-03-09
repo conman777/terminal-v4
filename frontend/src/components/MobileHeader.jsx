@@ -202,9 +202,43 @@ export function MobileHeader({
 
   const isPreviewView = mobileView === 'preview';
   const showInlineViewTabs = Boolean(previewUrl && previewOpened);
-  const showSessionRail = !showInlineViewTabs && !isPreviewView;
-
   const overflowItems = [
+    !isPreviewView ? {
+      label: chatMode ? 'Terminal view' : 'Conversation view',
+      icon: chatMode ? (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="4 17 10 11 4 5" />
+          <line x1="12" y1="19" x2="20" y2="19" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+      ),
+      active: chatMode,
+      onClick: () => onToggleChatMode?.()
+    } : null,
+    activeVisibleSession && !isPreviewView ? {
+      label: 'Rename session',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+        </svg>
+      ),
+      onClick: () => handleStartRename(activeSessionId)
+    } : null,
+    activeVisibleSession && !isPreviewView ? {
+      label: 'Close session',
+      icon: (
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      ),
+      danger: true,
+      onClick: () => handleCloseFromMenu(activeSessionId)
+    } : null,
+    { separator: true },
     !isPreviewView && !chatMode ? {
       label: 'Preview',
       icon: (
@@ -311,53 +345,11 @@ export function MobileHeader({
               onViewChange={onViewChange}
               previewUrl={previewUrl}
             />
-          ) : (
+          ) : isPreviewView ? (
             <div className="mobile-header-title-block">
-              <span className="mobile-header-title">{isPreviewView ? 'Preview' : chatMode ? 'Conversation' : 'Terminal'}</span>
-              {!isPreviewView && (
-                <span className="mobile-header-caption">{sessionCountLabel}</span>
-              )}
+              <span className="mobile-header-title">Preview</span>
             </div>
-          )}
-
-          <div className="mobile-header-actions-right">
-            {!isPreviewView && (
-              <button
-                type="button"
-                className={`mobile-header-btn-modern mobile-chat-toggle${chatMode ? ' active' : ''}`}
-                onClick={() => onToggleChatMode?.()}
-                aria-label={chatMode ? 'Switch to terminal view' : 'Switch to conversation view'}
-              >
-                {chatMode ? (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="4 17 10 11 4 5" />
-                    <line x1="12" y1="19" x2="20" y2="19" />
-                  </svg>
-                ) : (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                  </svg>
-                )}
-              </button>
-            )}
-            <Dropdown
-              trigger={(
-                <button className="mobile-header-btn-modern" type="button" aria-label="More actions">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="12" cy="5" r="2" />
-                    <circle cx="12" cy="12" r="2" />
-                    <circle cx="12" cy="19" r="2" />
-                  </svg>
-                </button>
-              )}
-              items={overflowItems}
-              align="right"
-            />
-          </div>
-        </div>
-
-        {showSessionRail && (
-          <div className="mobile-header-session-rail">
+          ) : (
             <button
               type="button"
               className={`mobile-header-session-switcher${activeSessionIsBusy ? ' busy' : ''}`}
@@ -380,38 +372,38 @@ export function MobileHeader({
                 <polyline points="9 6 15 12 9 18" />
               </svg>
             </button>
+          )}
 
-            <button
-              type="button"
-              className="mobile-header-session-icon"
-              onClick={() => onCreateSession?.()}
-              aria-label="New terminal"
-              title="New terminal"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-            </button>
-
-            {activeVisibleSession && (
+          <div className="mobile-header-actions-right">
+            {!isPreviewView && !showInlineViewTabs && (
               <button
-                ref={sessionActionsButtonRef}
                 type="button"
-                className="mobile-header-session-icon"
-                onClick={handleOpenActiveSessionMenu}
-                aria-label="Session actions"
-                title="Session actions"
+                className="mobile-header-btn-modern"
+                onClick={() => onCreateSession?.()}
+                aria-label="New terminal"
+                title="New terminal"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-                  <circle cx="12" cy="5" r="2" />
-                  <circle cx="12" cy="12" r="2" />
-                  <circle cx="12" cy="19" r="2" />
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
             )}
+            <Dropdown
+              trigger={(
+                <button className="mobile-header-btn-modern" type="button" aria-label="More actions">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                  </svg>
+                </button>
+              )}
+              items={overflowItems}
+              align="right"
+            />
           </div>
-        )}
+        </div>
       </header>
 
       <MobileDrawer

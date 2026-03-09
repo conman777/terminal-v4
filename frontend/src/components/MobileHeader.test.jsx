@@ -299,4 +299,29 @@ describe('MobileHeader', () => {
     expect(screen.queryByText('archived thread')).not.toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: /session picker/i })).toHaveTextContent('visible one');
   });
+
+  it('opens file manager from the overflow menu without changing the active session', () => {
+    const onToggleFileManager = vi.fn();
+    const onSelectSession = vi.fn();
+
+    render(
+      <MobileHeader
+        {...buildProps({
+          onToggleFileManager,
+          onSelectSession,
+          activeSessions: [
+            { id: 'session-1', title: 'Terminal 1', isBusy: false, thread: { topic: 'active thread' } }
+          ],
+          activeSessionId: 'session-1'
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'File Manager' }));
+
+    expect(onToggleFileManager).toHaveBeenCalledTimes(1);
+    expect(onSelectSession).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /open session picker/i })).toHaveTextContent('active thread');
+  });
 });

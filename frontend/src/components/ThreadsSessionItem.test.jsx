@@ -53,4 +53,47 @@ describe('ThreadsSessionItem', () => {
 
     expect(onRenameSession).toHaveBeenCalledWith('session-1', 'New title');
   });
+
+  it('shows a ready dot for inactive threads with completed activity', () => {
+    const { container } = render(
+      <ThreadsSessionItem
+        session={buildSession()}
+        isBusy={false}
+        isActive={false}
+        hasActivity={true}
+        onSelect={vi.fn()}
+        onPin={vi.fn()}
+        onUnpin={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        onTopicChange={vi.fn()}
+        onRenameSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(container.querySelector('.threads-session-indicator.ready')).toBeTruthy();
+    expect(screen.getByLabelText('Ready to review')).toBeInTheDocument();
+  });
+
+  it('does not show the ready dot for the active thread', () => {
+    const { container } = render(
+      <ThreadsSessionItem
+        session={buildSession()}
+        isBusy={false}
+        isActive={true}
+        hasActivity={true}
+        onSelect={vi.fn()}
+        onPin={vi.fn()}
+        onUnpin={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        onTopicChange={vi.fn()}
+        onRenameSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(container.querySelector('.threads-session-indicator.ready')).toBeNull();
+  });
 });

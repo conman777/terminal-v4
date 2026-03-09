@@ -48,6 +48,7 @@ export default function ThreadsSessionItem({
   const isArchived = thread.archived || false;
   const sessionAge = formatRelativeTime(session.createdAt);
   const resolvedIsBusy = typeof isBusy === 'boolean' ? isBusy : Boolean(session.isBusy);
+  const showReadyIndicator = !resolvedIsBusy && Boolean(hasActivity) && !isActive;
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -155,13 +156,19 @@ export default function ThreadsSessionItem({
       onMouseLeave={() => setIsHovered(false)}
       title={undefined}
     >
-      {/* Busy spinner */}
-      {resolvedIsBusy && (
-        <div className="threads-session-spinner" aria-label="Working">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-            <path d="M14 8a6 6 0 0 0-6-6" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" />
-          </svg>
+      {(resolvedIsBusy || showReadyIndicator) && (
+        <div
+          className={`threads-session-indicator ${resolvedIsBusy ? 'busy' : 'ready'}`}
+          aria-label={resolvedIsBusy ? 'Working' : 'Ready to review'}
+        >
+          {resolvedIsBusy ? (
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+              <path d="M14 8a6 6 0 0 0-6-6" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <span className="threads-session-ready-dot" aria-hidden="true" />
+          )}
         </div>
       )}
 
@@ -315,14 +322,25 @@ export default function ThreadsSessionItem({
           justify-content: flex-end;
         }
 
-        .threads-session-spinner {
+        .threads-session-indicator {
           flex-shrink: 0;
           width: 14px;
           height: 14px;
           display: flex;
           align-items: center;
           justify-content: center;
+        }
+
+        .threads-session-indicator.busy {
           animation: spin 0.8s linear infinite;
+        }
+
+        .threads-session-ready-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #60a5fa;
+          box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.14);
         }
 
         @keyframes spin {
