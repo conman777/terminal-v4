@@ -39,9 +39,13 @@ function toTimestamp(value) {
 export function useSessionActivity() {
   const [activity, setActivity] = useState({});
   const focusedSessionRef = useRef(null);
+  const hasBusySessions = Object.values(activity).some((state) => state?.isBusy);
 
-  // Auto-clear stale busy sessions every 2 seconds
+  // Auto-clear stale busy sessions only while something is actually busy.
   useEffect(() => {
+    if (!hasBusySessions) {
+      return undefined;
+    }
     const interval = setInterval(() => {
       const now = Date.now();
       setActivity(prev => {
@@ -59,7 +63,7 @@ export function useSessionActivity() {
       });
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [hasBusySessions]);
 
   const markActivity = useCallback((sessionId) => {
     if (!sessionId) return;

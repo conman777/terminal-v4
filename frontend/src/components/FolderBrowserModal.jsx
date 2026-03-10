@@ -95,7 +95,12 @@ export function FolderBrowserModal({
   };
 
   const handleRecentClick = (recentPath) => {
-    loadDirectory(recentPath);
+    onSelect(
+      recentPath,
+      showAiSelector ? selectedAiOptionId : undefined,
+      showAiSelector ? tabName.trim() : undefined
+    );
+    onClose();
   };
 
   if (!isOpen) return null;
@@ -123,6 +128,7 @@ export function FolderBrowserModal({
         <div className="fb-pathbar">
           {parent && (
             <button
+              type="button"
               className="fb-back-btn"
               onClick={handleGoUp}
               disabled={loading}
@@ -138,6 +144,7 @@ export function FolderBrowserModal({
               <span key={i} className="fb-breadcrumb-segment">
                 {i > 0 && <span className="fb-breadcrumb-sep">/</span>}
                 <button
+                  type="button"
                   className={`fb-breadcrumb-btn${i === breadcrumbs.length - 1 ? ' fb-breadcrumb-active' : ''}`}
                   onClick={() => loadDirectory(crumb.path)}
                 >
@@ -167,9 +174,9 @@ export function FolderBrowserModal({
                   >
                     {resolvedAiOptions.map((option) => (
                       <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
+                      {option.label}
+                    </option>
+                  ))}
                   </select>
                   <svg className="fb-select-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none">
                     <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
@@ -219,6 +226,7 @@ export function FolderBrowserModal({
             )}
             {!loading && !error && visibleFolders.map((folder) => (
               <button
+                type="button"
                 key={folder}
                 className="fb-folder-item"
                 onClick={() => handleFolderClick(folder)}
@@ -249,6 +257,7 @@ export function FolderBrowserModal({
                   const shortName = recent.split(/[/\\]/).pop() || recent;
                   return (
                     <button
+                      type="button"
                       key={idx}
                       className="fb-recent-chip"
                       onClick={() => handleRecentClick(recent)}
@@ -272,8 +281,8 @@ export function FolderBrowserModal({
             {path.split(/[/\\]/).pop() || path}
           </div>
           <div className="fb-footer-actions">
-            <button className="fb-btn-cancel" onClick={onClose}>Cancel</button>
-            <button className="fb-btn-select" onClick={handleSelect}>
+            <button type="button" className="fb-btn-cancel" onClick={onClose}>Cancel</button>
+            <button type="button" className="fb-btn-select" onClick={handleSelect}>
               Open here
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M2 7H12M8 3L12 7L8 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

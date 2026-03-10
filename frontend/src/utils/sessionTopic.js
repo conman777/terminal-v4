@@ -10,6 +10,7 @@ export function isMeaningfulSessionTopic(topic) {
   if (text.length < 8 || text.length > 150) return false;
   if (!/\s/.test(text)) return false;
   if (/^\/[a-z0-9._:-]+(?:\s|$)/i.test(text)) return false;
+  if (/^[a-z]:[\\/]/i.test(text)) return false;
   if (/^[./~]/.test(text) || /^https?:\/\//.test(text)) return false;
   if (isLikelyShellCommand(text)) return false;
   if (/\s--?[a-z0-9][\w-]*/i.test(text)) return false;

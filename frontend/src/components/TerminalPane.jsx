@@ -124,6 +124,7 @@ export const TerminalPane = memo(function TerminalPane({
     [sessions]
   );
   const currentSession = selectableSessions.find(s => s.id === pane.sessionId);
+  const shouldHighlightActiveChrome = isActive && selectableSessions.length > 1;
   const currentAiType = sessionAiTypes?.[pane.sessionId] ?? null;
   const currentAiCapabilities = getAiCapabilities(currentAiType, customAiProviders);
   const launchCommand = getAiInitialCommand(currentAiType, customAiProviders);
@@ -239,11 +240,14 @@ export const TerminalPane = memo(function TerminalPane({
   const handleSelectGitBranch = useCallback(async (nextBranch) => {
     if (!pane.sessionId || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
     setIsSwitchingGitBranch(true);
-    const result = await checkoutSessionGitBranch(pane.sessionId, nextBranch);
-    if (result) {
-      setGitBranchInfo(result);
+    try {
+      const result = await checkoutSessionGitBranch(pane.sessionId, nextBranch);
+      if (result) {
+        setGitBranchInfo(result);
+      }
+    } finally {
+      setIsSwitchingGitBranch(false);
     }
-    setIsSwitchingGitBranch(false);
   }, [checkoutSessionGitBranch, gitBranchInfo?.currentBranch, pane.sessionId]);
 
   const handlePaneClick = (e) => {
@@ -540,19 +544,6 @@ export const TerminalPane = memo(function TerminalPane({
             </div>
           )}
 
-          {/* Minimal Session Topic Summary */}
-          {paneSummaryText && (
-            <>
-              {showSessionSelector && <span className="ph-topic-sep">/</span>}
-              <span className="ph-topic" title={paneSummaryText} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.4 }}>
-                  <polyline points="4 17 10 11 4 5" />
-                  <line x1="12" y1="19" x2="20" y2="19" />
-                </svg>
-                {paneSummaryText.toLowerCase()}
-              </span>
-            </>
-          )}
         </div>
 
         <div className="ph-controls">
@@ -718,11 +709,13 @@ export const TerminalPane = memo(function TerminalPane({
                 />
               </div>
             </div>
-            <DesktopStatusBar
+              <DesktopStatusBar
               sessionId={pane.sessionId}
               sessionTitle={currentSession?.title}
+              sessionSummary={paneSummaryText}
               cwd={currentCwd || projectInfo?.cwd}
               gitBranch={projectInfo?.gitBranch}
+              isActive={shouldHighlightActiveChrome}
               onImageUpload={handleImageUpload}
               isTerminalPanelOpen={isTerminalPanelOpen}
               showTerminalToggle={!useTerminalFirstLayout}

@@ -70,6 +70,18 @@ async function withApp<T>(
 }
 
 describe('Process log route auth', () => {
+  it('rejects authenticated stop requests for unmanaged processes', async () => {
+    await withApp(async ({ app, accessToken }) => {
+      const response = await supertest(app.server)
+        .post('/api/processes/stop')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ pid: 999999 })
+        .expect(403);
+
+      expect(response.body.error).toBe('Process is not managed by this app');
+    });
+  });
+
   it('allows unauthenticated GET on process log listing', async () => {
     await withApp(async ({ app }) => {
       const response = await supertest(app.server)

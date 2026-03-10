@@ -2,9 +2,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileStatusBar } from './MobileStatusBar';
 
+const sendToSessionMock = vi.fn();
+
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession: () => ({
-    sendToSession: vi.fn()
+    sendToSession: sendToSessionMock
   })
 }));
 
@@ -45,6 +47,7 @@ function buildProps(overrides = {}) {
 describe('MobileStatusBar', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    sendToSessionMock.mockReset();
   });
 
   it('shows AI selector controls and launches the current provider', () => {
@@ -80,5 +83,37 @@ describe('MobileStatusBar', () => {
 
     expect(onAddCustomAiCommand).toHaveBeenCalledWith('Qwen 3', 'qwen --fast');
     promptSpy.mockRestore();
+  });
+
+  it('submits the selected slash suggestion when Enter is pressed', () => {
+    render(<MobileStatusBar {...buildProps({ runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high Â· 100% left' } })} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
+      target: { value: '/' }
+    });
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
+
+    expect(sendToSessionMock).toHaveBeenCalledWith('session-1', '/model\r');
+  });
+
+  it('hides slash suggestions when no coding cli runtime is active', () => {
+    render(<MobileStatusBar {...buildProps()} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
+      target: { value: '/' }
+    });
+
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).not.toBeInTheDocument();
+  });
+
+  it('uses theme-aware composer styles instead of hardcoded dark surfaces', () => {
+    const { container } = render(<MobileStatusBar {...buildProps()} />);
+
+    const styles = Array.from(container.querySelectorAll('style')).map((node) => node.textContent || '').join('\n');
+
+    expect(styles).toContain('color-mix(in srgb, var(--bg-surface) 94%, transparent)');
+    expect(styles).toContain('color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated))');
   });
 });

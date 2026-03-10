@@ -328,10 +328,18 @@ export function getSpawnedProcess(pid: number): ChildProcess | undefined {
   return spawnedProcesses.get(pid);
 }
 
+export function isManagedProcess(pid: number): boolean {
+  return spawnedProcesses.has(pid);
+}
+
 /**
  * Stop a process by PID (SIGTERM, then SIGKILL after timeout)
  */
 export async function stopProcess(pid: number): Promise<{ success: boolean; error?: string }> {
+  if (!isManagedProcess(pid)) {
+    return { success: false, error: 'Process is not managed by this app' };
+  }
+
   try {
     // Check if process exists
     process.kill(pid, 0);

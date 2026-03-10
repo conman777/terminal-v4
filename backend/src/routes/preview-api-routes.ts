@@ -127,6 +127,42 @@ async function lookupDarwinProcessCwd(pid: number): Promise<string | null> {
 }
 
 async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      exec('netstat -ano -p tcp', { windowsHide: true }, (error, stdout) => {
+        const portMap = new Map<number, ActivePortInfo>();
+        if (error) {
+          resolve(portMap);
+          return;
+        }
+
+        for (const rawLine of stdout.split(/\r?\n/)) {
+          const line = rawLine.trim();
+          if (!line.startsWith('TCP')) continue;
+
+          const parts = line.split(/\s+/);
+          if (parts.length < 4) continue;
+
+          const localAddress = parts[1];
+          const state = (parts[3] || '').toUpperCase();
+          if (state !== 'LISTENING') continue;
+
+          const portMatch = localAddress.match(/:(\d+)$/);
+          if (!portMatch) continue;
+
+          const port = Number.parseInt(portMatch[1], 10);
+          if (!Number.isFinite(port) || port < 1 || port > 65535 || port === APP_PORT) continue;
+
+          if (!portMap.has(port)) {
+            portMap.set(port, { process: '', cwd: null });
+          }
+        }
+
+        resolve(portMap);
+      });
+    });
+  }
+
   if (process.platform === 'darwin') {
     return new Promise((resolve) => {
       exec('lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null', (error, stdout) => {

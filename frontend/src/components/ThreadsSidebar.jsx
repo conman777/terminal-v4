@@ -245,14 +245,14 @@ export default function ThreadsSidebar({
 
       <style>{`
         .threads-sidebar {
-          --sidebar-bg: #10151a;
-          --sidebar-shell-bg: #10151a;
-          --sidebar-content-bg: #10151a;
-          --sidebar-hover: #1a212b;
-          --sidebar-active: #222b36;
-          --sidebar-border: #24303f;
-          --sidebar-text: #d5deea;
-          --sidebar-text-muted: #8997aa;
+          --sidebar-bg: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-tertiary) 12%);
+          --sidebar-shell-bg: color-mix(in srgb, var(--bg-primary) 82%, var(--bg-tertiary) 18%);
+          --sidebar-content-bg: color-mix(in srgb, var(--bg-primary) 92%, var(--bg-tertiary) 8%);
+          --sidebar-hover: color-mix(in srgb, var(--bg-tertiary) 78%, var(--accent-primary-dim) 22%);
+          --sidebar-active: color-mix(in srgb, var(--bg-tertiary) 52%, var(--accent-primary-dim) 48%);
+          --sidebar-border: var(--border-subtle);
+          --sidebar-text: var(--text-primary);
+          --sidebar-text-muted: var(--text-muted);
           width: 260px;
           height: 100%;
           background: var(--sidebar-bg);
@@ -265,14 +265,14 @@ export default function ThreadsSidebar({
         }
 
         html[data-window-active="false"] .threads-sidebar {
-          --sidebar-bg: #10151a;
-          --sidebar-shell-bg: #161d25;
-          --sidebar-content-bg: #0b1015;
-          --sidebar-hover: #202934;
-          --sidebar-active: #2c3744;
-          --sidebar-border: #314050;
-          --sidebar-text: #cad5e4;
-          --sidebar-text-muted: #7f8ca0;
+          --sidebar-bg: color-mix(in srgb, var(--bg-primary) 84%, var(--bg-tertiary) 16%);
+          --sidebar-shell-bg: color-mix(in srgb, var(--bg-primary) 76%, var(--bg-tertiary) 24%);
+          --sidebar-content-bg: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-tertiary) 12%);
+          --sidebar-hover: color-mix(in srgb, var(--bg-tertiary) 72%, var(--accent-primary-dim) 18%);
+          --sidebar-active: color-mix(in srgb, var(--bg-tertiary) 58%, var(--accent-primary-dim) 32%);
+          --sidebar-border: var(--border-default);
+          --sidebar-text: var(--text-primary);
+          --sidebar-text-muted: var(--text-muted);
         }
 
         .threads-sidebar.collapsed {

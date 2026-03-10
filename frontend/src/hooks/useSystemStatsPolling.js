@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiGet } from '../utils/api';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -7,6 +8,8 @@ const subscribers = new Set();
 let latestStats = null;
 let pollTimer = null;
 let visibilityListenerAttached = false;
+let windowActive = true;
+let unsubscribeWindowActivity = null;
 
 function notifySubscribers(value) {
   subscribers.forEach((listener) => {
@@ -19,7 +22,7 @@ function notifySubscribers(value) {
 }
 
 async function pollSystemStats() {
-  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+  if (!windowActive) {
     return;
   }
   try {
@@ -36,25 +39,36 @@ function stopPolling() {
     clearInterval(pollTimer);
     pollTimer = null;
   }
-  if (visibilityListenerAttached && typeof document !== 'undefined') {
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  if (visibilityListenerAttached) {
+    unsubscribeWindowActivity?.();
+    unsubscribeWindowActivity = null;
     visibilityListenerAttached = false;
   }
 }
 
 function ensurePolling() {
-  if (pollTimer || subscribers.size === 0) return;
-  pollSystemStats();
-  pollTimer = setInterval(pollSystemStats, POLL_INTERVAL_MS);
-  if (!visibilityListenerAttached && typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+  if (!visibilityListenerAttached) {
+    windowActive = isWindowActive();
+    unsubscribeWindowActivity = subscribeWindowActivity(handleVisibilityChange);
     visibilityListenerAttached = true;
   }
+  if (pollTimer || subscribers.size === 0 || !windowActive) return;
+  pollSystemStats();
+  pollTimer = setInterval(pollSystemStats, POLL_INTERVAL_MS);
 }
 
 function handleVisibilityChange() {
-  if (document.visibilityState === 'visible') {
+  windowActive = isWindowActive();
+  if (!windowActive) {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    return;
+  }
+  if (subscribers.size > 0) {
     void pollSystemStats();
+    ensurePolling();
   }
 }
 
@@ -63,6 +77,7 @@ export function useSystemStatsPolling(enabled = true) {
 
   useEffect(() => {
     if (!enabled) return undefined;
+    windowActive = isWindowActive();
     subscribers.add(setStats);
     if (latestStats !== null) {
       setStats(latestStats);

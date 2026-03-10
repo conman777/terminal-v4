@@ -32,6 +32,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
+import { persistSidebarProject } from './utils/sidebarProjectPersistence';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 
 function isDynamicImportFetchError(error) {
@@ -829,13 +830,14 @@ function AppContent() {
       try {
         const session = await createSession({ cwd: projectPath });
         if (session?.id) {
+          persistSidebarProject(addSidebarProject, projectPath, session);
           addSessionToDesktop(session.id);
         }
       } catch { /* createSession already logs */ }
     } else {
       setShowNewSessionModal(true);
     }
-  }, [addSessionToDesktop, createSession, setShowNewSessionModal]);
+  }, [addSessionToDesktop, addSidebarProject, createSession, setShowNewSessionModal]);
 
   const handleCloseNewSessionModal = useCallback(() => {
     setShowNewSessionModal(false);
@@ -856,6 +858,7 @@ function AppContent() {
     try {
       const session = await createSession(request);
       if (session?.id) {
+        persistSidebarProject(addSidebarProject, path, session);
         addSessionToDesktop(session.id);
         if (aiOptionId !== 'cli') {
           setSessionAiTypes(prev => {
@@ -866,7 +869,7 @@ function AppContent() {
         }
       }
     } catch { /* createSession already logs */ }
-  }, [addSessionToDesktop, createSession, customAiProviders]);
+  }, [addSessionToDesktop, addSidebarProject, createSession, customAiProviders]);
 
   const handleSetSessionAiType = useCallback((sessionId, aiType) => {
     setSessionAiTypes(prev => {

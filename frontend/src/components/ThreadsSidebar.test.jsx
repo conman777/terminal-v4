@@ -125,4 +125,15 @@ describe('ThreadsSidebar', () => {
 
     expect(onCloseProject).toHaveBeenCalledWith('C:\\repo', ['session-1', 'session-2']);
   });
+
+  it('uses theme-aware sidebar palette tokens', () => {
+    const { container } = render(<ThreadsSidebar {...buildProps()} />);
+    const styles = Array.from(container.querySelectorAll('style'))
+      .map((styleNode) => styleNode.textContent || '')
+      .join('\n');
+
+    expect(styles).toContain('var(--bg-primary)');
+    expect(styles).toContain('var(--text-primary)');
+    expect(styles).toContain('var(--text-muted)');
+  });
 });

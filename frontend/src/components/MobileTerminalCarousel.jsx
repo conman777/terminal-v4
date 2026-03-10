@@ -6,6 +6,9 @@ import { MobileChatView } from './MobileChatView';
 import { ContextMenu } from './ContextMenu';
 import { useLongPress } from '../hooks/useLongPress';
 import { getAiInitialCommand } from '../utils/aiProviders';
+import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
+import { useTerminalSession } from '../contexts/TerminalSessionContext';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 export function MobileTerminalCarousel({
   sessions,
@@ -44,6 +47,11 @@ export function MobileTerminalCarousel({
   const [isTerminalScrolledUp, setIsTerminalScrolledUp] = useState(false);
   const [isClaudeBusy, setIsClaudeBusy] = useState(false);
   const [selectionActions, setSelectionActions] = useState(null);
+  const [terminalPreview, setTerminalPreview] = useState('');
+  const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
+  const [gitBranchInfo, setGitBranchInfo] = useState(null);
+  const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
+  const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
   const [viewMode, setViewMode] = useState(() => {
     try {
       const stored = localStorage.getItem('mobileTerminalViewMode');
@@ -52,17 +60,23 @@ export function MobileTerminalCarousel({
       return 'terminal';
     }
   });
-  const [isConnected, setIsConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState('connecting');
   const [reconnectBannerState, setReconnectBannerState] = useState('idle');
   const [terminalContextMenu, setTerminalContextMenu] = useState(null);
+  const [windowActive, setWindowActive] = useState(() => isWindowActive());
 
   const currentSession = sessions[currentIndex] || null;
   const currentAiType = currentSession ? sessionAiTypes?.[currentSession.id] : null;
+  const runtimeInfo = parseTerminalRuntimeInfo(terminalScreenSnapshot || terminalPreview, currentAiType);
+  const { listSessionGitBranches, checkoutSessionGitBranch } = useTerminalSession();
 
   // Auto-remount watchdog: if disconnected for 5 continuous minutes, force remount
   const disconnectStartRef = useRef(null);
   const autoRemountTimerRef = useRef(null);
   const reconnectFeedbackTimerRef = useRef(null);
+  const hasConnectedOnceRef = useRef(false);
+
+  useEffect(() => subscribeWindowActivity(setWindowActive), []);
 
   const handleToggleViewMode = useCallback(() => {
     setViewMode(v => v === 'terminal' ? 'reader' : 'terminal');
@@ -111,8 +125,9 @@ export function MobileTerminalCarousel({
   }, []);
 
   const handleConnectionChange = useCallback((connected) => {
-    setIsConnected(connected);
     if (connected) {
+      hasConnectedOnceRef.current = true;
+      setConnectionState('online');
       disconnectStartRef.current = null;
       if (autoRemountTimerRef.current) {
         clearTimeout(autoRemountTimerRef.current);
@@ -133,16 +148,81 @@ export function MobileTerminalCarousel({
         }, 2000);
         return 'reconnected';
       });
-    } else if (!disconnectStartRef.current) {
-      disconnectStartRef.current = Date.now();
-      autoRemountTimerRef.current = setTimeout(() => {
-        setReconnectBannerState('reconnecting');
-        setRefreshToken(v => v + 1);
-        disconnectStartRef.current = null;
-        autoRemountTimerRef.current = null;
-      }, 5 * 60 * 1000);
+      return;
     }
+
+    setConnectionState(hasConnectedOnceRef.current ? 'offline' : 'connecting');
+
+    if (!hasConnectedOnceRef.current || !windowActive || disconnectStartRef.current) {
+      return;
+    }
+
+    disconnectStartRef.current = Date.now();
+    autoRemountTimerRef.current = setTimeout(() => {
+      setReconnectBannerState('reconnecting');
+      setRefreshToken(v => v + 1);
+      disconnectStartRef.current = null;
+      autoRemountTimerRef.current = null;
+    }, 5 * 60 * 1000);
+  }, [windowActive]);
+
+  useEffect(() => {
+    if (windowActive) {
+      return;
+    }
+    disconnectStartRef.current = null;
+    if (autoRemountTimerRef.current) {
+      clearTimeout(autoRemountTimerRef.current);
+      autoRemountTimerRef.current = null;
+    }
+    setReconnectBannerState('idle');
+  }, [windowActive]);
+
+  useEffect(() => {
+    hasConnectedOnceRef.current = false;
+    setConnectionState('connecting');
+    setReconnectBannerState('idle');
+    disconnectStartRef.current = null;
+    if (autoRemountTimerRef.current) {
+      clearTimeout(autoRemountTimerRef.current);
+      autoRemountTimerRef.current = null;
+    }
+    if (reconnectFeedbackTimerRef.current) {
+      clearTimeout(reconnectFeedbackTimerRef.current);
+      reconnectFeedbackTimerRef.current = null;
+    }
+  }, [currentSession?.id]);
+
+  const handleOutputChunk = useCallback((chunk) => {
+    if (typeof chunk !== 'string' || chunk.length === 0) return;
+    const next = chunk
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+      .replace(/\r/g, '\n')
+      .replace(/\x08/g, '')
+      .replace(/[^\x09\x0a\x20-\x7e]/g, ' ')
+      .trim();
+    if (!next) return;
+    setTerminalPreview((previous) => `${previous}\n${next}`.trim().slice(-4000));
   }, []);
+
+  const handleScreenSnapshot = useCallback((snapshot) => {
+    const next = typeof snapshot?.text === 'string' ? snapshot.text : '';
+    setTerminalScreenSnapshot(next);
+  }, []);
+
+  const handleSelectGitBranch = useCallback(async (nextBranch) => {
+    if (!currentSession?.id || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
+    setIsSwitchingGitBranch(true);
+    try {
+      const result = await checkoutSessionGitBranch(currentSession.id, nextBranch);
+      if (result) {
+        setGitBranchInfo(result);
+      }
+    } finally {
+      setIsSwitchingGitBranch(false);
+    }
+  }, [checkoutSessionGitBranch, currentSession?.id, gitBranchInfo?.currentBranch]);
 
   const handleTerminalLongPress = useCallback((coords) => {
     const items = [];
@@ -193,6 +273,36 @@ export function MobileTerminalCarousel({
   useEffect(() => {
     setSelectionActions(null);
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    setTerminalPreview('');
+    setTerminalScreenSnapshot('');
+    setGitBranchInfo(null);
+    setIsLoadingGitBranches(false);
+    setIsSwitchingGitBranch(false);
+  }, [currentSession?.id]);
+
+  useEffect(() => {
+    if (!currentSession?.id) return;
+
+    let cancelled = false;
+    setIsLoadingGitBranches(true);
+    listSessionGitBranches(currentSession.id)
+      .then((data) => {
+        if (!cancelled) {
+          setGitBranchInfo(data);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingGitBranches(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSession?.id, listSessionGitBranches]);
 
   useEffect(() => {
     setIsTerminalScrolledUp(false);
@@ -252,7 +362,7 @@ export function MobileTerminalCarousel({
 
   return (
     <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
-      {!isConnected && reconnectBannerState !== 'reconnecting' && (
+      {connectionState === 'offline' && reconnectBannerState !== 'reconnecting' && (
         <div className="mobile-terminal-disconnected-pill" role="status" aria-live="polite">
           Disconnected
         </div>
@@ -304,6 +414,8 @@ export function MobileTerminalCarousel({
           onActivityChange={handleActivityChange}
           onRegisterSendText={handleRegisterSendText}
           onTurn={handleTurn}
+          onOutputChunk={handleOutputChunk}
+          onScreenSnapshot={handleScreenSnapshot}
         />
       </div>
 
@@ -325,11 +437,9 @@ export function MobileTerminalCarousel({
       {!chatMode && (
         <MobileStatusBar
           sessionId={currentSession.id}
-          onImageUpload={triggerImageUpload}
           onOpenHistory={triggerHistoryPanel}
           viewMode={viewMode}
           onToggleViewMode={handleToggleViewMode}
-          isConnected={isConnected}
           aiType={currentAiType}
           customAiProviders={customAiProviders}
           onSelectAiType={handleSelectAiType}
@@ -340,6 +450,12 @@ export function MobileTerminalCarousel({
               handleChatSend(launchCommand);
             }
           }}
+          runtimeInfo={runtimeInfo}
+          gitBranches={gitBranchInfo?.branches ?? []}
+          currentGitBranch={gitBranchInfo?.currentBranch ?? null}
+          isLoadingGitBranches={isLoadingGitBranches}
+          isSwitchingGitBranch={isSwitchingGitBranch}
+          onSelectGitBranch={handleSelectGitBranch}
         />
       )}
 

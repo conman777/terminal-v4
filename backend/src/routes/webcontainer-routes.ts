@@ -47,21 +47,23 @@ const BINARY_EXTENSIONS = new Set([
   '.wasm'
 ]);
 
-function shouldExclude(name: string): boolean {
-  // Check exact matches
-  if (EXCLUDED_PATTERNS.includes(name)) return true;
+function matchesExcludedPattern(name: string, pattern: string): boolean {
+  if (!pattern.includes('*')) {
+    return name === pattern;
+  }
+
+  const escapedPattern = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp(`^${escapedPattern}$`).test(name);
+}
+
+export function shouldExclude(name: string): boolean {
+  if (EXCLUDED_PATTERNS.some((pattern) => matchesExcludedPattern(name, pattern))) {
+    return true;
+  }
 
   // Check if it's a dotfile (except some allowed ones)
   if (name.startsWith('.') && !name.startsWith('.env') && name !== '.gitignore' && name !== '.npmrc') {
     return true;
-  }
-
-  // Check wildcard patterns
-  for (const pattern of EXCLUDED_PATTERNS) {
-    if (pattern.startsWith('*')) {
-      const suffix = pattern.slice(1);
-      if (name.endsWith(suffix)) return true;
-    }
   }
 
   return false;

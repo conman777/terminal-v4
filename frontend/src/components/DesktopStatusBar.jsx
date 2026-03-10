@@ -1,10 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
 import { Dropdown } from './Dropdown';
 import { useAutocorrect } from '../contexts/AutocorrectContext';
 import { AI_TYPE_OPTIONS, getAiDisplayLabel } from '../utils/aiProviders';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
+import { getComposerSlashSuggestions } from '../utils/slashCommands';
+
+function formatSessionSummary(summary) {
+  if (typeof summary !== 'string') return '';
+  const text = summary.trim();
+  if (!text) return '';
+
+  const pathStart = text.search(/(~[\\/]|[A-Za-z]:[\\/]|\/)/);
+  if (pathStart === -1) return text;
+
+  const prefix = text.slice(0, pathStart).trimEnd();
+  const rawPath = text.slice(pathStart).trim();
+  const isWindowsLike = /[A-Za-z]:[\\/]/.test(rawPath) || rawPath.startsWith('~\\') || rawPath.includes('\\');
+  const separator = isWindowsLike ? '\\' : '/';
+  const normalizedPath = rawPath.replace(/[\\/]+/g, separator);
+  const parts = normalizedPath.split(separator).filter(Boolean);
+
+  if (parts.length <= 3) return text;
+
+  let root = parts[0];
+  let tailParts = parts.slice(-2);
+  if (rawPath.startsWith('~')) {
+    root = '~';
+    tailParts = parts.slice(-2);
+  } else if (/^[A-Za-z]:$/.test(root)) {
+    tailParts = parts.slice(-2);
+  }
+
+  const compactPath = `${root}${separator}…${separator}${tailParts.join(separator)}`;
+  return prefix ? `${prefix} ${compactPath}` : compactPath;
+}
 
 /**
  * Desktop status bar at the bottom of the terminal pane.
@@ -13,8 +44,10 @@ import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 export function DesktopStatusBar({
   sessionId,
   sessionTitle,
+  sessionSummary = '',
   cwd,
   gitBranch,
+  isActive = false,
   isTerminalPanelOpen = false,
   showTerminalToggle = true,
   onToggleTerminalPanel,
@@ -41,6 +74,7 @@ export function DesktopStatusBar({
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
+  const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
   const aiMenuRef = useRef(null);
   const imageInputRef = useRef(null);
 
@@ -55,6 +89,15 @@ export function DesktopStatusBar({
   const canLaunchSelectedAi = Boolean(aiType && onLaunchAi);
   const showMetaRow = Boolean(showTerminalToggle);
   const showComposerFooter = Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
+  const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
+  const slashSuggestions = useMemo(
+    () => getComposerSlashSuggestions(composerValue, activeRuntimeProviderId),
+    [activeRuntimeProviderId, composerValue]
+  );
+
+  useEffect(() => {
+    setSelectedSlashIndex(0);
+  }, [composerValue, slashSuggestions.length]);
 
   useEffect(() => {
     if (!isAiMenuOpen) return undefined;
@@ -99,6 +142,32 @@ export function DesktopStatusBar({
   }
 
   function handleComposerKeyDown(event) {
+    if (slashSuggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSelectedSlashIndex((index) => (index + 1) % slashSuggestions.length);
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSelectedSlashIndex((index) => (index - 1 + slashSuggestions.length) % slashSuggestions.length);
+        return;
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        onComposerSubmit?.(slashSuggestions[selectedSlashIndex].cmd);
+        return;
+      }
+
+      if (event.key === 'Tab') {
+        event.preventDefault();
+        onComposerChange?.(`${slashSuggestions[selectedSlashIndex].cmd} `);
+        return;
+      }
+    }
+
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       handleComposerSubmit(event);
@@ -162,7 +231,7 @@ export function DesktopStatusBar({
     && typeof onComposerSubmit === 'function';
 
   return (
-    <div className="desktop-status-bar desktop-status-bar-shell">
+    <div className={`desktop-status-bar desktop-status-bar-shell${isActive ? ' pane-active' : ''}`}>
       {showMetaRow && (
         <div className="status-bar-meta-row">
           <div className="status-bar-left" />
@@ -200,6 +269,23 @@ export function DesktopStatusBar({
                   ×
                 </button>
               </div>
+            ))}
+          </div>
+        )}
+        {slashSuggestions.length > 0 && (
+          <div className="status-slash-menu" role="listbox" aria-label="Slash commands">
+            {slashSuggestions.map((suggestion, index) => (
+              <button
+                key={suggestion.cmd}
+                type="button"
+                role="option"
+                aria-selected={index === selectedSlashIndex ? 'true' : 'false'}
+                className={`status-slash-option${index === selectedSlashIndex ? ' selected' : ''}`}
+                onClick={() => onComposerChange?.(`${suggestion.cmd} `)}
+              >
+                <span className="status-slash-command">{suggestion.cmd}</span>
+                <span className="status-slash-description">{suggestion.desc}</span>
+              </button>
             ))}
           </div>
         )}
@@ -334,7 +420,7 @@ export function DesktopStatusBar({
           aria-label="Send to terminal"
           title="Send to terminal"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{transform: 'translate(1px, -1px)'}}>
             <path d="M3.4 20.4 21.85 12 3.4 3.6l.05 6.4 12.25 2-12.25 2-.05 6.4Z" />
           </svg>
         </button>
@@ -349,14 +435,25 @@ export function DesktopStatusBar({
                 {runtimeInfo.label}
               </span>
             )}
+            {sessionSummary && (
+              <span className="status-session-summary" title={sessionSummary}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="4 17 10 11 4 5" />
+                  <line x1="12" y1="19" x2="20" y2="19" />
+                </svg>
+                <span className="status-session-summary-label">{formatSessionSummary(sessionSummary.toLowerCase())}</span>
+              </span>
+            )}
             {(gitBranches.length > 0 || currentGitBranch || gitBranch) && (
               <div className="status-branch-picker" title={`Branch: ${currentGitBranch || gitBranch || ''}`}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="6" y1="3" x2="6" y2="15" />
-                  <circle cx="18" cy="6" r="3" />
-                  <circle cx="6" cy="18" r="3" />
-                  <path d="M18 9a9 9 0 0 1-9 9" />
-                </svg>
+                <span className="status-branch-glyph" aria-hidden="true">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="6" y1="3" x2="6" y2="15" />
+                    <circle cx="18" cy="6" r="3" />
+                    <circle cx="6" cy="18" r="3" />
+                    <path d="M18 9a9 9 0 0 1-9 9" />
+                  </svg>
+                </span>
                 {gitBranches.length > 0 && onSelectGitBranch ? (
                   <Dropdown
                     align="right"
@@ -443,11 +540,16 @@ export function DesktopStatusBar({
           padding: 16px 18px 12px;
           border-radius: 18px;
           background:
-            linear-gradient(180deg, rgba(16, 21, 31, 0.96), rgba(11, 15, 23, 0.98));
-          border: 1px solid rgba(255, 255, 255, 0.05);
+            linear-gradient(
+              180deg,
+              color-mix(in srgb, var(--bg-surface) 92%, transparent),
+              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
+            );
+          border: 1px solid color-mix(in srgb, var(--border-default) 38%, transparent);
           box-shadow:
-            0 18px 40px rgba(0, 0, 0, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.025);
+            var(--shadow-lg),
+            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
+          transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
         }
 
         .status-composer-shell.disabled {
@@ -466,10 +568,10 @@ export function DesktopStatusBar({
         }
 
         .status-composer-shell:focus-within {
-          border-color: rgba(255, 255, 255, 0.05);
+          border-color: color-mix(in srgb, var(--border-default) 38%, transparent);
           box-shadow:
-            0 18px 40px rgba(0, 0, 0, 0.18),
-            inset 0 1px 0 rgba(255, 255, 255, 0.025);
+            var(--shadow-lg),
+            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
         }
 
         .status-composer-input {
@@ -502,7 +604,7 @@ export function DesktopStatusBar({
         }
 
         .status-composer-input::placeholder {
-          color: rgba(255, 255, 255, 0.36);
+          color: color-mix(in srgb, var(--text-muted) 72%, transparent);
           font-weight: 500;
         }
 
@@ -521,6 +623,52 @@ export function DesktopStatusBar({
           gap: 8px;
         }
 
+        .status-slash-menu {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          padding: 6px;
+          border-radius: 14px;
+          background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
+        }
+
+        .status-slash-option {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          width: 100%;
+          padding: 10px 12px;
+          border: none;
+          border-radius: 10px;
+          background: transparent;
+          color: var(--text-secondary);
+          text-align: left;
+          cursor: pointer;
+          transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .status-slash-option:hover,
+        .status-slash-option.selected {
+          background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+          color: var(--text-primary);
+        }
+
+        .status-slash-command {
+          font-size: 13px;
+          font-weight: 700;
+          color: var(--text-primary);
+        }
+
+        .status-slash-description {
+          flex: 1;
+          min-width: 0;
+          font-size: 12px;
+          color: var(--text-muted);
+          text-align: right;
+        }
+
         .status-composer-attachment-chip {
           display: inline-flex;
           align-items: center;
@@ -529,8 +677,8 @@ export function DesktopStatusBar({
           min-height: 30px;
           padding: 0 10px;
           border-radius: 999px;
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           color: var(--text-primary);
         }
 
@@ -538,7 +686,7 @@ export function DesktopStatusBar({
           width: 8px;
           height: 8px;
           border-radius: 999px;
-          background: rgba(59, 130, 246, 0.85);
+          background: color-mix(in srgb, var(--accent-primary) 82%, white 6%);
           flex-shrink: 0;
         }
 
@@ -567,7 +715,7 @@ export function DesktopStatusBar({
         }
 
         .status-composer-attachment-remove:hover {
-          background: rgba(255, 255, 255, 0.08);
+          background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
           color: var(--text-primary);
         }
 
@@ -584,8 +732,31 @@ export function DesktopStatusBar({
           justify-content: flex-start;
           gap: 10px;
           flex-wrap: wrap;
-          padding-top: 10px;
-          border-top: 1px solid rgba(148, 163, 184, 0.12);
+          padding: 8px 0 2px;
+          border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
+          transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .desktop-status-bar-shell.pane-active .status-composer-shell {
+          background:
+            linear-gradient(
+              180deg,
+              color-mix(in srgb, var(--bg-surface) 88%, var(--accent-primary) 12%),
+              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
+            );
+          border-color: color-mix(in srgb, var(--accent-primary) 26%, var(--border-default));
+          box-shadow:
+            var(--shadow-lg),
+            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent),
+            inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        }
+
+        .desktop-status-bar-shell.pane-active .status-bar-right {
+          border-top-color: color-mix(in srgb, var(--border-default) 24%, transparent);
+          background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+          border-radius: 12px;
+          padding: 8px 12px 2px;
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
         }
 
         .status-composer-footer {
@@ -629,12 +800,30 @@ export function DesktopStatusBar({
           border-radius: 0;
           background: transparent;
           border: none;
-          color: rgba(255, 255, 255, 0.64);
+          color: color-mix(in srgb, var(--text-secondary) 76%, transparent);
           font-size: 11px;
           font-weight: 600;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+        }
+
+        .status-session-summary {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          max-width: 320px;
+          color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
+          font-size: 11px;
+          font-weight: 500;
+        }
+
+        .status-session-summary-label {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
 
         .status-branch-picker {
@@ -646,7 +835,17 @@ export function DesktopStatusBar({
           border-radius: 0;
           background: transparent;
           border: none;
-          color: rgba(255, 255, 255, 0.72);
+          color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
+        }
+
+        .status-branch-glyph {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 18px;
+          height: 18px;
+          color: color-mix(in srgb, var(--text-primary) 76%, transparent);
+          flex-shrink: 0;
         }
 
         .status-branch-select {
@@ -674,9 +873,13 @@ export function DesktopStatusBar({
           max-width: 320px;
           padding: 6px;
           border-radius: 12px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          background: linear-gradient(180deg, rgba(14, 18, 27, 0.98), rgba(10, 14, 22, 0.99));
-          box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
+          background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--bg-surface) 96%, transparent),
+            color-mix(in srgb, var(--bg-base) 96%, transparent)
+          );
+          box-shadow: var(--shadow-modal);
           backdrop-filter: blur(16px);
         }
 
@@ -684,23 +887,23 @@ export function DesktopStatusBar({
           min-height: 34px;
           padding: 0 10px;
           border-radius: 8px;
-          color: rgba(255, 255, 255, 0.82);
+          color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
           font-size: 12px;
           font-weight: 550;
         }
 
         .status-branch-dropdown .dropdown-item:hover:not(:disabled) {
-          background: rgba(99, 179, 237, 0.08);
-          color: #f8fbff;
+          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+          color: var(--text-primary);
         }
 
         .status-branch-dropdown .dropdown-item.active {
-          background: rgba(99, 179, 237, 0.14);
-          color: #f8fbff;
+          background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+          color: var(--text-primary);
         }
 
         .status-branch-dropdown .dropdown-item-badge {
-          color: rgba(125, 211, 252, 0.86);
+          color: color-mix(in srgb, var(--accent-primary) 84%, var(--text-primary));
           font-size: 10px;
           font-weight: 700;
           text-transform: uppercase;
@@ -713,7 +916,7 @@ export function DesktopStatusBar({
           gap: 6px;
           min-height: 24px;
           padding: 0 8px;
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           border-radius: 8px;
           background: transparent;
           color: inherit;
@@ -723,9 +926,9 @@ export function DesktopStatusBar({
         }
 
         .status-branch-trigger:hover:not(:disabled) {
-          border-color: rgba(125, 211, 252, 0.28);
-          background: rgba(125, 211, 252, 0.06);
-          color: #f8fbff;
+          border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+          color: var(--text-primary);
         }
 
         .status-branch-trigger:disabled {
@@ -753,8 +956,8 @@ export function DesktopStatusBar({
           gap: 6px;
           height: 26px;
           padding: 0 9px;
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           border-radius: 7px;
           color: var(--text-secondary);
           cursor: pointer;
@@ -764,9 +967,38 @@ export function DesktopStatusBar({
         .status-ai-selector:hover,
         .status-ai-selector.active,
         .status-ai-launch:hover:not(:disabled) {
-          border-color: rgba(99, 179, 237, 0.35);
+          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
           color: var(--text-primary);
-          background: rgba(99, 179, 237, 0.08);
+          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+        }
+
+        .desktop-status-bar-shell.pane-active .status-ai-selector,
+        .desktop-status-bar-shell.pane-active .status-ai-launch,
+        .desktop-status-bar-shell.pane-active .status-bar-btn,
+        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
+        .desktop-status-bar-shell.pane-active .status-send-btn {
+          border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+        }
+
+        .desktop-status-bar-shell.pane-active .status-ai-selector,
+        .desktop-status-bar-shell.pane-active .status-ai-launch,
+        .desktop-status-bar-shell.pane-active .status-bar-btn,
+        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline {
+          color: color-mix(in srgb, var(--text-primary) 94%, transparent);
+        }
+
+        .desktop-status-bar-shell.pane-active .status-branch-glyph {
+          color: color-mix(in srgb, var(--text-primary) 84%, transparent);
+        }
+
+        .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
+        .desktop-status-bar-shell.pane-active .status-ai-selector.active,
+        .desktop-status-bar-shell.pane-active .status-ai-launch:hover:not(:disabled),
+        .desktop-status-bar-shell.pane-active .status-bar-btn:hover:not(:disabled),
+        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline:hover:not(:disabled) {
+          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
         }
 
         .status-ai-selector-label {
@@ -783,7 +1015,7 @@ export function DesktopStatusBar({
           height: 8px;
           border-radius: 999px;
           flex-shrink: 0;
-          box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent);
         }
 
         .status-ai-launch {
@@ -803,10 +1035,10 @@ export function DesktopStatusBar({
           bottom: calc(100% + 8px);
           min-width: 200px;
           padding: 6px;
-          background: rgba(13, 18, 28, 0.98);
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-default) 30%, transparent);
           border-radius: 10px;
-          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38);
+          box-shadow: var(--shadow-modal);
           z-index: 30;
           backdrop-filter: blur(14px);
         }
@@ -829,7 +1061,7 @@ export function DesktopStatusBar({
 
         .status-ai-menu-item:hover,
         .status-ai-menu-item.selected {
-          background: rgba(99, 179, 237, 0.1);
+          background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
           color: var(--text-primary);
         }
 
@@ -840,7 +1072,7 @@ export function DesktopStatusBar({
         }
 
         .status-ai-menu-add {
-          border-top: 1px solid rgba(255, 255, 255, 0.08);
+          border-top: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           margin-top: 6px;
           padding-top: 8px;
         }
@@ -849,8 +1081,12 @@ export function DesktopStatusBar({
           min-height: 34px;
           padding: 0 12px;
           border-radius: 14px;
-          background: linear-gradient(180deg, rgba(20, 24, 31, 0.94), rgba(13, 17, 24, 0.98));
-          border: 1px solid rgba(255, 255, 255, 0.06);
+          background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--bg-elevated) 90%, transparent),
+            color-mix(in srgb, var(--bg-surface) 92%, transparent)
+          );
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
         }
 
         .status-ai-menu-plus {
@@ -868,17 +1104,24 @@ export function DesktopStatusBar({
           width: 34px;
           height: 34px;
           border-radius: 999px;
-          border: 1px solid rgba(99, 179, 237, 0.24);
-          background: rgba(99, 179, 237, 0.14);
-          color: #dbeafe;
+          border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated));
+          color: var(--text-primary);
           cursor: pointer;
           transition: all 0.15s ease;
           margin-left: auto;
+          align-self: center;
+          position: relative;
+          top: -1px;
+        }
+
+        .status-send-btn svg {
+          display: block;
         }
 
         .status-send-btn:hover:not(:disabled) {
-          background: rgba(99, 179, 237, 0.22);
-          border-color: rgba(99, 179, 237, 0.4);
+          background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-elevated));
+          border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
           transform: translateY(-1px);
         }
 

@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
 import { extractPortFromUrl, getActivePortsInfo } from '../utils/previewUrl';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 const PreviewContext = createContext(null);
 const PREVIEW_URL_KEY = 'terminal_preview_url';
@@ -50,10 +51,36 @@ export function PreviewProvider({ children }) {
   const previewUrlRef = useRef(previewUrl);
   const previewUrlSourceRef = useRef(initialPreviewUrl ? 'user' : 'auto');
   const listeningPortsRef = useRef(new Set());
+  const lastPortsRefreshAtRef = useRef(0);
 
   useEffect(() => {
     previewUrlRef.current = previewUrl;
   }, [previewUrl]);
+
+  const refreshListeningPorts = useCallback(async () => {
+    try {
+      const ports = await getActivePortsInfo();
+      const listeningSet = new Set(ports.filter((portInfo) => portInfo.listening).map((portInfo) => portInfo.port));
+      listeningPortsRef.current = listeningSet;
+      lastPortsRefreshAtRef.current = Date.now();
+
+      const currentUrl = previewUrlRef.current;
+      if (currentUrl && previewUrlSourceRef.current === 'user') {
+        const currentPort = extractPortFromUrl(currentUrl);
+        if (currentPort && !listeningSet.has(currentPort)) {
+          previewUrlSourceRef.current = 'auto';
+          setPreviewUrl(null);
+          try {
+            localStorage.removeItem(PREVIEW_URL_KEY);
+          } catch {}
+        }
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   // Fetch active ports on mount and periodically to:
   // 1. Validate the stored URL (clear if port is dead)
@@ -61,46 +88,19 @@ export function PreviewProvider({ children }) {
   useEffect(() => {
     let isMounted = true;
     let pollTimer = null;
+    let windowActive = isWindowActive();
+    const shouldPoll = showPreview || Boolean(previewUrl);
 
     const VISIBLE_INTERVAL_MS = 10000;
     const HIDDEN_INTERVAL_MS = 30000;
     const ERROR_INTERVAL_MS = 20000;
 
-    const fetchAndValidate = async () => {
-      try {
-        const ports = await getActivePortsInfo();
-        if (!isMounted) return;
-
-        // Update the listening ports ref
-        const listeningSet = new Set(ports.filter(p => p.listening).map(p => p.port));
-        listeningPortsRef.current = listeningSet;
-
-        // On first load, validate the stored URL
-        const currentUrl = previewUrlRef.current;
-        if (currentUrl && previewUrlSourceRef.current === 'user') {
-          const currentPort = extractPortFromUrl(currentUrl);
-          if (currentPort && !listeningSet.has(currentPort)) {
-            // Current port is not listening - clear it to allow auto-detection
-            previewUrlSourceRef.current = 'auto';
-            setPreviewUrl(null);
-            try {
-              localStorage.removeItem(PREVIEW_URL_KEY);
-            } catch {}
-          }
-        }
-      } catch {
-        // Ignore fetch errors
-        return false;
-      }
-      return true;
-    };
-
     const scheduleNextPoll = (succeeded = true) => {
-      if (!isMounted) return;
+      if (!isMounted || !shouldPoll) return;
       if (pollTimer) {
         clearTimeout(pollTimer);
       }
-      const baseDelay = document.visibilityState === 'visible' ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS;
+      const baseDelay = windowActive ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS;
       const delay = succeeded ? baseDelay : ERROR_INTERVAL_MS;
       pollTimer = setTimeout(async () => {
         const ok = await fetchAndValidate();
@@ -109,30 +109,36 @@ export function PreviewProvider({ children }) {
     };
 
     const runNow = async () => {
-      const ok = await fetchAndValidate();
+      const ok = await refreshListeningPorts();
+      if (!isMounted) return;
       scheduleNextPoll(ok);
     };
 
-    const handleVisibilityChange = () => {
+    const handleWindowActivityChange = (nextWindowActive) => {
       if (!isMounted) return;
-      if (document.visibilityState === 'visible') {
+      windowActive = nextWindowActive;
+      if (windowActive) {
         void runNow();
       } else {
         scheduleNextPoll(true);
       }
     };
 
-    void runNow();
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    if (shouldPoll) {
+      void runNow();
+    } else {
+      void refreshListeningPorts();
+    }
+    const unsubscribeWindowActivity = subscribeWindowActivity(handleWindowActivityChange);
 
     return () => {
       isMounted = false;
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribeWindowActivity();
       if (pollTimer) {
         clearTimeout(pollTimer);
       }
     };
-  }, []);
+  }, [previewUrl, refreshListeningPorts, showPreview]);
 
   const setPreviewUrlWithSource = useCallback((nextUrl, source) => {
     const normalized = sanitizePreviewUrl(nextUrl) || null;
@@ -312,10 +318,18 @@ export function PreviewProvider({ children }) {
   const [pipSize, setPipSize] = useState({ width: 400, height: 300 });
 
   // Handle URL detection from terminal
-  const handleUrlDetected = useCallback((url) => {
+  const handleUrlDetected = useCallback(async (url) => {
+    const port = extractPortFromUrl(url);
+    const shouldRefreshPorts = port
+      && !listeningPortsRef.current.has(port)
+      && Date.now() - lastPortsRefreshAtRef.current > 2000;
+
+    if (shouldRefreshPorts) {
+      await refreshListeningPorts();
+    }
     setPreviewUrlWithSource(url, 'auto');
     // Don't auto-open preview - user can click the preview button to see it
-  }, [setPreviewUrlWithSource]);
+  }, [refreshListeningPorts, setPreviewUrlWithSource]);
 
   // Close preview
   const handlePreviewClose = useCallback(() => {

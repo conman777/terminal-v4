@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { isTouchLikeDevice } from '../utils/deviceDetection';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 // Track the real visible viewport height so mobile layouts can react to browser chrome and keyboards.
 export function useViewportHeight() {
@@ -13,6 +14,8 @@ export function useViewportHeight() {
 
   const pollIntervalIdRef = useRef(null);
   const slowdownTimeoutIdRef = useRef(null);
+  const settleTimeoutIdRef = useRef(null);
+  const windowActiveRef = useRef(isWindowActive());
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -28,9 +31,16 @@ export function useViewportHeight() {
         clearTimeout(slowdownTimeoutIdRef.current);
         slowdownTimeoutIdRef.current = null;
       }
+      if (settleTimeoutIdRef.current) {
+        clearTimeout(settleTimeoutIdRef.current);
+        settleTimeoutIdRef.current = null;
+      }
     };
 
     const updateHeight = () => {
+      if (!windowActiveRef.current) {
+        return;
+      }
       const viewport = window.visualViewport;
       const nextHeight = Math.round(viewport ? viewport.height : window.innerHeight);
 
@@ -42,18 +52,8 @@ export function useViewportHeight() {
       });
     };
 
-    updateHeight();
-
-    window.addEventListener('resize', updateHeight);
-
-    const viewport = window.visualViewport;
-    if (viewport) {
-      // Listen for both resize and scroll - iOS fires scroll when keyboard opens
-      viewport.addEventListener('resize', updateHeight);
-      viewport.addEventListener('scroll', updateHeight);
-    }
-
     const isTouchLike = isTouchLikeDevice();
+    const viewport = window.visualViewport;
     const hasVisualViewport = Boolean(viewport);
 
     // Short burst polling keeps keyboard transitions smooth on mobile while
@@ -63,7 +63,7 @@ export function useViewportHeight() {
     const KEYBOARD_ANIMATION_DURATION = 450;
 
     const startFastPolling = () => {
-      if (!isTouchLike) return;
+      if (!isTouchLike || !windowActiveRef.current) return;
 
       updateHeight();
       clearPollingTimers();
@@ -81,8 +81,33 @@ export function useViewportHeight() {
       }, KEYBOARD_ANIMATION_DURATION);
     };
 
+    const handleViewportChange = () => {
+      updateHeight();
+      if (!isTouchLike || !windowActiveRef.current) {
+        return;
+      }
+      if (settleTimeoutIdRef.current) {
+        clearTimeout(settleTimeoutIdRef.current);
+      }
+      settleTimeoutIdRef.current = setTimeout(() => {
+        settleTimeoutIdRef.current = null;
+        updateHeight();
+      }, KEYBOARD_ANIMATION_DURATION);
+    };
+
+    updateHeight();
+
+    window.addEventListener('resize', handleViewportChange);
+
+    if (viewport) {
+      // Listen for both resize and scroll - mobile browsers can use either while
+      // opening or dismissing the keyboard.
+      viewport.addEventListener('resize', handleViewportChange);
+      viewport.addEventListener('scroll', handleViewportChange);
+    }
+
     if (isTouchLike) {
-      if (!hasVisualViewport) {
+      if (!hasVisualViewport && windowActiveRef.current) {
         pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
       }
       window.addEventListener('focusin', startFastPolling);
@@ -90,17 +115,30 @@ export function useViewportHeight() {
       window.addEventListener('orientationchange', startFastPolling);
     }
 
+    const unsubscribeWindowActivity = subscribeWindowActivity((active) => {
+      windowActiveRef.current = active;
+      if (!active) {
+        clearPollingTimers();
+        return;
+      }
+      updateHeight();
+      if (isTouchLike && !hasVisualViewport && !pollIntervalIdRef.current) {
+        pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+      }
+    });
+
     return () => {
-      window.removeEventListener('resize', updateHeight);
+      window.removeEventListener('resize', handleViewportChange);
       if (isTouchLike) {
         window.removeEventListener('focusin', startFastPolling);
         window.removeEventListener('focusout', startFastPolling);
         window.removeEventListener('orientationchange', startFastPolling);
       }
       if (viewport) {
-        viewport.removeEventListener('resize', updateHeight);
-        viewport.removeEventListener('scroll', updateHeight);
+        viewport.removeEventListener('resize', handleViewportChange);
+        viewport.removeEventListener('scroll', handleViewportChange);
       }
+      unsubscribeWindowActivity();
       clearPollingTimers();
     };
   }, []);

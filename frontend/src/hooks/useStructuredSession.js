@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../utils/api';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 /**
  * Hook for consuming a structured session's canonical events via WebSocket.
@@ -11,8 +12,16 @@ export function useStructuredSession({ sessionId, active = true }) {
   const [pendingApproval, setPendingApproval] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [connectionState, setConnectionState] = useState('connecting');
+  const [windowActive, setWindowActive] = useState(() => isWindowActive());
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
+  const connectRef = useRef(null);
+  const windowActiveRef = useRef(windowActive);
+
+  useEffect(() => subscribeWindowActivity(setWindowActive), []);
+  useEffect(() => {
+    windowActiveRef.current = windowActive;
+  }, [windowActive]);
 
   // Process a single canonical event into our rendering model
   const processEvent = useCallback((event) => {
@@ -170,6 +179,9 @@ export function useStructuredSession({ sessionId, active = true }) {
     const wsUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
 
     function connect() {
+      if (!windowActiveRef.current) {
+        return;
+      }
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -191,6 +203,9 @@ export function useStructuredSession({ sessionId, active = true }) {
       ws.onclose = () => {
         setConnectionState('offline');
         wsRef.current = null;
+        if (!windowActiveRef.current) {
+          return;
+        }
         // Auto-reconnect after 3s
         reconnectTimerRef.current = setTimeout(connect, 3000);
       };
@@ -200,9 +215,11 @@ export function useStructuredSession({ sessionId, active = true }) {
       };
     }
 
+    connectRef.current = connect;
     connect();
 
     return () => {
+      connectRef.current = null;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -213,6 +230,16 @@ export function useStructuredSession({ sessionId, active = true }) {
       }
     };
   }, [sessionId, active, processEvent]);
+
+  useEffect(() => {
+    if (!windowActive || !active || !sessionId) {
+      return;
+    }
+    if (wsRef.current || reconnectTimerRef.current) {
+      return;
+    }
+    connectRef.current?.();
+  }, [active, sessionId, windowActive]);
 
   const sendMessage = useCallback(
     async (text) => {

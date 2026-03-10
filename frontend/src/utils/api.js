@@ -4,22 +4,26 @@ const API_BASE = import.meta.env.VITE_API_URL || '';
 
 export async function apiFetch(url, options = {}) {
   const accessToken = getAccessToken();
-
-  const headers = {
-    ...options.headers,
+  const requestOptions = {
+    ...options,
+    headers: {
+      ...options.headers,
+    }
   };
+
+  const headers = requestOptions.headers;
 
   if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
-  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData)) {
+  if (requestOptions.body && typeof requestOptions.body === 'object' && !(requestOptions.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
-    options.body = JSON.stringify(options.body);
+    requestOptions.body = JSON.stringify(requestOptions.body);
   }
 
   const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
-  let response = await fetch(fullUrl, { ...options, headers });
+  let response = await fetch(fullUrl, requestOptions);
 
   // Handle 401 - try to refresh token
   if (response.status === 401 && accessToken) {
@@ -32,7 +36,7 @@ export async function apiFetch(url, options = {}) {
       // Use centralized refresh to avoid race conditions
       const result = await refreshTokens();
       headers['Authorization'] = `Bearer ${result.accessToken}`;
-      response = await fetch(fullUrl, { ...options, headers });
+      response = await fetch(fullUrl, requestOptions);
     } catch (err) {
       // Only clear tokens if it's actually an auth failure, not a network error
       // Network errors should not log out the user

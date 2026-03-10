@@ -127,6 +127,32 @@ describe('DesktopStatusBar', () => {
     expect(onComposerSubmit).toHaveBeenCalledWith('Explain this repo');
   });
 
+  it('submits the selected slash suggestion when Enter is pressed', () => {
+    const onComposerChange = vi.fn();
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...buildProps({
+      composerValue: '/',
+      onComposerChange,
+      onComposerSubmit,
+      runtimeInfo: { providerId: 'claude', label: 'Opus 4.6 Â· Ctx 11%' }
+    })} />);
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '/modelChange AI model' })).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'ArrowDown' });
+    fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
+
+    expect(onComposerChange).not.toHaveBeenCalled();
+    expect(onComposerSubmit).toHaveBeenCalledWith('/clear');
+  });
+
+  it('hides slash suggestions when the terminal is not inside a coding cli', () => {
+    render(<DesktopStatusBar {...buildProps({ composerValue: '/' })} />);
+
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).not.toBeInTheDocument();
+  });
+
   it('disables the send button when the composer is empty', () => {
     render(<DesktopStatusBar {...buildProps({ composerValue: '   ' })} />);
 
@@ -171,5 +197,22 @@ describe('DesktopStatusBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'feature/ui' }));
 
     expect(onSelectGitBranch).toHaveBeenCalledWith('feature/ui');
+  });
+
+  it('compacts session summaries to show the end of long paths', () => {
+    render(<DesktopStatusBar {...buildProps({
+      sessionSummary: 'gpt-5.4 high 100% left ~\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4'
+    })} />);
+
+    expect(screen.getByText('gpt-5.4 high 100% left ~\\…\\coding projects\\terminal v4')).toBeInTheDocument();
+  });
+
+  it('uses theme-aware composer styles instead of hardcoded dark surfaces', () => {
+    const { container } = render(<DesktopStatusBar {...buildProps()} />);
+
+    const styles = Array.from(container.querySelectorAll('style')).map((node) => node.textContent || '').join('\n');
+
+    expect(styles).toContain('color-mix(in srgb, var(--bg-surface) 92%, transparent)');
+    expect(styles).toContain('color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated))');
   });
 });

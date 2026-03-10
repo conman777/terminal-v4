@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { apiFetch, apiGet } from '../utils/api';
+import { areEquivalentTerminalStates } from '../utils/terminalStateEquality';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 import { useFolders } from './FolderContext';
 
 const TerminalSessionContext = createContext(null);
@@ -136,7 +138,12 @@ export function TerminalSessionProvider({ children }) {
       }
       const data = await response.json();
       if (isMountedRef.current) {
-        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+        const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+        setSessions((prevSessions) => (
+          areEquivalentTerminalStates(prevSessions, nextSessions)
+            ? prevSessions
+            : nextSessions
+        ));
       }
     } catch (error) {
       console.error('Failed to load sessions', error);
@@ -168,11 +175,20 @@ export function TerminalSessionProvider({ children }) {
       const data = await response.json();
 
       if (data.sessions && isMountedRef.current) {
-        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
+        const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+        setSessions((prevSessions) => (
+          areEquivalentTerminalStates(prevSessions, nextSessions)
+            ? prevSessions
+            : nextSessions
+        ));
       }
 
       if (data.projectInfo && isMountedRef.current) {
-        setProjectInfo(data.projectInfo);
+        setProjectInfo((prevProjectInfo) => (
+          areEquivalentTerminalStates(prevProjectInfo, data.projectInfo)
+            ? prevProjectInfo
+            : data.projectInfo
+        ));
         if (data.projectInfo.cwd && data.projectInfo.cwd !== lastCwdRef.current) {
           lastCwdRef.current = data.projectInfo.cwd;
           addRecentFolder(data.projectInfo.cwd);
@@ -668,17 +684,22 @@ export function TerminalSessionProvider({ children }) {
     let pollTimeoutId = null;
 
     const getPollingInterval = () => {
-      if (document.visibilityState === 'hidden') return null;
+      if (!isWindowActive()) return null;
       const idleTime = Date.now() - lastActivityRef.current;
       const hasLiveTerminalConnection = liveTerminalCountRef.current > 0;
+      const hasActiveSelection = Boolean(activeSessionIdRef.current);
       if (hasLiveTerminalConnection) {
-        if (idleTime > 120000) return 15000;
-        if (idleTime > 60000) return 8000;
-        return 2500;
+        if (idleTime > 300000) return 60000;
+        if (idleTime > 120000) return 30000;
+        if (idleTime > 30000) return 15000;
+        return 8000;
       }
-      if (idleTime > 60000) return 30000;
-      if (idleTime > 30000) return 10000;
-      return 4000;
+      if (!hasActiveSelection) {
+        return 30000;
+      }
+      if (idleTime > 120000) return 30000;
+      if (idleTime > 30000) return 15000;
+      return 8000;
     };
 
     const schedulePoll = () => {
@@ -699,8 +720,8 @@ export function TerminalSessionProvider({ children }) {
       lastActivityRef.current = Date.now();
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+    const handleWindowActivityChange = (windowIsActive) => {
+      if (windowIsActive) {
         lastActivityRef.current = Date.now();
         fetchAppState();
         schedulePoll();
@@ -711,7 +732,7 @@ export function TerminalSessionProvider({ children }) {
 
     window.addEventListener('mousemove', handleActivity, { passive: true });
     window.addEventListener('keydown', handleActivity, { passive: true });
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const unsubscribeWindowActivity = subscribeWindowActivity(handleWindowActivityChange);
 
     return () => {
       isMountedRef.current = false;
@@ -719,7 +740,7 @@ export function TerminalSessionProvider({ children }) {
       if (pollTimeoutId) clearTimeout(pollTimeoutId);
       window.removeEventListener('mousemove', handleActivity);
       window.removeEventListener('keydown', handleActivity);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribeWindowActivity();
     };
   }, [loadSessions, fetchAppState]);
 

@@ -91,7 +91,8 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
 
     const stopResult = await stopProcess(result.data.pid);
     if (!stopResult.success) {
-      reply.code(500).send({ error: stopResult.error });
+      const statusCode = stopResult.error === 'Process is not managed by this app' ? 403 : 500;
+      reply.code(statusCode).send({ error: stopResult.error });
       return;
     }
 

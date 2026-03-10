@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { cloneElement, isValidElement, useState, useRef, useEffect } from 'react';
 
 export function Dropdown({
   trigger,
@@ -26,11 +26,25 @@ export function Dropdown({
 
   const toggleDropdown = () => setIsOpen(!isOpen);
 
+  const triggerElement = isValidElement(trigger)
+    ? cloneElement(trigger, {
+        onClick: (event) => {
+          trigger.props.onClick?.(event);
+          toggleDropdown();
+        },
+        'aria-expanded': isOpen ? 'true' : 'false'
+      })
+    : trigger;
+
   return (
     <div className={`dropdown-container ${className}`} ref={dropdownRef}>
-      <div className="dropdown-trigger" onClick={toggleDropdown}>
-        {trigger}
-      </div>
+      {isValidElement(triggerElement) ? (
+        triggerElement
+      ) : (
+        <div className="dropdown-trigger" onClick={toggleDropdown}>
+          {triggerElement}
+        </div>
+      )}
       
       {isOpen && (
         <div className={`dropdown-menu align-${align} dir-${direction}`}>

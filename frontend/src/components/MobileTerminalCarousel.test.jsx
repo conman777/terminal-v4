@@ -4,6 +4,18 @@ import { MobileTerminalCarousel } from './MobileTerminalCarousel';
 
 let latestTerminalChatProps = null;
 
+vi.mock('../utils/windowActivity', () => ({
+  isWindowActive: () => true,
+  subscribeWindowActivity: () => () => {}
+}));
+
+vi.mock('../contexts/TerminalSessionContext', () => ({
+  useTerminalSession: () => ({
+    listSessionGitBranches: vi.fn().mockResolvedValue({ currentBranch: 'main', branches: ['main', 'feature/mobile'] }),
+    checkoutSessionGitBranch: vi.fn()
+  })
+}));
+
 vi.mock('../hooks/useSwipeGesture', () => ({
   useSwipeGesture: () => ({ containerRef: { current: null } })
 }));
@@ -18,6 +30,8 @@ vi.mock('./TerminalChat', () => ({
       <button type="button" onClick={() => onViewportStateChange?.(false)}>mark-terminal-scrolled-up</button>
       <button type="button" onClick={() => onViewportStateChange?.(true)}>mark-terminal-at-bottom</button>
       <button type="button" onClick={() => onRegisterScrollToBottom?.(vi.fn())}>register-scroll</button>
+      <button type="button" onClick={() => props.onConnectionChange?.(true)}>mark-connected</button>
+      <button type="button" onClick={() => props.onConnectionChange?.(false)}>mark-disconnected</button>
     </div>
     );
   }
@@ -136,5 +150,32 @@ describe('MobileTerminalCarousel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'mark-chat-at-bottom' }));
     expect(onViewportStateChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not show disconnected before the first successful connection', () => {
+    render(
+      <MobileTerminalCarousel
+        currentIndex={0}
+        onIndexChange={vi.fn()}
+        keybarOpen={false}
+        viewportHeight={800}
+        onUrlDetected={vi.fn()}
+        fontSize={14}
+        webglEnabled={true}
+        onScrollDirection={vi.fn()}
+        onRegisterFocusTerminal={vi.fn()}
+        onSessionBusyChange={vi.fn()}
+        sessions={[{ id: 'session-1', usesTmux: false }]}
+      />
+    );
+
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'mark-disconnected' }));
+    expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'mark-connected' }));
+    fireEvent.click(screen.getByRole('button', { name: 'mark-disconnected' }));
+    expect(screen.getByText('Disconnected')).toBeInTheDocument();
   });
 });

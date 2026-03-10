@@ -31,6 +31,15 @@ declare module 'fastify' {
 // Match preview subdomain pattern (preview-{port}.*)
 const PREVIEW_SUBDOMAIN_REGEX = /^preview-\d+\./i;
 
+export function isPublicApiRoute(url: string): boolean {
+  const urlPath = url.split('?')[0];
+  if (PUBLIC_ROUTES.includes(urlPath)) {
+    return true;
+  }
+
+  return PUBLIC_ROUTE_PATTERNS.some(pattern => pattern.test(urlPath));
+}
+
 export function registerAuthHook(app: FastifyInstance): void {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     // Skip auth for preview subdomain requests (they're proxied to other apps)
@@ -46,13 +55,7 @@ export function registerAuthHook(app: FastifyInstance): void {
     }
 
     // Skip auth for public routes
-    if (PUBLIC_ROUTES.some(route => request.url.startsWith(route))) {
-      return;
-    }
-
-    // Skip auth for public route patterns (preview logs endpoints)
-    const urlPath = request.url.split('?')[0]; // Remove query string
-    if (PUBLIC_ROUTE_PATTERNS.some(pattern => pattern.test(urlPath))) {
+    if (isPublicApiRoute(request.url)) {
       return;
     }
 

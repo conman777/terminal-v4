@@ -102,45 +102,75 @@ export async function registerClaudeCodeRoutes(
       (stream as { flushHeaders: () => void }).flushHeaders();
     }
 
-    const send = (event: string, data: unknown) => {
-      stream.write(`event: ${event}\n`);
-      stream.write(`data: ${JSON.stringify(data)}\n\n`);
+    let streamClosed = false;
+    const send = (event: string, data: unknown): boolean => {
+      if (streamClosed || stream.destroyed || !stream.writable) {
+        return false;
+      }
+
+      try {
+        stream.write(`event: ${event}\n`);
+        stream.write(`data: ${JSON.stringify(data)}\n\n`);
+        return true;
+      } catch {
+        streamClosed = true;
+        return false;
+      }
     };
 
     // Send existing events as history
     for (const event of session.events) {
-      send('event', event);
+      if (!send('event', event)) {
+        return;
+      }
     }
-    send('history-complete', {});
+    if (!send('history-complete', {})) {
+      return;
+    }
 
     // Subscribe to new events
     let unsubscribe: (() => void) | null = null;
     try {
       unsubscribe = manager.subscribe(userId, request.params.id, (event) => {
-        send('event', event);
+        if (!send('event', event)) {
+          cleanup();
+        }
       });
     } catch (error) {
       // Session might not exist anymore
+      streamClosed = true;
       stream.end();
       return;
     }
 
-    // Ping to keep connection alive
-    const pingInterval = setInterval(() => {
-      send('ping', {});
-    }, 15000);
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
 
     // Cleanup on close
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      clearInterval(pingInterval);
+      streamClosed = true;
+      if (pingInterval) {
+        clearInterval(pingInterval);
+      }
       if (unsubscribe) unsubscribe();
+      if (!stream.destroyed && stream.writableEnded === false) {
+        stream.end();
+      }
     };
 
+    // Ping to keep connection alive
+    pingInterval = setInterval(() => {
+      if (!send('ping', {})) {
+        cleanup();
+      }
+    }, 15000);
+
     stream.on('close', cleanup);
+    stream.on('error', cleanup);
     request.raw.on('close', cleanup);
+    request.raw.on('error', cleanup);
   });
 
   // Maximum input size for Claude Code prompts (100KB - prompts can be longer than terminal commands)

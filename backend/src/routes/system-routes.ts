@@ -3,13 +3,17 @@ import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
+import { createAutoIdleEventLoopMonitor } from '../utils/event-loop-monitor';
 
 // Stats history storage
 const HISTORY_FILE = path.join(os.homedir(), '.terminal-v4-stats-history.json');
 const HISTORY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SYSTEM_STATS_CACHE_TTL_MS = (() => {
+  const parsed = Number.parseInt(process.env.SYSTEM_STATS_CACHE_TTL_MS || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+})();
 const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
   .split(',')
   .map((host) => host.trim())
@@ -52,8 +56,23 @@ interface StatsHistoryPoint {
 
 let statsHistory: StatsHistoryPoint[] = [];
 let historyInterval: NodeJS.Timeout | null = null;
-const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
-eventLoopDelay.enable();
+let systemStatsCache:
+  | {
+      expiresAt: number;
+      value: Awaited<ReturnType<typeof collectSystemStatsSnapshot>>;
+    }
+  | null = null;
+let systemStatsInFlight: Promise<Awaited<ReturnType<typeof collectSystemStatsSnapshot>>> | null = null;
+const eventLoopMonitor = createAutoIdleEventLoopMonitor({
+  resolutionMs: (() => {
+    const parsed = Number.parseInt(process.env.SYSTEM_EVENT_LOOP_RESOLUTION_MS || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 100;
+  })(),
+  idleTimeoutMs: (() => {
+    const parsed = Number.parseInt(process.env.SYSTEM_EVENT_LOOP_IDLE_MS || '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 20000;
+  })()
+});
 
 function loadStatsHistory(): void {
   try {
@@ -84,25 +103,10 @@ async function collectStatsPoint(): Promise<void> {
     const usedMem = totalMem - freeMem;
     const memoryPct = Math.round((usedMem / totalMem) * 100);
 
-    // Quick CPU sample
-    const getCpuTimes = () => os.cpus().map(cpu => ({
-      idle: cpu.times.idle,
-      total: Object.values(cpu.times).reduce((a, b) => a + b, 0)
-    }));
-
-    const startTimes = getCpuTimes();
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const endTimes = getCpuTimes();
-
-    const cpuUsage = startTimes.reduce((acc, start, i) => {
-      const end = endTimes[i];
-      const idleDiff = end.idle - start.idle;
-      const totalDiff = end.total - start.total;
-      return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
-    }, 0) / startTimes.length;
-
-    // Calculate disk I/O (uses separate 100ms sample)
-    const diskIO = await calculateDiskIO();
+    const [cpuUsage, diskIO] = await Promise.all([
+      sampleCpuUsage(),
+      calculateDiskIO()
+    ]);
 
     const point: StatsHistoryPoint = {
       timestamp: Date.now(),
@@ -134,6 +138,9 @@ interface DiskStats {
  * Returns total sectors read and written across all devices.
  */
 function readDiskStats(): DiskStats | null {
+  if (process.platform !== 'linux') {
+    return null;
+  }
   try {
     const data = fs.readFileSync('/proc/diskstats', 'utf-8');
     let totalRead = 0;
@@ -199,6 +206,28 @@ async function calculateDiskIO(): Promise<{ readMBps: number; writeMBps: number 
   return { readMBps, writeMBps };
 }
 
+async function sampleCpuUsage(sampleMs = 100): Promise<number> {
+  const readCpuTimes = () => os.cpus().map((cpu) => ({
+    idle: cpu.times.idle,
+    total: Object.values(cpu.times).reduce((sum, value) => sum + value, 0)
+  }));
+
+  const startTimes = readCpuTimes();
+  await new Promise((resolve) => setTimeout(resolve, sampleMs));
+  const endTimes = readCpuTimes();
+
+  if (startTimes.length === 0 || endTimes.length === 0) {
+    return 0;
+  }
+
+  return startTimes.reduce((acc, start, index) => {
+    const end = endTimes[index];
+    const idleDiff = end.idle - start.idle;
+    const totalDiff = end.total - start.total;
+    return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
+  }, 0) / startTimes.length;
+}
+
 function startHistoryCollection(): void {
   loadStatsHistory();
   // Collect immediately on startup
@@ -212,6 +241,7 @@ function stopHistoryCollection(): void {
     clearInterval(historyInterval);
     historyInterval = null;
   }
+  eventLoopMonitor.stop();
 }
 
 interface ProcessInfo {
@@ -263,6 +293,9 @@ function getListeningPorts(): Map<number, number[]> {
 }
 
 function getTopProcesses(): ProcessInfo[] {
+  if (process.platform === 'win32') {
+    return [];
+  }
   try {
     // Get listening ports first
     const pidToPorts = getListeningPorts();
@@ -319,6 +352,61 @@ function getTopProcesses(): ProcessInfo[] {
   } catch {
     return [];
   }
+}
+
+async function collectSystemStatsSnapshot() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+
+  const [cpuUsage, diskIO] = await Promise.all([
+    sampleCpuUsage(),
+    calculateDiskIO()
+  ]);
+  const eventLoop = eventLoopMonitor.read();
+
+  return {
+    memory: {
+      total: totalMem,
+      used: usedMem,
+      free: freeMem,
+      percentage: Math.round((usedMem / totalMem) * 100)
+    },
+    cpu: {
+      percentage: Math.round(cpuUsage),
+      cores: os.cpus().length
+    },
+    disk: {
+      readMBps: diskIO.readMBps,
+      writeMBps: diskIO.writeMBps
+    },
+    eventLoop,
+    processes: getTopProcesses()
+  };
+}
+
+async function getCachedSystemStats() {
+  const now = Date.now();
+  if (systemStatsCache && systemStatsCache.expiresAt > now) {
+    return systemStatsCache.value;
+  }
+  if (systemStatsInFlight) {
+    return systemStatsInFlight;
+  }
+
+  systemStatsInFlight = collectSystemStatsSnapshot()
+    .then((value) => {
+      systemStatsCache = {
+        value,
+        expiresAt: Date.now() + SYSTEM_STATS_CACHE_TTL_MS
+      };
+      return value;
+    })
+    .finally(() => {
+      systemStatsInFlight = null;
+    });
+
+  return systemStatsInFlight;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -487,56 +575,6 @@ export async function registerSystemRoutes(app: FastifyInstance): Promise<void> 
       return reply.code(401).send({ error: 'Unauthorized' });
     }
 
-    // Memory stats
-    const totalMem = os.totalmem();
-    const freeMem = os.freemem();
-    const usedMem = totalMem - freeMem;
-
-    // CPU stats - sample twice with 100ms delay for instantaneous usage
-    const getCpuTimes = () => {
-      return os.cpus().map(cpu => ({
-        idle: cpu.times.idle,
-        total: Object.values(cpu.times).reduce((a, b) => a + b, 0)
-      }));
-    };
-
-    const startTimes = getCpuTimes();
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const endTimes = getCpuTimes();
-
-    const cpuUsage = startTimes.reduce((acc, start, i) => {
-      const end = endTimes[i];
-      const idleDiff = end.idle - start.idle;
-      const totalDiff = end.total - start.total;
-      return acc + (totalDiff > 0 ? ((totalDiff - idleDiff) / totalDiff) * 100 : 0);
-    }, 0) / startTimes.length;
-
-    // Disk I/O stats (separate 100ms sample)
-    const diskIO = await calculateDiskIO();
-    const eventLoopMeanMs = Math.round(eventLoopDelay.mean / 1e6);
-    const eventLoopMaxMs = Math.round(eventLoopDelay.max / 1e6);
-    eventLoopDelay.reset();
-
-    return {
-      memory: {
-        total: totalMem,
-        used: usedMem,
-        free: freeMem,
-        percentage: Math.round((usedMem / totalMem) * 100)
-      },
-      cpu: {
-        percentage: Math.round(cpuUsage),
-        cores: os.cpus().length
-      },
-      disk: {
-        readMBps: diskIO.readMBps,
-        writeMBps: diskIO.writeMBps
-      },
-      eventLoop: {
-        meanMs: eventLoopMeanMs,
-        maxMs: eventLoopMaxMs
-      },
-      processes: getTopProcesses()
-    };
+    return getCachedSystemStats();
   });
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiGet } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
 import { useSystemStatsPolling } from '../hooks/useSystemStatsPolling';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 // Format bytes to human-readable GB
 function formatBytes(bytes) {
@@ -122,7 +123,8 @@ function MetricCard({ title, value, subtitle, icon, color, trend, trendData, chi
 }
 
 export function SystemResourcesView() {
-  const systemStats = useSystemStatsPolling(true);
+  const [windowActive, setWindowActive] = useState(() => isWindowActive());
+  const systemStats = useSystemStatsPolling(windowActive);
   const [statsHistory, setStatsHistory] = useState(null);
   const [historyRange, setHistoryRange] = useState('24h');
   const [latencyMs, setLatencyMs] = useState(null);
@@ -135,8 +137,14 @@ export function SystemResourcesView() {
   const wsRef = useRef(null);
   const frameRef = useRef(null);
 
+  useEffect(() => subscribeWindowActivity(setWindowActive), []);
+
   // Fetch history
   useEffect(() => {
+    if (!windowActive) {
+      return undefined;
+    }
+
     const fetchHistory = async () => {
       try {
         const data = await apiGet(`/api/system/stats/history?range=${historyRange}`);
@@ -149,10 +157,15 @@ export function SystemResourcesView() {
     fetchHistory();
     const interval = setInterval(fetchHistory, 60000);
     return () => clearInterval(interval);
-  }, [historyRange]);
+  }, [historyRange, windowActive]);
 
   // API latency measurement
   useEffect(() => {
+    if (!windowActive) {
+      setLatencyMs(null);
+      return undefined;
+    }
+
     const measureLatency = async () => {
       try {
         const start = performance.now();
@@ -168,10 +181,16 @@ export function SystemResourcesView() {
     measureLatency();
     const interval = setInterval(measureLatency, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [windowActive]);
 
   // WebSocket latency
   useEffect(() => {
+    if (!windowActive) {
+      setWsLatencyMs(null);
+      setWsTarget(null);
+      return undefined;
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
     const token = getAccessToken();
@@ -213,10 +232,19 @@ export function SystemResourcesView() {
       clearInterval(pingInterval);
       if (ws) ws.close();
     };
-  }, []);
+  }, [windowActive]);
 
   // Client frame time
   useEffect(() => {
+    if (!windowActive) {
+      setClientFrameMs(null);
+      if (frameRef.current) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+      return undefined;
+    }
+
     let lastTime = performance.now();
     let running = true;
 
@@ -240,7 +268,7 @@ export function SystemResourcesView() {
       running = false;
       if (frameRef.current) cancelAnimationFrame(frameRef.current);
     };
-  }, []);
+  }, [windowActive]);
 
   const getStatus = (pct) => pct >= 85 ? 'critical' : pct >= 70 ? 'warning' : 'healthy';
   const getColor = (status) => status === 'critical' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#22c55e';

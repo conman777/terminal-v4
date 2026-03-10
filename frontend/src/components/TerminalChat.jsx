@@ -34,6 +34,7 @@ import {
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
+import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
 const DEFAULT_ANSI_PALETTE = (() => {
@@ -166,6 +167,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     appliedRows: null
   });
   const [showCopiedBanner, setShowCopiedBanner] = useState(false);
+  const [windowActive, setWindowActive] = useState(() => isWindowActive());
   const copiedBannerTimerRef = useRef(null);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
@@ -239,6 +241,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const reconnectSocketRef = useRef(null);
   const pausedForOfflineRef = useRef(false);
   const lastServerPingAtRef = useRef(0);
+  const windowActiveRef = useRef(windowActive);
   const sessionsRef = useRef(sessions);
   const restoreSessionRef = useRef(restoreSession);
   const updateSessionTopicRef = useRef(updateSessionTopic);
@@ -251,6 +254,20 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const idlePromptProbeRef = useRef('');
   const isValidClientId = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const isActiveSession = sessionId === activeSessionId;
+
+  useEffect(() => subscribeWindowActivity(setWindowActive), []);
+  useEffect(() => {
+    windowActiveRef.current = windowActive;
+  }, [windowActive]);
+  useEffect(() => {
+    if (!windowActive || pausedForOfflineRef.current) return;
+    const socket = socketRef.current;
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    reconnectSocketRef.current?.();
+  }, [windowActive]);
+
   const getHistoryConfig = useCallback(() => ({
     pageEvents: platformConfig.history.pageEvents,
     pageChars: platformConfig.history.pageChars,
@@ -2499,15 +2516,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const MAX_WS_RETRY_DELAY = 30000;
 
       const connectSocket = () => {
+        reconnectSocketRef.current = connectSocket;
         if (disposed) return () => {};
         // Skip reconnect if we're offline
-        if (pausedForOfflineRef.current) return () => {};
+        if (pausedForOfflineRef.current || !windowActiveRef.current) {
+          historyReloadingRef.current = false;
+          setIsLoadingHistory(false);
+          return () => {};
+        }
         restoreRetryAttemptedRef.current = false;
         restoreAttempt2Ref.current = false;
         const existing = socketRef.current;
         if (existing) existing.close();
-        // Store reconnect function for visibility/online handlers
-        reconnectSocketRef.current = connectSocket;
 
         const shouldLoadHistory = shouldReplayHistoryRef.current;
         let socket = null;
@@ -2549,7 +2569,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const startSocket = async () => {
           const authResult = await ensureFreshSocketToken();
-          if (disposed || !shouldReconnect) return;
+          if (disposed || !shouldReconnect || !windowActiveRef.current) return;
           if (!authResult.ok) {
             handleAuthFailure(authResult.message);
             return;
@@ -2589,6 +2609,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(() => {
               if (socket.readyState !== WebSocket.OPEN) return;
+              if (!windowActiveRef.current) {
+                return;
+              }
               // Initial/full history replay can take long enough on mobile devices to
               // delay processing of incoming ping frames. Treat that as local backpressure,
               // not a dead socket, otherwise we reconnect mid-replay and get stuck showing
@@ -3024,7 +3047,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 });
               return;
             }
-            if (shouldReconnect && !pausedForOfflineRef.current) {
+            if (shouldReconnect && !pausedForOfflineRef.current && windowActiveRef.current) {
               wsRetryCount++;
               const baseDelay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
               const jitter = Math.random() * 500;
@@ -3603,7 +3626,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           <span>Loading more history...</span>
         </div>
       )}
-      {(isMobile || isScrollMode || isCopyMode) && (
+      {!isMobile && (isScrollMode || isCopyMode) && (
         <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
             className="scroll-btn scroll-up"

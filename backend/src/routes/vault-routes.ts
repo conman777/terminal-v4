@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { getDatabase } from '../database/db';
+import { decryptSecret, encryptSecret } from '../utils/secret-crypto';
 
 interface VaultIdParams {
   id: string;
@@ -14,6 +15,14 @@ interface AddKeyBody {
 function maskValue(value: string): string {
   if (value.length <= 4) return '****';
   return '****' + value.slice(-4);
+}
+
+function readStoredValue(value: string): string {
+  try {
+    return decryptSecret(value);
+  } catch {
+    return value;
+  }
 }
 
 export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
@@ -34,7 +43,7 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       keys: rows.map(row => ({
         id: row.id,
         name: row.key_name,
-        maskedValue: maskValue(row.key_value),
+        maskedValue: maskValue(readStoredValue(row.key_value)),
         createdAt: row.created_at
       }))
     };
@@ -73,10 +82,11 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
 
     const id = randomUUID();
     const now = new Date().toISOString();
+    const encryptedValue = encryptSecret(value);
 
     db.prepare(
       'INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, userId, trimmedName, value, now);
+    ).run(id, userId, trimmedName, encryptedValue, now);
 
     return {
       key: {
@@ -105,8 +115,7 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
       reply.code(404).send({ error: 'Key not found' });
       return;
     }
-
-    return { value: row.key_value };
+    return { value: readStoredValue(row.key_value) };
   });
 
   // DELETE /api/vault/:id - delete a key

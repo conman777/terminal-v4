@@ -11,6 +11,10 @@ describe('isMeaningfulSessionTopic', () => {
     expect(isMeaningfulSessionTopic('claude --dangerously-skip-permissions')).toBe(false);
     expect(isMeaningfulSessionTopic('npm run build')).toBe(false);
   });
+
+  it('rejects windows path-like topics', () => {
+    expect(isMeaningfulSessionTopic('C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4')).toBe(false);
+  });
 });
 
 describe('getPreferredSessionTopic', () => {
