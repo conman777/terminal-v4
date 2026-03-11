@@ -769,10 +769,11 @@ export const TerminalPane = memo(function TerminalPane({
           align-items: center;
           justify-content: space-between;
           height: 36px;
-          padding: 0 6px 0 10px;
+          padding: 0 6px 0 12px;
           background: var(--terminal-chrome-bg, #17191c);
           border-bottom: none;
           flex-shrink: 0;
+          z-index: 1;
         }
 
         .ph-bar[draggable=true] { cursor: grab; }

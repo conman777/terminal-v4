@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDatabase } from '../database/db';
+import { getUserById, upsertExternalAuthMirrorUser } from '../auth/user-store.js';
 import { SANDBOX_MODES, type SandboxMode } from '../sandbox/sandbox-types';
 
 interface UserSettings {
@@ -149,6 +150,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     const db = getDatabase();
     const now = new Date().toISOString();
+
+    if (!getUserById(userId) && request.username) {
+      upsertExternalAuthMirrorUser(userId, request.username);
+    }
 
     // Upsert the settings
     const existing = db.prepare('SELECT user_id FROM user_settings WHERE user_id = ?').get(userId);

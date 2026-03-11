@@ -530,6 +530,9 @@ export function TerminalSessionProvider({ children }) {
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/git-branches`);
+      if (response.status === 404) {
+        return null;
+      }
       if (!response.ok) {
         throw new Error(`Failed to get git branches (${response.status})`);
       }

@@ -4,7 +4,9 @@ import { randomUUID, createHash } from 'crypto';
 import {
   getUserByUsername,
   getUserById,
+  isExternalAuthMirrorUser,
   toPublicUser,
+  upsertExternalAuthMirrorUser,
   createRefreshToken,
   getRefreshTokenByHash,
   deleteRefreshToken,
@@ -109,7 +111,7 @@ export function verifyAccessToken(token: string): JwtPayload | null {
 // Login with username or email and password against Neon Postgres
 export async function login(identifier: string, password: string): Promise<AuthResult> {
   const localUser = getUserByUsername(identifier);
-  if (localUser) {
+  if (localUser && !isExternalAuthMirrorUser(localUser)) {
     const valid = await verifyPassword(password, localUser.password_hash);
     if (!valid) {
       throw new Error('Invalid credentials');
@@ -136,6 +138,7 @@ export async function login(identifier: string, password: string): Promise<AuthR
 
   // Generate tokens (refresh tokens stored locally in SQLite)
   const username = getNeonUsername(user);
+  upsertExternalAuthMirrorUser(user.id, username);
   const tokens: TokenPair = {
     accessToken: generateAccessToken(user.id, username),
     refreshToken: generateRefreshToken(user.id)
@@ -170,7 +173,7 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
   }
 
   const localUser = getUserById(storedToken.user_id);
-  if (localUser) {
+  if (localUser && !isExternalAuthMirrorUser(localUser)) {
     deleteRefreshToken(storedToken.id);
     return {
       user: toPublicUser(localUser),
@@ -193,6 +196,7 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
 
   // Generate new tokens
   const username = getNeonUsername(user);
+  upsertExternalAuthMirrorUser(user.id, username);
   const tokens: TokenPair = {
     accessToken: generateAccessToken(user.id, username),
     refreshToken: generateRefreshToken(user.id)

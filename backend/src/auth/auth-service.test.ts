@@ -18,13 +18,16 @@ vi.mock('./neon-user-store.js', () => ({
 }));
 
 vi.mock('./user-store.js', () => ({
+  EXTERNAL_AUTH_MIRROR_PASSWORD_HASH: '!external-auth-mirror!',
   getUserByUsername: vi.fn(),
   getUserById: vi.fn(),
+  isExternalAuthMirrorUser: vi.fn(),
   toPublicUser: vi.fn((user) => ({
     id: user.id,
     username: user.username,
     created_at: user.created_at
   })),
+  upsertExternalAuthMirrorUser: vi.fn(),
   createRefreshToken: vi.fn(),
   getRefreshTokenByHash: vi.fn(),
   deleteRefreshToken: vi.fn(),
@@ -42,12 +45,15 @@ import {
   deleteExpiredRefreshTokens,
   deleteRefreshToken,
   getRefreshTokenByHash,
-  getUserById
+  getUserById,
+  isExternalAuthMirrorUser,
+  upsertExternalAuthMirrorUser
 } from './user-store.js';
 
 describe('auth-service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isExternalAuthMirrorUser).mockReturnValue(false);
   });
 
   it('prefers local username accounts before Neon lookup', async () => {
@@ -92,6 +98,7 @@ describe('auth-service', () => {
       expect.any(String),
       expect.any(Object)
     );
+    expect(upsertExternalAuthMirrorUser).toHaveBeenCalledWith('user-1', 'conor');
     expect(createRefreshToken).toHaveBeenCalled();
   });
 
@@ -137,6 +144,7 @@ describe('auth-service', () => {
       expect.any(String),
       expect.any(Object)
     );
+    expect(upsertExternalAuthMirrorUser).toHaveBeenCalledWith('user-1', 'conor');
   });
 
   it('refreshes local-user sessions from SQLite-backed users', async () => {
@@ -164,5 +172,29 @@ describe('auth-service', () => {
       expect.any(String),
       expect.any(Object)
     );
+  });
+
+  it('skips mirror rows during username login and falls through to Neon auth', async () => {
+    vi.mocked(getUserByUsername).mockReturnValue({
+      id: 'user-1',
+      username: 'conor',
+      password_hash: '!external-auth-mirror!',
+      created_at: '2026-03-11T00:00:00.000Z',
+      updated_at: '2026-03-11T00:00:00.000Z'
+    });
+    vi.mocked(isExternalAuthMirrorUser).mockReturnValue(true);
+    vi.mocked(getNeonUserByIdentifier).mockResolvedValue({
+      id: 'user-1',
+      email: 'conor@example.com',
+      display_name: 'conor',
+      password_hash: 'hash',
+      created_at: '2026-03-11T00:00:00.000Z'
+    });
+    vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+
+    const result = await login('conor', 'secret');
+
+    expect(getNeonUserByIdentifier).toHaveBeenCalledWith('conor');
+    expect(result.user.username).toBe('conor');
   });
 });

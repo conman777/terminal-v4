@@ -4,6 +4,30 @@ import { basename, dirname, parse, resolve } from 'node:path';
 import archiver from 'archiver';
 import { resolvePathAnywhere, PROJECT_ROOT } from '../utils/path-security';
 
+async function listVisibleFolders(dirPath: string): Promise<string[]> {
+  const entries = await readdir(dirPath, { withFileTypes: true });
+  const folderChecks = await Promise.all(entries.map(async (entry) => {
+    if (entry.name.startsWith('.')) {
+      return null;
+    }
+
+    if (entry.isDirectory()) {
+      return entry.name;
+    }
+
+    try {
+      const entryStats = await stat(resolve(dirPath, entry.name));
+      return entryStats.isDirectory() ? entry.name : null;
+    } catch {
+      return null;
+    }
+  }));
+
+  return folderChecks
+    .filter((entryName): entryName is string => entryName !== null)
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
 export async function registerFilesystemRoutes(app: FastifyInstance): Promise<void> {
   // Filesystem: List directories
   app.get<{ Querystring: { path?: string } }>('/api/fs/list', async (request, reply) => {
@@ -18,11 +42,7 @@ export async function registerFilesystemRoutes(app: FastifyInstance): Promise<vo
         return;
       }
 
-      const entries = await readdir(safePath, { withFileTypes: true });
-      const folders = entries
-        .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
-        .map(entry => entry.name)
-        .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+      const folders = await listVisibleFolders(safePath);
 
       // Get parent directory (null if at filesystem root)
       const parsed = parse(safePath);

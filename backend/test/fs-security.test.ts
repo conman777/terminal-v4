@@ -45,6 +45,30 @@ describe('Filesystem & preview sandboxing', () => {
     }
   });
 
+  it('includes directory junctions in /api/fs/list results', async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'terminal-v4-fs-junction-'));
+    const targetDir = path.join(tmpRoot, 'target-project');
+    const junctionDir = path.join(tmpRoot, 'linked-project');
+
+    try {
+      await fs.mkdir(targetDir);
+      await fs.symlink(targetDir, junctionDir, 'junction');
+
+      await withApp(async ({ app, accessToken }) => {
+        const res = await supertest(app.server)
+          .get('/api/fs/list')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .query({ path: tmpRoot })
+          .expect(200);
+
+        expect(res.body.folders).toContain('linked-project');
+        expect(res.body.folders).toContain('target-project');
+      });
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it('blocks previewing files outside the project root', async () => {
     await withApp(async ({ app, accessToken }) => {
       await supertest(app.server)

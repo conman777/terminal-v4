@@ -74,6 +74,11 @@
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
   --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.05);
 
+  /* Shared scrollbar palette */
+  --scrollbar-track: color-mix(in srgb, var(--terminal-bg) 84%, var(--bg-surface) 16%);
+  --scrollbar-thumb: color-mix(in srgb, var(--border-default) 74%, var(--text-muted) 26%);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 78%, var(--text-secondary) 22%);
+
   /* Atmospheric backgrounds - warm amber glow from top */
   --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(34, 211, 238, 0.2), transparent 50%),
                  radial-gradient(ellipse 80% 60% at 100% 100%, rgba(129, 140, 248, 0.12), transparent 40%);
@@ -172,6 +177,11 @@
   /* Shadows - lighter */
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(8, 145, 178, 0.04);
+
+  /* Shared scrollbar palette */
+  --scrollbar-track: color-mix(in srgb, var(--bg-elevated) 74%, white 26%);
+  --scrollbar-thumb: color-mix(in srgb, var(--border-default) 72%, var(--text-muted) 28%);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 76%, var(--text-secondary) 24%);
 
   /* Interactive state colors */
   --bg-hover: #e2e8f0;
@@ -418,7 +428,12 @@ button {
 .sidebar {
   width: 256px;
   min-width: 256px;
-  background: var(--surface-glass);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-surface) 88%, black 12%),
+      color-mix(in srgb, var(--terminal-bg) 94%, black 6%)
+    );
   backdrop-filter: blur(20px);
   border-right: none;
   display: flex;
@@ -436,8 +451,13 @@ button {
   right: 0;
   bottom: 0;
   width: 1px;
-  background: linear-gradient(180deg, var(--accent-primary) 0%, rgba(245, 158, 11, 0.3) 30%, transparent 100%);
-  opacity: 0.4;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--border-default) 52%, transparent),
+    color-mix(in srgb, var(--accent-primary) 18%, transparent) 35%,
+    transparent 100%
+  );
+  opacity: 0.7;
   pointer-events: none;
 }
 
@@ -451,7 +471,12 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 30%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-surface) 92%, transparent),
+    color-mix(in srgb, var(--terminal-bg) 90%, transparent)
+  );
   flex-shrink: 0;
 }
 
@@ -480,7 +505,7 @@ button {
 }
 
 .sidebar-collapse-btn:hover {
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, var(--terminal-bg) 28%);
   color: var(--text-primary);
 }
 
@@ -606,15 +631,15 @@ button {
   gap: 8px;
   padding: 6px 12px;
   margin: 4px 8px 8px;
-  background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--terminal-bg) 92%, black 8%);
+  border: 1px solid color-mix(in srgb, var(--border-default) 22%, transparent);
   border-radius: var(--radius-md);
   transition: all var(--transition-fast);
 }
 
 .sidebar-search:focus-within {
-  border-color: var(--accent-primary);
-  background: var(--bg-elevated);
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, var(--terminal-bg) 32%);
 }
 
 .sidebar-search-icon {
@@ -671,14 +696,14 @@ button {
 }
 
 .sidebar-item:hover {
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--bg-elevated) 58%, var(--terminal-bg) 42%);
   color: var(--text-primary);
 }
 
 .sidebar-item.active {
-  background: var(--accent-primary-dim);
-  color: var(--accent-primary);
-  border-left-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary-dim) 54%, var(--terminal-bg) 46%);
+  color: color-mix(in srgb, var(--accent-primary) 88%, white 12%);
+  border-left-color: color-mix(in srgb, var(--accent-primary) 82%, white 8%);
 }
 
 .sidebar-item-icon {
@@ -721,7 +746,7 @@ button {
 }
 
 .sidebar-pin-btn:hover {
-  background: var(--bg-base);
+  background: color-mix(in srgb, var(--bg-elevated) 54%, var(--terminal-bg) 46%);
   color: var(--accent-primary);
 }
 
@@ -1693,22 +1718,26 @@ button {
     overflow-y: scroll !important;
   }
 
+  .xterm-viewport {
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  }
+
   .xterm-viewport::-webkit-scrollbar {
     width: 14px;
   }
 
   .xterm-viewport::-webkit-scrollbar-track {
-    background: var(--bg-elevated);
+    background: var(--scrollbar-track);
   }
 
   .xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--text-muted);
+    background: var(--scrollbar-thumb);
     border-radius: 7px;
-    border: 3px solid var(--bg-elevated);
+    border: 3px solid var(--scrollbar-track);
   }
 
   .xterm-viewport::-webkit-scrollbar-thumb:active {
-    background: var(--text-secondary);
+    background: var(--scrollbar-thumb-hover);
   }
 }
 
@@ -8917,16 +8946,16 @@ button,
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-default);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-hover);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Focus styles for accessibility */

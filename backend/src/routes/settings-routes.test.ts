@@ -7,10 +7,11 @@ import path from 'node:path';
 import { closeDatabase, getDatabase } from '../database/db';
 import { registerSettingsRoutes } from './settings-routes';
 
-function buildApp(userId: string) {
+function buildApp(userId: string, username = `test-${userId}`) {
   const app = Fastify();
   app.addHook('preHandler', async (request) => {
     request.userId = userId;
+    request.username = username;
   });
   return app;
 }
@@ -82,6 +83,32 @@ describe('settings-routes desktop terminal input preference', () => {
     expect(getResponse.statusCode).toBe(200);
     expect(getResponse.json()).toMatchObject({
       desktopAllowTerminalInput: true,
+    });
+
+    await app.close();
+  });
+
+  it('creates settings for authenticated users without a local SQLite user row', async () => {
+    const externalUserId = randomUUID();
+    const app = buildApp(externalUserId, 'conor');
+    await registerSettingsRoutes(app);
+
+    const patchResponse = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload: { theme: 'light' },
+    });
+
+    expect(patchResponse.statusCode).toBe(200);
+
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: '/api/settings',
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject({
+      theme: 'light',
     });
 
     await app.close();

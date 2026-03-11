@@ -15,6 +15,12 @@ export interface UserPublic {
   created_at: string;
 }
 
+export const EXTERNAL_AUTH_MIRROR_PASSWORD_HASH = '!external-auth-mirror!';
+
+function getExternalAuthMirrorUsername(userId: string): string {
+  return `external-${userId}`;
+}
+
 export function createUser(username: string, passwordHash: string): User {
   const db = getDatabase();
   const now = new Date().toISOString();
@@ -42,6 +48,36 @@ export function getUserByUsername(username: string): User | undefined {
 export function getUserById(id: string): User | undefined {
   const db = getDatabase();
   return db.prepare('SELECT * FROM users WHERE id = ?').get(id) as User | undefined;
+}
+
+export function isExternalAuthMirrorUser(user: Pick<User, 'password_hash'> | undefined): boolean {
+  return user?.password_hash === EXTERNAL_AUTH_MIRROR_PASSWORD_HASH;
+}
+
+export function upsertExternalAuthMirrorUser(userId: string, _username: string): User {
+  const db = getDatabase();
+  const now = new Date().toISOString();
+  const existing = getUserById(userId);
+  const createdAt = existing?.created_at ?? now;
+  const storedUsername = isExternalAuthMirrorUser(existing)
+    ? existing.username
+    : getExternalAuthMirrorUsername(userId);
+
+  db.prepare(`
+    INSERT INTO users (id, username, password_hash, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      username = excluded.username,
+      updated_at = excluded.updated_at
+  `).run(userId, storedUsername, EXTERNAL_AUTH_MIRROR_PASSWORD_HASH, createdAt, now);
+
+  return {
+    id: userId,
+    username: storedUsername,
+    password_hash: EXTERNAL_AUTH_MIRROR_PASSWORD_HASH,
+    created_at: createdAt,
+    updated_at: now
+  };
 }
 
 export function toPublicUser(user: User): UserPublic {

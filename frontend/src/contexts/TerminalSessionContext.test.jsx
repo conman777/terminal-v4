@@ -32,6 +32,19 @@ function TestConsumer() {
   );
 }
 
+function TestGitBranchesConsumer() {
+  const { listSessionGitBranches } = useTerminalSession();
+
+  return (
+    <button
+      type="button"
+      onClick={() => listSessionGitBranches('session-404')}
+    >
+      load branches
+    </button>
+  );
+}
+
 describe('TerminalSessionContext', () => {
   beforeEach(() => {
     apiFetch.mockImplementation(async (url) => {
@@ -144,5 +157,48 @@ describe('TerminalSessionContext', () => {
       const restoreCalls = apiFetch.mock.calls.filter(([url]) => url === '/api/terminal/session-1/restore');
       expect(restoreCalls).toHaveLength(1);
     });
+  });
+
+  it('treats missing git branches as unavailable instead of logging an error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    apiFetch.mockImplementation(async (url) => {
+      if (url === '/api/terminal') {
+        return {
+          ok: true,
+          json: async () => ({ sessions: [] })
+        };
+      }
+
+      if (String(url).startsWith('/api/state')) {
+        return {
+          ok: true,
+          json: async () => ({ sessions: [] })
+        };
+      }
+
+      if (url === '/api/terminal/session-404/git-branches') {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: 'Git branches not available for this terminal' })
+        };
+      }
+
+      throw new Error(`Unexpected apiFetch call: ${url}`);
+    });
+
+    render(
+      <TerminalSessionProvider>
+        <TestGitBranchesConsumer />
+      </TerminalSessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'load branches' }).click();
+    });
+
+    expect(errorSpy).not.toHaveBeenCalledWith('Failed to list git branches', expect.anything());
+    errorSpy.mockRestore();
   });
 });

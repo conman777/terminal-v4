@@ -322,17 +322,25 @@ export default function ThreadsSidebar({
 
       <style>{`
         .threads-sidebar {
-          --sidebar-bg: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-tertiary) 12%);
-          --sidebar-shell-bg: color-mix(in srgb, var(--bg-primary) 82%, var(--bg-tertiary) 18%);
-          --sidebar-content-bg: color-mix(in srgb, var(--bg-primary) 92%, var(--bg-tertiary) 8%);
-          --sidebar-hover: color-mix(in srgb, var(--bg-tertiary) 78%, var(--accent-primary-dim) 22%);
-          --sidebar-active: color-mix(in srgb, var(--bg-tertiary) 52%, var(--accent-primary-dim) 48%);
-          --sidebar-border: var(--border-subtle);
-          --sidebar-text: var(--text-primary);
-          --sidebar-text-muted: var(--text-muted);
+          --sidebar-bg: #101723;
+          --sidebar-shell-bg: #111a27;
+          --sidebar-content-bg: #0f1620;
+          --sidebar-hover: rgba(149, 175, 211, 0.08);
+          --sidebar-active: rgba(36, 95, 153, 0.28);
+          --sidebar-border: rgba(110, 132, 164, 0.22);
+          --sidebar-text: #e7eef9;
+          --sidebar-text-muted: #9caec8;
+          --sidebar-cutout-bg: var(--bg-primary);
+          --sidebar-theme-text: var(--text-primary);
+          --sidebar-theme-muted: var(--text-muted);
           width: 260px;
           height: 100%;
-          background: var(--sidebar-bg);
+          background: linear-gradient(
+            180deg,
+            #111a27 0%,
+            #101723 44%,
+            #0f141d 100%
+          );
           border-right: 1px solid var(--sidebar-border);
           display: flex;
           flex-direction: column;
@@ -342,14 +350,14 @@ export default function ThreadsSidebar({
         }
 
         html[data-window-active="false"] .threads-sidebar {
-          --sidebar-bg: color-mix(in srgb, var(--bg-primary) 84%, var(--bg-tertiary) 16%);
-          --sidebar-shell-bg: color-mix(in srgb, var(--bg-primary) 76%, var(--bg-tertiary) 24%);
-          --sidebar-content-bg: color-mix(in srgb, var(--bg-primary) 88%, var(--bg-tertiary) 12%);
-          --sidebar-hover: color-mix(in srgb, var(--bg-tertiary) 72%, var(--accent-primary-dim) 18%);
-          --sidebar-active: color-mix(in srgb, var(--bg-tertiary) 58%, var(--accent-primary-dim) 32%);
-          --sidebar-border: var(--border-default);
-          --sidebar-text: var(--text-primary);
-          --sidebar-text-muted: var(--text-muted);
+          --sidebar-bg: #0d121a;
+          --sidebar-shell-bg: #0f1520;
+          --sidebar-content-bg: #0c1118;
+          --sidebar-hover: rgba(149, 175, 211, 0.06);
+          --sidebar-active: rgba(36, 95, 153, 0.2);
+          --sidebar-border: rgba(110, 132, 164, 0.18);
+          --sidebar-text: #dbe5f2;
+          --sidebar-text-muted: #91a1b8;
         }
 
         .threads-sidebar.collapsed {
@@ -477,7 +485,7 @@ export default function ThreadsSidebar({
           flex: 1;
           overflow-y: auto;
           scrollbar-width: thin;
-          scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+          scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
           padding: 0;
           background: var(--sidebar-content-bg);
         }
@@ -487,7 +495,7 @@ export default function ThreadsSidebar({
         }
 
         .threads-sidebar-content::-webkit-scrollbar-thumb {
-          background: color-mix(in srgb, var(--sidebar-border) 70%, white 30%);
+          background: var(--scrollbar-thumb);
           border-radius: 2px;
         }
 
