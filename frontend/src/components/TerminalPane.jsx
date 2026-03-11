@@ -74,6 +74,7 @@ export const TerminalPane = memo(function TerminalPane({
   customAiProviders = [],
   onSetSessionAiType,
   onAddCustomAiProvider,
+  desktopAllowTerminalInput = false,
   onCwdChange,
   onSessionBusyChange,
   currentDesktopId,
@@ -150,6 +151,7 @@ export const TerminalPane = memo(function TerminalPane({
     handleRegisterSendText,
     handleChatSend,
     handleRawSend,
+    handleInterrupt,
   } = useMobileChatTurns({
     sessionId: pane.sessionId ?? null,
     chatMode: Boolean(pane.sessionId) && !isStructuredSession,
@@ -380,6 +382,12 @@ export const TerminalPane = memo(function TerminalPane({
     setIsNoticePersistent(false);
     setViewModeNotice('');
   }, []);
+
+  useEffect(() => {
+    if (!desktopAllowTerminalInput && !isStructuredSession) {
+      setIsTerminalPanelOpen(false);
+    }
+  }, [desktopAllowTerminalInput, isStructuredSession]);
 
   const launchAiType = useCallback((aiTypeToLaunch, commandOverride = null) => {
     const nextLaunchCommand = commandOverride || getAiInitialCommand(aiTypeToLaunch, customAiProviders);
@@ -652,26 +660,26 @@ export const TerminalPane = memo(function TerminalPane({
                 <div className="desktop-conversation-surface">
                   <DesktopConversationView
                     turns={turns}
-                    isStreaming={structuredIsStreaming}
-                    isLoadingHistory={isConversationHistoryLoading}
-                    onSend={structuredSendMessage}
+                    isStreaming={isStructuredSession ? structuredIsStreaming : isSessionBusy}
+                    isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
+                    onSend={isStructuredSession ? structuredSendMessage : handleChatSend}
                     onSendRaw={handleRawSend}
-                    onInterrupt={structuredInterrupt}
+                    onInterrupt={isStructuredSession ? structuredInterrupt : handleInterrupt}
                     onImageUpload={handleImageUpload}
                     sessionId={pane.sessionId}
                     aiType={currentAiType}
-                    connectionState={structuredConnectionState}
-                    isSendReady
+                    connectionState={isStructuredSession ? structuredConnectionState : connectionState}
+                    isSendReady={isStructuredSession ? structuredConnectionState === 'online' : isSendReady}
                     terminalPreview={terminalPreview}
                     terminalScreenSnapshot={terminalScreenSnapshot}
-                    launchCommand=""
+                    launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
-                    onLaunchAgent={handleLaunchAgent}
-                    onOpenTerminal={handleOpenTerminalPanel}
+                    onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
+                    onOpenTerminal={isStructuredSession || desktopAllowTerminalInput ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
                     interactivePromptEvent={interactivePromptEvent}
-                    mode="structured"
+                    mode={isStructuredSession ? 'structured' : 'terminal'}
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
@@ -693,6 +701,7 @@ export const TerminalPane = memo(function TerminalPane({
                   onUrlDetected={onUrlDetected}
                   fontSize={fontSize}
                   webglEnabled={webglEnabled}
+                  inputEnabled={isStructuredSession || desktopAllowTerminalInput || isTerminalPanelOpen}
                   usesTmux={currentSession?.usesTmux}
                   viewMode="terminal"
                   isPrimary={isActive}
@@ -718,8 +727,8 @@ export const TerminalPane = memo(function TerminalPane({
               isActive={shouldHighlightActiveChrome}
               onImageUpload={handleImageUpload}
               isTerminalPanelOpen={isTerminalPanelOpen}
-              showTerminalToggle={!useTerminalFirstLayout}
-              onToggleTerminalPanel={useTerminalFirstLayout ? undefined : handleToggleTerminalPanel}
+              showTerminalToggle={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput)}
+              onToggleTerminalPanel={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
               connectionState={connectionState}
               aiType={currentAiType}
               aiOptions={aiOptions}

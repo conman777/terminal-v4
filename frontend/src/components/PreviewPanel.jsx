@@ -35,10 +35,12 @@ function isFrontendCandidatePort(portInfo, previewPort) {
   if (portInfo.port === previewPort) return true;
   // Ignore common system service ports unless explicitly selected.
   if (portInfo.port < 1024) return false;
-  // If we have no process/cwd metadata, this is usually noisy/system traffic.
-  if (!portInfo.process && !portInfo.cwd) return false;
   // Exclude system services identified by the probe (postgres, redis, chrome, etc).
   if (portInfo.probeStatus === 'excluded-process') return false;
+  if (portInfo.frontendLikely === true || portInfo.previewable === true) return true;
+  if (portInfo.reachable === true && portInfo.common) return true;
+  // If we have no process/cwd metadata, this is usually noisy/system traffic.
+  if (!portInfo.process && !portInfo.cwd) return false;
   return true;
 }
 
@@ -3596,12 +3598,12 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     fontSize={previewTerminalFontSize}
                   webglEnabled={webglEnabled}
                   isPrimary={mainTerminalMinimized}
-                  syncPtySize={mainTerminalMinimized}
+                  syncPtySize
                   fitSignal={previewTerminalFitToken}
                     onUrlDetected={onUrlDetected || (() => {})}
                     usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
                     onRegisterImageUpload={() => {}}
-                    onRegisterFocusTerminal={() => {}}
+                    onRegisterFocusTerminal={(focusFn) => { focusPreviewTerminalRef.current = focusFn; }}
                     onActivityChange={(isBusy) => onSessionBusyChange?.(selectedTerminalSession, isBusy)}
                     onConnectionChange={() => {}}
                     onCwdChange={() => {}}

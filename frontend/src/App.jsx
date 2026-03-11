@@ -600,6 +600,13 @@ function AppContent() {
       return resolveTerminalWebglEnabled(true);
     }
   });
+  const [desktopAllowTerminalInput, setDesktopAllowTerminalInput] = useState(() => {
+    try {
+      return localStorage.getItem('desktopAllowTerminalInput') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
     try {
       const stored = localStorage.getItem('showTabStatusLabels');
@@ -648,6 +655,12 @@ function AppContent() {
             setTerminalWebglEnabled(resolvedWebglEnabled);
             try {
               localStorage.setItem('terminalWebglEnabled', String(resolvedWebglEnabled));
+            } catch { /* ignore */ }
+          }
+          if (data.desktopAllowTerminalInput !== null && data.desktopAllowTerminalInput !== undefined) {
+            setDesktopAllowTerminalInput(data.desktopAllowTerminalInput);
+            try {
+              localStorage.setItem('desktopAllowTerminalInput', String(data.desktopAllowTerminalInput));
             } catch { /* ignore */ }
           }
           if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
@@ -710,6 +723,20 @@ function AppContent() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalWebglEnabled: resolvedEnabled })
     }).catch(e => console.error('Failed to save terminal WebGL setting to server', e));
+  }, []);
+
+  const updateDesktopAllowTerminalInput = useCallback((enabled) => {
+    setDesktopAllowTerminalInput(enabled);
+    try {
+      localStorage.setItem('desktopAllowTerminalInput', String(enabled));
+    } catch (e) {
+      console.error('Failed to save desktop terminal input setting to localStorage', e);
+    }
+    apiFetch('/api/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ desktopAllowTerminalInput: enabled })
+    }).catch(e => console.error('Failed to save desktop terminal input setting to server', e));
   }, []);
 
   const updateShowTabStatusLabels = useCallback((enabled) => {
@@ -1159,6 +1186,8 @@ function AppContent() {
             onFontSizeChange={updateTerminalFontSize}
             terminalWebglEnabled={terminalWebglEnabled}
             onWebglChange={updateTerminalWebglEnabled}
+            desktopAllowTerminalInput={desktopAllowTerminalInput}
+            onDesktopTerminalInputChange={updateDesktopAllowTerminalInput}
             onOpenApiSettings={() => {
               setShowSettings(false);
               setShowApiSettings(true);
@@ -1370,6 +1399,7 @@ function AppContent() {
                         customAiProviders={customAiProviders}
                         onSetSessionAiType={handleSetSessionAiType}
                         onAddCustomAiProvider={handleAddCustomAiProvider}
+                        desktopAllowTerminalInput={desktopAllowTerminalInput}
                         currentDesktopId={activeDesktopId}
                         fitSignal={mainTerminalFitToken}
                       />

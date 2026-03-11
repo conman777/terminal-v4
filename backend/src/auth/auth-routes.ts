@@ -1,33 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import { register, login, refreshTokens, logout } from './auth-service.js';
-import { registerSchema, loginSchema, refreshSchema } from './auth-schemas.js';
+import { login, refreshTokens, logout } from './auth-service.js';
+import { loginSchema, refreshSchema } from './auth-schemas.js';
 import { ZodError } from 'zod';
 
 export function registerAuthRoutes(app: FastifyInstance): void {
-  // Register new user
-  app.post<{ Body: { username: string; password: string } }>('/api/auth/register', async (request, reply) => {
-    try {
-      const input = registerSchema.parse(request.body);
-      const result = await register(input.username, input.password);
-      reply.send(result);
-    } catch (error) {
-      if (error instanceof ZodError) {
-        reply.status(400).send({ error: 'Validation error', details: error.errors });
-        return;
-      }
-      if (error instanceof Error) {
-        reply.status(400).send({ error: error.message });
-        return;
-      }
-      throw error;
-    }
+  // Register - disabled, users are managed in the Neon database
+  app.post('/api/auth/register', async (_request, reply) => {
+    reply.status(403).send({ error: 'Registration is disabled. Users are managed externally.' });
   });
 
   // Login
-  app.post<{ Body: { username: string; password: string } }>('/api/auth/login', async (request, reply) => {
+  app.post<{ Body: { email: string; password: string } }>('/api/auth/login', async (request, reply) => {
     try {
       const input = loginSchema.parse(request.body);
-      const result = await login(input.username, input.password);
+      const result = await login(input.email, input.password);
       reply.send(result);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -49,7 +35,7 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   app.post<{ Body: { refreshToken: string } }>('/api/auth/refresh', async (request, reply) => {
     try {
       const input = refreshSchema.parse(request.body);
-      const result = refreshTokens(input.refreshToken);
+      const result = await refreshTokens(input.refreshToken);
       reply.send(result);
     } catch (error) {
       if (error instanceof ZodError) {

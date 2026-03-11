@@ -20,6 +20,7 @@ function LayoutNode({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  desktopAllowTerminalInput,
   sessionActivity,
   onSessionBusyChange,
   projectInfo,
@@ -55,6 +56,7 @@ function LayoutNode({
         onUrlDetected={onUrlDetected}
         fontSize={fontSize}
         webglEnabled={webglEnabled}
+        desktopAllowTerminalInput={desktopAllowTerminalInput}
         sessionActivity={sessionActivity}
         onSessionBusyChange={onSessionBusyChange}
         projectInfo={projectInfo}
@@ -101,6 +103,7 @@ function LayoutNode({
             onUrlDetected={onUrlDetected}
             fontSize={fontSize}
             webglEnabled={webglEnabled}
+            desktopAllowTerminalInput={desktopAllowTerminalInput}
             sessionActivity={sessionActivity}
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
@@ -136,6 +139,7 @@ export function SplitPaneContainer({
   onUrlDetected,
   fontSize,
   webglEnabled,
+  desktopAllowTerminalInput,
   sessionActivity,
   onSessionBusyChange,
   projectInfo,
@@ -199,6 +203,7 @@ export function SplitPaneContainer({
             onUrlDetected={onUrlDetected}
             fontSize={fontSize}
             webglEnabled={webglEnabled}
+            desktopAllowTerminalInput={desktopAllowTerminalInput}
             sessionActivity={sessionActivity}
             onSessionBusyChange={onSessionBusyChange}
             projectInfo={projectInfo}
@@ -235,6 +240,7 @@ export function SplitPaneContainer({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           webglEnabled={webglEnabled}
+          desktopAllowTerminalInput={desktopAllowTerminalInput}
           sessionActivity={sessionActivity}
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}
@@ -279,6 +285,7 @@ export function SplitPaneContainer({
           onUrlDetected={onUrlDetected}
           fontSize={fontSize}
           webglEnabled={webglEnabled}
+          desktopAllowTerminalInput={desktopAllowTerminalInput}
           sessionActivity={sessionActivity}
           onSessionBusyChange={onSessionBusyChange}
           projectInfo={projectInfo}

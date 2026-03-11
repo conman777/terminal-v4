@@ -2,30 +2,23 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { randomUUID, createHash } from 'crypto';
 import {
-  createUser,
-  getUserByUsername,
   getUserById,
-  toPublicUser,
   createRefreshToken,
   getRefreshTokenByHash,
   deleteRefreshToken,
   deleteUserRefreshTokens,
   deleteExpiredRefreshTokens,
-  User,
   UserPublic
 } from './user-store.js';
+import { getNeonUserByEmail, getNeonUserById } from './neon-user-store.js';
 
-const BCRYPT_ROUNDS = 12;
 const ACCESS_TOKEN_EXPIRY = '24h';
 const REFRESH_TOKEN_EXPIRY_DAYS = 30;
 
 const DEV_JWT_SECRET = 'dev-jwt-secret-change-in-production';
-const DEV_REFRESH_SECRET = 'dev-refresh-secret-change-in-production';
 
 // Get secrets from environment or use defaults for development
 const JWT_SECRET = process.env.JWT_SECRET || DEV_JWT_SECRET;
-const REFRESH_SECRET = process.env.REFRESH_SECRET || DEV_REFRESH_SECRET;
-const ALLOWED_USERNAME = process.env.ALLOWED_USERNAME?.trim();
 const REQUIRE_STRONG_SECRETS = process.env.NODE_ENV === 'production';
 
 export function assertAuthConfig(): void {
@@ -33,18 +26,14 @@ export function assertAuthConfig(): void {
     if (!process.env.JWT_SECRET || JWT_SECRET === DEV_JWT_SECRET) {
       throw new Error('JWT_SECRET must be set to a strong value in production');
     }
-    if (!process.env.REFRESH_SECRET || REFRESH_SECRET === DEV_REFRESH_SECRET) {
-      throw new Error('REFRESH_SECRET must be set to a strong value in production');
-    }
   }
-  if (ALLOWED_USERNAME !== undefined && ALLOWED_USERNAME.length === 0) {
-    throw new Error('ALLOWED_USERNAME must not be empty when set');
+  if (!process.env.STORAGE_DATABASE_URL) {
+    console.warn('STORAGE_DATABASE_URL not set - login will not work');
   }
 }
 
 export function isAllowedUsername(username: string): boolean {
-  if (!ALLOWED_USERNAME) return true;
-  return username === ALLOWED_USERNAME;
+  return true;
 }
 
 export interface TokenPair {
@@ -64,20 +53,16 @@ export interface JwtPayload {
   exp: number;
 }
 
-// Hash a password
-export async function hashPassword(password: string): Promise<string> {
-  return bcrypt.hash(password, BCRYPT_ROUNDS);
-}
-
 // Verify a password against a hash
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  // bcryptjs (used by coin-ai-spy) and bcrypt (used here) produce compatible hashes
   return bcrypt.compare(password, hash);
 }
 
 // Generate a JWT access token
-export function generateAccessToken(user: User): string {
+export function generateAccessToken(userId: string, email: string): string {
   return jwt.sign(
-    { sub: user.id, username: user.username },
+    { sub: userId, username: email },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRY }
   );
@@ -108,39 +93,9 @@ export function verifyAccessToken(token: string): JwtPayload | null {
   }
 }
 
-// Register a new user
-export async function register(username: string, password: string): Promise<AuthResult> {
-  if (!isAllowedUsername(username)) {
-    throw new Error('Invalid credentials');
-  }
-  // Check if username already exists
-  const existing = getUserByUsername(username);
-  if (existing) {
-    throw new Error('Username already exists');
-  }
-
-  // Create user
-  const passwordHash = await hashPassword(password);
-  const user = createUser(username, passwordHash);
-
-  // Generate tokens
-  const tokens: TokenPair = {
-    accessToken: generateAccessToken(user),
-    refreshToken: generateRefreshToken(user.id)
-  };
-
-  return {
-    user: toPublicUser(user),
-    tokens
-  };
-}
-
-// Login with username and password
-export async function login(username: string, password: string): Promise<AuthResult> {
-  if (!isAllowedUsername(username)) {
-    throw new Error('Invalid credentials');
-  }
-  const user = getUserByUsername(username);
+// Login with email and password against Neon Postgres
+export async function login(email: string, password: string): Promise<AuthResult> {
+  const user = await getNeonUserByEmail(email);
   if (!user) {
     throw new Error('Invalid credentials');
   }
@@ -150,20 +105,24 @@ export async function login(username: string, password: string): Promise<AuthRes
     throw new Error('Invalid credentials');
   }
 
-  // Generate tokens
+  // Generate tokens (refresh tokens stored locally in SQLite)
   const tokens: TokenPair = {
-    accessToken: generateAccessToken(user),
+    accessToken: generateAccessToken(user.id, user.email),
     refreshToken: generateRefreshToken(user.id)
   };
 
   return {
-    user: toPublicUser(user),
+    user: {
+      id: user.id,
+      username: user.email,
+      created_at: user.created_at
+    },
     tokens
   };
 }
 
 // Refresh tokens
-export function refreshTokens(refreshToken: string): AuthResult {
+export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
   // Clean up expired tokens
   deleteExpiredRefreshTokens();
 
@@ -180,13 +139,9 @@ export function refreshTokens(refreshToken: string): AuthResult {
     throw new Error('Refresh token expired');
   }
 
-  // Get user
-  const user = getUserById(storedToken.user_id);
+  // Get user from Neon DB
+  const user = await getNeonUserById(storedToken.user_id);
   if (!user) {
-    deleteRefreshToken(storedToken.id);
-    throw new Error('User not found');
-  }
-  if (!isAllowedUsername(user.username)) {
     deleteRefreshToken(storedToken.id);
     throw new Error('User not found');
   }
@@ -196,12 +151,16 @@ export function refreshTokens(refreshToken: string): AuthResult {
 
   // Generate new tokens
   const tokens: TokenPair = {
-    accessToken: generateAccessToken(user),
+    accessToken: generateAccessToken(user.id, user.email),
     refreshToken: generateRefreshToken(user.id)
   };
 
   return {
-    user: toPublicUser(user),
+    user: {
+      id: user.id,
+      username: user.email,
+      created_at: user.created_at
+    },
     tokens
   };
 }

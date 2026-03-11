@@ -18,7 +18,6 @@ export function MobileStatusBar({
   customAiProviders = [],
   onSelectAiType,
   onAddCustomAiCommand,
-  onLaunchAi,
   runtimeInfo = null,
   gitBranches = [],
   currentGitBranch = null,
@@ -55,9 +54,6 @@ export function MobileStatusBar({
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType, customAiProviders), color: '#38bdf8' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
-  const aiLabel = aiType ? (selectedAiOption?.label || getAiDisplayLabel(aiType, customAiProviders)) : null;
-  const canLaunchSelectedAi = Boolean(aiType && onLaunchAi);
-
   useEffect(() => {
     setSelectedSlashIndex(0);
   }, [inputText, slashSuggestions.length]);
@@ -335,18 +331,6 @@ export function MobileStatusBar({
                 <span className="mobile-status-ai-label">{selectedAiOption.label}</span>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
-              <button
-                type="button"
-                className={`mobile-status-ai-launch ${canLaunchSelectedAi ? '' : 'disabled'}`}
-                onClick={onLaunchAi}
-                disabled={!canLaunchSelectedAi}
-                aria-label={aiLabel ? `Launch ${aiLabel}` : 'Launch selected AI'}
-                title={aiLabel ? `Launch ${aiLabel}` : 'Select an AI coder first'}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                  <polygon points="8 5 19 12 8 19 8 5" />
                 </svg>
               </button>
               {isAiMenuOpen && (
@@ -634,7 +618,6 @@ export function MobileStatusBar({
         }
 
         .mobile-status-ai-selector,
-        .mobile-status-ai-launch,
         .mobile-status-btn {
           display: inline-flex;
           align-items: center;
@@ -661,7 +644,6 @@ export function MobileStatusBar({
 
         .mobile-status-ai-selector.active,
         .mobile-status-ai-selector:hover,
-        .mobile-status-ai-launch:hover:not(:disabled),
         .mobile-status-btn:hover:not(:disabled) {
           border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-default));
           color: var(--text-primary);
@@ -685,7 +667,6 @@ export function MobileStatusBar({
           box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent);
         }
 
-        .mobile-status-ai-launch.disabled,
         .mobile-status-btn:disabled,
         .mobile-composer-send.disabled {
           opacity: 0.45;

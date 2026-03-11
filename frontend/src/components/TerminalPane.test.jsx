@@ -5,6 +5,7 @@ import { TerminalPane } from './TerminalPane';
 const refreshSessionGitStats = vi.fn();
 const listSessionGitBranches = vi.fn();
 const checkoutSessionGitBranch = vi.fn();
+let lastTerminalChatProps = null;
 
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession: () => ({
@@ -22,7 +23,14 @@ vi.mock('../contexts/AutocorrectContext', () => ({
 }));
 
 vi.mock('./TerminalChat', () => ({
-  TerminalChat: () => <div data-testid="terminal-chat" />
+  TerminalChat: (props) => {
+    lastTerminalChatProps = props;
+    return <div data-testid="terminal-chat" />;
+  }
+}));
+
+vi.mock('./DesktopConversationView', () => ({
+  DesktopConversationView: () => <div data-testid="desktop-conversation-view" />
 }));
 
 vi.mock('../hooks/useMobileChatTurns', () => ({
@@ -80,6 +88,7 @@ function buildProps(overrides = {}) {
     customAiProviders: [],
     onSetSessionAiType: vi.fn(),
     onAddCustomAiProvider: vi.fn(),
+    desktopAllowTerminalInput: false,
     currentDesktopId: 'desktop-1',
     fitSignal: 0,
     ...overrides
@@ -91,6 +100,7 @@ describe('TerminalPane', () => {
     refreshSessionGitStats.mockReset();
     listSessionGitBranches.mockReset();
     checkoutSessionGitBranch.mockReset();
+    lastTerminalChatProps = null;
     listSessionGitBranches.mockResolvedValue({ currentBranch: 'main', branches: ['main', 'feature/ui'] });
   });
 
@@ -100,5 +110,19 @@ describe('TerminalPane', () => {
     await waitFor(() => {
       expect(listSessionGitBranches).toHaveBeenCalledWith('session-1');
     });
+  });
+
+  it('keeps the existing terminal-first desktop layout while disabling direct terminal input by default', () => {
+    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
+  });
+
+  it('keeps terminal-first desktop layout when direct terminal input is enabled', () => {
+    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: true })} />);
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 });

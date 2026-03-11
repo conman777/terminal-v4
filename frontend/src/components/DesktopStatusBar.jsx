@@ -55,7 +55,6 @@ export function DesktopStatusBar({
   aiOptions = AI_TYPE_OPTIONS,
   onSelectAiType,
   onAddCustomAiCommand,
-  onLaunchAi,
   composerValue = '',
   composerAttachments = [],
   onComposerChange,
@@ -85,8 +84,6 @@ export function DesktopStatusBar({
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: '#38bdf8' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
-  const aiLabel = aiType ? (selectedAiOption?.label || getAiDisplayLabel(aiType)) : null;
-  const canLaunchSelectedAi = Boolean(aiType && onLaunchAi);
   const showMetaRow = Boolean(showTerminalToggle);
   const showComposerFooter = Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
@@ -133,6 +130,15 @@ export function DesktopStatusBar({
     if (composerDisabled) return;
     if (!composerValue.trim() && composerAttachments.length === 0) return;
     onComposerSubmit?.(composerValue);
+  }
+
+  function handleComposerTranscript(transcribedText) {
+    if (composerDisabled || typeof onComposerChange !== 'function') return;
+    const normalizedTranscript = typeof transcribedText === 'string' ? transcribedText.trim() : '';
+    if (!normalizedTranscript) return;
+
+    const needsSeparator = Boolean(composerValue) && !/\s$/.test(composerValue);
+    onComposerChange(`${composerValue}${needsSeparator ? ' ' : ''}${normalizedTranscript}`);
   }
 
   function handleGitBranchChange(event) {
@@ -331,18 +337,6 @@ export function DesktopStatusBar({
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
-          <button
-            type="button"
-            className={`status-ai-launch ${canLaunchSelectedAi ? '' : 'disabled'}`}
-            onClick={onLaunchAi}
-            disabled={!canLaunchSelectedAi}
-            aria-label={aiLabel ? `Launch ${aiLabel}` : 'Launch selected AI'}
-            title={aiLabel ? `Launch ${aiLabel}` : 'Select an AI coder first'}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <polygon points="8 5 19 12 8 19 8 5" />
-            </svg>
-          </button>
           {isAiMenuOpen && (
             <div className="status-ai-menu" role="menu" aria-label="AI coder options">
               {aiOptions.map((option) => {
@@ -411,8 +405,20 @@ export function DesktopStatusBar({
         </button>
 
         {/* Mic buttons - local Whisper + Groq cloud */}
-        <TerminalMicButton sessionId={sessionId} provider="local" inline />
-        <TerminalMicButton sessionId={sessionId} provider="groq" inline />
+        <TerminalMicButton
+          sessionId={sessionId}
+          provider="local"
+          inline
+          disabled={composerDisabled || isPastingImage}
+          onTranscript={handleComposerTranscript}
+        />
+        <TerminalMicButton
+          sessionId={sessionId}
+          provider="groq"
+          inline
+          disabled={composerDisabled || isPastingImage}
+          onTranscript={handleComposerTranscript}
+        />
         <button
           type="submit"
           className={`status-send-btn ${canSubmitComposer ? '' : 'disabled'}`}
@@ -949,8 +955,7 @@ export function DesktopStatusBar({
           display: inline-flex;
         }
 
-        .status-ai-selector,
-        .status-ai-launch {
+        .status-ai-selector {
           display: inline-flex;
           align-items: center;
           gap: 6px;
@@ -965,15 +970,13 @@ export function DesktopStatusBar({
         }
 
         .status-ai-selector:hover,
-        .status-ai-selector.active,
-        .status-ai-launch:hover:not(:disabled) {
+        .status-ai-selector.active {
           border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
           color: var(--text-primary);
           background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
         }
 
         .desktop-status-bar-shell.pane-active .status-ai-selector,
-        .desktop-status-bar-shell.pane-active .status-ai-launch,
         .desktop-status-bar-shell.pane-active .status-bar-btn,
         .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
         .desktop-status-bar-shell.pane-active .status-send-btn {
@@ -982,7 +985,6 @@ export function DesktopStatusBar({
         }
 
         .desktop-status-bar-shell.pane-active .status-ai-selector,
-        .desktop-status-bar-shell.pane-active .status-ai-launch,
         .desktop-status-bar-shell.pane-active .status-bar-btn,
         .desktop-status-bar-shell.pane-active .terminal-mic-button-inline {
           color: color-mix(in srgb, var(--text-primary) 94%, transparent);
@@ -994,7 +996,6 @@ export function DesktopStatusBar({
 
         .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
         .desktop-status-bar-shell.pane-active .status-ai-selector.active,
-        .desktop-status-bar-shell.pane-active .status-ai-launch:hover:not(:disabled),
         .desktop-status-bar-shell.pane-active .status-bar-btn:hover:not(:disabled),
         .desktop-status-bar-shell.pane-active .terminal-mic-button-inline:hover:not(:disabled) {
           border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
@@ -1016,17 +1017,6 @@ export function DesktopStatusBar({
           border-radius: 999px;
           flex-shrink: 0;
           box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent);
-        }
-
-        .status-ai-launch {
-          justify-content: center;
-          min-width: 26px;
-          padding: 0;
-        }
-
-        .status-ai-launch.disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
         }
 
         .status-ai-menu {

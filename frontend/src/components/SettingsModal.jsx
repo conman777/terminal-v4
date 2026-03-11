@@ -3,15 +3,19 @@ import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
 import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, onOpenApiSettings, showTabStatusLabels, onTabStatusLabelsChange }) {
+export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, desktopAllowTerminalInput, onDesktopTerminalInputChange, onOpenApiSettings, showTabStatusLabels, onTabStatusLabelsChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const resolvedWebglEnabled = resolveTerminalWebglEnabled(terminalWebglEnabled);
   const webglGuardReason = getTerminalRendererGuardReason();
   const webglLocked = Boolean(webglGuardReason);
+  const resolvedDesktopAllowTerminalInput = desktopAllowTerminalInput === true;
   const resolvedShowTabStatusLabels = showTabStatusLabels !== false;
   const dropdownRef = useRef(null);
+  const normalizedWorkingDir = workingDir.trim();
+  const normalizedCurrentCwd = typeof currentCwd === 'string' ? currentCwd.trim() : '';
+  const shouldNavigateOnSave = Boolean(normalizedWorkingDir) && normalizedWorkingDir !== normalizedCurrentCwd;
 
   // Update local state when modal opens
   useEffect(() => {
@@ -32,10 +36,10 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
   }, []);
 
   const handleSave = () => {
-    if (workingDir && workingDir.trim()) {
-      onAddRecentFolder(workingDir.trim());
+    if (shouldNavigateOnSave) {
+      onAddRecentFolder(normalizedWorkingDir);
+      onSave(sessionId, normalizedWorkingDir);
     }
-    onSave(sessionId, workingDir.trim());
     onClose();
   };
 
@@ -223,6 +227,26 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             <small>Show explicit Busy/Done/Idle labels in tab chips.</small>
           </div>
           <div className="form-group">
+            <label>Desktop Typing</label>
+            <div className="mode-toggle" role="group" aria-label="Desktop typing mode">
+              <button
+                type="button"
+                className={`mode-btn ${!resolvedDesktopAllowTerminalInput ? 'active' : ''}`}
+                onClick={() => onDesktopTerminalInputChange?.(false)}
+              >
+                Ask V4 Only
+              </button>
+              <button
+                type="button"
+                className={`mode-btn ${resolvedDesktopAllowTerminalInput ? 'active' : ''}`}
+                onClick={() => onDesktopTerminalInputChange?.(true)}
+              >
+                Ask V4 + Terminal
+              </button>
+            </div>
+            <small>Choose where keyboard typing goes on desktop. Ask V4 Only keeps typing in the Ask V4 anything box. Ask V4 + Terminal also enables direct terminal typing.</small>
+          </div>
+          <div className="form-group">
             <label>Voice Input</label>
             <div className="settings-inline-actions">
               <div>
@@ -254,7 +278,7 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
             ⬇ Download
           </button>
           <button className="btn-primary" onClick={handleSave}>
-            Save & Navigate
+            {shouldNavigateOnSave ? 'Save & Navigate' : 'Save'}
           </button>
         </div>
 

@@ -727,31 +727,6 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText(/Send a message to start this Codex session/i)).toBeInTheDocument();
   });
 
-  it('routes composer key presses to raw input while mirror mode is active', () => {
-    const onSendRaw = vi.fn();
-    const onSend = vi.fn();
-    render(
-      <DesktopConversationView
-        {...buildProps({
-          showTerminalMirror: true,
-          onSend,
-          onSendRaw,
-          terminalScreenSnapshot: 'Continue anyway? [y/N]'
-        })}
-      />
-    );
-
-    const input = screen.getByPlaceholderText('Message Codex...');
-    fireEvent.keyDown(input, { key: 'y', code: 'KeyY' });
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
-
-    expect(onSendRaw.mock.calls).toEqual([
-      ['y'],
-      ['\r']
-    ]);
-    expect(onSend).not.toHaveBeenCalled();
-  });
-
   it('captures global key presses in mirror mode even without mirror focus', () => {
     const onSendRaw = vi.fn();
     render(

@@ -24,6 +24,8 @@ function buildProps(overrides = {}) {
     onFontSizeChange: vi.fn(),
     terminalWebglEnabled: true,
     onWebglChange: vi.fn(),
+    desktopAllowTerminalInput: false,
+    onDesktopTerminalInputChange: vi.fn(),
     showTabStatusLabels: true,
     onTabStatusLabelsChange: vi.fn(),
     ...overrides,
@@ -85,5 +87,42 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open API Settings' }));
 
     expect(onOpenApiSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches desktop input mode between composer-only and terminal-enabled', () => {
+    const onDesktopTerminalInputChange = vi.fn();
+
+    render(<SettingsModal {...buildProps({ onDesktopTerminalInputChange, desktopAllowTerminalInput: false })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask V4 + Terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask V4 Only' }));
+
+    expect(onDesktopTerminalInputChange).toHaveBeenNthCalledWith(1, true);
+    expect(onDesktopTerminalInputChange).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it('saves settings without navigating when the working directory is unchanged', () => {
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+
+    render(<SettingsModal {...buildProps({ onSave, onClose, currentCwd: '/workspace' })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('navigates when the working directory changes', () => {
+    const onSave = vi.fn();
+
+    render(<SettingsModal {...buildProps({ onSave, currentCwd: '/workspace' })} />);
+
+    fireEvent.change(screen.getByLabelText('Working Directory'), {
+      target: { value: '/workspace-next' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save & Navigate' }));
+
+    expect(onSave).toHaveBeenCalledWith('session-1', '/workspace-next');
   });
 });

@@ -152,6 +152,12 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN sandbox_default_mode TEXT DEFAULT 'off';
       `
+    },
+    {
+      name: '013_add_desktop_terminal_input_preference',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN desktop_allow_terminal_input INTEGER DEFAULT 0;
+      `
     }
   ];
 

@@ -623,7 +623,7 @@ export function DesktopConversationView({
       textareaRef.current.style.height = 'auto';
     }
     markShouldStickToBottom();
-  }, [inputValue, onSend]);
+  }, [inputValue, markShouldStickToBottom, onSend]);
 
   const handleKeyDown = useCallback((event) => {
     if (shouldCaptureRawKeyboard) {

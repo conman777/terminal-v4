@@ -3,9 +3,16 @@ import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
 import { AudioWaveform } from './AudioWaveform';
 
-export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, onStateChange, provider }) {
-  const sendToTerminal = useCallback(async (text) => {
-    if (!sessionId || !text) return;
+export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, onStateChange, onTranscript, provider }) {
+  const handleTranscript = useCallback(async (text) => {
+    if (!text) return;
+
+    if (typeof onTranscript === 'function') {
+      await onTranscript(text);
+      return;
+    }
+
+    if (!sessionId) return;
 
     try {
       await apiFetch(`/api/terminal/${sessionId}/input`, {
@@ -15,9 +22,9 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
     } catch (error) {
       console.error('Failed to send voice input to terminal:', error);
     }
-  }, [sessionId]);
+  }, [onTranscript, sessionId]);
 
-  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(sendToTerminal, { provider });
+  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(handleTranscript, { provider });
 
   useEffect(() => {
     onRecordingChange?.(isRecording && !!audioStream);

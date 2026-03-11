@@ -12,7 +12,13 @@ vi.mock('../contexts/AutocorrectContext', () => ({
 }));
 
 vi.mock('./TerminalMicButton', () => ({
-  TerminalMicButton: () => <span data-testid="terminal-mic-mock" />
+  TerminalMicButton: ({ provider, onTranscript }) => (
+    <button
+      type="button"
+      data-testid={`terminal-mic-mock-${provider}`}
+      onClick={() => onTranscript?.(`${provider} transcript`)}
+    />
+  )
 }));
 
 const uploadScreenshotMock = vi.fn();
@@ -125,6 +131,15 @@ describe('DesktopStatusBar', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
 
     expect(onComposerSubmit).toHaveBeenCalledWith('Explain this repo');
+  });
+
+  it('routes mic transcripts into the AskV composer', () => {
+    const onComposerChange = vi.fn();
+    render(<DesktopStatusBar {...buildProps({ composerValue: 'Existing draft', onComposerChange })} />);
+
+    fireEvent.click(screen.getByTestId('terminal-mic-mock-groq'));
+
+    expect(onComposerChange).toHaveBeenCalledWith('Existing draft groq transcript');
   });
 
   it('submits the selected slash suggestion when Enter is pressed', () => {

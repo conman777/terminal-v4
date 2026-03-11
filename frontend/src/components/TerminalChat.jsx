@@ -113,7 +113,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true, surface }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true, surface, inputEnabled = true }) {
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -198,6 +198,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const viewModeRef = useRef(viewMode);
   const isPrimaryRef = useRef(isPrimary);
   const syncPtySizeRef = useRef(syncPtySize !== false);
+  const inputEnabledRef = useRef(inputEnabled !== false);
   const ptyOwnerStateRef = useRef({
     isOwner: null,
     ownerClientId: null,
@@ -844,15 +845,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     });
   }, [syncReaderBuffer]);
 
-  // Blur xterm terminal when reader view is active to prevent it from capturing keyboard events
+  // Blur xterm whenever it should not capture keyboard events.
   useEffect(() => {
     const term = xtermRef.current;
     if (!term?.textarea) return;
 
-    if (viewMode === 'reader') {
+    if (viewMode === 'reader' || inputEnabled === false) {
       term.textarea.blur();
     }
-  }, [viewMode]);
+  }, [inputEnabled, viewMode]);
 
   // Update terminal colors when theme changes
   useEffect(() => {
@@ -865,8 +866,42 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     } catch { /* ignore refresh errors during setup */ }
   }, [theme]);
 
+  const requestTerminalTextInputFocus = useCallback(() => {
+    const focusTerminalTextarea = () => {
+      const term = xtermRef.current;
+      if (!term || inputEnabled === false) return;
+      try {
+        term.focus?.();
+      } catch {
+        // Ignore focus failures while the terminal reconnects.
+      }
+      const textarea = term.textarea;
+      if (!textarea) return;
+      textarea.readOnly = false;
+      textarea.inputMode = isMobile ? 'none' : 'text';
+      textarea.tabIndex = 0;
+      try {
+        textarea.focus({ preventScroll: true });
+      } catch {
+        textarea.focus();
+      }
+    };
+
+    prepareTerminalForExternalInput({
+      requestPriorityResize: requestPriorityResizeRef.current,
+      focusTerminal: focusTerminalTextarea,
+      setMobileInputEnabled
+    });
+
+    if (!isMobile && typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        focusTerminalTextarea();
+      });
+    }
+  }, [inputEnabled, isMobile, setMobileInputEnabled]);
+
   const handleTerminalTap = useCallback((event) => {
-    if (!isMobile || event?.defaultPrevented) return;
+    if (event?.defaultPrevented) return;
     if (viewMode === 'reader') return;
     const target = event?.target;
     if (target instanceof Element) {
@@ -876,6 +911,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       } else if (target.closest('button, input, textarea, select, a')) {
         return;
       }
+    }
+    if (!isMobile) {
+      if (inputEnabled === false) return;
+      requestTerminalTextInputFocus();
+      return;
     }
     if (scrollModeRef.current) {
       setScrollMode(false, { jumpToLive: true });
@@ -889,7 +929,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     }
     setMobileInputEnabled(true);
-  }, [isMobile, setMobileInputEnabled, setScrollMode, viewMode]);
+  }, [inputEnabled, isMobile, requestTerminalTextInputFocus, setMobileInputEnabled, setScrollMode, viewMode]);
 
   // Touch gesture handling - no scroll-mode on mobile (native scroll works better)
   const handleLongPress = useCallback(() => {
@@ -1133,6 +1173,28 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [syncPtySize]);
 
   useEffect(() => {
+    inputEnabledRef.current = inputEnabled !== false;
+    const term = xtermRef.current;
+    if (!term) return;
+    term.options.disableStdin = inputEnabled === false;
+    if (inputEnabled === false) {
+      try {
+        term.blur?.();
+      } catch {
+        // Ignore focus teardown failures while the terminal is reconnecting.
+      }
+    }
+    if (term.textarea) {
+      term.textarea.readOnly = inputEnabled === false || isMobile;
+      term.textarea.inputMode = inputEnabled === false || isMobile ? 'none' : 'text';
+      term.textarea.tabIndex = inputEnabled === false ? -1 : 0;
+      if (inputEnabled === false) {
+        term.textarea.blur();
+      }
+    }
+  }, [inputEnabled, isMobile]);
+
+  useEffect(() => {
     webglEnabledRef.current = platformConfig.webglEnabled;
   }, [platformConfig.webglEnabled]);
 
@@ -1351,25 +1413,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (onRegisterFocusTerminal) {
       onRegisterFocusTerminal(() => {
-        prepareTerminalForExternalInput({
-          requestPriorityResize: requestPriorityResizeRef.current,
-          focusTerminal: () => xtermRef.current?.focus?.(),
-          setMobileInputEnabled
-        });
+        requestTerminalTextInputFocus();
       });
     }
-  }, [onRegisterFocusTerminal, setMobileInputEnabled]);
+  }, [onRegisterFocusTerminal, requestTerminalTextInputFocus]);
 
   // Register send-text function for external callers (e.g. chat input bar)
   useEffect(() => {
     if (!onRegisterSendText) return undefined;
     onRegisterSendText((text) => {
       if (!text) return false;
-      prepareTerminalForExternalInput({
-        requestPriorityResize: requestPriorityResizeRef.current,
-        focusTerminal: () => xtermRef.current?.focus?.(),
-        setMobileInputEnabled
-      });
+      requestTerminalTextInputFocus();
       const enqueueExternalInput = enqueueExternalInputRef.current;
       if (!enqueueExternalInput) {
         pendingExternalInputRef.current.push(text);
@@ -1380,7 +1434,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     return () => {
       onRegisterSendText(null);
     };
-  }, [onRegisterSendText, setMobileInputEnabled]);
+  }, [onRegisterSendText, requestTerminalTextInputFocus]);
 
   const jumpToLatestOutput = useCallback(() => {
     if (viewModeRef.current === 'reader') {
@@ -1443,6 +1497,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       letterSpacing: 0,
       lineHeight: 1.2,
       scrollback,
+      disableStdin: inputEnabled === false,
       theme: getTerminalTheme(theme),
       allowProposedApi: true,
       windowOptions: {
@@ -1859,13 +1914,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     term.attachCustomKeyEventHandler((event) => {
-      // Allow native copy when text is selected
-      if (event.ctrlKey && event.key === 'c' && term.hasSelection()) {
+      const normalizedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+
+      // Copy terminal selection instead of sending SIGINT when text is selected.
+      if ((event.ctrlKey || event.metaKey) && normalizedKey === 'c' && term.hasSelection()) {
+        void copyTerminalSelection();
         return false;
       }
 
       // Allow native paste event to fire (handled by paste event listener below)
-      if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
+      if ((event.ctrlKey || event.metaKey) && normalizedKey === 'v') {
         return false;
       }
 
@@ -1982,6 +2040,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       let isComposing = false;
       const handleCompositionStart = () => { isComposing = true; };
       const handleCompositionEnd = () => { isComposing = false; };
+      const handleReadOnlyFocus = () => {
+        if (inputEnabledRef.current !== false) return;
+        try {
+          term.blur?.();
+        } catch {
+          // Ignore blur failures during rapid reconnects.
+        }
+        textarea?.blur();
+      };
       term._isComposing = () => isComposing;
 
       if (textarea) {
@@ -1990,9 +2057,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         textarea.style.left = '-9999px';
         textarea.addEventListener('compositionstart', handleCompositionStart);
         textarea.addEventListener('compositionend', handleCompositionEnd);
-        if (isMobile) {
+        textarea.addEventListener('focus', handleReadOnlyFocus);
+        if (isMobile || inputEnabled === false) {
           textarea.readOnly = true;
           textarea.inputMode = 'none';
+        }
+        if (inputEnabled === false) {
+          textarea.tabIndex = -1;
+          handleReadOnlyFocus();
         }
       }
 
@@ -3079,6 +3151,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const dataDisposer = term.onData((data) => {
         if (disposed) return;
+        if (inputEnabledRef.current === false) return;
         if (term._isComposing && term._isComposing()) return;
 
         if (isTerminalControlResponseInput(data)) return;
@@ -3227,6 +3300,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (textarea) {
           textarea.removeEventListener('compositionstart', handleCompositionStart);
           textarea.removeEventListener('compositionend', handleCompositionEnd);
+          textarea.removeEventListener('focus', handleReadOnlyFocus);
         }
         closeSocket?.();
         if (resizeTimeout) clearTimeout(resizeTimeout);
@@ -3571,7 +3645,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       )}
       {viewMode === 'terminal' && isCopyMode && (
         <div className="terminal-copy-mode-banner">
-          <span>Copy mode - output paused</span>
           <button
             type="button"
             className="terminal-copy-mode-exit"

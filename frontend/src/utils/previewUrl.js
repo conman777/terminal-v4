@@ -110,6 +110,26 @@ function getPreviewSubdomainBase() {
   return 'localhost';
 }
 
+function getPreviewSubdomainBases() {
+  if (typeof window === 'undefined') return ['localhost'];
+
+  const configuredBase = getPreviewSubdomainBase();
+  try {
+    const stored = localStorage.getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
+    if (!stored) return [configuredBase];
+
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed)) return [configuredBase];
+
+    const normalized = parsed
+      .map((host) => (typeof host === 'string' ? host.trim() : ''))
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized : [configuredBase];
+  } catch {
+    return [configuredBase];
+  }
+}
+
 function getPreviewProxyHosts() {
   if (typeof window === 'undefined') return [];
   try {
@@ -136,6 +156,7 @@ function isLocalPreviewTarget(hostname, uiHost, proxyHosts) {
 function getEffectiveSubdomainBase() {
   const configuredBase = getPreviewSubdomainBase();
   if (typeof window === 'undefined') return configuredBase;
+  const configuredBases = getPreviewSubdomainBases();
   const uiHost = window.location.hostname || '';
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost)) {
     // On loopback IP, prefer the backend-provided base (if configured) so
@@ -147,6 +168,12 @@ function getEffectiveSubdomainBase() {
       }
     }
     return `${uiHost}.nip.io`;
+  }
+  if (isLoopbackHost(uiHost)) {
+    const loopbackBase = configuredBases.find((base) => isResolvableLoopbackSubdomainBase(base));
+    if (loopbackBase) {
+      return loopbackBase;
+    }
   }
   return configuredBase;
 }
@@ -268,9 +295,8 @@ export function toPreviewUrl(inputUrl) {
 
     if ((isLoopback || (isPrivateIP && targetIsLocalPreview)) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
-      const hasConfiguredSubdomainBase = subdomainBase && subdomainBase !== 'localhost';
       const loopbackSubdomainCapable = !uiIsLoopback || isResolvableLoopbackSubdomainBase(subdomainBase);
-      const canUseSubdomain = canUseLocalSubdomain && loopbackSubdomainCapable && (uiIsIp || hasConfiguredSubdomainBase);
+      const canUseSubdomain = canUseLocalSubdomain && loopbackSubdomainCapable && Boolean(subdomainBase || uiIsIp);
       const shouldUseSubdomain = defaultMode === 'subdomain-first'
         ? canUseSubdomain
         : (!preferPathBased && canUseSubdomain);

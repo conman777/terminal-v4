@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { authenticateWithPasskey } from '../utils/passkey';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -15,14 +15,14 @@ export default function LoginPage() {
     e.preventDefault();
     setLocalError('');
 
-    if (!username.trim() || !password.trim()) {
-      setLocalError('Username and password are required');
+    if (!email.trim() || !password.trim()) {
+      setLocalError('Email and password are required');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await login(username.trim(), password.trim());
+      await login(email.trim(), password.trim());
     } catch (err) {
       // Error is set in auth context
     } finally {
@@ -31,14 +31,14 @@ export default function LoginPage() {
   };
 
   const handlePasskeyLogin = async () => {
-    if (!username.trim()) {
-      setLocalError('Enter your username first');
+    if (!email.trim()) {
+      setLocalError('Enter your email first');
       return;
     }
     setLocalError('');
     setIsPasskeySubmitting(true);
     try {
-      const data = await authenticateWithPasskey(username.trim());
+      const data = await authenticateWithPasskey(email.trim());
       loginWithPasskeyResult(data);
     } catch (err) {
       if (err.name === 'NotAllowedError') {
@@ -71,15 +71,15 @@ export default function LoginPage() {
           {error && <div className="login-error">{error}</div>}
 
           <div className="login-field">
-            <label htmlFor="username">Username</label>
+            <label htmlFor="email">Email</label>
             <input
-              id="username"
-              name="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter username"
-              autoComplete="username"
+              id="email"
+              name="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Enter email"
+              autoComplete="email"
               disabled={isSubmitting}
             />
           </div>

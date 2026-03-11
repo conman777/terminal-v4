@@ -11,6 +11,7 @@ vi.mock('./api', () => ({
 import { toPathPreviewFallbackUrl, toPreviewUrl } from './previewUrl';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
+const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
 const PREVIEW_DEFAULT_MODE_KEY = 'terminal_preview_default_mode';
 const PREVIEW_PREFER_PATH_BASED_KEY = 'terminal_preview_prefer_path_based';
 const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
@@ -43,6 +44,15 @@ describe('toPreviewUrl', () => {
 
     const result = toPreviewUrl('http://localhost:5173/app');
     expect(result).toBe('/preview/5173/app');
+  });
+
+  it('uses a loopback-safe base from configured bases on localhost', () => {
+    localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+    localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, 'conordart.com');
+    localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(['conordart.com', 'localhost']));
+
+    const result = toPreviewUrl('http://localhost:5173/app');
+    expect(result).toBe(`http://preview-5173.localhost:${window.location.port}/app`);
   });
 
   it('forces path mode when default mode is path-first', () => {

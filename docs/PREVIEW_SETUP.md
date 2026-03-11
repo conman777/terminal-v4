@@ -5,8 +5,11 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
 
 ## Quick Rules
 
-- If you access Terminal V4 at `http://localhost:3020`, previews use **path-based
-  routing** (`/preview/<port>/`). This is the most reliable method for local dev.
+- If you access Terminal V4 at `http://localhost:3020`, previews prefer
+  **interactive subdomain routing** when a loopback-safe base is available
+  (`preview-<port>.localhost`, `lvh.me`, `nip.io`, etc.). They fall back to
+  **path-based routing** (`/preview/<port>/`) when no local subdomain base is
+  available.
 - Preview supports **all valid local ports** (`1-65535`) except the Terminal V4
   UI port itself.
 - Port dropdowns prioritize ports that look like real web previews (HTML/SPA
@@ -27,8 +30,10 @@ it work when accessing Terminal V4 over a LAN IP or hostname.
 When accessing Terminal V4 at `http://localhost:3020`:
 
 - Enter: `http://localhost:3001` (or just select port from dropdown)
-- Terminal V4 uses path-based preview: `/preview/3001/`
-- This works reliably for all apps including SPAs
+- Terminal V4 prefers interactive preview:
+  `http://preview-3001.localhost:3020/`
+- If no loopback-safe preview base is configured, it falls back to path-based
+  preview: `/preview/3001/`
 
 ### LAN/Remote Access
 
@@ -48,9 +53,9 @@ server no matter where the browser runs.
 
 ## Path-Based Preview
 
-Path-based preview (`/preview/<port>/`) is the default for localhost access and
-works reliably for SPAs. The proxy handles content rewriting to ensure resources
-load correctly.
+Path-based preview (`/preview/<port>/`) remains the fallback for localhost
+access when interactive subdomain preview is unavailable. The proxy handles
+content rewriting to ensure resources load correctly.
 
 ## Environment Settings
 
@@ -92,7 +97,9 @@ localStorage, so the preview URL generator can pick the right host.
 ## Validation Checklist
 
 For localhost access:
-- Iframe `src` should be: `/preview/<port>/`
+- Iframe `src` should be either:
+  `http://preview-<port>.localhost:3020/`
+  or `/preview/<port>/` when falling back
 
 For LAN/remote access:
 - Iframe `src` should be:

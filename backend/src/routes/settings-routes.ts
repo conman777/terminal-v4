@@ -8,6 +8,7 @@ interface UserSettings {
   terminalFontSize: number | null;
   sidebarCollapsed: boolean | null;
   terminalWebglEnabled: boolean | null;
+  desktopAllowTerminalInput: boolean | null;
   theme: string | null;
   tabOrder: string[] | null;
   sandboxDefaultMode: SandboxMode;
@@ -19,6 +20,7 @@ interface UpdateSettingsBody {
   terminalFontSize?: number | null;
   sidebarCollapsed?: boolean | null;
   terminalWebglEnabled?: boolean | null;
+  desktopAllowTerminalInput?: boolean | null;
   theme?: string | null;
   tabOrder?: string[] | null;
   sandboxDefaultMode?: SandboxMode | null;
@@ -34,12 +36,13 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, sandbox_default_mode FROM user_settings WHERE user_id = ?').get(userId) as {
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode FROM user_settings WHERE user_id = ?').get(userId) as {
       groq_api_key: string | null;
       preview_url: string | null;
       terminal_font_size: number | null;
       sidebar_collapsed: number | null;
       terminal_webgl_enabled: number | null;
+      desktop_allow_terminal_input: number | null;
       theme: string | null;
       tab_order: string | null;
       sandbox_default_mode: SandboxMode | null;
@@ -63,6 +66,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       terminalWebglEnabled: row?.terminal_webgl_enabled === null || row?.terminal_webgl_enabled === undefined
         ? null
         : row?.terminal_webgl_enabled === 1,
+      desktopAllowTerminalInput: row?.desktop_allow_terminal_input === null || row?.desktop_allow_terminal_input === undefined
+        ? null
+        : row?.desktop_allow_terminal_input === 1,
       theme: row?.theme || 'dark',
       tabOrder,
       sandboxDefaultMode: row?.sandbox_default_mode && SANDBOX_MODES.includes(row.sandbox_default_mode)
@@ -79,7 +85,17 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       return;
     }
 
-    const { groqApiKey, previewUrl, terminalFontSize, sidebarCollapsed, terminalWebglEnabled, theme, tabOrder, sandboxDefaultMode } = request.body || {};
+    const {
+      groqApiKey,
+      previewUrl,
+      terminalFontSize,
+      sidebarCollapsed,
+      terminalWebglEnabled,
+      desktopAllowTerminalInput,
+      theme,
+      tabOrder,
+      sandboxDefaultMode
+    } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
       reply.code(400).send({ error: 'Invalid Groq API key format' });
@@ -108,6 +124,11 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     if (terminalWebglEnabled !== undefined && terminalWebglEnabled !== null && typeof terminalWebglEnabled !== 'boolean') {
       reply.code(400).send({ error: 'Terminal WebGL setting must be a boolean' });
+      return;
+    }
+
+    if (desktopAllowTerminalInput !== undefined && desktopAllowTerminalInput !== null && typeof desktopAllowTerminalInput !== 'boolean') {
+      reply.code(400).send({ error: 'Desktop terminal input setting must be a boolean' });
       return;
     }
 
@@ -157,6 +178,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('terminal_webgl_enabled = ?');
         values.push(terminalWebglEnabled ? 1 : 0);
       }
+      if (desktopAllowTerminalInput !== undefined) {
+        updates.push('desktop_allow_terminal_input = ?');
+        values.push(desktopAllowTerminalInput ? 1 : 0);
+      }
       if (theme !== undefined) {
         updates.push('theme = ?');
         values.push(theme);
@@ -173,13 +198,14 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, theme, tab_order, sandbox_default_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
         terminalFontSize ?? null,
         sidebarCollapsed ? 1 : 0,
         terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
+        desktopAllowTerminalInput === undefined ? 0 : desktopAllowTerminalInput ? 1 : 0,
         theme || 'dark',
         tabOrder ? JSON.stringify(tabOrder) : null,
         sandboxDefaultMode || 'off',
