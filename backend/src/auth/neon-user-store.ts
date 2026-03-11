@@ -25,6 +25,18 @@ export interface NeonUser {
   created_at: string;
 }
 
+export async function getNeonUserByIdentifier(identifier: string): Promise<NeonUser | undefined> {
+  const normalized = identifier.toLowerCase();
+  const result = await getPool().query(
+    `SELECT id, email, password_hash, display_name, created_at
+     FROM users
+     WHERE lower(email) = $1 OR lower(coalesce(display_name, '')) = $1
+     LIMIT 1`,
+    [normalized]
+  );
+  return result.rows[0] || undefined;
+}
+
 export async function getNeonUserByEmail(email: string): Promise<NeonUser | undefined> {
   const result = await getPool().query(
     'SELECT id, email, password_hash, display_name, created_at FROM users WHERE email = $1',

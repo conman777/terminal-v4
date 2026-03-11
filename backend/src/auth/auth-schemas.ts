@@ -13,8 +13,15 @@ export const registerSchema = z.object({
 });
 
 export const loginSchema = z.object({
-  email: z.string().min(1, 'Email is required'),
+  username: z.string().trim().min(1, 'Username is required').optional(),
+  email: z.string().trim().min(1, 'Email is required').optional(),
   password: z.string().min(1, 'Password is required')
+}).transform((input) => ({
+  username: input.username || input.email || '',
+  password: input.password
+})).refine((input) => input.username.length > 0, {
+  message: 'Username is required',
+  path: ['username']
 });
 
 export const refreshSchema = z.object({

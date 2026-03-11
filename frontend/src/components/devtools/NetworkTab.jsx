@@ -99,7 +99,7 @@ export function NetworkTab({ requests = [], onClear }) {
     const har = {
       log: {
         version: '1.2',
-        creator: { name: 'Terminal V4 DevTools', version: '1.0' },
+        creator: { name: 'V4 DevTools', version: '1.0' },
         entries: requests.map(req => ({
           startedDateTime: new Date(req.timestamp).toISOString(),
           time: req.duration || 0,

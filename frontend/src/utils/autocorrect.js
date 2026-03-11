@@ -46,3 +46,22 @@ export function getAutocorrectSuggestion(spell, word) {
 
   return first;
 }
+
+export function getTerminalAutocorrectEdit(spell, word) {
+  const corrected = getAutocorrectSuggestion(spell, word);
+  if (!corrected) return null;
+
+  const originalLength = Array.from(word).length;
+  const correctedLength = Array.from(corrected).length;
+
+  return {
+    original: word,
+    corrected,
+    replacementInput: `${'\x7f'.repeat(originalLength)}${corrected} `,
+    undoInput: `${'\x7f'.repeat(correctedLength + 1)}${word}`
+  };
+}
+
+export function shouldResetTerminalAutocorrectState(data) {
+  return typeof data === 'string' && data.length > 0;
+}

@@ -26,6 +26,7 @@ function buildProps(overrides = {}) {
     onWebglChange: vi.fn(),
     desktopAllowTerminalInput: false,
     onDesktopTerminalInputChange: vi.fn(),
+    onOpenProcessManager: vi.fn(),
     showTabStatusLabels: true,
     onTabStatusLabelsChange: vi.fn(),
     ...overrides,
@@ -87,6 +88,16 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open API Settings' }));
 
     expect(onOpenApiSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the process manager from settings', () => {
+    const onOpenProcessManager = vi.fn();
+
+    render(<SettingsModal {...buildProps({ onOpenProcessManager })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Process Manager' }));
+
+    expect(onOpenProcessManager).toHaveBeenCalledTimes(1);
   });
 
   it('switches desktop input mode between composer-only and terminal-enabled', () => {

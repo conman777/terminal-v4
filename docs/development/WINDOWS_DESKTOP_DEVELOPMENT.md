@@ -33,10 +33,11 @@ npm run desktop:dev
 
 This command performs:
 1. Install desktop wrapper dependencies
-2. Build frontend (`frontend/dist`)
-3. Build backend (`backend/dist`)
-4. Launch Tauri app
-5. Tauri app starts backend with desktop-safe env:
+2. Stop any stale `terminal_v4_desktop.exe` process so Windows does not lock the binary during rebuild
+3. Build frontend (`frontend/dist`)
+4. Build backend (`backend/dist`)
+5. Launch Tauri app
+6. Tauri app starts backend with desktop-safe env:
    - `HOST=127.0.0.1`
    - `PORT=3020`
    - `TERMINAL_V4_DESKTOP=true`
@@ -71,6 +72,9 @@ Check:
 
 ### `cargo` not found
 Install Rust toolchain via [https://rustup.rs](https://rustup.rs)
+
+### `failed to remove ... terminal_v4_desktop.exe` / `Access is denied. (os error 5)`
+This means Windows still has the previous desktop executable open. `npm run desktop:dev` now pre-emptively stops stale desktop wrapper processes before rebuilding. If you still hit it, close the desktop window and rerun the command.
 
 ## Next Phase
 

@@ -3,7 +3,7 @@ import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
 import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 
-export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, desktopAllowTerminalInput, onDesktopTerminalInputChange, onOpenApiSettings, showTabStatusLabels, onTabStatusLabelsChange }) {
+export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, currentCwd, recentFolders, onSave, onAddRecentFolder, terminalFontSize, onFontSizeChange, terminalWebglEnabled, onWebglChange, desktopAllowTerminalInput, onDesktopTerminalInputChange, onOpenApiSettings, onOpenProcessManager, showTabStatusLabels, onTabStatusLabelsChange }) {
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
@@ -260,6 +260,23 @@ export function SettingsModal({ isOpen, onClose, sessionId, sessionTitle, curren
                 disabled={!onOpenApiSettings}
               >
                 Open API Settings
+              </button>
+            </div>
+          </div>
+          <div className="form-group">
+            <label>Process Manager</label>
+            <div className="settings-inline-actions">
+              <div>
+                <div className="settings-inline-title">Manage running project processes</div>
+                <small>Open the process list to inspect and stop active dev servers.</small>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary btn-small"
+                onClick={onOpenProcessManager}
+                disabled={!onOpenProcessManager}
+              >
+                Open Process Manager
               </button>
             </div>
           </div>

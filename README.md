@@ -45,6 +45,7 @@ npm run desktop:dev
 ```
 
 What this does:
+- Stops any stale Windows desktop wrapper process before rebuild so the app binary is not locked
 - Builds `frontend/dist` and `backend/dist`
 - Starts the backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
 - Launches a native Tauri window pointed at `http://127.0.0.1:3020`

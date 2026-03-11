@@ -10,10 +10,10 @@ export function registerAuthRoutes(app: FastifyInstance): void {
   });
 
   // Login
-  app.post<{ Body: { email: string; password: string } }>('/api/auth/login', async (request, reply) => {
+  app.post<{ Body: { username?: string; email?: string; password: string } }>('/api/auth/login', async (request, reply) => {
     try {
       const input = loginSchema.parse(request.body);
-      const result = await login(input.email, input.password);
+      const result = await login(input.username, input.password);
       reply.send(result);
     } catch (error) {
       if (error instanceof ZodError) {

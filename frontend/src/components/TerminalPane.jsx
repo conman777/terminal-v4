@@ -562,8 +562,8 @@ export const TerminalPane = memo(function TerminalPane({
             title="Reconnect terminal"
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="23 4 23 10 17 10" />
-              <path d="M20.49 15a9 9 0 1 1 2.13-9" />
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <polyline points="21 3 21 9 15 9" />
             </svg>
           </button>
 
@@ -577,8 +577,8 @@ export const TerminalPane = memo(function TerminalPane({
                 title="Split horizontally"
               >
                 <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="1" y="2" width="5" height="10" rx="1" />
-                  <rect x="8" y="2" width="5" height="10" rx="1" />
+                  <rect x="1.5" y="2" width="11" height="10" rx="1.5" />
+                  <line x1="7" y1="2" x2="7" y2="12" />
                 </svg>
               </button>
               <button
@@ -587,8 +587,8 @@ export const TerminalPane = memo(function TerminalPane({
                 title="Split vertically"
               >
                 <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="2" y="1" width="10" height="5" rx="1" />
-                  <rect x="2" y="8" width="10" height="5" rx="1" />
+                  <rect x="1.5" y="2" width="11" height="10" rx="1.5" />
+                  <line x1="1.5" y1="7" x2="12.5" y2="7" />
                 </svg>
               </button>
             </>
@@ -620,17 +620,17 @@ export const TerminalPane = memo(function TerminalPane({
           >
             {isFullscreen ? (
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <polyline points="4 10 1 10 1 13" />
-                <polyline points="10 4 13 4 13 1" />
-                <line x1="1" y1="13" x2="5" y2="9" />
-                <line x1="9" y1="5" x2="13" y2="1" />
+                <polyline points="5 1.5 1.5 1.5 1.5 5" />
+                <polyline points="9 12.5 12.5 12.5 12.5 9" />
+                <line x1="1.5" y1="1.5" x2="5.5" y2="5.5" />
+                <line x1="8.5" y1="8.5" x2="12.5" y2="12.5" />
               </svg>
             ) : (
               <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <polyline points="10 1 13 1 13 4" />
-                <polyline points="4 13 1 13 1 10" />
-                <line x1="13" y1="1" x2="9" y2="5" />
-                <line x1="1" y1="13" x2="5" y2="9" />
+                <polyline points="8.5 1.5 12.5 1.5 12.5 5.5" />
+                <polyline points="5.5 12.5 1.5 12.5 1.5 8.5" />
+                <line x1="12.5" y1="1.5" x2="8.5" y2="5.5" />
+                <line x1="1.5" y1="12.5" x2="5.5" y2="8.5" />
               </svg>
             )}
           </button>

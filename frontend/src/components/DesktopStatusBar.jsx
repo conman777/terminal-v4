@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { TerminalMicButton } from './TerminalMicButton';
 import { Dropdown } from './Dropdown';
 import { useAutocorrect } from '../contexts/AutocorrectContext';
+import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
 import { AI_TYPE_OPTIONS, getAiDisplayLabel } from '../utils/aiProviders';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
@@ -71,6 +72,11 @@ export function DesktopStatusBar({
   composerDisabled = false
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
+  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(
+    composerValue,
+    (nextValue) => onComposerChange?.(typeof nextValue === 'function' ? nextValue(composerValue) : nextValue),
+    autocorrectEnabled
+  );
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
@@ -148,6 +154,9 @@ export function DesktopStatusBar({
   }
 
   function handleComposerKeyDown(event) {
+    const handled = autocorrectKeyDown(event);
+    if (handled) return;
+
     if (slashSuggestions.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
@@ -317,6 +326,19 @@ export function DesktopStatusBar({
         />
 
         <div className="status-bar-right">
+        <button
+          type="button"
+          className="status-bar-btn"
+          onClick={() => imageInputRef.current?.click()}
+          disabled={composerDisabled || isPastingImage}
+          aria-label="Add image"
+          title="Add image"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
         <div className="status-ai-controls" ref={aiMenuRef}>
           <button
             type="button"
@@ -386,22 +408,6 @@ export function DesktopStatusBar({
           title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
         >
           <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
-        </button>
-
-        {/* Image upload button */}
-        <button
-          type="button"
-          className="status-bar-btn"
-          onClick={() => imageInputRef.current?.click()}
-          disabled={composerDisabled || isPastingImage}
-          aria-label="Upload image"
-          title="Upload image"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <polyline points="21 15 16 10 5 21" />
-          </svg>
         </button>
 
         {/* Mic buttons - local Whisper + Groq cloud */}

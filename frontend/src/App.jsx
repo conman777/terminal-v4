@@ -792,10 +792,14 @@ function AppContent() {
     () => visibleDesktopSessions.map((session) => session.id).join('|'),
     [visibleDesktopSessions]
   );
+  const visibleDesktopSessionIds = useMemo(
+    () => visibleDesktopSessions.map((session) => session.id),
+    [visibleDesktopSessionSignature]
+  );
 
   useEffect(() => {
-    reconcilePaneSessions(visibleDesktopSessions.map((session) => session.id));
-  }, [desktopPaneAssignmentSignature, reconcilePaneSessions, visibleDesktopSessionSignature, visibleDesktopSessions]);
+    reconcilePaneSessions(visibleDesktopSessionIds);
+  }, [desktopPaneAssignmentSignature, reconcilePaneSessions, visibleDesktopSessionIds]);
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
@@ -1192,6 +1196,10 @@ function AppContent() {
               setShowSettings(false);
               setShowApiSettings(true);
             }}
+            onOpenProcessManager={() => {
+              setShowSettings(false);
+              setShowProcessManager(true);
+            }}
             showTabStatusLabels={showTabStatusLabels}
             onTabStatusLabelsChange={updateShowTabStatusLabels}
           />
@@ -1321,6 +1329,13 @@ function AppContent() {
             projects={sidebarProjects}
             onAddProject={openAddProjectModal}
             onOpenSettings={handleOpenSettings}
+            onOpenBookmarks={() => setShowBookmarks(true)}
+            onOpenNotes={() => setShowNotes(true)}
+            showPreview={showPreview}
+            onTogglePreview={togglePreview}
+            showFileManager={showFileManager}
+            onToggleFileManager={toggleFileManager}
+            logout={logout}
           />
           <div className="main-container">
             <Header

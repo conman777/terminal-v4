@@ -93,4 +93,56 @@ describe('TerminalSessionContext', () => {
     const terminalLoadCallsAfterSwitch = apiFetch.mock.calls.filter(([url]) => url === '/api/terminal').length;
     expect(terminalLoadCallsAfterSwitch).toBe(terminalLoadCallsBeforeSwitch);
   });
+
+  it('restores an inactive saved session only once during startup', async () => {
+    localStorage.setItem('lastActiveSession', 'session-1');
+
+    apiFetch.mockImplementation(async (url) => {
+      if (url === '/api/terminal') {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [
+              { id: 'session-1', isActive: false, title: 'Terminal 1' }
+            ]
+          })
+        };
+      }
+
+      if (url === '/api/terminal/session-1/restore') {
+        return {
+          ok: true,
+          json: async () => ({})
+        };
+      }
+
+      if (String(url).startsWith('/api/state')) {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [
+              { id: 'session-1', isActive: true, title: 'Terminal 1' }
+            ]
+          })
+        };
+      }
+
+      throw new Error(`Unexpected apiFetch call: ${url}`);
+    });
+
+    render(
+      <TerminalSessionProvider>
+        <TestConsumer />
+      </TerminalSessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('loading-state')).toHaveTextContent('idle');
+    });
+
+    await waitFor(() => {
+      const restoreCalls = apiFetch.mock.calls.filter(([url]) => url === '/api/terminal/session-1/restore');
+      expect(restoreCalls).toHaveLength(1);
+    });
+  });
 });

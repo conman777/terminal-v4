@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Terminal V4",
+  "productName": "V4",
   "version": "0.1.0",
   "identifier": "com.conor.terminalv4",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Terminal V4",
+        "title": "V4",
         "url": "http://127.0.0.1:3020",
         "width": 1400,
         "height": 900,

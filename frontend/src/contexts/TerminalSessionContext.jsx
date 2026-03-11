@@ -128,7 +128,7 @@ export function TerminalSessionProvider({ children }) {
 
   // Load sessions
   const loadSessions = useCallback(async () => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current) return [];
     setLoadingSessions(true);
     setSessionLoadError(null);
     try {
@@ -137,19 +137,21 @@ export function TerminalSessionProvider({ children }) {
         throw new Error(`Failed to load sessions (${response.status})`);
       }
       const data = await response.json();
+      const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
       if (isMountedRef.current) {
-        const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
         setSessions((prevSessions) => (
           areEquivalentTerminalStates(prevSessions, nextSessions)
             ? prevSessions
             : nextSessions
         ));
       }
+      return nextSessions;
     } catch (error) {
       console.error('Failed to load sessions', error);
       if (isMountedRef.current) {
         setSessionLoadError(error.message || 'Failed to load terminals');
       }
+      return [];
     } finally {
       if (isMountedRef.current) {
         setLoadingSessions(false);
@@ -624,53 +626,37 @@ export function TerminalSessionProvider({ children }) {
     isMountedRef.current = true;
 
     const initializeSessions = async () => {
-      await loadSessions();
+      const initialSessions = await loadSessions();
+      if (!isMountedRef.current) return;
 
       const lastSessionId = localStorage.getItem('lastActiveSession');
       if (lastSessionId) {
         try {
-          const response = await apiFetch('/api/terminal');
-          if (response.ok) {
-            const data = await response.json();
-            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
-            const lastSession = sessionList.find(s => s.id === lastSessionId);
+          const lastSession = initialSessions.find((session) => session.id === lastSessionId);
 
-            if (lastSession) {
-              if (!lastSession.isActive) {
-                const restoreResponse = await apiFetch(`/api/terminal/${lastSessionId}/restore`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({})
-                });
-                if (restoreResponse.ok) {
-                  await loadSessions();
-                }
-              }
-            } else {
-              const activeSession = sessionList.find(s => s.isActive);
-              if (activeSession) {
-                setActiveSessionId(activeSession.id);
-                localStorage.setItem('lastActiveSession', activeSession.id);
-              } else {
-                localStorage.removeItem('lastActiveSession');
-                setActiveSessionId(null);
-              }
-            }
+          if (lastSession) {
+            setActiveSessionId(lastSession.id);
+            localStorage.setItem('lastActiveSession', lastSession.id);
+            return;
+          }
+
+          const activeSession = initialSessions.find((session) => session.isActive);
+          if (activeSession) {
+            setActiveSessionId(activeSession.id);
+            localStorage.setItem('lastActiveSession', activeSession.id);
+          } else {
+            localStorage.removeItem('lastActiveSession');
+            setActiveSessionId(null);
           }
         } catch (error) {
           console.error('Failed to restore last session', error);
         }
       } else {
         try {
-          const response = await apiFetch('/api/terminal');
-          if (response.ok) {
-            const data = await response.json();
-            const sessionList = Array.isArray(data.sessions) ? data.sessions : [];
-            const activeSession = sessionList.find(s => s.isActive);
-            if (activeSession) {
-              setActiveSessionId(activeSession.id);
-              localStorage.setItem('lastActiveSession', activeSession.id);
-            }
+          const activeSession = initialSessions.find((session) => session.isActive);
+          if (activeSession) {
+            setActiveSessionId(activeSession.id);
+            localStorage.setItem('lastActiveSession', activeSession.id);
           }
         } catch (error) {
           console.error('Failed to find active session', error);
@@ -746,6 +732,7 @@ export function TerminalSessionProvider({ children }) {
 
   // Auto-restore inactive sessions
   useEffect(() => {
+    if (loadingSessions) return;
     if (!activeSessionId) return;
     const activeSnapshot = sessions.find((session) => session.id === activeSessionId);
     if (!activeSnapshot || activeSnapshot.isActive) return;
@@ -766,7 +753,7 @@ export function TerminalSessionProvider({ children }) {
         clearTimeout(retryTimeout);
         restoreInFlightRef.current.delete(activeSessionId);
       });
-  }, [activeSessionId, sessions, restoreSession]);
+  }, [activeSessionId, loadingSessions, sessions, restoreSession]);
 
   // Clear restoring state when session becomes active
   useEffect(() => {

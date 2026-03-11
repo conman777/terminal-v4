@@ -2,7 +2,9 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { randomUUID, createHash } from 'crypto';
 import {
+  getUserByUsername,
   getUserById,
+  toPublicUser,
   createRefreshToken,
   getRefreshTokenByHash,
   deleteRefreshToken,
@@ -10,7 +12,7 @@ import {
   deleteExpiredRefreshTokens,
   UserPublic
 } from './user-store.js';
-import { getNeonUserByEmail, getNeonUserById } from './neon-user-store.js';
+import { getNeonUserByIdentifier, getNeonUserById, type NeonUser } from './neon-user-store.js';
 
 const ACCESS_TOKEN_EXPIRY = '24h';
 const REFRESH_TOKEN_EXPIRY_DAYS = 30;
@@ -60,9 +62,20 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 }
 
 // Generate a JWT access token
-export function generateAccessToken(userId: string, email: string): string {
+function getNeonUsername(user: Pick<NeonUser, 'email' | 'display_name'>): string {
+  const displayName = user.display_name?.trim();
+  return displayName && displayName.length > 0 ? displayName : user.email;
+}
+
+export function generateAccessToken(user: { id: string; username: string }): string;
+export function generateAccessToken(userId: string, username: string): string;
+export function generateAccessToken(userOrId: { id: string; username: string } | string, maybeUsername?: string): string {
+  const payload = typeof userOrId === 'string'
+    ? { sub: userOrId, username: maybeUsername ?? '' }
+    : { sub: userOrId.id, username: userOrId.username };
+
   return jwt.sign(
-    { sub: userId, username: email },
+    payload,
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRY }
   );
@@ -93,9 +106,25 @@ export function verifyAccessToken(token: string): JwtPayload | null {
   }
 }
 
-// Login with email and password against Neon Postgres
-export async function login(email: string, password: string): Promise<AuthResult> {
-  const user = await getNeonUserByEmail(email);
+// Login with username or email and password against Neon Postgres
+export async function login(identifier: string, password: string): Promise<AuthResult> {
+  const localUser = getUserByUsername(identifier);
+  if (localUser) {
+    const valid = await verifyPassword(password, localUser.password_hash);
+    if (!valid) {
+      throw new Error('Invalid credentials');
+    }
+
+    return {
+      user: toPublicUser(localUser),
+      tokens: {
+        accessToken: generateAccessToken(localUser),
+        refreshToken: generateRefreshToken(localUser.id)
+      }
+    };
+  }
+
+  const user = await getNeonUserByIdentifier(identifier);
   if (!user) {
     throw new Error('Invalid credentials');
   }
@@ -106,15 +135,16 @@ export async function login(email: string, password: string): Promise<AuthResult
   }
 
   // Generate tokens (refresh tokens stored locally in SQLite)
+  const username = getNeonUsername(user);
   const tokens: TokenPair = {
-    accessToken: generateAccessToken(user.id, user.email),
+    accessToken: generateAccessToken(user.id, username),
     refreshToken: generateRefreshToken(user.id)
   };
 
   return {
     user: {
       id: user.id,
-      username: user.email,
+      username,
       created_at: user.created_at
     },
     tokens
@@ -139,6 +169,18 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
     throw new Error('Refresh token expired');
   }
 
+  const localUser = getUserById(storedToken.user_id);
+  if (localUser) {
+    deleteRefreshToken(storedToken.id);
+    return {
+      user: toPublicUser(localUser),
+      tokens: {
+        accessToken: generateAccessToken(localUser),
+        refreshToken: generateRefreshToken(localUser.id)
+      }
+    };
+  }
+
   // Get user from Neon DB
   const user = await getNeonUserById(storedToken.user_id);
   if (!user) {
@@ -150,15 +192,16 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
   deleteRefreshToken(storedToken.id);
 
   // Generate new tokens
+  const username = getNeonUsername(user);
   const tokens: TokenPair = {
-    accessToken: generateAccessToken(user.id, user.email),
+    accessToken: generateAccessToken(user.id, username),
     refreshToken: generateRefreshToken(user.id)
   };
 
   return {
     user: {
       id: user.id,
-      username: user.email,
+      username,
       created_at: user.created_at
     },
     tokens

@@ -23,10 +23,16 @@ import { TerminalHistoryModal } from './TerminalHistoryModal';
 import { useTerminalBuffer } from '../hooks/useTerminalBuffer';
 import { ReaderView } from './ReaderView';
 import { useTheme } from '../contexts/ThemeContext';
+import { useAutocorrect } from '../contexts/AutocorrectContext';
 import { normalizeCliEventFromMeta } from '../utils/cliEventContract';
 import { cliEventIndicatesTerminalIdle, outputIndicatesTerminalIdle } from '../utils/terminalBusyState';
 import { isTerminalControlResponseInput } from '../utils/terminalControlInput';
 import { getTerminalTheme } from '../utils/terminalTheme';
+import {
+  getSpellChecker,
+  getTerminalAutocorrectEdit,
+  shouldResetTerminalAutocorrectState
+} from '../utils/autocorrect';
 import {
   createExternalInputFrames,
   prepareTerminalForExternalInput,
@@ -35,6 +41,11 @@ import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
+import { shouldCheckHistoryAtTopOnWheel } from '../utils/terminalWheelHistory';
+import {
+  createTerminalReconnectController,
+  shouldReuseTerminalSocket
+} from '../utils/terminalSocketReconnect';
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
 const DEFAULT_ANSI_PALETTE = (() => {
@@ -130,6 +141,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const inputFlushRef = useRef(null);
   const mobileInputRef = useRef(null);
   const { theme } = useTheme();
+  const { autocorrectEnabled } = useAutocorrect();
   const detectedIsMobile = useMobileDetect();
   const terminalSurface = useMemo(
     () => resolveTerminalSurface(surface, detectedIsMobile),
@@ -199,6 +211,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const isPrimaryRef = useRef(isPrimary);
   const syncPtySizeRef = useRef(syncPtySize !== false);
   const inputEnabledRef = useRef(inputEnabled !== false);
+  const autocorrectEnabledRef = useRef(autocorrectEnabled);
+  const terminalSpellRef = useRef(null);
+  const terminalCorrectionRef = useRef(null);
+  const terminalWordRef = useRef('');
   const ptyOwnerStateRef = useRef({
     isOwner: null,
     ownerClientId: null,
@@ -1195,6 +1211,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, [inputEnabled, isMobile]);
 
   useEffect(() => {
+    autocorrectEnabledRef.current = autocorrectEnabled;
+  }, [autocorrectEnabled]);
+
+  useEffect(() => {
+    terminalCorrectionRef.current = null;
+    terminalWordRef.current = '';
+    if (!autocorrectEnabled) return undefined;
+    let cancelled = false;
+    getSpellChecker()
+      .then((spell) => {
+        if (!cancelled) {
+          terminalSpellRef.current = spell;
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load terminal autocorrect dictionary:', error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [autocorrectEnabled]);
+
+  useEffect(() => {
     webglEnabledRef.current = platformConfig.webglEnabled;
   }, [platformConfig.webglEnabled]);
 
@@ -1460,7 +1500,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (!isActiveSession) return;
     const session = sessions.find(s => s.id === sessionId);
-    document.title = session?.title || 'Terminal';
+      document.title = session?.title || 'V4';
   }, [isActiveSession, sessionId, sessions]);
 
   // Main terminal initialization effect
@@ -1469,6 +1509,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     let disposed = false;
     let hasOpened = false;
+    let socketConnectInFlight = false;
     let rafId = null;
     let resizeObserver = null;
     let openRetryCount = 0;
@@ -1478,6 +1519,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let suppressResizeSyncCount = 0;
     let pendingTrackedResize = null;
     let lastResizeRequestKey = '';
+    const reconnectController = createTerminalReconnectController((options = {}) => {
+      connectSocket(options);
+    });
 
     const scrollback = performanceMode
       ? platformConfig.scrollback
@@ -2074,13 +2118,26 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       term.attachCustomWheelEventHandler((event) => {
         if (isMobile) {
           // On mobile, always let xterm handle scroll natively
-          if (event.deltaY < 0) {
+          if (shouldCheckHistoryAtTopOnWheel({
+            deltaY: event.deltaY,
+            isMobile: true,
+            usesTmux: usesTmuxRef.current,
+            baseY: term.buffer?.active?.baseY || 0
+          })) {
             setTimeout(() => triggerLoadMoreIfAtTop(), 0);
           }
           return true;
         }
 
         if (!usesTmuxRef.current) {
+          if (shouldCheckHistoryAtTopOnWheel({
+            deltaY: event.deltaY,
+            isMobile: false,
+            usesTmux: false,
+            baseY: term.buffer?.active?.baseY || 0
+          })) {
+            setTimeout(() => triggerLoadMoreIfAtTop(), 0);
+          }
           return true;
         }
 
@@ -2107,7 +2164,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         // xterm has scrollback — let it handle natively (smooth scroll)
         if (baseY > 0) {
-          if (event.deltaY < 0) {
+          if (shouldCheckHistoryAtTopOnWheel({
+            deltaY: event.deltaY,
+            isMobile: false,
+            usesTmux: true,
+            baseY
+          })) {
             setTimeout(() => triggerLoadMoreIfAtTop(), 0);
           }
           return true;
@@ -2517,8 +2579,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             && lastServerPingAtRef.current > 0
             && (Date.now() - lastServerPingAtRef.current) > STALE_SOCKET_THRESHOLD;
           if (navigator.onLine && (isSocketDead() || stale)) {
-            if (stale) socketRef.current.close(4000, 'Stale on resume');
-            reconnectSocketRef.current?.();
+            reconnectSocketRef.current?.({
+              force: stale,
+              reason: stale ? 'Stale on resume' : 'Resume reconnect'
+            });
           } else {
             scheduleIncrementalResync(0);
           }
@@ -2528,7 +2592,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         pausedForOfflineRef.current = false;
         // Attempt reconnect only if socket is dead, not if still connecting
         if (isSocketDead()) {
-          reconnectSocketRef.current?.();
+          reconnectSocketRef.current?.({ reason: 'Back online' });
         } else {
           scheduleIncrementalResync(0);
         }
@@ -2586,9 +2650,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       let authRetryCount = 0;
       let restoreRetryDelay = 5000;
       const MAX_WS_RETRY_DELAY = 30000;
+      const scheduleSocketReconnect = (delay = 0, options = {}) => {
+        if (disposed) return;
+        reconnectController.scheduleReconnect(delay, options);
+      };
 
-      const connectSocket = () => {
+      const connectSocket = (options = {}) => {
         reconnectSocketRef.current = connectSocket;
+        reconnectController.clearScheduledReconnect();
         if (disposed) return () => {};
         // Skip reconnect if we're offline
         if (pausedForOfflineRef.current || !windowActiveRef.current) {
@@ -2598,8 +2667,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }
         restoreRetryAttemptedRef.current = false;
         restoreAttempt2Ref.current = false;
+        const forceReconnect = options.force === true;
         const existing = socketRef.current;
-        if (existing) existing.close();
+        if (shouldReuseTerminalSocket({
+          existingReadyState: existing?.readyState,
+          isConnecting: socketConnectInFlight,
+          force: forceReconnect
+        })) {
+          return () => {};
+        }
+        const connectAttemptId = reconnectController.beginAttempt();
+        socketConnectInFlight = true;
+        if (forceReconnect && existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+          try {
+            existing.close(4001, options.reason || 'Reconnect requested');
+          } catch {
+            // Ignore socket close races.
+          }
+        }
 
         const shouldLoadHistory = shouldReplayHistoryRef.current;
         let socket = null;
@@ -2617,6 +2702,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = isMobile ? 30000 : 45000;
         const CONNECT_TIMEOUT = isMobile ? 20000 : 15000;
+        const settleConnectAttempt = () => {
+          if (reconnectController.isCurrentAttempt(connectAttemptId)) {
+            socketConnectInFlight = false;
+          }
+        };
 
         const markDisconnected = () => {
           onConnectionChange?.(false);
@@ -2631,6 +2721,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const handleAuthFailure = (message) => {
           shouldReconnect = false;
+          settleConnectAttempt();
           setIsLoadingHistory(false);
           onConnectionChange?.(false);
           if (!hadConnectionError) {
@@ -2641,7 +2732,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const startSocket = async () => {
           const authResult = await ensureFreshSocketToken();
-          if (disposed || !shouldReconnect || !windowActiveRef.current) return;
+          if (disposed || !shouldReconnect || !windowActiveRef.current || !reconnectController.isCurrentAttempt(connectAttemptId)) {
+            settleConnectAttempt();
+            return;
+          }
           if (!authResult.ok) {
             handleAuthFailure(authResult.message);
             return;
@@ -2665,6 +2759,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           socket.onopen = () => {
             if (disposed) return;
+            if (!reconnectController.isCurrentAttempt(connectAttemptId)) {
+              try {
+                socket.close(4001, 'Superseded connect attempt');
+              } catch {
+                // Ignore socket close races.
+              }
+              return;
+            }
+            settleConnectAttempt();
+            reconnectController.clearScheduledReconnect();
             const token = getAccessToken();
             if (token) socket.send(JSON.stringify({ type: 'auth', token }));
             didOpen = true;
@@ -2996,6 +3100,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           socket.onerror = () => {
             if (disposed) return;
+            if (socketRef.current === socket) {
+              socketRef.current = null;
+            }
+            settleConnectAttempt();
             if (connectTimeout) {
               clearTimeout(connectTimeout);
               connectTimeout = null;
@@ -3009,6 +3117,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
           socket.onclose = (event) => {
             if (disposed) return;
+            const isCurrentAttempt = reconnectController.isCurrentAttempt(connectAttemptId);
+            if (socketRef.current === socket) {
+              socketRef.current = null;
+            }
+            settleConnectAttempt();
             if (connectTimeout) {
               clearTimeout(connectTimeout);
               connectTimeout = null;
@@ -3019,6 +3132,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               heartbeatTimer = null;
             }
             messageQueue.length = 0;
+            if (!isCurrentAttempt) {
+              return;
+            }
             if (event.reason === 'Session ended') {
               const sessionSnapshot = sessionsRef.current.find((session) => session.id === sessionId);
               const shouldTryRestore = !restoreRetryAttemptedRef.current
@@ -3031,27 +3147,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 void restoreSessionRef.current(sessionId)
                   .then(() => {
                     if (disposed || pausedForOfflineRef.current) return;
-                    setTimeout(() => {
-                      if (!disposed) {
-                        connectSocket();
-                      }
-                    }, 120);
+                    scheduleSocketReconnect(120, { reason: 'Restore succeeded' });
                   })
                   .catch(() => {
                     if (!restoreAttempt2Ref.current) {
                       restoreAttempt2Ref.current = true;
                       setTimeout(() => {
+                        if (disposed || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
                         void restoreSessionRef.current(sessionId)
                           .then(() => {
                             if (disposed || pausedForOfflineRef.current) return;
-                            setTimeout(() => { if (!disposed) connectSocket(); }, 120);
+                            scheduleSocketReconnect(120, { reason: 'Second restore succeeded' });
                           })
                           .catch(() => {
                             setIsLoadingHistory(false);
                             writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                             const nextDelay = restoreRetryDelay;
                             restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-                            setTimeout(() => { if (!disposed) connectSocket(); }, nextDelay);
+                            scheduleSocketReconnect(nextDelay, { reason: 'Restore failed retry' });
                           });
                       }, 2000);
                     } else {
@@ -3059,7 +3172,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                       writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                       const nextDelay = restoreRetryDelay;
                       restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-                      setTimeout(() => { if (!disposed) connectSocket(); }, nextDelay);
+                      scheduleSocketReconnect(nextDelay, { reason: 'Restore failed retry' });
                     }
                   });
                 return;
@@ -3068,7 +3181,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
               const nextDelayA = restoreRetryDelay;
               restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-              setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayA);
+              scheduleSocketReconnect(nextDelayA, { reason: 'Session ended retry' });
               return;
             }
             if (event.reason === 'Terminal session not found' || event.code === 4404) {
@@ -3078,21 +3191,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 void restoreSessionRef.current(sessionId)
                   .then(() => {
                     if (disposed || pausedForOfflineRef.current) return;
-                    setTimeout(() => { if (!disposed) connectSocket(); }, 120);
+                    scheduleSocketReconnect(120, { reason: 'Session restore succeeded' });
                   })
                   .catch(() => {
                     setIsLoadingHistory(false);
                     writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayB = restoreRetryDelay;
                     restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-                    setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayB);
+                    scheduleSocketReconnect(nextDelayB, { reason: 'Session restore failed retry' });
                   });
               } else {
                 setIsLoadingHistory(false);
                 writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                 const nextDelayC = restoreRetryDelay;
                 restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-                setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayC);
+                scheduleSocketReconnect(nextDelayC, { reason: 'Session not found retry' });
               }
               return;
             }
@@ -3102,7 +3215,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                   if (!disposed && shouldReconnect) {
                     wsRetryCount++;
                     const delay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
-                    setTimeout(connectSocket, delay);
+                    scheduleSocketReconnect(delay, { reason: 'Unauthorized retry' });
                   }
                 })
                 .catch(() => {
@@ -3114,7 +3227,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                     writeTerminal('\r\n[Auth failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayD = restoreRetryDelay;
                     restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
-                    setTimeout(() => { if (!disposed) connectSocket(); }, nextDelayD);
+                    scheduleSocketReconnect(nextDelayD, { reason: 'Auth retry' });
                   }
                 });
               return;
@@ -3123,7 +3236,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               wsRetryCount++;
               const baseDelay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
               const jitter = Math.random() * 500;
-              setTimeout(connectSocket, baseDelay + jitter);
+              scheduleSocketReconnect(baseDelay + jitter, { reason: 'Socket closed retry' });
             }
           };
         };
@@ -3132,6 +3245,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         return () => {
           shouldReconnect = false;
+          settleConnectAttempt();
           if (skipUrlTimeout) clearTimeout(skipUrlTimeout);
           if (heartbeatTimer) clearInterval(heartbeatTimer);
           if (connectTimeout) clearTimeout(connectTimeout);
@@ -3156,6 +3270,58 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         if (isTerminalControlResponseInput(data)) return;
 
+        const handleTerminalAutocorrect = () => {
+          if (!autocorrectEnabledRef.current || isMobile) return null;
+
+          if (data === '\x7f' && terminalCorrectionRef.current) {
+            const correction = terminalCorrectionRef.current;
+            terminalCorrectionRef.current = null;
+            terminalWordRef.current = correction.original;
+            return correction.undoInput;
+          }
+
+          if (data === ' ') {
+            const currentWord = terminalWordRef.current;
+            terminalWordRef.current = '';
+            terminalCorrectionRef.current = null;
+            if (!currentWord) return null;
+            return getTerminalAutocorrectEdit(terminalSpellRef.current, currentWord);
+          }
+
+          if (data === '\r' || data === '\n') {
+            terminalWordRef.current = '';
+            terminalCorrectionRef.current = null;
+            return null;
+          }
+
+          if (data === '\t') {
+            terminalWordRef.current = '';
+            terminalCorrectionRef.current = null;
+            return null;
+          }
+
+          if (data === '\x7f') {
+            terminalCorrectionRef.current = null;
+            terminalWordRef.current = Array.from(terminalWordRef.current).slice(0, -1).join('');
+            return null;
+          }
+
+          if (/^[A-Za-z'-]$/.test(data)) {
+            terminalCorrectionRef.current = null;
+            terminalWordRef.current += data;
+            return null;
+          }
+
+          if (shouldResetTerminalAutocorrectState(data)) {
+            terminalCorrectionRef.current = null;
+            terminalWordRef.current = '';
+          }
+
+          return null;
+        };
+
+        const autocorrectEdit = handleTerminalAutocorrect();
+
         exitCopyModeIfActive();
         markUserInput();
         resetIdleTimer(false);
@@ -3171,6 +3337,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           awaitOwnerPromotionBeforeInput();
         }
         syncPtySize({ clientId: clientIdRef.current || undefined, priorityOverride: true });
+        if (autocorrectEdit?.replacementInput) {
+          terminalCorrectionRef.current = autocorrectEdit;
+          queueTerminalInput(autocorrectEdit.replacementInput);
+          return;
+        }
+        if (typeof autocorrectEdit === 'string') {
+          queueTerminalInput(autocorrectEdit);
+          return;
+        }
         queueTerminalInput(data);
       });
 
@@ -3380,6 +3555,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       pendingFitOptionsRef.current = null;
       cleanupIdle();
       cleanupScrolling();
+      reconnectController.dispose();
       if (resizeObserver) resizeObserver.disconnect();
       if (openWhenReady.cleanup) openWhenReady.cleanup();
       if (socketRef.current) {

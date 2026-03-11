@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import ThreadsProjectGroup from './ThreadsProjectGroup';
 import ThreadsSessionItem from './ThreadsSessionItem';
+import { useTheme } from '../contexts/ThemeContext';
 import { normalizeProjectPath } from '../utils/projectPaths';
 
 export default function ThreadsSidebar({
@@ -23,9 +24,17 @@ export default function ThreadsSidebar({
   onCloseProject,
   projects,
   onAddProject,
-  onOpenSettings
+  onOpenSettings,
+  onOpenBookmarks,
+  onOpenNotes,
+  showPreview,
+  onTogglePreview,
+  showFileManager,
+  onToggleFileManager,
+  logout
 }) {
   const [showArchived, setShowArchived] = useState(false);
+  const { theme, toggleTheme } = useTheme();
 
   // Build project groups from auto-grouped sessions (grouped by individual project directory)
   const projectGroups = useMemo(() => {
@@ -65,7 +74,7 @@ export default function ThreadsSidebar({
               <polyline points="4 17 10 11 4 5" />
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
-            <span>Terminal</span>
+            <span>V4</span>
           </div>
         )}
         <button
@@ -83,6 +92,36 @@ export default function ThreadsSidebar({
       {/* New thread button */}
       {!isCollapsed && (
         <div className="ts-new-thread-row">
+          <div className="ts-quick-actions">
+            <button className="ts-quick-action-btn" type="button" onClick={onOpenBookmarks}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>Bookmarks</span>
+            </button>
+            <button className="ts-quick-action-btn" type="button" onClick={onOpenNotes}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+              </svg>
+              <span>Notes</span>
+            </button>
+            <button className={`ts-quick-action-btn ${showFileManager ? 'active' : ''}`} type="button" onClick={onToggleFileManager}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>{showFileManager ? 'Hide files' : 'Show files'}</span>
+            </button>
+            <button className={`ts-quick-action-btn ${showPreview ? 'active' : ''}`} type="button" onClick={onTogglePreview}>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <line x1="12" y1="3" x2="12" y2="21" />
+              </svg>
+              <span>{showPreview ? 'Hide preview window' : 'Preview window'}</span>
+            </button>
+          </div>
           <button
             className="ts-new-thread-btn"
             onClick={() => onCreateSession?.()}
@@ -240,6 +279,44 @@ export default function ThreadsSidebar({
             </svg>
             <span>Settings</span>
           </button>
+          <button
+            className="ts-footer-icon-btn"
+            onClick={toggleTheme}
+            type="button"
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {theme === 'dark' ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
+          <button
+            className="ts-footer-icon-btn"
+            onClick={logout}
+            type="button"
+            aria-label="Logout"
+            title="Logout"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+              <polyline points="16 17 21 12 16 7" />
+              <line x1="21" y1="12" x2="9" y2="12" />
+            </svg>
+          </button>
         </div>
       )}
 
@@ -334,6 +411,42 @@ export default function ThreadsSidebar({
           padding: 4px 10px 8px;
           flex-shrink: 0;
           background: var(--sidebar-shell-bg);
+        }
+
+        .ts-quick-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          margin-bottom: 14px;
+        }
+
+        .ts-quick-action-btn {
+          width: 100%;
+          min-height: 30px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 0 10px;
+          background: transparent;
+          border: 1px solid transparent;
+          color: var(--sidebar-text-muted);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 500;
+          transition: all 0.12s ease;
+        }
+
+        .ts-quick-action-btn:hover {
+          background: var(--sidebar-hover);
+          color: var(--sidebar-text);
+          border-color: color-mix(in srgb, var(--sidebar-border) 75%, white 25%);
+        }
+
+        .ts-quick-action-btn.active {
+          background: color-mix(in srgb, var(--sidebar-active) 72%, transparent);
+          color: var(--sidebar-text);
+          border-color: color-mix(in srgb, var(--sidebar-border) 65%, var(--accent-primary) 35%);
         }
 
         .ts-new-thread-btn {
@@ -492,13 +605,16 @@ export default function ThreadsSidebar({
           padding: 6px 10px 10px;
           border-top: none;
           background: var(--sidebar-shell-bg);
+          display: flex;
+          align-items: center;
+          gap: 6px;
         }
 
         .ts-settings-btn {
           display: flex;
           align-items: center;
           gap: 8px;
-          width: 100%;
+          flex: 1;
           padding: 8px 10px;
           background: transparent;
           border: none;
@@ -511,6 +627,27 @@ export default function ThreadsSidebar({
         }
 
         .ts-settings-btn:hover {
+          background: var(--sidebar-hover);
+          color: var(--sidebar-text);
+        }
+
+        .ts-footer-icon-btn {
+          width: 34px;
+          height: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          background: transparent;
+          border: none;
+          color: var(--sidebar-text-muted);
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.12s ease;
+          flex-shrink: 0;
+        }
+
+        .ts-footer-icon-btn:hover {
           background: var(--sidebar-hover);
           color: var(--sidebar-text);
         }

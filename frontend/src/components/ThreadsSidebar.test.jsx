@@ -1,6 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import ThreadsSidebar from './ThreadsSidebar';
+
+const toggleTheme = vi.fn();
+
+vi.mock('../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: 'dark',
+    toggleTheme
+  })
+}));
 
 function buildSession(id, title, overrides = {}) {
   return {
@@ -45,6 +54,13 @@ function buildProps(overrides = {}) {
     projects: [{ path: 'C:\\repo', name: 'terminal v4' }],
     onAddProject: vi.fn(),
     onOpenSettings: vi.fn(),
+    onOpenBookmarks: vi.fn(),
+    onOpenNotes: vi.fn(),
+    showPreview: false,
+    onTogglePreview: vi.fn(),
+    showFileManager: false,
+    onToggleFileManager: vi.fn(),
+    logout: vi.fn(),
     ...overrides
   };
 }
@@ -53,8 +69,31 @@ describe('ThreadsSidebar', () => {
   it('renders new thread button and threads section', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
+    expect(screen.getByText('Bookmarks')).toBeInTheDocument();
+    expect(screen.getByText('Notes')).toBeInTheDocument();
+    expect(screen.getByText('Show files')).toBeInTheDocument();
+    expect(screen.getByText('Preview window')).toBeInTheDocument();
     expect(screen.getByText('New thread')).toBeInTheDocument();
     expect(screen.getByText('Threads')).toBeInTheDocument();
+  });
+
+  it('opens sidebar utility actions above new thread', () => {
+    const onOpenBookmarks = vi.fn();
+    const onOpenNotes = vi.fn();
+    const onToggleFileManager = vi.fn();
+    const onTogglePreview = vi.fn();
+
+    render(<ThreadsSidebar {...buildProps({ onOpenBookmarks, onOpenNotes, onToggleFileManager, onTogglePreview })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Bookmarks' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview window' }));
+
+    expect(onOpenBookmarks).toHaveBeenCalledTimes(1);
+    expect(onOpenNotes).toHaveBeenCalledTimes(1);
+    expect(onToggleFileManager).toHaveBeenCalledTimes(1);
+    expect(onTogglePreview).toHaveBeenCalledTimes(1);
   });
 
   it('renders add project button', () => {
@@ -67,6 +106,8 @@ describe('ThreadsSidebar', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
     expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch to light mode' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Logout' })).toBeInTheDocument();
   });
 
   it('shows empty state when no projects and no sessions', () => {

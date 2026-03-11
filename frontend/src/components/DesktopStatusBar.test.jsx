@@ -23,6 +23,8 @@ vi.mock('./TerminalMicButton', () => ({
 
 const uploadScreenshotMock = vi.fn();
 const getImageFileFromDataTransferMock = vi.fn();
+const getSpellCheckerMock = vi.fn();
+const getAutocorrectSuggestionMock = vi.fn();
 
 vi.mock('../utils/api', () => ({
   uploadScreenshot: (...args) => uploadScreenshotMock(...args)
@@ -30,6 +32,11 @@ vi.mock('../utils/api', () => ({
 
 vi.mock('../utils/clipboardImage', () => ({
   getImageFileFromDataTransfer: (...args) => getImageFileFromDataTransferMock(...args)
+}));
+
+vi.mock('../utils/autocorrect', () => ({
+  getSpellChecker: (...args) => getSpellCheckerMock(...args),
+  getAutocorrectSuggestion: (...args) => getAutocorrectSuggestionMock(...args)
 }));
 
 function buildProps(overrides = {}) {
@@ -56,6 +63,10 @@ describe('DesktopStatusBar', () => {
     toggleAutocorrectMock.mockClear();
     uploadScreenshotMock.mockReset();
     getImageFileFromDataTransferMock.mockReset();
+    getSpellCheckerMock.mockReset();
+    getAutocorrectSuggestionMock.mockReset();
+    getSpellCheckerMock.mockResolvedValue({ correct: vi.fn(() => false), suggest: vi.fn(() => ['the']) });
+    getAutocorrectSuggestionMock.mockImplementation((_spell, word) => (word === 'teh' ? 'the' : null));
     vi.restoreAllMocks();
   });
 
@@ -131,6 +142,23 @@ describe('DesktopStatusBar', () => {
     fireEvent.keyDown(screen.getByRole('textbox', { name: 'Command composer' }), { key: 'Enter' });
 
     expect(onComposerSubmit).toHaveBeenCalledWith('Explain this repo');
+  });
+
+  it('autocorrects misspelled words in the Ask V4 composer on space', async () => {
+    const onComposerChange = vi.fn();
+    render(<DesktopStatusBar {...buildProps({ composerValue: 'teh', onComposerChange })} />);
+
+    await waitFor(() => {
+      expect(getSpellCheckerMock).toHaveBeenCalledTimes(1);
+    });
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    fireEvent.keyDown(composer, {
+      key: ' ',
+      target: { selectionStart: 3 }
+    });
+
+    expect(onComposerChange).toHaveBeenCalledWith('the ');
   });
 
   it('routes mic transcripts into the AskV composer', () => {

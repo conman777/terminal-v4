@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { authenticateWithPasskey } from '../utils/passkey';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [localError, setLocalError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -15,14 +15,14 @@ export default function LoginPage() {
     e.preventDefault();
     setLocalError('');
 
-    if (!email.trim() || !password.trim()) {
-      setLocalError('Email and password are required');
+    if (!username.trim() || !password.trim()) {
+      setLocalError('Username and password are required');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      await login(email.trim(), password.trim());
+      await login(username.trim(), password.trim());
     } catch (err) {
       // Error is set in auth context
     } finally {
@@ -31,14 +31,14 @@ export default function LoginPage() {
   };
 
   const handlePasskeyLogin = async () => {
-    if (!email.trim()) {
-      setLocalError('Enter your email first');
+    if (!username.trim()) {
+      setLocalError('Enter your username first');
       return;
     }
     setLocalError('');
     setIsPasskeySubmitting(true);
     try {
-      const data = await authenticateWithPasskey(email.trim());
+      const data = await authenticateWithPasskey(username.trim());
       loginWithPasskeyResult(data);
     } catch (err) {
       if (err.name === 'NotAllowedError') {
@@ -71,15 +71,15 @@ export default function LoginPage() {
           {error && <div className="login-error">{error}</div>}
 
           <div className="login-field">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="username">Username</label>
             <input
-              id="email"
-              name="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter email"
-              autoComplete="email"
+              id="username"
+              name="username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter username"
+              autoComplete="username"
               disabled={isSubmitting}
             />
           </div>
@@ -110,7 +110,7 @@ export default function LoginPage() {
             onClick={handlePasskeyLogin}
             disabled={isPasskeySubmitting || isSubmitting}
           >
-            {isPasskeySubmitting ? 'Waiting for Face ID...' : 'Sign in with Passkey'}
+            {isPasskeySubmitting ? 'Waiting for passkey...' : 'Sign in with Passkey'}
           </button>
         </form>
       </div>

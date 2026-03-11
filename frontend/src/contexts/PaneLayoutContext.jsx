@@ -209,15 +209,31 @@ function loadDesktopsFromStorage() {
 }
 
 // Helper to update active desktop's paneLayout immutably
-function updateActiveDesktopLayout(desktopsState, updater) {
+export function updateActiveDesktopLayout(desktopsState, updater) {
   const { activeDesktopId, desktops } = desktopsState;
+  let changed = false;
+
+  const nextDesktops = desktops.map((desktop) => {
+    if (desktop.id !== activeDesktopId) {
+      return desktop;
+    }
+
+    const nextLayout = updater(desktop.paneLayout);
+    if (nextLayout === desktop.paneLayout) {
+      return desktop;
+    }
+
+    changed = true;
+    return { ...desktop, paneLayout: nextLayout };
+  });
+
+  if (!changed) {
+    return desktopsState;
+  }
+
   return {
     ...desktopsState,
-    desktops: desktops.map(d => {
-      if (d.id !== activeDesktopId) return d;
-      const newLayout = updater(d.paneLayout);
-      return { ...d, paneLayout: newLayout };
-    })
+    desktops: nextDesktops
   };
 }
 
@@ -291,9 +307,15 @@ export function PaneLayoutProvider({ children }) {
     setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
       const newRoot = cloneNode(layout.root);
       const found = findPaneInTree(newRoot, paneId);
-      if (found) {
-        found.node.sessionId = sessionId;
+      if (!found) {
+        return layout;
       }
+
+      if ((found.node.sessionId ?? null) === (sessionId ?? null)) {
+        return layout;
+      }
+
+      found.node.sessionId = sessionId;
       return { ...layout, root: newRoot };
     }));
     return sessionId;
@@ -324,10 +346,16 @@ export function PaneLayoutProvider({ children }) {
 
   // Handle pane focus
   const focusPane = useCallback((paneId) => {
-    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => ({
-      ...layout,
-      activePaneId: paneId
-    })));
+    setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
+      if (layout.activePaneId === paneId) {
+        return layout;
+      }
+
+      return {
+        ...layout,
+        activePaneId: paneId
+      };
+    }));
     const panes = getAllPanes(paneLayout.root);
     const pane = panes.find(p => p.id === paneId);
     return pane?.sessionId || null;

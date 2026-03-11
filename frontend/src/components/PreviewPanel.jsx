@@ -179,7 +179,7 @@ function classifyPreviewMode(iframeSrc, useWebContainer) {
         label: 'External',
         limited: true,
         title: 'External proxy preview',
-        description: 'External URL routed through Terminal V4 proxy.'
+        description: 'External URL routed through V4 proxy.'
       };
     }
     return {
@@ -392,7 +392,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         cleanUrl = url.replace(/([?&])_cb=[^&]*/g, '').replace(/\?&/, '?').replace(/\?$/, '');
       }
     }
-    // Prevent viewing Terminal V4 in its own preview panel.
+    // Prevent viewing V4 in its own preview panel.
     if (cleanUrl) {
       try {
         const parsed = new URL(cleanUrl, window.location.origin);
@@ -403,7 +403,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const isLocalUiHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
         if (previewPort === uiPort || (isLocalUiHost && hostPort === uiPort && !pathMatch && !hostMatch)) {
           if (import.meta.env.DEV) {
-            console.warn(`[Preview] Cannot view Terminal V4 (port ${uiPort}) in its own preview panel`);
+            console.warn(`[Preview] Cannot view V4 (port ${uiPort}) in its own preview panel`);
           }
           return null;
         }
@@ -2499,8 +2499,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               {url && (url.includes(`:${uiPort}`) || url.includes(`preview-${uiPort}`)) ? (
                 <>
                   <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
-                  <h3>Cannot Preview Terminal V4</h3>
-                  <p>Terminal V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                  <h3>Cannot Preview V4</h3>
+                  <p>V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
                   <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector.</p>
                 </>
               ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
@@ -3391,8 +3391,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 {url && (url.includes(`:${uiPort}`) || url.includes(`preview-${uiPort}`)) ? (
                   <>
                     <div className="preview-empty-icon">{'\u{1F6AB}'}</div>
-                    <h3>Cannot Preview Terminal V4</h3>
-                    <p>Terminal V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
+                    <h3>Cannot Preview V4</h3>
+                    <p>V4 (port {uiPort}) cannot be viewed in its own preview panel to prevent infinite recursion.</p>
                     <p style={{ marginTop: '1rem', opacity: 0.7 }}>Please select a different port from the port selector above.</p>
                   </>
                 ) : projectInfo && projectInfo.projectType !== 'unknown' ? (
