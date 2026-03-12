@@ -1,32 +1,21 @@
 # Terminal v4 - Web Terminal and Claude Code Workspace
 
-Terminal v4 is a browser-based terminal workspace with full PTY sessions, Claude Code streaming, preview tooling, and a mobile-friendly UI. It is built for running real shell workflows in the browser while keeping terminals, previews, and debugging tools in one place.
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/images/app-desktop.png" alt="Desktop workspace with Claude Code and terminal panes" width="900" />
-</p>
-
-<p align="center">
-  <img src="docs/images/app-mobile-preview.png" alt="Mobile preview mode showing a site inside the in-app browser" width="280" />
-  <img src="docs/images/app-mobile-split.png" alt="Mobile split view showing preview and terminal together" width="280" />
-</p>
+Terminal v4 is a browser-based terminal workspace with PTY-backed terminal sessions, Claude Code integration, preview tooling, and a mobile-friendly UI.
 
 ## Features
 
-- 🖥️ **Full PTY Support** - Run interactive programs (Claude CLI, Python REPL, vim, etc.) with optional tmux persistence
-- 🎨 **xterm.js Terminal** - Professional terminal UI with ANSI colors and WebGL acceleration
-- 🔄 **Multiple Sessions** - Create and manage unlimited terminal sessions with split-pane layouts
-- 🤖 **Claude Code Integration** - Native Claude CLI with SSE streaming and multiple sessions
-- 🔍 **Preview & DevTools** - Preview local dev servers with console, network, storage, and performance monitoring
-- 📁 **File Management** - Upload, download, rename, delete, and unzip files
-- 📊 **System Monitoring** - Real-time CPU, RAM, disk I/O stats with historical tracking
-- 🎤 **Voice Input** - AI-powered voice-to-text with Groq Whisper
-- 📱 **Mobile Optimized** - Touch gestures, mobile keybar, and responsive UI
-- 📸 **Screenshots & Recording** - Capture screenshots and record videos of preview panels
-- 📝 **Bookmarks & Notes** - Save commands and project notes
-- 🌐 **Remote Access** - Access your terminal from any browser with JWT authentication
+- **Full PTY Support** - Run interactive programs such as Claude CLI, Python REPL, and Vim, with optional tmux persistence where supported.
+- **xterm.js Terminal** - Terminal UI with ANSI color support and optional WebGL acceleration.
+- **Multiple Sessions** - Create and manage multiple terminal sessions with split-pane layouts.
+- **Claude Code Integration** - Run Claude CLI with SSE streaming and multiple sessions.
+- **Preview & DevTools** - Preview local dev servers with console, network, storage, and performance tooling.
+- **File Management** - Upload, download, rename, delete, and unzip files.
+- **System Monitoring** - View CPU, memory, disk I/O, and process stats.
+- **Voice Input** - Voice-to-text transcription with Groq Whisper support.
+- **Mobile Optimized** - Mobile-friendly UI with responsive layouts and keybar controls.
+- **Screenshots & Recording** - Capture screenshots and record preview sessions.
+- **Bookmarks & Notes** - Save commands and project notes.
+- **Remote Access** - Access the app from a browser with JWT-based authentication.
 
 See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 
@@ -70,25 +59,25 @@ See [Windows Desktop Development](docs/development/WINDOWS_DESKTOP_DEVELOPMENT.m
 
 ## Project Structure
 
-```
+```text
 terminal-v4/
-├── backend/              # Fastify server with PTY support
-│   ├── src/
-│   │   ├── index.ts      # Main server entry point
-│   │   ├── terminal/     # Terminal manager with PTY
-│   │   └── routes/       # API route handlers & schemas
-│   ├── test/             # Vitest test suite
-│   └── package.json
-├── frontend/             # React + Vite frontend
-│   ├── src/
-│   │   ├── App.jsx       # Main app with session sidebar & settings
-│   │   ├── styles.css    # Application styles
-│   │   └── components/
-│   │       └── TerminalChat.jsx  # xterm.js integration
-│   └── package.json
-└── docs/
-    ├── architecture/     # System architecture docs
-    └── development/      # Setup and testing guides
+|-- backend/              # Fastify server with PTY support
+|   |-- src/
+|   |   |-- index.ts      # Main server entry point
+|   |   |-- terminal/     # Terminal manager with PTY
+|   |   `-- routes/       # API route handlers & schemas
+|   |-- test/             # Vitest test suite
+|   `-- package.json
+|-- frontend/             # React + Vite frontend
+|   |-- src/
+|   |   |-- App.jsx       # Main app with session sidebar & settings
+|   |   |-- styles.css    # Application styles
+|   |   `-- components/
+|   |       `-- TerminalChat.jsx  # xterm.js integration
+|   `-- package.json
+`-- docs/
+    |-- architecture/     # System architecture docs
+    `-- development/      # Setup and testing guides
 ```
 
 ## API Endpoints
@@ -157,7 +146,7 @@ git status            # Git operations
 
 ## Security Considerations
 
-⚠️ **Internet Exposure Requires Hardening**
+**Internet Exposure Requires Hardening**
 
 This app provides full shell access to the host. If exposed to the internet:
 - Ensure `JWT_SECRET` and `REFRESH_SECRET` are set to strong values
@@ -171,21 +160,21 @@ See `docs/architecture/SYSTEM_ARCHITECTURE.md` for detailed security recommendat
 ## Documentation
 
 ### Architecture
-- 📖 [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) - Complete system design and components
-- 🔌 [API Architecture](docs/architecture/API_ARCHITECTURE.md) - API endpoints and patterns
-- 🗄️ [Database Schema](docs/architecture/DATABASE_SCHEMA.md) - Data storage structure
+- [System Architecture](docs/architecture/SYSTEM_ARCHITECTURE.md) - Complete system design and components
+- [API Architecture](docs/architecture/API_ARCHITECTURE.md) - API endpoints and patterns
+- [Database Schema](docs/architecture/DATABASE_SCHEMA.md) - Data storage structure
 
 ### Development
-- 🛠️ [Development Setup](docs/development/SETUP.md) - Local development guide
-- 🧪 [Testing Guide](docs/development/TESTING_GUIDE.md) - Running and writing tests
+- [Development Setup](docs/development/SETUP.md) - Local development guide
+- [Testing Guide](docs/development/TESTING_GUIDE.md) - Running and writing tests
 
 ### Features & Usage
-- ⭐ [Features Catalog](docs/FEATURES.md) - Comprehensive feature list
-- ⌨️ [Keyboard Shortcuts](docs/KEYBOARD_SHORTCUTS.md) - Shortcuts and gestures reference
-- 📋 [CLAUDE.md](CLAUDE.md) - Universal best practices guide
+- [Features Catalog](docs/FEATURES.md) - Comprehensive feature list
+- [Keyboard Shortcuts](docs/KEYBOARD_SHORTCUTS.md) - Shortcuts and gestures reference
+- [CLAUDE.md](CLAUDE.md) - Universal best practices guide
 
 ### Troubleshooting
-- 🔧 [Common Issues](docs/troubleshooting/COMMON_ISSUES.md) - Solutions to frequent problems
+- [Common Issues](docs/troubleshooting/COMMON_ISSUES.md) - Solutions to frequent problems
 
 ## Testing
 
