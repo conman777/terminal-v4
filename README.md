@@ -1,6 +1,17 @@
-# Terminal v4 - Web-Based Terminal
+# Terminal v4 - Web Terminal and Claude Code Workspace
 
-A browser-based terminal emulator that provides remote access to your system's command line (cmd/PowerShell/bash) through a web interface. Built with full PTY (pseudo-terminal) support for interactive programs like `claude`, `python`, `vim`, and more.
+Terminal v4 is a browser-based terminal workspace with full PTY sessions, Claude Code streaming, preview tooling, and a mobile-friendly UI. It is built for running real shell workflows in the browser while keeping terminals, previews, and debugging tools in one place.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/app-desktop.png" alt="Desktop workspace with Claude Code and terminal panes" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/images/app-mobile-preview.png" alt="Mobile preview mode showing a site inside the in-app browser" width="280" />
+  <img src="docs/images/app-mobile-split.png" alt="Mobile split view showing preview and terminal together" width="280" />
+</p>
 
 ## Features
 
