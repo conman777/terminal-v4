@@ -4,6 +4,7 @@ import { apiFetch, uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
 import { useConversationScroll } from '../hooks/useConversationScroll';
+import { parseInteractivePromptSnapshot, parseInteractivePromptEvent } from '../utils/interactivePrompt';
 
 function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
@@ -58,122 +59,6 @@ function mapKeyboardEventToTerminalInput(event) {
   }
 
   return null;
-}
-
-function parseInteractivePromptSnapshot(snapshotText) {
-  if (typeof snapshotText !== 'string') return null;
-  const text = snapshotText.trim();
-  if (!text) return null;
-
-  const lines = text
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (lines.length === 0) return null;
-
-  const lowerText = text.toLowerCase();
-  const numberedOptions = lines
-    .map((line, index) => {
-      const match = line.match(/^([›>]\s*)?(\d+)\.\s+(.+)$/);
-      if (!match) return null;
-      return {
-        index,
-        isSelected: Boolean(match[1]),
-        number: match[2],
-        label: `${match[2]}. ${match[3].trim()}`
-      };
-    })
-    .filter(Boolean);
-  const promptLine = [...lines].reverse().find((line) => (
-    /\[[yYnN]\/[yYnN]\]/.test(line)
-    || /(?:continue anyway|trust this folder|select an option|confirm|cancel)/i.test(line)
-    || /(?:enter|esc|shift\+tab|tab to cycle)/i.test(line)
-  )) || lines[lines.length - 1];
-
-  const actions = [];
-  if (numberedOptions.length > 0) {
-    const selectedIndex = numberedOptions.findIndex((option) => option.isSelected);
-    const baseIndex = selectedIndex >= 0 ? selectedIndex : 0;
-    for (let index = 0; index < numberedOptions.length; index += 1) {
-      const option = numberedOptions[index];
-      const delta = index - baseIndex;
-      const navigation = delta > 0
-        ? '\x1b[B'.repeat(delta)
-        : '\x1b[A'.repeat(Math.abs(delta));
-      actions.push({
-        label: option.label,
-        payload: `${navigation}\r`,
-        kind: option.isSelected || (selectedIndex === -1 && index === 0) ? 'primary' : 'secondary'
-      });
-    }
-  }
-
-  if (/\[[yYnN]\/[yYnN]\]/.test(promptLine) || /continue anyway|trust this folder/i.test(promptLine)) {
-    actions.push(
-      { label: 'Yes', payload: 'y\r', kind: 'primary' },
-      { label: 'No', payload: 'n\r', kind: 'secondary' }
-    );
-  }
-
-  if (/enter to (confirm|continue)|\[[yYnN]\/[yYnN]\]|continue anyway|confirm/i.test(promptLine) || /enter to (confirm|continue)/i.test(lowerText)) {
-    actions.push({ label: 'Enter', payload: '\r', kind: 'secondary' });
-  }
-
-  if (/esc(?:ape)? to cancel|cancel/i.test(promptLine) || /esc(?:ape)? to cancel/i.test(lowerText)) {
-    actions.push({ label: 'Esc', payload: '\x1b', kind: 'secondary' });
-  }
-
-  if (/shift\+tab to cycle|tab to cycle/i.test(promptLine) || /shift\+tab to cycle|tab to cycle/i.test(lowerText)) {
-    actions.push(
-      { label: 'Tab', payload: '\t', kind: 'secondary' },
-      { label: 'Shift+Tab', payload: '\x1b[Z', kind: 'secondary' }
-    );
-  }
-
-  if (actions.length === 0) {
-    return null;
-  }
-
-  const deduped = [];
-  const seen = new Set();
-  for (const action of actions) {
-    const key = `${action.label}:${action.payload}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(action);
-  }
-
-  return {
-    prompt: promptLine,
-    actions: deduped
-  };
-}
-
-function parseInteractivePromptEvent(event) {
-  if (!event || typeof event !== 'object') return null;
-  if (event.type !== 'prompt_required') return null;
-  if (typeof event.prompt !== 'string' || event.prompt.trim().length === 0) return null;
-
-  const actionMap = {
-    yes: { label: 'Yes', payload: 'y\r', kind: 'primary' },
-    no: { label: 'No', payload: 'n\r', kind: 'secondary' },
-    enter: { label: 'Enter', payload: '\r', kind: 'secondary' },
-    escape: { label: 'Esc', payload: '\x1b', kind: 'secondary' },
-    tab: { label: 'Tab', payload: '\t', kind: 'secondary' },
-    shift_tab: { label: 'Shift+Tab', payload: '\x1b[Z', kind: 'secondary' }
-  };
-
-  const requestedActions = Array.isArray(event.actions)
-    ? event.actions.map((value) => String(value).trim().toLowerCase()).filter(Boolean)
-    : [];
-  const mapped = requestedActions.map((name) => actionMap[name]).filter(Boolean);
-  const actions = mapped.length > 0 ? mapped : [{ label: 'Enter', payload: '\r', kind: 'secondary' }];
-
-  return {
-    prompt: event.prompt.trim(),
-    actions
-  };
 }
 
 function isLaunchCommand(content, aiType) {

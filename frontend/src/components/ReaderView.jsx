@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
+import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 
 /**
  * ReaderView - A clean, scrollable text view for terminal output
@@ -42,7 +43,7 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     if (!isMobile) return;
     const timer = setTimeout(() => {
       if (inputRef.current) {
-        inputRef.current.focus();
+        focusElementWithoutScroll(inputRef.current);
       }
     }, 100);
     return () => clearTimeout(timer);
@@ -67,12 +68,12 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     if (selection && selection.toString().length > 0) {
       return;
     }
-    if (inputRef.current) {
-      inputRef.current.focus();
+    if (isMobile && inputRef.current) {
+      focusElementWithoutScroll(inputRef.current);
       return;
     }
-    containerRef.current?.focus();
-  }, []);
+    focusElementWithoutScroll(containerRef.current);
+  }, [isMobile]);
 
   // Desktop keyboard handler
   const handleKeyDown = useCallback((e) => {

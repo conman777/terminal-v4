@@ -3,14 +3,24 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 const ENCRYPTION_PREFIX = 'enc:v1';
 const ALGORITHM = 'aes-256-gcm';
 
-function getEncryptionKey(): Buffer {
-  const secretSeed =
-    process.env.VAULT_ENCRYPTION_KEY ||
-    process.env.JWT_SECRET ||
-    process.env.REFRESH_SECRET ||
-    'dev-vault-key-change-me';
+const DEV_VAULT_KEY = 'dev-vault-key-change-me';
+let warnedDevKey = false;
 
-  return createHash('sha256').update(secretSeed).digest();
+function getEncryptionKey(): Buffer {
+  const vaultKey = process.env.VAULT_ENCRYPTION_KEY;
+  if (vaultKey) {
+    return createHash('sha256').update(vaultKey).digest();
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('VAULT_ENCRYPTION_KEY must be set in production');
+  }
+
+  if (!warnedDevKey) {
+    console.warn('[secret-crypto] VAULT_ENCRYPTION_KEY not set — using insecure dev fallback');
+    warnedDevKey = true;
+  }
+  return createHash('sha256').update(DEV_VAULT_KEY).digest();
 }
 
 export function encryptSecret(value: string): string {

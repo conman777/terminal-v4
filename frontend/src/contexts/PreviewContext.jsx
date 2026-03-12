@@ -103,7 +103,7 @@ export function PreviewProvider({ children }) {
       const baseDelay = windowActive ? VISIBLE_INTERVAL_MS : HIDDEN_INTERVAL_MS;
       const delay = succeeded ? baseDelay : ERROR_INTERVAL_MS;
       pollTimer = setTimeout(async () => {
-        const ok = await fetchAndValidate();
+        const ok = await refreshListeningPorts();
         scheduleNextPoll(ok);
       }, delay);
     };

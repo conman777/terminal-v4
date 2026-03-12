@@ -18,6 +18,7 @@ export function MobileStatusBar({
   customAiProviders = [],
   onSelectAiType,
   onAddCustomAiCommand,
+  onLaunchAi,
   runtimeInfo = null,
   gitBranches = [],
   currentGitBranch = null,
@@ -368,6 +369,20 @@ export function MobileStatusBar({
               )}
             </div>
 
+            {onLaunchAi && (
+              <button
+                type="button"
+                className="mobile-status-btn"
+                onClick={onLaunchAi}
+                aria-label={`Launch ${selectedAiOption.label}`}
+                title={`Launch ${selectedAiOption.label}`}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+              </button>
+            )}
+
             <button
               type="button"
               className={`mobile-status-btn ${autocorrectEnabled ? 'active' : ''}`}
@@ -493,6 +508,13 @@ export function MobileStatusBar({
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
           background: var(--terminal-bg, #0b0f17);
           backdrop-filter: blur(18px);
+          transition: gap 0.18s ease, padding 0.18s ease, background 0.18s ease;
+        }
+
+        .mobile-composer-shell:focus-within {
+          gap: 4px;
+          padding: 4px 8px calc(6px + env(safe-area-inset-bottom));
+          background: color-mix(in srgb, var(--terminal-bg, #0b0f17) 96%, black 4%);
         }
 
         .mobile-composer-form {
@@ -505,6 +527,14 @@ export function MobileStatusBar({
           background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
+          transition: gap 0.18s ease, padding 0.18s ease, border-radius 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .mobile-composer-shell:focus-within .mobile-composer-form {
+          gap: 6px;
+          padding: 9px 10px 8px;
+          border-radius: 13px;
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent);
         }
 
         .mobile-composer-input {
@@ -523,6 +553,12 @@ export function MobileStatusBar({
           line-height: 1.35;
           outline: none;
           box-shadow: none;
+          transition: min-height 0.18s ease, font-size 0.18s ease;
+        }
+
+        .mobile-composer-shell:focus-within .mobile-composer-input {
+          min-height: 44px;
+          font-size: 16px;
         }
 
         .mobile-composer-input::placeholder {
@@ -590,6 +626,11 @@ export function MobileStatusBar({
           gap: 8px;
           padding-top: 8px;
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
+          transition: padding-top 0.18s ease;
+        }
+
+        .mobile-composer-shell:focus-within .mobile-composer-controls {
+          padding-top: 6px;
         }
 
         .mobile-composer-primary {
@@ -657,6 +698,10 @@ export function MobileStatusBar({
           white-space: nowrap;
           font-size: 11px;
           font-weight: 600;
+        }
+
+        .mobile-composer-shell:focus-within .mobile-status-ai-label {
+          max-width: 56px;
         }
 
         .mobile-status-ai-swatch {
@@ -802,6 +847,15 @@ export function MobileStatusBar({
           width: min(100%, 880px);
           padding: 0 2px;
           flex-wrap: nowrap;
+          transition: opacity 0.18s ease, max-height 0.18s ease, margin 0.18s ease;
+        }
+
+        .mobile-composer-shell:focus-within .mobile-composer-footer {
+          opacity: 0;
+          max-height: 0;
+          overflow: hidden;
+          margin-top: -4px;
+          pointer-events: none;
         }
 
         .mobile-composer-footer-left {

@@ -218,7 +218,7 @@ body, html, #root {
 }
 
 /* Prevent body scroll on mobile - important for keyboard handling */
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-width: 1024px) {
   html, body {
     position: fixed;
     width: 100%;
@@ -1465,10 +1465,10 @@ button {
 /* Mobile keyboard input overlay - tappable for iOS keyboard */
 .mobile-keyboard-input {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  left: 12px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  width: 56px;
+  height: 32px;
   background: transparent;
   border: none;
   outline: none;
@@ -1479,6 +1479,7 @@ button {
   appearance: none;
   -webkit-appearance: none;
   -webkit-tap-highlight-color: transparent;
+  opacity: 0.01;
   pointer-events: none;
 }
 
@@ -8684,7 +8685,7 @@ button {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (pointer: coarse) and (max-width: 1024px) {
   html,
   body,
   #root {
@@ -8696,7 +8697,7 @@ button {
     /* --mobile-header-height is set dynamically by MobileHeader component */
     /* Use fixed positioning for reliable iOS keyboard handling */
     position: fixed;
-    top: 0;
+    top: var(--mobile-viewport-offset-top, 0px);
     left: 0;
     right: 0;
     /* Bottom is set dynamically: viewport height from top */

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useViewportHeight } from './useViewportHeight';
+import { useViewportHeight, useViewportMetrics } from './useViewportHeight';
 import { isTouchLikeDevice } from '../utils/deviceDetection';
 import * as windowActivity from '../utils/windowActivity';
 
@@ -13,7 +13,7 @@ vi.mock('../utils/windowActivity', () => ({
   subscribeWindowActivity: vi.fn()
 }));
 
-function setVisualViewport(height = 768) {
+function setVisualViewport(height = 768, offsetTop = 0) {
   const listeners = new Map();
   Object.defineProperty(window, 'visualViewport', {
     configurable: true,
@@ -21,6 +21,7 @@ function setVisualViewport(height = 768) {
     value: {
       height,
       width: 390,
+      offsetTop,
       addEventListener: vi.fn((event, listener) => {
         listeners.set(event, listener);
       }),
@@ -91,6 +92,21 @@ describe('useViewportHeight', () => {
     });
 
     expect(result.current).toBe(812);
+  });
+
+  it('tracks the visual viewport offset top when the keyboard shifts the viewport', () => {
+    setVisualViewport(640, 0);
+
+    const { result } = renderHook(() => useViewportMetrics());
+    expect(result.current).toEqual({ height: 640, offsetTop: 0 });
+
+    act(() => {
+      window.visualViewport.height = 402;
+      window.visualViewport.offsetTop = 248;
+      window.visualViewport.__listeners.get('resize')?.();
+    });
+
+    expect(result.current).toEqual({ height: 402, offsetTop: 248 });
   });
 
   it('stops fallback polling while the window is inactive', () => {

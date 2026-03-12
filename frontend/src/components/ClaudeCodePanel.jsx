@@ -13,6 +13,7 @@ export default function ClaudeCodePanel({
   onScrollDirection,
   onViewportStateChange,
   onRegisterFocusTerminal,
+  onSessionBusyChange,
   usesTmux,
   chatMode = false
 }) {
@@ -29,7 +30,8 @@ export default function ClaudeCodePanel({
 
   const handleActivityChange = useCallback((isBusy) => {
     setIsClaudeBusy(isBusy);
-  }, []);
+    onSessionBusyChange?.(sessionId, isBusy);
+  }, [onSessionBusyChange, sessionId]);
 
   const handleTerminalViewportStateChange = useCallback((atBottom) => {
     if (chatMode) return;

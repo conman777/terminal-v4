@@ -499,6 +499,17 @@ export function PaneLayoutProvider({ children }) {
     setFullscreenPaneId(null);
   }, []);
 
+  const renameDesktop = useCallback((id, name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return;
+    setDesktopsState(prev => ({
+      ...prev,
+      desktops: prev.desktops.map(d =>
+        d.id === id ? { ...d, name: trimmed } : d
+      )
+    }));
+  }, []);
+
   const moveSessionToDesktop = useCallback((sessionId, sourcePaneId, targetDesktopId) => {
     setDesktopsState(prev => {
       const { activeDesktopId, desktops } = prev;
@@ -613,6 +624,7 @@ export function PaneLayoutProvider({ children }) {
     createDesktop,
     switchDesktop,
     deleteDesktop,
+    renameDesktop,
     moveSessionToDesktop,
     addSessionToDesktop,
   };

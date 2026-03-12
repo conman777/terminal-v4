@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import supertest from 'supertest';
 import { createServer } from '../src/index';
-import { register } from '../src/auth/auth-service';
+import { generateAccessToken } from '../src/auth/auth-service';
+import { createUser } from '../src/auth/user-store';
+import bcrypt from 'bcrypt';
 import type { TerminalManager } from '../src/terminal/terminal-manager';
 import type { TerminalSessionSnapshot } from '../src/terminal/terminal-types';
 
@@ -60,10 +62,12 @@ async function withApp<T>(
   });
   await app.listen({ port: 0 });
   const username = `api-routes-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const auth = await register(username, 'test-password-123');
+  const passwordHash = bcrypt.hashSync('test-password-123', 10);
+  const user = createUser(username, passwordHash);
+  const accessToken = generateAccessToken(user);
 
   try {
-    return await fn({ app, terminalManager, accessToken: auth.tokens.accessToken });
+    return await fn({ app, terminalManager, accessToken });
   } finally {
     await app.close();
   }

@@ -4,7 +4,9 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import { createServer } from '../src/index';
-import { register } from '../src/auth/auth-service';
+import { generateAccessToken } from '../src/auth/auth-service';
+import { createUser } from '../src/auth/user-store';
+import bcrypt from 'bcrypt';
 import { EventEmitter } from 'node:events';
 import type { TerminalProcess, TerminalSpawnOptions } from '../src/terminal/terminal-types';
 
@@ -21,9 +23,11 @@ async function withApp<T>(
   const app = await createServer({ logger: false, terminalOptions: { spawnTerminal: spawnMock } });
   await app.listen({ port: 0 });
   const username = `fs-security-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const auth = await register(username, 'test-password-123');
+  const passwordHash = bcrypt.hashSync('test-password-123', 10);
+  const user = createUser(username, passwordHash);
+  const accessToken = generateAccessToken(user);
   try {
-    return await fn({ app, accessToken: auth.tokens.accessToken });
+    return await fn({ app, accessToken });
   } finally {
     await app.close();
   }

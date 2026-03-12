@@ -42,8 +42,14 @@ build/
 .DS_Store
 Thumbs.db
 
-# Test screenshots
+# Test screenshots and generated output
 tests/screenshots/*.png
+output/
+
+# npm bin stubs (desktop)
+desktop/tauri/codex
+desktop/tauri/codex.cmd
+desktop/tauri/codex.ps1
 
 # Temporary files
 *.tmp

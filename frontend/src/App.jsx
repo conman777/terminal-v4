@@ -23,7 +23,7 @@ import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AutocorrectProvider } from './contexts/AutocorrectContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
-import { useViewportHeight } from './hooks/useViewportHeight';
+import { useViewportMetrics } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
@@ -216,6 +216,7 @@ function AppContent() {
     createDesktop,
     switchDesktop,
     deleteDesktop,
+    renameDesktop,
     moveSessionToDesktop,
     addSessionToDesktop,
   } = usePaneLayout();
@@ -280,7 +281,7 @@ function AppContent() {
   const mobileViewportAtBottomRef = useRef(true);
   const previousActiveSessionRef = useRef(null);
   const isMobile = useMobileDetect();
-  const viewportHeight = useViewportHeight();
+  const { height: viewportHeight, offsetTop: viewportOffsetTop } = useViewportMetrics();
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
 
@@ -1152,7 +1153,8 @@ function AppContent() {
   const layoutStyle =
     isMobile && viewportHeight
       ? {
-          '--mobile-viewport-height': `${Math.round(viewportHeight)}px`
+          '--mobile-viewport-height': `${Math.round(viewportHeight)}px`,
+          '--mobile-viewport-offset-top': `${Math.round(viewportOffsetTop || 0)}px`
         }
       : undefined;
 
@@ -1174,7 +1176,7 @@ function AppContent() {
   };
 
   return (
-    <div className={`layout${isMobile ? ' mobile' : ''}${isNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
+    <div className={`layout${isMobile ? ' mobile' : ''}`} style={layoutStyle}>
       <ErrorBoundary name="modals">
         <Suspense fallback={null}>
           <SettingsModal
@@ -1357,6 +1359,7 @@ function AppContent() {
                 onSwitch: switchDesktop,
                 onCreate: createDesktop,
                 onDelete: deleteDesktop,
+                onRename: renameDesktop,
                 onMoveSession: moveSessionToDesktop,
               }}
             />
@@ -1521,6 +1524,7 @@ function AppContent() {
                   onScrollDirection={handleScrollDirectionSafe}
                   onViewportStateChange={handleMobileViewportStateChange}
                   onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                  onSessionBusyChange={handleSessionBusyChange}
                   usesTmux={activeClaudeSession?.usesTmux}
                   chatMode={chatMode}
                 />
@@ -1566,7 +1570,7 @@ function AppContent() {
               right: 0,
               bottom: 0,
               background: 'rgba(0,0,0,0.6)',
-              zIndex: 99998
+              zIndex: 9999
             }}
           />
           <Suspense fallback={null}>

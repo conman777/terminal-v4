@@ -8,6 +8,7 @@ export function DesktopSwitcher({
   onCreate,
   onDelete,
   onMoveSession,
+  onRename,
   variant = 'default',
 }) {
   const [dragOverDesktopId, setDragOverDesktopId] = useState(null);
@@ -59,19 +60,11 @@ export function DesktopSwitcher({
 
   const handleEditBlur = useCallback((e, desktop) => {
     const newName = e.target.value.trim() || desktop.name;
-    // Update via a renamed desktop in-place — we expose this via onRename if needed
-    // For now just commit edit (name is managed in context via renameDesktop if we add it)
-    // Since plan doesn't include a rename action we update via a workaround:
-    // Store edits locally and pass them as overrides. Actually the plan doesn't
-    // include renameDesktop so we'll just use the context's desktops array directly.
-    // We need to signal rename somehow... we'll add it to onDelete/onCreate concept
-    // Actually let me use the onRename prop if provided, or we can skip for now.
     setEditingDesktopId(null);
-    // If name changed, fire rename if handler provided
-    if (newName !== desktop.name && e.target._onRename) {
-      e.target._onRename(desktop.id, newName);
+    if (newName !== desktop.name && onRename) {
+      onRename(desktop.id, newName);
     }
-  }, []);
+  }, [onRename]);
 
   const handleEditKeyDown = useCallback((e) => {
     if (e.key === 'Enter') e.target.blur();

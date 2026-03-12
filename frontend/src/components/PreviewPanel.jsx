@@ -339,6 +339,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const devToolsDragStartYRef = useRef(0);
   const devToolsDragStartHeightRef = useRef(0);
   const resizeRafRef = useRef(null);
+  const previewTerminalResizeRafRef = useRef(null);
+  const previewTerminalMeasuredSizeRef = useRef({ width: 0, height: 0 });
   const focusPreviewTerminalRef = useRef(null);
   const mobileChromeTimerRef = useRef(null);
   const mobileSplitModeRef = useRef(null);
@@ -1856,6 +1858,47 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     });
     return () => cancelAnimationFrame(rafId);
   }, [browserSplitEnabled, compactChrome, devToolsHeight, isMobile, showDevTools]);
+
+  useEffect(() => {
+    if (isMobile) return;
+    if (!browserSplitEnabled) return;
+    const section = previewTerminalSectionRef.current;
+    if (!section || typeof ResizeObserver === 'undefined') return;
+
+    const scheduleFit = () => {
+      if (previewTerminalResizeRafRef.current !== null) {
+        cancelAnimationFrame(previewTerminalResizeRafRef.current);
+      }
+      previewTerminalResizeRafRef.current = requestAnimationFrame(() => {
+        previewTerminalResizeRafRef.current = null;
+        setPreviewTerminalFitToken((token) => token + 1);
+      });
+    };
+
+    const updateMeasuredSize = () => {
+      const rect = section.getBoundingClientRect();
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      const previous = previewTerminalMeasuredSizeRef.current;
+      if (previous.width === width && previous.height === height) return;
+      previewTerminalMeasuredSizeRef.current = { width, height };
+      scheduleFit();
+    };
+
+    updateMeasuredSize();
+    const observer = new ResizeObserver(updateMeasuredSize);
+    observer.observe(section);
+    window.addEventListener('resize', updateMeasuredSize);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateMeasuredSize);
+      if (previewTerminalResizeRafRef.current !== null) {
+        cancelAnimationFrame(previewTerminalResizeRafRef.current);
+        previewTerminalResizeRafRef.current = null;
+      }
+    };
+  }, [browserSplitEnabled, isMobile, selectedTerminalSession]);
 
   const handleDevToolsResizeMouseDown = useCallback((event) => {
     event.preventDefault();
@@ -3593,22 +3636,24 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
                   surface={isMobile ? 'mobile' : 'desktop'}
                   sessionId={selectedTerminalSession}
-                    keybarOpen={false}
-                    viewportHeight={null}
-                    fontSize={previewTerminalFontSize}
-                  webglEnabled={webglEnabled}
-                  isPrimary={mainTerminalMinimized}
-                  syncPtySize
+                  keybarOpen={false}
+                  viewportHeight={null}
+                  fontSize={previewTerminalFontSize}
+                  webglEnabled={false}
+                  isPrimary={false}
+                  syncPtySize={false}
+                  viewMode="reader"
+                  inputEnabled={false}
                   fitSignal={previewTerminalFitToken}
-                    onUrlDetected={onUrlDetected || (() => {})}
-                    usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
-                    onRegisterImageUpload={() => {}}
-                    onRegisterFocusTerminal={(focusFn) => { focusPreviewTerminalRef.current = focusFn; }}
-                    onActivityChange={(isBusy) => onSessionBusyChange?.(selectedTerminalSession, isBusy)}
-                    onConnectionChange={() => {}}
-                    onCwdChange={() => {}}
-                    onScrollDirection={() => {}}
-                  />
+                  onUrlDetected={onUrlDetected || (() => {})}
+                  usesTmux={activeSessions.find(s => s.id === selectedTerminalSession)?.usesTmux}
+                  onRegisterImageUpload={() => {}}
+                  onRegisterFocusTerminal={(focusFn) => { focusPreviewTerminalRef.current = focusFn; }}
+                  onActivityChange={(isBusy) => onSessionBusyChange?.(selectedTerminalSession, isBusy)}
+                  onConnectionChange={() => {}}
+                  onCwdChange={() => {}}
+                  onScrollDirection={() => {}}
+                />
                 ) : (
                   <div className="preview-empty">
                     <p>No terminal session selected</p>

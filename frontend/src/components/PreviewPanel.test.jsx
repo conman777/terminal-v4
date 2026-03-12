@@ -142,7 +142,7 @@ describe('PreviewPanel', () => {
     });
   });
 
-  it('keeps the desktop preview terminal PTY-synced while the main terminal is visible', async () => {
+  it('renders the desktop preview terminal in reader mirror mode', async () => {
     render(<PreviewPanel {...buildProps()} />);
 
     await waitFor(() => {
@@ -151,7 +151,9 @@ describe('PreviewPanel', () => {
         .find((callProps) => callProps.sessionId === 'session-1');
 
       expect(props).toBeTruthy();
-      expect(props.syncPtySize).toBe(true);
+      expect(props.syncPtySize).toBe(false);
+      expect(props.viewMode).toBe('reader');
+      expect(props.inputEnabled).toBe(false);
     });
   });
 });

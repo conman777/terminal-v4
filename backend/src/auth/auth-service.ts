@@ -37,7 +37,9 @@ export function assertAuthConfig(): void {
 }
 
 export function isAllowedUsername(username: string): boolean {
-  return true;
+  const allowed = process.env.ALLOWED_USERNAME?.trim();
+  if (!allowed) return true;
+  return username === allowed;
 }
 
 export interface TokenPair {

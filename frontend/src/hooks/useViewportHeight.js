@@ -2,15 +2,21 @@ import { useEffect, useState, useRef } from 'react';
 import { isTouchLikeDevice } from '../utils/deviceDetection';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
-// Track the real visible viewport height so mobile layouts can react to browser chrome and keyboards.
-export function useViewportHeight() {
-  const [height, setHeight] = useState(() => {
-    if (typeof window === 'undefined') {
-      return 0;
-    }
-    const viewport = window.visualViewport;
-    return Math.round(viewport ? viewport.height : window.innerHeight);
-  });
+function readViewportMetrics() {
+  if (typeof window === 'undefined') {
+    return { height: 0, offsetTop: 0 };
+  }
+
+  const viewport = window.visualViewport;
+  return {
+    height: Math.round(viewport ? viewport.height : window.innerHeight),
+    offsetTop: Math.round(viewport?.offsetTop || 0),
+  };
+}
+
+// Track the real visible viewport so mobile layouts can react to browser chrome and keyboards.
+export function useViewportMetrics() {
+  const [metrics, setMetrics] = useState(() => readViewportMetrics());
 
   const pollIntervalIdRef = useRef(null);
   const slowdownTimeoutIdRef = useRef(null);
@@ -41,14 +47,16 @@ export function useViewportHeight() {
       if (!windowActiveRef.current) {
         return;
       }
-      const viewport = window.visualViewport;
-      const nextHeight = Math.round(viewport ? viewport.height : window.innerHeight);
+      const nextMetrics = readViewportMetrics();
 
-      setHeight((prevHeight) => {
-        if (nextHeight !== prevHeight) {
-          return nextHeight;
+      setMetrics((previousMetrics) => {
+        if (
+          nextMetrics.height !== previousMetrics.height
+          || nextMetrics.offsetTop !== previousMetrics.offsetTop
+        ) {
+          return nextMetrics;
         }
-        return prevHeight;
+        return previousMetrics;
       });
     };
 
@@ -143,5 +151,9 @@ export function useViewportHeight() {
     };
   }, []);
 
-  return height;
+  return metrics;
+}
+
+export function useViewportHeight() {
+  return useViewportMetrics().height;
 }

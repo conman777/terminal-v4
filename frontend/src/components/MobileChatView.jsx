@@ -97,7 +97,7 @@ export function MobileChatView({
       textareaRef.current.style.height = 'auto';
     }
     markShouldStickToBottom();
-  }, [inputValue, onSend]);
+  }, [inputValue, onSend, markShouldStickToBottom]);
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && !e.shiftKey) {

@@ -94,7 +94,7 @@ export function useStructuredSession({ sessionId, active = true }) {
       case 'tool_output':
         setCurrentToolCalls((prev) =>
           prev.map((tc) =>
-            tc.toolName === event.toolName && tc.status === 'running'
+            tc.toolCallId === event.toolCallId && tc.status === 'running'
               ? { ...tc, result: (tc.result || '') + event.output }
               : tc
           )
@@ -104,7 +104,7 @@ export function useStructuredSession({ sessionId, active = true }) {
       case 'tool_completed':
         setCurrentToolCalls((prev) => {
           const updated = prev.map((tc) =>
-            tc.toolName === event.toolName && tc.status === 'running'
+            tc.toolCallId === event.toolCallId && tc.status === 'running'
               ? { ...tc, status: 'completed', result: event.result, isError: event.isError }
               : tc
           );

@@ -205,6 +205,12 @@
   background: var(--chat-input-bar-bg);
   border-top: 1px solid var(--chat-input-border);
   flex-shrink: 0;
+  transition: padding 0.18s ease, gap 0.18s ease;
+}
+
+.chat-input-bar:focus-within {
+  gap: 6px;
+  padding: 6px 8px;
 }
 
 .chat-input {
@@ -225,6 +231,12 @@
   max-height: 120px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  transition: min-height 0.18s ease, padding 0.18s ease;
+}
+
+.chat-input-bar:focus-within .chat-input {
+  min-height: 36px;
+  padding: 8px 14px;
 }
 
 .chat-input::placeholder {

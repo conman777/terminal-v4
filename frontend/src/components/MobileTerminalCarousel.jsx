@@ -118,7 +118,7 @@ export function MobileTerminalCarousel({
   const handleActivityChange = useCallback((isBusy) => {
     setIsClaudeBusy(isBusy);
     onSessionBusyChange?.(currentSession?.id, isBusy);
-  }, [onSessionBusyChange]);
+  }, [onSessionBusyChange, currentSession?.id]);
 
   const handleRegisterSelectionActions = useCallback((actions) => {
     setSelectionActions(() => actions || null);

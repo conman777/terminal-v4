@@ -1478,7 +1478,7 @@ export class TerminalManager {
       throw new Error('Branch cannot be empty');
     }
 
-    await execFileAsync('git', ['checkout', trimmedBranch], { cwd: session.cwd, timeout: 15000 });
+    await execFileAsync('git', ['checkout', '--', trimmedBranch], { cwd: session.cwd, timeout: 15000 });
     return this.listGitBranches(userId, id);
   }
 

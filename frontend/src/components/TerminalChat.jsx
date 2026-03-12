@@ -37,6 +37,7 @@ import {
   createExternalInputFrames,
   prepareTerminalForExternalInput,
 } from '../utils/terminalExternalInput';
+import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
@@ -515,7 +516,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (!isMobile) return;
     if (enabled) {
       // Focus the mobile input to trigger iOS keyboard
-      setTimeout(() => mobileInputRef.current?.focus(), 50);
+      setTimeout(() => {
+        focusElementWithoutScroll(mobileInputRef.current);
+      }, 50);
     } else {
       mobileInputRef.current?.blur();
     }
@@ -896,11 +899,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       textarea.readOnly = false;
       textarea.inputMode = isMobile ? 'none' : 'text';
       textarea.tabIndex = 0;
-      try {
-        textarea.focus({ preventScroll: true });
-      } catch {
-        textarea.focus();
-      }
+      focusElementWithoutScroll(textarea);
     };
 
     prepareTerminalForExternalInput({
@@ -3779,7 +3778,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         ref={terminalRef}
         className="xterm-container"
         style={{
-          visibility: viewMode === 'terminal' ? 'visible' : 'hidden',
+          opacity: viewMode === 'terminal' ? 1 : 0,
           pointerEvents: viewMode === 'terminal' ? 'auto' : 'none'
         }}
       ></div>
