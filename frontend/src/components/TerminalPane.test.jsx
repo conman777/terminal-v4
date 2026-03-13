@@ -125,4 +125,33 @@ describe('TerminalPane', () => {
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
+
+  it('hides the fullscreen button when there is only one selectable session', () => {
+    render(<TerminalPane {...buildProps()} />);
+
+    expect(screen.queryByTitle('Fullscreen')).not.toBeInTheDocument();
+  });
+
+  it('shows the fullscreen button when multiple selectable sessions exist', () => {
+    render(<TerminalPane {...buildProps({
+      sessions: [
+        {
+          id: 'session-1',
+          title: 'Claude Terminal',
+          isActive: true,
+          updatedAt: new Date().toISOString(),
+          thread: { gitStats: null, topic: 'Review code' }
+        },
+        {
+          id: 'session-2',
+          title: 'Second Terminal',
+          isActive: true,
+          updatedAt: new Date().toISOString(),
+          thread: { gitStats: null, topic: 'Second session' }
+        }
+      ]
+    })} />);
+
+    expect(screen.getByTitle('Fullscreen')).toBeInTheDocument();
+  });
 });

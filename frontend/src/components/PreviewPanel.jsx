@@ -10,6 +10,7 @@ import { DevToolsPanel } from './devtools/DevToolsPanel';
 import { WebContainerPreview } from './WebContainerPreview';
 import { PreviewUrlBar } from './preview/PreviewUrlBar';
 import { PreviewInspector } from './preview/PreviewInspector';
+import { getPreferredSessionTopic } from '../utils/sessionTopic';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -3580,11 +3581,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                         key={session.id}
                         className={`preview-session-btn ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}`}
                         onClick={() => setSelectedTerminalSession(session.id)}
-                        title={session.title || `Session ${session.id.slice(0, 8)}`}
+                        title={getPreferredSessionTopic(session.thread?.topic, session.title || `Session ${session.id.slice(0, 8)}`)}
                       >
                         <span className={`session-indicator ${statusClass}`} />
                         <span className="session-name">
-                          {session.title || `Session ${session.id.slice(0, 8)}`}
+                          {getPreferredSessionTopic(session.thread?.topic, session.title || `Session ${session.id.slice(0, 8)}`)}
                         </span>
                         {showStatusLabels && (
                           <span className={`session-status-label ${statusClass}`} aria-hidden="true">

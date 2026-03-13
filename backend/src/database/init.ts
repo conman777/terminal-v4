@@ -158,6 +158,14 @@ function runMigrations(db: Database.Database): void {
       sql: `
         ALTER TABLE user_settings ADD COLUMN desktop_allow_terminal_input INTEGER DEFAULT 0;
       `
+    },
+    {
+      name: '014_add_folder_state_settings',
+      sql: `
+        ALTER TABLE user_settings ADD COLUMN recent_folders TEXT;
+        ALTER TABLE user_settings ADD COLUMN pinned_folders TEXT;
+        ALTER TABLE user_settings ADD COLUMN sidebar_projects TEXT;
+      `
     }
   ];
 

@@ -55,6 +55,7 @@ export function MobileStatusBar({
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType, customAiProviders), color: '#38bdf8' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
+
   useEffect(() => {
     setSelectedSlashIndex(0);
   }, [inputText, slashSuggestions.length]);
@@ -508,7 +509,7 @@ export function MobileStatusBar({
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
           background: var(--terminal-bg, #0b0f17);
           backdrop-filter: blur(18px);
-          transition: gap 0.18s ease, padding 0.18s ease, background 0.18s ease;
+          -webkit-tap-highlight-color: transparent;
         }
 
         .mobile-composer-shell:focus-within {
@@ -527,7 +528,8 @@ export function MobileStatusBar({
           background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
-          transition: gap 0.18s ease, padding 0.18s ease, border-radius 0.18s ease, box-shadow 0.18s ease;
+          outline: none;
+          -webkit-tap-highlight-color: transparent;
         }
 
         .mobile-composer-shell:focus-within .mobile-composer-form {
@@ -548,17 +550,23 @@ export function MobileStatusBar({
           background: transparent;
           color: var(--text-primary);
           font-family: var(--font-ui);
-          font-size: 15px;
+          font-size: 16px;
           font-weight: 500;
-          line-height: 1.35;
+          line-height: 1.4;
           outline: none;
           box-shadow: none;
-          transition: min-height 0.18s ease, font-size 0.18s ease;
+          appearance: none;
+          -webkit-appearance: none;
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .mobile-composer-input:focus {
+          outline: none;
+          box-shadow: none;
         }
 
         .mobile-composer-shell:focus-within .mobile-composer-input {
           min-height: 44px;
-          font-size: 16px;
         }
 
         .mobile-composer-input::placeholder {
@@ -626,7 +634,6 @@ export function MobileStatusBar({
           gap: 8px;
           padding-top: 8px;
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
-          transition: padding-top 0.18s ease;
         }
 
         .mobile-composer-shell:focus-within .mobile-composer-controls {
@@ -847,7 +854,6 @@ export function MobileStatusBar({
           width: min(100%, 880px);
           padding: 0 2px;
           flex-wrap: nowrap;
-          transition: opacity 0.18s ease, max-height 0.18s ease, margin 0.18s ease;
         }
 
         .mobile-composer-shell:focus-within .mobile-composer-footer {

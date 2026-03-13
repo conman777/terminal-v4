@@ -45,8 +45,8 @@ export function TerminalSessionProvider({ children }) {
     [sessions]
   );
 
-  const activeSessionsForThreads = useMemo(
-    () => sessions.filter((session) => session.isActive),
+  const threadSessions = useMemo(
+    () => sessions.filter((session) => !session.thread?.archived),
     [sessions]
   );
 
@@ -63,7 +63,7 @@ export function TerminalSessionProvider({ children }) {
     };
 
     // Process all sessions (both active and inactive)
-    activeSessionsForThreads.forEach((session) => {
+    threadSessions.forEach((session) => {
       const projectPath = session.thread?.projectPath || session.groupPath || session.cwd || null;
       const projectName = getProjectName(projectPath);
 
@@ -108,18 +108,18 @@ export function TerminalSessionProvider({ children }) {
     });
 
     return groupArray;
-  }, [activeSessionsForThreads]);
+  }, [threadSessions]);
 
   // Get pinned sessions across all projects
   const pinnedSessions = useMemo(
-    () => activeSessionsForThreads.filter((session) => session.thread?.pinned),
-    [activeSessionsForThreads]
+    () => threadSessions.filter((session) => session.thread?.pinned),
+    [threadSessions]
   );
 
   // Get archived sessions
   const archivedSessions = useMemo(
-    () => activeSessionsForThreads.filter((session) => session.thread?.archived),
-    [activeSessionsForThreads]
+    () => sessions.filter((session) => session.thread?.archived),
+    [sessions]
   );
 
   useEffect(() => {
@@ -127,9 +127,13 @@ export function TerminalSessionProvider({ children }) {
   }, [activeSessionId]);
 
   // Load sessions
+  const hasLoadedOnceRef = useRef(false);
   const loadSessions = useCallback(async () => {
     if (!isMountedRef.current) return [];
-    setLoadingSessions(true);
+    // Only show loading indicator on first load to avoid flashing the terminal
+    if (!hasLoadedOnceRef.current) {
+      setLoadingSessions(true);
+    }
     setSessionLoadError(null);
     try {
       const response = await apiFetch('/api/terminal');
@@ -145,6 +149,7 @@ export function TerminalSessionProvider({ children }) {
             : nextSessions
         ));
       }
+      hasLoadedOnceRef.current = true;
       return nextSessions;
     } catch (error) {
       console.error('Failed to load sessions', error);
@@ -277,10 +282,18 @@ export function TerminalSessionProvider({ children }) {
       }
     } catch (error) {
       console.error('Failed to restore session', error);
-      await loadSessions();
+      // Refresh sessions without triggering loading state to avoid flash loop
+      try {
+        const response = await apiFetch('/api/terminal');
+        if (response.ok) {
+          const data = await response.json();
+          const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+          setSessions(nextSessions);
+        }
+      } catch (_) { /* best-effort refresh */ }
       throw error;
     }
-  }, [loadSessions]);
+  }, []);
 
   const renameSession = useCallback(async (sessionId, title) => {
     const trimmed = title.trim().slice(0, 60);

@@ -45,6 +45,21 @@ function TestGitBranchesConsumer() {
   );
 }
 
+function TestThreadStateConsumer() {
+  const { sessionsGroupedByProject, pinnedSessions, archivedSessions } = useTerminalSession();
+
+  return (
+    <>
+      <span data-testid="thread-group-count">{String(sessionsGroupedByProject.length)}</span>
+      <span data-testid="pinned-count">{String(pinnedSessions.length)}</span>
+      <span data-testid="archived-count">{String(archivedSessions.length)}</span>
+      <span data-testid="thread-session-ids">
+        {sessionsGroupedByProject.flatMap((group) => group.sessions.map((session) => session.id)).join(',')}
+      </span>
+    </>
+  );
+}
+
 describe('TerminalSessionContext', () => {
   beforeEach(() => {
     apiFetch.mockImplementation(async (url) => {
@@ -200,5 +215,72 @@ describe('TerminalSessionContext', () => {
 
     expect(errorSpy).not.toHaveBeenCalledWith('Failed to list git branches', expect.anything());
     errorSpy.mockRestore();
+  });
+
+  it('keeps inactive persisted sessions visible in thread groupings after restart', async () => {
+    apiFetch.mockImplementation(async (url) => {
+      if (url === '/api/terminal') {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [
+              {
+                id: 'session-1',
+                isActive: false,
+                title: 'Saved thread',
+                cwd: 'C:\\repo',
+                updatedAt: '2026-03-12T08:00:00.000Z',
+                thread: {
+                  topic: 'Saved thread',
+                  pinned: true,
+                  archived: false,
+                  projectPath: 'C:\\repo',
+                  lastActivityAt: '2026-03-12T08:00:00.000Z'
+                }
+              },
+              {
+                id: 'session-2',
+                isActive: false,
+                title: 'Archived thread',
+                cwd: 'C:\\repo',
+                updatedAt: '2026-03-12T07:00:00.000Z',
+                thread: {
+                  topic: 'Archived thread',
+                  pinned: false,
+                  archived: true,
+                  projectPath: 'C:\\repo',
+                  lastActivityAt: '2026-03-12T07:00:00.000Z'
+                }
+              }
+            ]
+          })
+        };
+      }
+
+      if (String(url).startsWith('/api/state')) {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: []
+          })
+        };
+      }
+
+      throw new Error(`Unexpected apiFetch call: ${url}`);
+    });
+
+    render(
+      <TerminalSessionProvider>
+        <TestThreadStateConsumer />
+      </TerminalSessionProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('thread-group-count')).toHaveTextContent('1');
+    });
+
+    expect(screen.getByTestId('pinned-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('archived-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('thread-session-ids')).toHaveTextContent('session-1');
   });
 });

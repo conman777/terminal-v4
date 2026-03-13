@@ -74,10 +74,13 @@
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
   --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.05);
 
-  /* Shared scrollbar palette */
-  --scrollbar-track: color-mix(in srgb, var(--terminal-bg) 84%, var(--bg-surface) 16%);
+  /* Shared scrollbar palette – track matches composer card background */
+  --scrollbar-track: var(--bg-surface);
   --scrollbar-thumb: color-mix(in srgb, var(--border-default) 74%, var(--text-muted) 26%);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 78%, var(--text-secondary) 22%);
+  --composer-shell-fill: var(--bg-elevated);
+  --composer-shell-edge: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default) 66%);
+  --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 44%, var(--border-hover) 56%);
 
   /* Atmospheric backgrounds - warm amber glow from top */
   --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(34, 211, 238, 0.2), transparent 50%),
@@ -178,10 +181,13 @@
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(8, 145, 178, 0.04);
 
-  /* Shared scrollbar palette */
-  --scrollbar-track: color-mix(in srgb, var(--bg-elevated) 74%, white 26%);
+  /* Shared scrollbar palette – track matches composer card background */
+  --scrollbar-track: var(--bg-surface);
   --scrollbar-thumb: color-mix(in srgb, var(--border-default) 72%, var(--text-muted) 28%);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 76%, var(--text-secondary) 24%);
+  --composer-shell-fill: var(--bg-elevated);
+  --composer-shell-edge: color-mix(in srgb, var(--accent-primary) 26%, var(--border-default) 74%);
+  --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 34%, var(--border-hover) 66%);
 
   /* Interactive state colors */
   --bg-hover: #e2e8f0;
@@ -1707,20 +1713,39 @@ button {
 
 .xterm-viewport {
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: scroll;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch; /* Smooth scrolling on iOS */
   touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: var(--accent-primary) var(--composer-shell-fill) !important;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 14px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: var(--composer-shell-fill) !important;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--accent-primary) !important;
+  border-radius: 999px;
+  border: 3px solid var(--composer-shell-fill);
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover,
+.xterm-viewport::-webkit-scrollbar-thumb:active {
+  background: var(--accent-primary-light) !important;
 }
 
 /* Mobile terminal scrollbar - visible and touch-friendly */
 @media (max-width: 768px) {
   .xterm-viewport {
     overflow-y: scroll !important;
-  }
-
-  .xterm-viewport {
-    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    scrollbar-color: var(--composer-shell-edge) var(--composer-shell-fill);
   }
 
   .xterm-viewport::-webkit-scrollbar {
@@ -1728,17 +1753,13 @@ button {
   }
 
   .xterm-viewport::-webkit-scrollbar-track {
-    background: var(--scrollbar-track);
+    background: var(--composer-shell-fill);
   }
 
   .xterm-viewport::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb);
+    background: var(--composer-shell-edge);
     border-radius: 7px;
-    border: 3px solid var(--scrollbar-track);
-  }
-
-  .xterm-viewport::-webkit-scrollbar-thumb:active {
-    background: var(--scrollbar-thumb-hover);
+    border: 3px solid var(--composer-shell-fill);
   }
 }
 
@@ -7681,7 +7702,8 @@ button {
   display: none;
   flex-direction: column;
   position: fixed;
-  top: 0;
+  /* Match visual viewport offset so header stays aligned with layout */
+  top: var(--mobile-viewport-offset, 0px);
   left: 0;
   right: 0;
   background: var(--bg-primary, #09090b);
@@ -8697,7 +8719,8 @@ button {
     /* --mobile-header-height is set dynamically by MobileHeader component */
     /* Use fixed positioning for reliable iOS keyboard handling */
     position: fixed;
-    top: var(--mobile-viewport-offset-top, 0px);
+    /* Offset top to match visual viewport when iOS scrolls on keyboard open */
+    top: var(--mobile-viewport-offset, 0px);
     left: 0;
     right: 0;
     /* Bottom is set dynamically: viewport height from top */

@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TerminalStreamEvent } from './terminal-types';
 import { ensureDataDir } from '../utils/data-dir';
-import type { TerminalSandboxInfo } from '../sandbox/sandbox-types';
+import type { SandboxMode, TerminalSandboxInfo } from '../sandbox/sandbox-types';
 
 export interface ThreadGitStats {
   linesAdded: number;
@@ -16,6 +16,8 @@ export interface ThreadMetadata {
   pinned: boolean;
   archived: boolean;
   projectPath: string | null;
+  sandboxMode: SandboxMode;
+  sandboxWorkspaceRoot: string | null;
   gitStats: ThreadGitStats | null;
   lastActivityAt: string;
 }
@@ -296,6 +298,8 @@ export function createDefaultThreadMetadata(cwd?: string): ThreadMetadata {
     pinned: false,
     archived: false,
     projectPath: null, // Will be detected lazily
+    sandboxMode: 'off',
+    sandboxWorkspaceRoot: null,
     gitStats: null,
     lastActivityAt: new Date().toISOString()
   };
@@ -320,6 +324,8 @@ export async function updateThreadMetadata(
   // Merge updates
   session.thread = {
     ...currentThread,
+    sandboxMode: updates.sandboxMode ?? currentThread.sandboxMode ?? session.sandbox?.mode ?? 'off',
+    sandboxWorkspaceRoot: updates.sandboxWorkspaceRoot ?? currentThread.sandboxWorkspaceRoot ?? session.sandbox?.workspaceRoot ?? null,
     ...updates,
     // Ensure lastActivityAt is updated
     lastActivityAt: updates.lastActivityAt || new Date().toISOString()
@@ -340,5 +346,9 @@ export async function getThreadMetadata(
   if (!session) {
     return null;
   }
-  return session.thread || createDefaultThreadMetadata(session.cwd);
+  return session.thread || {
+    ...createDefaultThreadMetadata(session.cwd),
+    sandboxMode: session.sandbox?.mode ?? 'off',
+    sandboxWorkspaceRoot: session.sandbox?.workspaceRoot ?? null
+  };
 }

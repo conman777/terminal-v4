@@ -2,16 +2,38 @@ import { useEffect, useState, useRef } from 'react';
 import { isTouchLikeDevice } from '../utils/deviceDetection';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
+function isEditableElementFocused() {
+  if (typeof document === 'undefined') return false;
+  const el = document.activeElement;
+  if (!el || el === document.body) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+}
+
 function readViewportMetrics() {
   if (typeof window === 'undefined') {
     return { height: 0, offsetTop: 0 };
   }
 
   const viewport = window.visualViewport;
+  const rawHeight = viewport ? viewport.height : window.innerHeight;
+  const rawOffsetTop = viewport?.offsetTop;
+
+  // Only report offsetTop when an editable input is focused (keyboard likely open).
+  // iOS can leave a stale offsetTop after the keyboard closes, causing the layout
+  // to stay pushed down. Force it to 0 when no input has focus.
+  const inputFocused = isEditableElementFocused();
+
   return {
-    height: Math.round(viewport ? viewport.height : window.innerHeight),
-    offsetTop: Math.round(viewport?.offsetTop || 0),
+    height: typeof rawHeight === 'number' && Number.isFinite(rawHeight) ? Math.max(0, Math.round(rawHeight)) : 0,
+    offsetTop: inputFocused && typeof rawOffsetTop === 'number' && Number.isFinite(rawOffsetTop) ? Math.max(0, Math.round(rawOffsetTop)) : 0,
   };
+}
+
+function coerceViewportMetrics(nextMetrics, previousMetrics) {
+  const height = nextMetrics.height > 0 ? nextMetrics.height : previousMetrics.height;
+  const offsetTop = Math.max(0, nextMetrics.offsetTop);
+
+  return { height, offsetTop };
 }
 
 // Track the real visible viewport so mobile layouts can react to browser chrome and keyboards.
@@ -50,11 +72,13 @@ export function useViewportMetrics() {
       const nextMetrics = readViewportMetrics();
 
       setMetrics((previousMetrics) => {
+        const normalizedMetrics = coerceViewportMetrics(nextMetrics, previousMetrics);
+
         if (
-          nextMetrics.height !== previousMetrics.height
-          || nextMetrics.offsetTop !== previousMetrics.offsetTop
+          normalizedMetrics.height !== previousMetrics.height
+          || normalizedMetrics.offsetTop !== previousMetrics.offsetTop
         ) {
-          return nextMetrics;
+          return normalizedMetrics;
         }
         return previousMetrics;
       });

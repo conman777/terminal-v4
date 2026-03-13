@@ -12,6 +12,9 @@ export function buildInteractiveTerminalEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv, ...overrides };
 
+  // Remove Claude Code's nesting guard so terminals can launch claude independently
+  delete env.CLAUDECODE;
+
   if (!env.TERM || isDumbTerm(env.TERM)) {
     env.TERM = FALLBACK_TERM;
   }

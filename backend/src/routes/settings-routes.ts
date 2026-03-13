@@ -13,6 +13,9 @@ interface UserSettings {
   theme: string | null;
   tabOrder: string[] | null;
   sandboxDefaultMode: SandboxMode;
+  recentFolders: string[] | null;
+  pinnedFolders: string[] | null;
+  sidebarProjects: { path: string; name: string }[] | null;
 }
 
 interface UpdateSettingsBody {
@@ -25,6 +28,32 @@ interface UpdateSettingsBody {
   theme?: string | null;
   tabOrder?: string[] | null;
   sandboxDefaultMode?: SandboxMode | null;
+  recentFolders?: string[] | null;
+  pinnedFolders?: string[] | null;
+  sidebarProjects?: { path: string; name: string }[] | null;
+}
+
+function parseJsonArray<T>(value: string | null | undefined): T[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as T[] : null;
+  } catch {
+    return null;
+  }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+function isSidebarProjectArray(value: unknown): value is { path: string; name: string }[] {
+  return Array.isArray(value) && value.every((entry) => (
+    entry &&
+    typeof entry === 'object' &&
+    typeof (entry as { path?: unknown }).path === 'string' &&
+    typeof (entry as { name?: unknown }).name === 'string'
+  ));
 }
 
 export async function registerSettingsRoutes(app: FastifyInstance): Promise<void> {
@@ -37,7 +66,7 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
     }
 
     const db = getDatabase();
-    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode FROM user_settings WHERE user_id = ?').get(userId) as {
+    const row = db.prepare('SELECT groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, recent_folders, pinned_folders, sidebar_projects FROM user_settings WHERE user_id = ?').get(userId) as {
       groq_api_key: string | null;
       preview_url: string | null;
       terminal_font_size: number | null;
@@ -47,6 +76,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       theme: string | null;
       tab_order: string | null;
       sandbox_default_mode: SandboxMode | null;
+      recent_folders: string | null;
+      pinned_folders: string | null;
+      sidebar_projects: string | null;
     } | undefined;
 
     // Mask the API key for display (show only last 4 chars)
@@ -72,6 +104,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         : row?.desktop_allow_terminal_input === 1,
       theme: row?.theme || 'dark',
       tabOrder,
+      recentFolders: parseJsonArray<string>(row?.recent_folders),
+      pinnedFolders: parseJsonArray<string>(row?.pinned_folders),
+      sidebarProjects: parseJsonArray<{ path: string; name: string }>(row?.sidebar_projects),
       sandboxDefaultMode: row?.sandbox_default_mode && SANDBOX_MODES.includes(row.sandbox_default_mode)
         ? row.sandbox_default_mode
         : 'off'
@@ -95,7 +130,10 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       desktopAllowTerminalInput,
       theme,
       tabOrder,
-      sandboxDefaultMode
+      sandboxDefaultMode,
+      recentFolders,
+      pinnedFolders,
+      sidebarProjects
     } = request.body || {};
 
     if (groqApiKey !== undefined && groqApiKey !== null && typeof groqApiKey !== 'string') {
@@ -140,6 +178,21 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
 
     if (tabOrder !== undefined && tabOrder !== null && !Array.isArray(tabOrder)) {
       reply.code(400).send({ error: 'Tab order must be an array of session IDs' });
+      return;
+    }
+
+    if (recentFolders !== undefined && recentFolders !== null && !isStringArray(recentFolders)) {
+      reply.code(400).send({ error: 'Recent folders must be an array of strings' });
+      return;
+    }
+
+    if (pinnedFolders !== undefined && pinnedFolders !== null && !isStringArray(pinnedFolders)) {
+      reply.code(400).send({ error: 'Pinned folders must be an array of strings' });
+      return;
+    }
+
+    if (sidebarProjects !== undefined && sidebarProjects !== null && !isSidebarProjectArray(sidebarProjects)) {
+      reply.code(400).send({ error: 'Sidebar projects must be an array of { path, name } objects' });
       return;
     }
 
@@ -199,11 +252,23 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         updates.push('sandbox_default_mode = ?');
         values.push(sandboxDefaultMode ?? 'off');
       }
+      if (recentFolders !== undefined) {
+        updates.push('recent_folders = ?');
+        values.push(recentFolders ? JSON.stringify(recentFolders) : null);
+      }
+      if (pinnedFolders !== undefined) {
+        updates.push('pinned_folders = ?');
+        values.push(pinnedFolders ? JSON.stringify(pinnedFolders) : null);
+      }
+      if (sidebarProjects !== undefined) {
+        updates.push('sidebar_projects = ?');
+        values.push(sidebarProjects ? JSON.stringify(sidebarProjects) : null);
+      }
 
       values.push(userId);
       db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
     } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, recent_folders, pinned_folders, sidebar_projects, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
         userId,
         groqApiKey || null,
         previewUrl || null,
@@ -214,6 +279,9 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
         theme || 'dark',
         tabOrder ? JSON.stringify(tabOrder) : null,
         sandboxDefaultMode || 'off',
+        recentFolders ? JSON.stringify(recentFolders) : null,
+        pinnedFolders ? JSON.stringify(pinnedFolders) : null,
+        sidebarProjects ? JSON.stringify(sidebarProjects) : null,
         now
       );
     }

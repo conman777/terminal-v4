@@ -612,28 +612,32 @@ export const TerminalPane = memo(function TerminalPane({
           )}
 
           {/* Fullscreen */}
-          <span className="ph-divider" />
-          <button
-            className="ph-btn"
-            onClick={(e) => { e.stopPropagation(); onFullscreen(pane.id); }}
-            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          >
-            {isFullscreen ? (
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <polyline points="5 1.5 1.5 1.5 1.5 5" />
-                <polyline points="9 12.5 12.5 12.5 12.5 9" />
-                <line x1="1.5" y1="1.5" x2="5.5" y2="5.5" />
-                <line x1="8.5" y1="8.5" x2="12.5" y2="12.5" />
-              </svg>
-            ) : (
-              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <polyline points="8.5 1.5 12.5 1.5 12.5 5.5" />
-                <polyline points="5.5 12.5 1.5 12.5 1.5 8.5" />
-                <line x1="12.5" y1="1.5" x2="8.5" y2="5.5" />
-                <line x1="1.5" y1="12.5" x2="5.5" y2="8.5" />
-              </svg>
-            )}
-          </button>
+          {selectableSessions.length > 1 && (
+            <>
+              <span className="ph-divider" />
+              <button
+                className="ph-btn"
+                onClick={(e) => { e.stopPropagation(); onFullscreen(pane.id); }}
+                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                {isFullscreen ? (
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <polyline points="5 1.5 1.5 1.5 1.5 5" />
+                    <polyline points="9 12.5 12.5 12.5 12.5 9" />
+                    <line x1="1.5" y1="1.5" x2="5.5" y2="5.5" />
+                    <line x1="8.5" y1="8.5" x2="12.5" y2="12.5" />
+                  </svg>
+                ) : (
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <polyline points="8.5 1.5 12.5 1.5 12.5 5.5" />
+                    <polyline points="5.5 12.5 1.5 12.5 1.5 8.5" />
+                    <line x1="12.5" y1="1.5" x2="8.5" y2="5.5" />
+                    <line x1="1.5" y1="12.5" x2="5.5" y2="8.5" />
+                  </svg>
+                )}
+              </button>
+            </>
+          )}
 
           {/* Close pane */}
           {canClose && !isFullscreen && (

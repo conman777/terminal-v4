@@ -17,6 +17,7 @@ export default function ThreadsSidebar({
   onUnpinSession,
   onArchiveSession,
   onUnarchiveSession,
+  onUpdateThreadMetadata,
   onTopicChange,
   onRenameSession,
   onCloseSession,
@@ -164,6 +165,7 @@ export default function ThreadsSidebar({
                   onUnpin={onUnpinSession}
                   onArchive={onArchiveSession}
                   onUnarchive={onUnarchiveSession}
+                  onUpdateThreadMetadata={onUpdateThreadMetadata}
                   onTopicChange={onTopicChange}
                   onClose={onCloseSession}
                 />
@@ -186,6 +188,7 @@ export default function ThreadsSidebar({
                 onUnpinSession={onUnpinSession}
                 onArchiveSession={onArchiveSession}
                 onUnarchiveSession={onUnarchiveSession}
+                onUpdateThreadMetadata={onUpdateThreadMetadata}
                 onTopicChange={onTopicChange}
                 onRenameSession={onRenameSession}
                 onCloseSession={onCloseSession}
@@ -254,6 +257,7 @@ export default function ThreadsSidebar({
                       onUnpin={onUnpinSession}
                       onArchive={onArchiveSession}
                       onUnarchive={onUnarchiveSession}
+                      onUpdateThreadMetadata={onUpdateThreadMetadata}
                       onTopicChange={onTopicChange}
                       onClose={onCloseSession}
                     />

@@ -32,6 +32,7 @@ export default function ThreadsSessionItem({
   onUnpin,
   onArchive,
   onUnarchive,
+  onUpdateThreadMetadata,
   onTopicChange,
   onRenameSession,
   onClose
@@ -46,6 +47,10 @@ export default function ThreadsSessionItem({
   const topic = getPreferredSessionTopic(thread.topic, session.title || 'New session');
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
+  const effectiveSandboxMode = session.sandbox?.mode ?? 'off';
+  const requestedSandboxMode = thread.sandboxMode ?? effectiveSandboxMode;
+  const isSandboxed = requestedSandboxMode !== 'off' || effectiveSandboxMode !== 'off';
+  const sandboxChangePending = requestedSandboxMode !== effectiveSandboxMode;
   const sessionAge = formatRelativeTime(session.createdAt);
   const resolvedIsBusy = typeof isBusy === 'boolean' ? isBusy : Boolean(session.isBusy);
   const showReadyIndicator = !resolvedIsBusy && Boolean(hasActivity) && !isActive;
@@ -119,6 +124,26 @@ export default function ThreadsSessionItem({
     onClose?.(session.id);
   }, [session.id, onClose]);
 
+  const handleToggleSandbox = useCallback((event) => {
+    event?.stopPropagation?.();
+    const nextMode = requestedSandboxMode === 'off' ? 'workspace-write' : 'off';
+    const nextWorkspaceRoot = nextMode === 'off'
+      ? null
+      : thread.projectPath || thread.sandboxWorkspaceRoot || session.sandbox?.workspaceRoot || session.cwd || null;
+    onUpdateThreadMetadata?.(session.id, {
+      sandboxMode: nextMode,
+      sandboxWorkspaceRoot: nextWorkspaceRoot
+    });
+  }, [
+    onUpdateThreadMetadata,
+    requestedSandboxMode,
+    session.cwd,
+    session.id,
+    session.sandbox?.workspaceRoot,
+    thread.projectPath,
+    thread.sandboxWorkspaceRoot
+  ]);
+
   const handleContextMenu = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -137,6 +162,12 @@ export default function ThreadsSessionItem({
     {
       label: isArchived ? 'Unarchive' : 'Archive',
       onClick: () => isArchived ? onUnarchive?.(session.id) : onArchive?.(session.id)
+    },
+    {
+      label: requestedSandboxMode === 'off'
+        ? (session.isActive ? 'Use sandbox next launch' : 'Use sandbox copy')
+        : (session.isActive ? 'Use host workspace next launch' : 'Use host workspace'),
+      onClick: () => handleToggleSandbox()
     },
     { separator: true },
     {
@@ -186,7 +217,17 @@ export default function ThreadsSessionItem({
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <span className="threads-session-topic">{topic}</span>
+          <>
+            <span className="threads-session-topic">{topic}</span>
+            {isSandboxed && (
+              <span
+                className={`threads-session-sandbox-badge${sandboxChangePending ? ' pending' : ''}`}
+                title={sandboxChangePending ? 'Sandbox setting will apply next launch' : 'Sandbox copy enabled'}
+              >
+                SBX
+              </span>
+            )}
+          </>
         )}
       </div>
 
@@ -198,6 +239,25 @@ export default function ThreadsSessionItem({
 
         {showActions && (
           <div className="threads-session-actions">
+            <button
+              type="button"
+              className={`threads-action-btn ${isSandboxed ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
+              onClick={handleToggleSandbox}
+              title={
+                requestedSandboxMode === 'off'
+                  ? (session.isActive ? 'Enable sandbox for next launch' : 'Enable sandbox copy')
+                  : (session.isActive ? 'Use host workspace on next launch' : 'Use host workspace')
+              }
+              aria-label={
+                requestedSandboxMode === 'off'
+                  ? (session.isActive ? 'Enable sandbox for next launch' : 'Enable sandbox copy')
+                  : (session.isActive ? 'Use host workspace on next launch' : 'Use host workspace')
+              }
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
+              </svg>
+            </button>
             <button
               type="button"
               className="threads-action-btn"
@@ -292,6 +352,7 @@ export default function ThreadsSessionItem({
           min-width: 0;
           display: flex;
           align-items: center;
+          gap: 6px;
         }
 
         .threads-session-topic {
@@ -301,6 +362,25 @@ export default function ThreadsSessionItem({
           overflow: hidden;
           text-overflow: ellipsis;
           line-height: 1;
+        }
+
+        .threads-session-sandbox-badge {
+          flex-shrink: 0;
+          display: inline-flex;
+          align-items: center;
+          height: 16px;
+          padding: 0 5px;
+          border-radius: 999px;
+          background: rgba(59, 130, 246, 0.14);
+          color: #93c5fd;
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.04em;
+        }
+
+        .threads-session-sandbox-badge.pending {
+          background: rgba(245, 158, 11, 0.14);
+          color: #fcd34d;
         }
 
         .threads-session-edit {
@@ -382,6 +462,10 @@ export default function ThreadsSessionItem({
 
         .threads-action-btn.active {
           color: var(--accent-primary, #f59e0b);
+        }
+
+        .threads-action-btn.pending {
+          color: #fcd34d;
         }
 
         .threads-action-btn.close:hover {

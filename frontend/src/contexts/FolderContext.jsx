@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
 import { normalizeProjectPath } from '../utils/projectPaths';
+import { useAuth } from './AuthContext';
 
 const FolderContext = createContext(null);
 
@@ -17,54 +18,91 @@ function appendSidebarProject(prev, folderPath) {
   return [...prev, { path: folderPath, name: getProjectNameFromPath(folderPath) }];
 }
 
-export function FolderProvider({ children }) {
-  // Folder state
-  const [recentFolders, setRecentFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('recentFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
+function readStoredJson(key, fallback) {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored ? JSON.parse(stored) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
-  const [pinnedFolders, setPinnedFolders] = useState(() => {
-    try {
-      const stored = localStorage.getItem('pinnedFolders');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    console.error(`Failed to save ${key}`, error);
+  }
+}
+
+function sanitizeStringList(value, limit) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const next = [];
+  value.forEach((entry) => {
+    if (typeof entry !== 'string') return;
+    const trimmed = entry.trim();
+    if (!trimmed) return;
+    const dedupeKey = trimmed.toLowerCase();
+    if (seen.has(dedupeKey)) return;
+    seen.add(dedupeKey);
+    next.push(trimmed);
   });
+  return next.slice(0, limit);
+}
+
+function sanitizeSidebarProjects(value) {
+  if (!Array.isArray(value)) return [];
+  return value.reduce((projects, entry) => {
+    if (!entry || typeof entry !== 'object' || typeof entry.path !== 'string') {
+      return projects;
+    }
+    return appendSidebarProject(projects, entry.path);
+  }, []);
+}
+
+export function FolderProvider({ children }) {
+  const { isAuthenticated } = useAuth();
+  const settingsHydratedRef = useRef(false);
+
+  // Folder state
+  const [recentFolders, setRecentFolders] = useState(() => sanitizeStringList(readStoredJson('recentFolders', []), 10));
+
+  const [pinnedFolders, setPinnedFolders] = useState(() => sanitizeStringList(readStoredJson('pinnedFolders', []), 20));
 
   // Projects state (from scanner)
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
 
   // Sidebar projects - user-curated list of folders shown in sidebar
-  const [sidebarProjects, setSidebarProjects] = useState(() => {
+  const [sidebarProjects, setSidebarProjects] = useState(() => sanitizeSidebarProjects(readStoredJson('sidebarProjects', [])));
+
+  const syncFolderSettings = useCallback(async (updates) => {
+    if (!isAuthenticated) return;
     try {
-      const stored = localStorage.getItem('sidebarProjects');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
+      const response = await apiFetch('/api/settings', {
+        method: 'PATCH',
+        body: updates
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to sync folder settings (${response.status})`);
+      }
+    } catch (error) {
+      console.error('Failed to sync folder settings', error);
     }
-  });
+  }, [isAuthenticated]);
 
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
     if (!folder) return;
     setRecentFolders(prev => {
       const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      const updated = [folder, ...filtered].slice(0, 10);
-      try {
-        localStorage.setItem('recentFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save recent folders', e);
-      }
+      const updated = sanitizeStringList([folder, ...filtered], 10);
+      writeStoredJson('recentFolders', updated);
+      void syncFolderSettings({ recentFolders: updated });
       return updated;
     });
-  }, []);
+  }, [syncFolderSettings]);
 
   // Pin a folder (max 20)
   const pinFolder = useCallback((folder) => {
@@ -73,56 +111,47 @@ export function FolderProvider({ children }) {
       if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
         return prev;
       }
-      const updated = [...prev, folder].slice(0, 20);
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
+      const updated = sanitizeStringList([...prev, folder], 20);
+      writeStoredJson('pinnedFolders', updated);
+      void syncFolderSettings({ pinnedFolders: updated });
       return updated;
     });
-  }, []);
+  }, [syncFolderSettings]);
 
   // Unpin a folder
   const unpinFolder = useCallback((folder) => {
     setPinnedFolders(prev => {
-      const updated = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
-      try {
-        localStorage.setItem('pinnedFolders', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save pinned folders', e);
-      }
+      const updated = sanitizeStringList(
+        prev.filter(f => f.toLowerCase() !== folder.toLowerCase()),
+        20
+      );
+      writeStoredJson('pinnedFolders', updated);
+      void syncFolderSettings({ pinnedFolders: updated });
       return updated;
     });
-  }, []);
+  }, [syncFolderSettings]);
 
   // Add a project folder to sidebar
   const addSidebarProject = useCallback((folderPath) => {
     if (!folderPath) return;
     setSidebarProjects(prev => {
       const updated = appendSidebarProject(prev, folderPath);
-      try {
-        localStorage.setItem('sidebarProjects', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save sidebar projects', e);
-      }
+      writeStoredJson('sidebarProjects', updated);
+      void syncFolderSettings({ sidebarProjects: updated });
       return updated;
     });
-  }, []);
+  }, [syncFolderSettings]);
 
   // Remove a project folder from sidebar
   const removeSidebarProject = useCallback((folderPath) => {
     setSidebarProjects(prev => {
       const normalizedPath = normalizeProjectPath(folderPath);
       const updated = prev.filter(p => normalizeProjectPath(p.path) !== normalizedPath);
-      try {
-        localStorage.setItem('sidebarProjects', JSON.stringify(updated));
-      } catch (e) {
-        console.error('Failed to save sidebar projects', e);
-      }
+      writeStoredJson('sidebarProjects', updated);
+      void syncFolderSettings({ sidebarProjects: updated });
       return updated;
     });
-  }, []);
+  }, [syncFolderSettings]);
 
   // Load projects
   const loadProjects = useCallback(async () => {
@@ -159,11 +188,8 @@ export function FolderProvider({ children }) {
         }
         setSidebarProjects(prev => {
           const updated = appendSidebarProject(prev, normalizedPath);
-          try {
-            localStorage.setItem('sidebarProjects', JSON.stringify(updated));
-          } catch (e) {
-            console.error('Failed to save sidebar projects', e);
-          }
+          writeStoredJson('sidebarProjects', updated);
+          void syncFolderSettings({ sidebarProjects: updated });
           return updated;
         });
         return { ok: true };
@@ -184,7 +210,68 @@ export function FolderProvider({ children }) {
     } finally {
       setProjectsLoading(false);
     }
-  }, []);
+  }, [syncFolderSettings]);
+
+  useEffect(() => {
+    if (!isAuthenticated || settingsHydratedRef.current) {
+      return;
+    }
+    settingsHydratedRef.current = true;
+
+    let cancelled = false;
+
+    const hydrateFromSettings = async () => {
+      try {
+        const response = await apiFetch('/api/settings');
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        if (cancelled) {
+          return;
+        }
+
+        const nextRecentFolders = Array.isArray(data.recentFolders)
+          ? sanitizeStringList(data.recentFolders, 10)
+          : recentFolders;
+        const nextPinnedFolders = Array.isArray(data.pinnedFolders)
+          ? sanitizeStringList(data.pinnedFolders, 20)
+          : pinnedFolders;
+        const nextSidebarProjects = Array.isArray(data.sidebarProjects)
+          ? sanitizeSidebarProjects(data.sidebarProjects)
+          : sidebarProjects;
+
+        setRecentFolders(nextRecentFolders);
+        setPinnedFolders(nextPinnedFolders);
+        setSidebarProjects(nextSidebarProjects);
+        writeStoredJson('recentFolders', nextRecentFolders);
+        writeStoredJson('pinnedFolders', nextPinnedFolders);
+        writeStoredJson('sidebarProjects', nextSidebarProjects);
+
+        const migrationPayload = {};
+        if (!Array.isArray(data.recentFolders) && recentFolders.length > 0) {
+          migrationPayload.recentFolders = recentFolders;
+        }
+        if (!Array.isArray(data.pinnedFolders) && pinnedFolders.length > 0) {
+          migrationPayload.pinnedFolders = pinnedFolders;
+        }
+        if (!Array.isArray(data.sidebarProjects) && sidebarProjects.length > 0) {
+          migrationPayload.sidebarProjects = sidebarProjects;
+        }
+        if (Object.keys(migrationPayload).length > 0) {
+          void syncFolderSettings(migrationPayload);
+        }
+      } catch (error) {
+        console.error('Failed to hydrate folder settings', error);
+      }
+    };
+
+    void hydrateFromSettings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, pinnedFolders, recentFolders, sidebarProjects, syncFolderSettings]);
 
   useEffect(() => {
     loadProjects();

@@ -23,6 +23,7 @@ import {
   loadAllSessions,
   updateSessionMetadata,
   updateThreadMetadata,
+  createDefaultThreadMetadata,
   getSessionMetadata,
   listSessionMetadata,
   deleteSessionMetadata,
@@ -601,12 +602,17 @@ export class TerminalManager {
     const activeSessions = Array.from(this.#sessions.values())
       .filter((session) => session.userId === userId)
       .map((session) => {
+        const thread = session.thread || {
+          ...createDefaultThreadMetadata(session.cwd),
+          sandboxMode: session.sandbox?.mode ?? 'off',
+          sandboxWorkspaceRoot: session.sandbox?.workspaceRoot ?? null
+        };
         const resolved = resolveSessionPaths({
           cwd: session.cwd,
           metadataCwd: metadataIndex[session.id]?.cwd || null,
           defaultCwd,
           homeDir,
-          threadProjectPath: session.thread?.projectPath
+          threadProjectPath: thread.projectPath
         });
         return {
           id: session.id,
@@ -623,7 +629,7 @@ export class TerminalManager {
           isBusy: this.#isSessionBusy(session, now),
           usesTmux: session.usesTmux,
           sandbox: session.sandbox,
-          thread: session.thread
+          thread
         };
       });
 
@@ -633,12 +639,17 @@ export class TerminalManager {
     const persistedSessions = Array.from(userPersistedSessions.values())
       .filter((s) => !activeIds.has(s.id))
       .map((session) => {
+        const thread = session.thread || {
+          ...createDefaultThreadMetadata(session.cwd),
+          sandboxMode: session.sandbox?.mode ?? 'off',
+          sandboxWorkspaceRoot: session.sandbox?.workspaceRoot ?? null
+        };
         const resolved = resolveSessionPaths({
           cwd: session.cwd,
           metadataCwd: metadataIndex[session.id]?.cwd || null,
           defaultCwd,
           homeDir,
-          threadProjectPath: session.thread?.projectPath
+          threadProjectPath: thread.projectPath
         });
         return {
           id: session.id,
@@ -655,7 +666,7 @@ export class TerminalManager {
           isBusy: false,
           usesTmux: false,
           sandbox: session.sandbox,
-          thread: session.thread
+          thread
         };
       });
 
@@ -1079,6 +1090,11 @@ export class TerminalManager {
     cwd = launch.cwd;
     const launchShell = launch.shell;
     const launchEnv = launch.env;
+    const thread = {
+      ...createDefaultThreadMetadata(cwd),
+      sandboxMode: launch.sandbox.mode,
+      sandboxWorkspaceRoot: launch.sandbox.workspaceRoot ?? null
+    };
 
     // Use tmux if available for persistent sessions
     const usesTmux = this.#useTmux;
@@ -1133,6 +1149,7 @@ export class TerminalManager {
       nextEventSeq: 1,
       usesTmux,
       sandbox: launch.sandbox,
+      thread,
       outputBatcher: undefined, // Will be initialized below
       lastActivityAt: Date.now(),
       busyUntilAt: 0,
@@ -1662,10 +1679,15 @@ export class TerminalManager {
     } catch {
       cwd = defaultCwd;
     }
+    const persistedThread = persisted.thread || {
+      ...createDefaultThreadMetadata(cwd),
+      sandboxMode: persisted.sandbox?.mode ?? 'off',
+      sandboxWorkspaceRoot: persisted.sandbox?.workspaceRoot ?? null
+    };
     const sandboxPolicy = createSandboxPolicy(
       cwd,
-      persisted.sandbox?.mode ?? 'off',
-      persisted.sandbox?.workspaceRoot ?? undefined,
+      persistedThread.sandboxMode ?? persisted.sandbox?.mode ?? 'off',
+      persistedThread.sandboxWorkspaceRoot ?? persisted.sandbox?.workspaceRoot ?? undefined,
       persisted.sandbox
     );
     const launch = this.#sandboxRuntime.prepareTerminalLaunch({
@@ -1679,6 +1701,11 @@ export class TerminalManager {
     });
     cwd = launch.cwd;
     const launchShell = launch.shell;
+    const thread = {
+      ...persistedThread,
+      sandboxMode: sandboxPolicy.mode,
+      sandboxWorkspaceRoot: launch.sandbox.workspaceRoot ?? sandboxPolicy.workspaceRoot ?? null
+    };
 
     // Spawn the process - if tmux session exists, reattach to it
     const usesTmux = this.#useTmux;
@@ -1752,7 +1779,7 @@ export class TerminalManager {
       lastActivityAt: Date.now(),
       busyUntilAt: 0,
       recentOutputTail: '',
-      thread: persisted.thread
+      thread
     };
 
     // Create output batcher for this session

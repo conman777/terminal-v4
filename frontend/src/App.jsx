@@ -23,6 +23,7 @@ import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AutocorrectProvider } from './contexts/AutocorrectContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
+import { useMobileHeaderInputLock } from './hooks/useMobileHeaderInputLock';
 import { useViewportMetrics } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
@@ -170,6 +171,7 @@ function AppContent() {
     sessionsGroupedByProject,
     pinnedSessions,
     archivedSessions,
+    updateThreadMetadata,
     pinSession,
     unpinSession,
     archiveSession,
@@ -282,6 +284,7 @@ function AppContent() {
   const previousActiveSessionRef = useRef(null);
   const isMobile = useMobileDetect();
   const { height: viewportHeight, offsetTop: viewportOffsetTop } = useViewportMetrics();
+  const mobileHeaderInputLock = useMobileHeaderInputLock(isMobile);
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
 
@@ -359,14 +362,17 @@ function AppContent() {
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
     // Don't collapse header when keybar is open or in preview mode - user needs access to header controls
-    if (keybarOpen || mobileView === 'preview') {
+    if (keybarOpen || mobileView === 'preview' || mobileHeaderInputLock) {
+      if (mobileHeaderInputLock) {
+        resetScrollDirection();
+      }
       return;
     }
     if (mobileViewportAtBottomRef.current && direction === 'down') {
       return;
     }
     handleScrollDirection(direction);
-  }, [keybarOpen, mobileView, handleScrollDirection]);
+  }, [handleScrollDirection, keybarOpen, mobileHeaderInputLock, mobileView, resetScrollDirection]);
 
   // Toggle keybar and reset header collapse when opening
   const handleToggleKeybar = useCallback(() => {
@@ -539,6 +545,12 @@ function AppContent() {
     mobileViewportAtBottomRef.current = true;
     resetScrollDirection();
   }, [chatMode, mobileVisibleSessionId, resetScrollDirection]);
+
+  useEffect(() => {
+    if (!mobileHeaderInputLock) return;
+    mobileViewportAtBottomRef.current = true;
+    resetScrollDirection();
+  }, [mobileHeaderInputLock, resetScrollDirection]);
 
   useEffect(() => {
     if (!isMobile) return;
@@ -1150,13 +1162,20 @@ function AppContent() {
   }, [closeSession, removeSidebarProject]);
 
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
-  const layoutStyle =
-    isMobile && viewportHeight
-      ? {
-          '--mobile-viewport-height': `${Math.round(viewportHeight)}px`,
-          '--mobile-viewport-offset-top': `${Math.round(viewportOffsetTop || 0)}px`
-        }
-      : undefined;
+  // When a non-terminal input is focused (mobileHeaderInputLock), track the actual
+  // visualViewport height and offset so the layout fits above the iOS keyboard.
+  // When no input is focused, snap to 100dvh and zero offset immediately — this
+  // prevents the layout from staying squished while iOS animates the keyboard away.
+  const layoutStyle = isMobile
+    ? {
+        '--mobile-viewport-height': mobileHeaderInputLock && viewportHeight
+          ? `${Math.round(viewportHeight)}px`
+          : '100dvh',
+        '--mobile-viewport-offset': mobileHeaderInputLock && viewportOffsetTop
+          ? `${Math.round(viewportOffsetTop)}px`
+          : '0px'
+      }
+    : undefined;
 
   // Grouped props for Header
   const headerSessionProps = {
@@ -1323,6 +1342,7 @@ function AppContent() {
             onUnpinSession={unpinSession}
             onArchiveSession={archiveSession}
             onUnarchiveSession={unarchiveSession}
+            onUpdateThreadMetadata={updateThreadMetadata}
             onTopicChange={updateSessionTopic}
             onRenameSession={handleRenameThread}
             onCloseSession={closeSession}

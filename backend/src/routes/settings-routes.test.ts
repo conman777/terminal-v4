@@ -113,4 +113,36 @@ describe('settings-routes desktop terminal input preference', () => {
 
     await app.close();
   });
+
+  it('persists shared folder state for cross-client sidebar sync', async () => {
+    const app = buildApp(userId);
+    await registerSettingsRoutes(app);
+
+    const payload = {
+      recentFolders: ['C:\\repo-a', 'C:\\repo-b'],
+      pinnedFolders: ['C:\\repo-a'],
+      sidebarProjects: [
+        { path: 'C:\\repo-a', name: 'repo-a' },
+        { path: 'C:\\repo-b', name: 'repo-b' }
+      ]
+    };
+
+    const patchResponse = await app.inject({
+      method: 'PATCH',
+      url: '/api/settings',
+      payload,
+    });
+
+    expect(patchResponse.statusCode).toBe(200);
+
+    const getResponse = await app.inject({
+      method: 'GET',
+      url: '/api/settings',
+    });
+
+    expect(getResponse.statusCode).toBe(200);
+    expect(getResponse.json()).toMatchObject(payload);
+
+    await app.close();
+  });
 });

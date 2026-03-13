@@ -12,6 +12,7 @@ export default function ThreadsProjectGroup({
   onUnpinSession,
   onArchiveSession,
   onUnarchiveSession,
+  onUpdateThreadMetadata,
   onTopicChange,
   onRenameSession,
   onCloseSession,
@@ -108,6 +109,7 @@ export default function ThreadsProjectGroup({
                 onUnpin={onUnpinSession}
                 onArchive={onArchiveSession}
                 onUnarchive={onUnarchiveSession}
+                onUpdateThreadMetadata={onUpdateThreadMetadata}
                 onTopicChange={onTopicChange}
                 onRenameSession={onRenameSession}
                 onClose={onCloseSession}

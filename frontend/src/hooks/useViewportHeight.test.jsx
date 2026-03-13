@@ -109,6 +109,21 @@ describe('useViewportHeight', () => {
     expect(result.current).toEqual({ height: 402, offsetTop: 248 });
   });
 
+  it('ignores transient zero/invalid visual viewport heights', () => {
+    setVisualViewport(812, 0);
+
+    const { result } = renderHook(() => useViewportMetrics());
+    expect(result.current).toEqual({ height: 812, offsetTop: 0 });
+
+    act(() => {
+      window.visualViewport.height = 0;
+      window.visualViewport.offsetTop = -12;
+      window.visualViewport.__listeners.get('resize')?.();
+    });
+
+    expect(result.current).toEqual({ height: 812, offsetTop: 0 });
+  });
+
   it('stops fallback polling while the window is inactive', () => {
     Object.defineProperty(window, 'visualViewport', {
       configurable: true,

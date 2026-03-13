@@ -267,7 +267,11 @@ export async function registerThreadRoutes(app: FastifyInstance, deps: CoreRoute
     ]);
 
     // Update session with latest stats and project path
-    const thread = session.thread || createDefaultThreadMetadata(session.cwd);
+    const thread = session.thread || {
+      ...createDefaultThreadMetadata(session.cwd),
+      sandboxMode: session.sandbox?.mode ?? 'off',
+      sandboxWorkspaceRoot: session.sandbox?.workspaceRoot ?? null
+    };
     session.thread = {
       ...thread,
       gitStats,
