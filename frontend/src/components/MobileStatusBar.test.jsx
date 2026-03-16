@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileStatusBar } from './MobileStatusBar';
 
 const sendToSessionMock = vi.fn();
+const toggleAutocorrectMock = vi.fn();
+let mockAutocorrectEnabled = true;
 
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession: () => ({
@@ -12,8 +14,8 @@ vi.mock('../contexts/TerminalSessionContext', () => ({
 
 vi.mock('../contexts/AutocorrectContext', () => ({
   useAutocorrect: () => ({
-    autocorrectEnabled: true,
-    toggleAutocorrect: vi.fn()
+    autocorrectEnabled: mockAutocorrectEnabled,
+    toggleAutocorrect: toggleAutocorrectMock
   })
 }));
 
@@ -39,7 +41,6 @@ function buildProps(overrides = {}) {
     customAiProviders: [],
     onSelectAiType: vi.fn(),
     onAddCustomAiCommand: vi.fn(),
-    onLaunchAi: vi.fn(),
     ...overrides
   };
 }
@@ -48,16 +49,14 @@ describe('MobileStatusBar', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     sendToSessionMock.mockReset();
+    toggleAutocorrectMock.mockReset();
+    mockAutocorrectEnabled = true;
   });
 
-  it('shows AI selector controls and launches the current provider', () => {
-    const onLaunchAi = vi.fn();
-    render(<MobileStatusBar {...buildProps({ onLaunchAi })} />);
+  it('shows AI selector controls', () => {
+    render(<MobileStatusBar {...buildProps()} />);
 
     expect(screen.getByRole('button', { name: /choose ai coder/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: /launch codex/i }));
-    expect(onLaunchAi).toHaveBeenCalledTimes(1);
   });
 
   it('selects a different AI provider from the mobile menu', () => {
@@ -98,6 +97,36 @@ describe('MobileStatusBar', () => {
     expect(sendToSessionMock).toHaveBeenCalledWith('session-1', '/model\r');
   });
 
+  it('keeps the composer focused when selecting a slash suggestion', () => {
+    render(<MobileStatusBar {...buildProps({ runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high Â· 100% left' } })} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    composer.focus();
+    fireEvent.change(composer, {
+      target: { value: '/' }
+    });
+
+    fireEvent.pointerDown(screen.getByRole('option', { name: /\/model/i }));
+    fireEvent.click(screen.getByRole('option', { name: /\/model/i }));
+
+    expect(composer).toHaveFocus();
+    expect(composer).toHaveValue('/model ');
+  });
+
+  it('uses the queued mobile send handler when provided', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue({ queued: true });
+    render(<MobileStatusBar {...buildProps({ onSendMessage })} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
+      target: { value: 'Explain this repo' }
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+
+    expect(onSendMessage).toHaveBeenCalledWith('Explain this repo');
+    expect(sendToSessionMock).not.toHaveBeenCalled();
+  });
+
   it('hides slash suggestions when no coding cli runtime is active', () => {
     render(<MobileStatusBar {...buildProps()} />);
 
@@ -116,5 +145,24 @@ describe('MobileStatusBar', () => {
     expect(styles).toContain('color-mix(in srgb, var(--bg-surface) 94%, transparent)');
     expect(styles).toContain('color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated))');
     expect(styles).toContain('font-size: 16px;');
+  });
+
+  it('wires the autocorrect toggle into native text correction attributes', () => {
+    const { rerender } = render(<MobileStatusBar {...buildProps()} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    expect(composer).toHaveAttribute('autocorrect', 'on');
+    expect(composer).toHaveAttribute('autocapitalize', 'sentences');
+    expect(composer).toHaveAttribute('spellcheck', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable autocorrect' }));
+    expect(toggleAutocorrectMock).toHaveBeenCalledTimes(1);
+
+    mockAutocorrectEnabled = false;
+    rerender(<MobileStatusBar {...buildProps()} />);
+
+    expect(composer).toHaveAttribute('autocorrect', 'off');
+    expect(composer).toHaveAttribute('autocapitalize', 'off');
+    expect(composer).toHaveAttribute('spellcheck', 'false');
   });
 });

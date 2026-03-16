@@ -226,8 +226,6 @@ body, html, #root {
 /* Prevent body scroll on mobile - important for keyboard handling */
 @media (max-width: 768px), (pointer: coarse) and (max-width: 1024px) {
   html, body {
-    position: fixed;
-    width: 100%;
     height: 100%;
     overflow: hidden;
     overscroll-behavior: none;
@@ -7710,6 +7708,7 @@ button {
   border-bottom: 1px solid var(--border-default, #3f3f46);
   z-index: 1200;
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  flex-shrink: 0;
 }
 
 .mobile-header.nav-collapsed {
@@ -8724,18 +8723,19 @@ button {
     left: 0;
     right: 0;
     /* Bottom is set dynamically: viewport height from top */
+    width: 100%;
     height: var(--mobile-viewport-height, 100dvh);
+    padding-top: var(--mobile-header-height, 0px);
     overflow: hidden;
-    padding-top: var(--mobile-header-height);
     /* Safe area insets applied on .terminal-main instead to avoid duplication */
-    /* Flex container for children */
     display: flex;
     flex-direction: column;
+    min-height: 0;
   }
 
   .layout.mobile.nav-collapsed {
     --mobile-header-height: env(safe-area-inset-top, 0px);
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: var(--mobile-header-height, 0px);
   }
 
   .layout.mobile .sidebar {
@@ -8758,6 +8758,7 @@ button {
     display: flex;
     flex-direction: column;
     flex: 1;
+    height: auto;
     min-height: 0;
     overflow: hidden;
   }
@@ -8901,6 +8902,7 @@ button {
     display: flex;
     flex-direction: column;
     flex: 1;
+    height: auto;
     min-height: 0;
     overflow: hidden;
   }

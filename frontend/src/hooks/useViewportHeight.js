@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { isTouchLikeDevice } from '../utils/deviceDetection';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
@@ -15,12 +15,10 @@ function readViewportMetrics() {
   }
 
   const viewport = window.visualViewport;
-  const rawHeight = viewport ? viewport.height : window.innerHeight;
+  const rawHeight = viewport
+    ? viewport.height + (viewport.offsetTop || 0)
+    : window.innerHeight;
   const rawOffsetTop = viewport?.offsetTop;
-
-  // Only report offsetTop when an editable input is focused (keyboard likely open).
-  // iOS can leave a stale offsetTop after the keyboard closes, causing the layout
-  // to stay pushed down. Force it to 0 when no input has focus.
   const inputFocused = isEditableElementFocused();
 
   return {
@@ -36,10 +34,8 @@ function coerceViewportMetrics(nextMetrics, previousMetrics) {
   return { height, offsetTop };
 }
 
-// Track the real visible viewport so mobile layouts can react to browser chrome and keyboards.
 export function useViewportMetrics() {
   const [metrics, setMetrics] = useState(() => readViewportMetrics());
-
   const pollIntervalIdRef = useRef(null);
   const slowdownTimeoutIdRef = useRef(null);
   const settleTimeoutIdRef = useRef(null);
@@ -65,12 +61,11 @@ export function useViewportMetrics() {
       }
     };
 
-    const updateHeight = () => {
+    const updateMetrics = () => {
       if (!windowActiveRef.current) {
         return;
       }
       const nextMetrics = readViewportMetrics();
-
       setMetrics((previousMetrics) => {
         const normalizedMetrics = coerceViewportMetrics(nextMetrics, previousMetrics);
 
@@ -87,9 +82,6 @@ export function useViewportMetrics() {
     const isTouchLike = isTouchLikeDevice();
     const viewport = window.visualViewport;
     const hasVisualViewport = Boolean(viewport);
-
-    // Short burst polling keeps keyboard transitions smooth on mobile while
-    // avoiding continuous background timers on devices with visualViewport support.
     const FAST_POLL_INTERVAL = 100;
     const FALLBACK_POLL_INTERVAL = 2000;
     const KEYBOARD_ANIMATION_DURATION = 450;
@@ -97,10 +89,10 @@ export function useViewportMetrics() {
     const startFastPolling = () => {
       if (!isTouchLike || !windowActiveRef.current) return;
 
-      updateHeight();
+      updateMetrics();
       clearPollingTimers();
 
-      pollIntervalIdRef.current = setInterval(updateHeight, FAST_POLL_INTERVAL);
+      pollIntervalIdRef.current = setInterval(updateMetrics, FAST_POLL_INTERVAL);
 
       slowdownTimeoutIdRef.current = setTimeout(() => {
         if (pollIntervalIdRef.current) {
@@ -108,13 +100,13 @@ export function useViewportMetrics() {
           pollIntervalIdRef.current = null;
         }
         if (!hasVisualViewport) {
-          pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+          pollIntervalIdRef.current = setInterval(updateMetrics, FALLBACK_POLL_INTERVAL);
         }
       }, KEYBOARD_ANIMATION_DURATION);
     };
 
     const handleViewportChange = () => {
-      updateHeight();
+      updateMetrics();
       if (!isTouchLike || !windowActiveRef.current) {
         return;
       }
@@ -123,24 +115,22 @@ export function useViewportMetrics() {
       }
       settleTimeoutIdRef.current = setTimeout(() => {
         settleTimeoutIdRef.current = null;
-        updateHeight();
+        updateMetrics();
       }, KEYBOARD_ANIMATION_DURATION);
     };
 
-    updateHeight();
+    updateMetrics();
 
     window.addEventListener('resize', handleViewportChange);
 
     if (viewport) {
-      // Listen for both resize and scroll - mobile browsers can use either while
-      // opening or dismissing the keyboard.
       viewport.addEventListener('resize', handleViewportChange);
       viewport.addEventListener('scroll', handleViewportChange);
     }
 
     if (isTouchLike) {
       if (!hasVisualViewport && windowActiveRef.current) {
-        pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+        pollIntervalIdRef.current = setInterval(updateMetrics, FALLBACK_POLL_INTERVAL);
       }
       window.addEventListener('focusin', startFastPolling);
       window.addEventListener('focusout', startFastPolling);
@@ -153,9 +143,9 @@ export function useViewportMetrics() {
         clearPollingTimers();
         return;
       }
-      updateHeight();
+      updateMetrics();
       if (isTouchLike && !hasVisualViewport && !pollIntervalIdRef.current) {
-        pollIntervalIdRef.current = setInterval(updateHeight, FALLBACK_POLL_INTERVAL);
+        pollIntervalIdRef.current = setInterval(updateMetrics, FALLBACK_POLL_INTERVAL);
       }
     });
 

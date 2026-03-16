@@ -313,6 +313,10 @@ export function DesktopStatusBar({
           placeholder={composerPlaceholder}
           aria-label="Command composer"
           rows={1}
+          autoComplete="off"
+          autoCorrect={autocorrectEnabled ? 'on' : 'off'}
+          autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}
+          spellCheck={autocorrectEnabled}
           disabled={composerDisabled || isPastingImage}
         />
         <input

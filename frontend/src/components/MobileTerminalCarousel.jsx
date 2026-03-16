@@ -456,6 +456,7 @@ export function MobileTerminalCarousel({
           isLoadingGitBranches={isLoadingGitBranches}
           isSwitchingGitBranch={isSwitchingGitBranch}
           onSelectGitBranch={handleSelectGitBranch}
+          onSendMessage={handleChatSend}
         />
       )}
 

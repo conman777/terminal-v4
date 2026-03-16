@@ -25,6 +25,7 @@ export function MobileStatusBar({
   isLoadingGitBranches = false,
   isSwitchingGitBranch = false,
   onSelectGitBranch,
+  onSendMessage,
   composerPlaceholder = 'Ask V4 anything'
 }) {
   const [inputText, setInputText] = useState('');
@@ -60,6 +61,16 @@ export function MobileStatusBar({
     setSelectedSlashIndex(0);
   }, [inputText, slashSuggestions.length]);
 
+  const focusComposerInput = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    try {
+      input.focus({ preventScroll: true });
+    } catch {
+      input.focus();
+    }
+  }, []);
+
   const sendToTerminal = useCallback(async (text, currentAttachments = attachments) => {
     if (!sessionId) return;
     const trimmed = String(text || '').trim();
@@ -70,13 +81,17 @@ export function MobileStatusBar({
     if (!payload) return;
 
     try {
-      await sendToSession?.(sessionId, payload.endsWith('\r') || payload.endsWith('\n') ? payload : `${payload}\r`);
+      if (typeof onSendMessage === 'function') {
+        await Promise.resolve(onSendMessage(payload));
+      } else {
+        await sendToSession?.(sessionId, payload.endsWith('\r') || payload.endsWith('\n') ? payload : `${payload}\r`);
+      }
       setInputText('');
       setAttachments([]);
     } catch (error) {
       console.error('Failed to send input to terminal:', error);
     }
-  }, [attachments, sendToSession, sessionId]);
+  }, [attachments, onSendMessage, sendToSession, sessionId]);
 
   const handleSubmit = useCallback((event) => {
     event.preventDefault();
@@ -224,6 +239,11 @@ export function MobileStatusBar({
     setIsAiMenuOpen(false);
   }, [onAddCustomAiCommand]);
 
+  const handleSlashSuggestionSelect = useCallback((command) => {
+    setInputText(`${command} `);
+    focusComposerInput();
+  }, [focusComposerInput]);
+
   const canSubmit = !isPastingImage && (Boolean(inputText.trim()) || attachments.length > 0);
   const hasBranchContext = Boolean(gitBranches.length > 0 || currentGitBranch);
 
@@ -279,7 +299,8 @@ export function MobileStatusBar({
                 role="option"
                 aria-selected={index === selectedSlashIndex ? 'true' : 'false'}
                 className={`mobile-slash-option${index === selectedSlashIndex ? ' selected' : ''}`}
-                onClick={() => setInputText(`${suggestion.cmd} `)}
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => handleSlashSuggestionSelect(suggestion.cmd)}
               >
                 <span className="mobile-slash-command">{suggestion.cmd}</span>
                 <span className="mobile-slash-description">{suggestion.desc}</span>
@@ -298,9 +319,9 @@ export function MobileStatusBar({
           aria-label="Command composer"
           rows={1}
           autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="off"
-          spellCheck="false"
+          autoCorrect={autocorrectEnabled ? 'on' : 'off'}
+          autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}
+          spellCheck={autocorrectEnabled}
           disabled={isPastingImage}
         />
         <input

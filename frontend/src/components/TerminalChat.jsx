@@ -514,13 +514,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Mobile keyboard control - now also focuses the mobile input
   const setMobileInputEnabled = useCallback((enabled) => {
     if (!isMobile) return;
+    const input = mobileInputRef.current;
     if (enabled) {
-      // Focus the mobile input to trigger iOS keyboard
-      setTimeout(() => {
-        focusElementWithoutScroll(mobileInputRef.current);
-      }, 50);
+      if (!input) return;
+      try {
+        input.focus({ preventScroll: true });
+      } catch {
+        input.focus();
+      }
     } else {
-      mobileInputRef.current?.blur();
+      input?.blur();
     }
   }, [isMobile]);
 
@@ -3349,7 +3352,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
 
       const handleResize = () => debouncedFit(100);
-      window.addEventListener('resize', handleResize);
+      if (!isMobile) {
+        window.addEventListener('resize', handleResize);
+      }
 
       let resizeTimeout = null;
       const resizeDisposer = term.onResize(({ cols, rows }) => {
@@ -3383,7 +3388,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         lastViewportHeight = nextHeight;
         debouncedFit(100);
       };
-      if (viewport) {
+      if (viewport && !isMobile) {
         lastViewportWidth = Math.round(viewport.width);
         lastViewportHeight = Math.round(viewport.height);
         viewport.addEventListener('resize', handleViewportResize);
@@ -3464,7 +3469,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       container.addEventListener('paste', handlePasteEvent, true);
 
       openWhenReady.cleanup = () => {
-        window.removeEventListener('resize', handleResize);
+        if (!isMobile) {
+          window.removeEventListener('resize', handleResize);
+        }
         window.removeEventListener('focus', handleFocus);
         document.removeEventListener('visibilitychange', handleVisibility);
         window.removeEventListener('online', handleOnline);
@@ -3481,7 +3488,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         scrollDisposer?.dispose();
         resizeDisposer?.dispose();
         dataDisposer?.dispose();
-        if (viewport) viewport.removeEventListener('resize', handleViewportResize);
+        if (viewport && !isMobile) viewport.removeEventListener('resize', handleViewportResize);
         if (openRetryTimeout) {
           clearTimeout(openRetryTimeout);
           openRetryTimeout = null;
@@ -3791,10 +3798,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           onInput={handleMobileInput}
           onKeyDown={handleMobileKeyDown}
           onPaste={handleMobilePaste}
-          autoCapitalize="off"
-          autoCorrect="off"
+          style={{ pointerEvents: keybarOpen && !isScrollMode ? 'auto' : 'none' }}
+          autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}
+          autoCorrect={autocorrectEnabled ? 'on' : 'off'}
           autoComplete="off"
-          spellCheck="false"
+          spellCheck={autocorrectEnabled}
           inputMode="text"
           enterKeyHint="send"
           aria-label="Terminal input"

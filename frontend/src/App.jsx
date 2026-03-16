@@ -12,6 +12,7 @@ import { FileManager } from './components/FileManager';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
 import { MobileGestureHints } from './components/MobileGestureHints';
+import { MobileKeyboardDebugOverlay } from './components/MobileKeyboardDebugOverlay';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TerminalSessionProvider, useTerminalSession } from './contexts/TerminalSessionContext';
@@ -44,6 +45,29 @@ function isDynamicImportFetchError(error) {
     message.includes('ChunkLoadError') ||
     /Loading chunk [\w-]+ failed/i.test(message)
   );
+}
+
+function isTextEntryElement(target) {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLSelectElement) return false;
+  if (!(target instanceof HTMLInputElement)) return false;
+
+  const nonTextTypes = new Set([
+    'button',
+    'checkbox',
+    'color',
+    'file',
+    'hidden',
+    'image',
+    'radio',
+    'range',
+    'reset',
+    'submit',
+  ]);
+
+  return !nonTextTypes.has((target.type || '').toLowerCase());
 }
 
 function triggerOneTimeChunkRecovery(chunkName) {
@@ -282,6 +306,7 @@ function AppContent() {
   const focusTerminalRef = useRef(null);
   const mobileViewportAtBottomRef = useRef(true);
   const previousActiveSessionRef = useRef(null);
+  const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
   const isMobile = useMobileDetect();
   const { height: viewportHeight, offsetTop: viewportOffsetTop } = useViewportMetrics();
   const mobileHeaderInputLock = useMobileHeaderInputLock(isMobile);
@@ -359,20 +384,67 @@ function AppContent() {
     }
   }, [resetScrollDirection]);
 
+  useEffect(() => {
+    if (!isMobile || typeof window === 'undefined' || typeof document === 'undefined') {
+      setIsMobileTextEntryFocused(false);
+      return undefined;
+    }
+
+    let frameId = null;
+    let timeoutId = null;
+
+    const updateFocusedState = () => {
+      setIsMobileTextEntryFocused(isTextEntryElement(document.activeElement));
+    };
+
+    const scheduleFocusedStateUpdate = () => {
+      if (frameId) cancelAnimationFrame(frameId);
+      if (timeoutId) clearTimeout(timeoutId);
+      frameId = requestAnimationFrame(() => {
+        frameId = null;
+        updateFocusedState();
+      });
+      timeoutId = window.setTimeout(() => {
+        timeoutId = null;
+        updateFocusedState();
+      }, 30);
+    };
+
+    scheduleFocusedStateUpdate();
+    window.addEventListener('focusin', scheduleFocusedStateUpdate);
+    window.addEventListener('focusout', scheduleFocusedStateUpdate);
+
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+      if (timeoutId) clearTimeout(timeoutId);
+      window.removeEventListener('focusin', scheduleFocusedStateUpdate);
+      window.removeEventListener('focusout', scheduleFocusedStateUpdate);
+    };
+  }, [isMobile]);
+
+  const shouldKeepMobileHeaderVisible = isMobile && (
+    keybarOpen
+    || mobileView === 'preview'
+    || isMobileTextEntryFocused
+  );
+
+  useEffect(() => {
+    if (shouldKeepMobileHeaderVisible) {
+      resetScrollDirection();
+    }
+  }, [resetScrollDirection, shouldKeepMobileHeaderVisible]);
+
   // Wrap scroll handler to prevent header collapse when keybar is open or in preview mode
   const handleScrollDirectionSafe = useCallback((direction) => {
-    // Don't collapse header when keybar is open or in preview mode - user needs access to header controls
-    if (keybarOpen || mobileView === 'preview' || mobileHeaderInputLock) {
-      if (mobileHeaderInputLock) {
-        resetScrollDirection();
-      }
+    // Don't collapse header when the user is actively entering text or the keybar/preview needs controls visible.
+    if (shouldKeepMobileHeaderVisible) {
       return;
     }
     if (mobileViewportAtBottomRef.current && direction === 'down') {
       return;
     }
     handleScrollDirection(direction);
-  }, [handleScrollDirection, keybarOpen, mobileHeaderInputLock, mobileView, resetScrollDirection]);
+  }, [handleScrollDirection, shouldKeepMobileHeaderVisible]);
 
   // Toggle keybar and reset header collapse when opening
   const handleToggleKeybar = useCallback(() => {
@@ -1166,6 +1238,16 @@ function AppContent() {
   // visualViewport height and offset so the layout fits above the iOS keyboard.
   // When no input is focused, snap to 100dvh and zero offset immediately — this
   // prevents the layout from staying squished while iOS animates the keyboard away.
+  const effectiveNavCollapsed = isMobile ? false : (shouldKeepMobileHeaderVisible ? false : isNavCollapsed);
+  const mobileKeyboardDebugEnabled = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('mobileDebug') === '1' || localStorage.getItem('mobileKeyboardDebug') === '1';
+    } catch {
+      return false;
+    }
+  }, []);
   const layoutStyle = isMobile
     ? {
         '--mobile-viewport-height': mobileHeaderInputLock && viewportHeight
@@ -1195,7 +1277,17 @@ function AppContent() {
   };
 
   return (
-    <div className={`layout${isMobile ? ' mobile' : ''}`} style={layoutStyle}>
+    <div className={`layout${isMobile ? ' mobile' : ''}${effectiveNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
+      {isMobile && mobileKeyboardDebugEnabled && (
+        <MobileKeyboardDebugOverlay
+          viewportHeight={viewportHeight}
+          keybarOpen={keybarOpen}
+          keybarHeight={keybarHeight}
+          mobileView={mobileView}
+          chatMode={chatMode}
+          enabled
+        />
+      )}
       <ErrorBoundary name="modals">
         <Suspense fallback={null}>
           <SettingsModal
@@ -1297,7 +1389,7 @@ function AppContent() {
             user={user}
             logout={logout}
             mobileProps={{
-              isNavCollapsed,
+              isNavCollapsed: effectiveNavCollapsed,
               onToggleKeybar: handleToggleKeybar,
               keybarOpen,
               projects,
