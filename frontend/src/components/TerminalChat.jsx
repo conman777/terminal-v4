@@ -1521,6 +1521,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let suppressResizeSyncCount = 0;
     let pendingTrackedResize = null;
     let lastResizeRequestKey = '';
+    // Tracks the active socket's pending write RAF and message queue so cleanup
+    // can cancel in-flight writes and prevent cross-session data leaks.
+    let activePendingWriteFrame = null;
+    let activeMessageQueue = null;
     const reconnectController = createTerminalReconnectController((options = {}) => {
       connectSocket(options);
     });
@@ -2015,6 +2019,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
 
       hasOpened = true;
+      // Clear any stale DOM fragments from a previous terminal instance
+      // that shared this container, to prevent garbled text on tab switch.
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
       term.open(container);
 
       // Pre-block fit() until loadInitialHistory() finishes.
@@ -2698,6 +2707,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         let connectTimeout = null;
         lastServerPingAtRef.current = 0;
         const messageQueue = [];
+        activeMessageQueue = messageQueue;
         let processingQueue = false;
         let didOpen = false;
         let authConnected = false;
@@ -2857,6 +2867,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const flushPendingWrites = () => {
             if (disposed) return;
             pendingWriteFrame = null;
+            activePendingWriteFrame = null;
             if (parserRecoveryNeeded) {
               parserRecoveryNeeded = false;
               pendingWrite = '';
@@ -2966,6 +2977,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (pendingWriteFrame) return;
             pendingWriteFrame = requestAnimationFrame(flushPendingWrites);
+            activePendingWriteFrame = pendingWriteFrame;
           };
 
           const handleMetaMessage = (msg) => {
@@ -3541,6 +3553,13 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       pendingOwnerPromotionRef.current = false;
       ownerPromotionDeadlineRef.current = 0;
       inputBufferRef.current = '';
+      if (activePendingWriteFrame) {
+        cancelAnimationFrame(activePendingWriteFrame);
+        activePendingWriteFrame = null;
+      }
+      if (activeMessageQueue) {
+        activeMessageQueue.length = 0;
+      }
       if (rafId) cancelAnimationFrame(rafId);
       if (openRetryTimeout) {
         clearTimeout(openRetryTimeout);
