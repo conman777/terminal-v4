@@ -14,6 +14,7 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
   const [autoScroll, setAutoScroll] = useState(true);
   const lastScrollTop = useRef(0);
   const scrollThrottle = useRef(null);
+  const canAcceptInput = typeof onInput === 'function';
   const resolvedFontFamily = isMobile
     ? '"SF Mono", "Menlo", "Monaco", "Consolas", monospace'
     : 'Consolas, "Courier New", monospace';
@@ -40,14 +41,14 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
 
   // Focus on mount and when switching to reader view so keyboard works
   useEffect(() => {
-    if (!isMobile) return;
+    if (!isMobile || !canAcceptInput) return;
     const timer = setTimeout(() => {
       if (inputRef.current) {
         focusElementWithoutScroll(inputRef.current);
       }
     }, 100);
     return () => clearTimeout(timer);
-  }, [isMobile, scrollToken]);
+  }, [canAcceptInput, isMobile, scrollToken]);
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;
@@ -68,12 +69,12 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
     if (selection && selection.toString().length > 0) {
       return;
     }
-    if (isMobile && inputRef.current) {
+    if (isMobile && canAcceptInput && inputRef.current) {
       focusElementWithoutScroll(inputRef.current);
       return;
     }
     focusElementWithoutScroll(containerRef.current);
-  }, [isMobile]);
+  }, [canAcceptInput, isMobile]);
 
   // Desktop keyboard handler
   const handleKeyDown = useCallback((e) => {
@@ -222,19 +223,21 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
       </pre>
 
       {/* Hidden input for keyboard capture */}
-      <input
-        ref={inputRef}
-        type="text"
-        inputMode="text"
-        enterKeyHint="send"
-        className="reader-view-mobile-input"
-        onInput={handleInput}
-        onKeyDown={handleKeyDown}
-        autoCapitalize="off"
-        autoCorrect="off"
-        autoComplete="off"
-        spellCheck="false"
-      />
+      {canAcceptInput && (
+        <input
+          ref={inputRef}
+          type="text"
+          inputMode="text"
+          enterKeyHint="send"
+          className="reader-view-mobile-input"
+          onInput={handleInput}
+          onKeyDown={handleKeyDown}
+          autoCapitalize="off"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck="false"
+        />
+      )}
     </div>
   );
 }

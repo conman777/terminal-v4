@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
+import { downloadProjectArchive } from '../utils/projectArchiveDownload';
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return null;
@@ -467,28 +468,45 @@ export function MobileDrawer({
                     <div className="md-empty-state">No matches found</div>
                   ) : (
                     filteredProjects.map((project) => (
-                      <button
+                      <div
                         key={project.path}
-                        className={`md-project-item${normalizePath(project.path) === currentNormalized ? ' active' : ''}`}
-                        onClick={() => { onFolderSelect(project.path); onClose(); }}
-                        type="button"
+                        className={`md-project-row${normalizePath(project.path) === currentNormalized ? ' active' : ''}`}
                       >
-                        <div className="md-project-info">
-                          <span className="md-project-name">{project.name}</span>
-                          <span className="md-project-path">{project.path}</span>
-                        </div>
-                        {project.branch && (
-                          <div className="md-project-branch">
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                              <line x1="6" y1="3" x2="6" y2="15" />
-                              <circle cx="18" cy="6" r="3" />
-                              <circle cx="6" cy="18" r="3" />
-                              <path d="M18 9a9 9 0 0 1-9 9" />
-                            </svg>
-                            {project.branch}
+                        <button
+                          className={`md-project-item${normalizePath(project.path) === currentNormalized ? ' active' : ''}`}
+                          onClick={() => { onFolderSelect(project.path); onClose(); }}
+                          type="button"
+                        >
+                          <div className="md-project-info">
+                            <span className="md-project-name">{project.name}</span>
+                            <span className="md-project-path">{project.path}</span>
                           </div>
-                        )}
-                      </button>
+                          {project.branch && (
+                            <div className="md-project-branch">
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="6" y1="3" x2="6" y2="15" />
+                                <circle cx="18" cy="6" r="3" />
+                                <circle cx="6" cy="18" r="3" />
+                                <path d="M18 9a9 9 0 0 1-9 9" />
+                              </svg>
+                              {project.branch}
+                            </div>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="md-project-download-btn"
+                          onClick={() => downloadProjectArchive(project.path)}
+                          aria-label={`Zip and download ${project.name}`}
+                          title="Zip and download project"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                          </svg>
+                        </button>
+                      </div>
                     ))
                   )}
                 </div>

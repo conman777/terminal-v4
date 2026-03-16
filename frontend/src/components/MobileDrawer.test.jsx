@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileDrawer } from './MobileDrawer';
+
+const downloadProjectArchiveMock = vi.fn();
+
+vi.mock('../utils/projectArchiveDownload', () => ({
+  downloadProjectArchive: (...args) => downloadProjectArchiveMock(...args)
+}));
 
 function buildProps(overrides = {}) {
   return {
@@ -32,6 +38,10 @@ function buildProps(overrides = {}) {
 }
 
 describe('MobileDrawer', () => {
+  beforeEach(() => {
+    downloadProjectArchiveMock.mockReset();
+  });
+
   it('closes on Escape key press', () => {
     const onClose = vi.fn();
     render(<MobileDrawer {...buildProps({ onClose })} />);
@@ -253,6 +263,17 @@ describe('MobileDrawer', () => {
     expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New Terminal' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+  });
+
+  it('downloads a zipped project from the projects section', () => {
+    render(<MobileDrawer {...buildProps({
+      projects: [{ path: 'C:\\repo', name: 'terminal v4' }]
+    })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /projects/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zip and download terminal v4' }));
+
+    expect(downloadProjectArchiveMock).toHaveBeenCalledWith('C:\\repo');
   });
 
   it('does not render a preview button when no preview is available', () => {

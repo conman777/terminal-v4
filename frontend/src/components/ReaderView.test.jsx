@@ -34,4 +34,27 @@ describe('ReaderView', () => {
     expect(containerFocus).toHaveBeenCalledWith({ preventScroll: true });
     expect(inputFocus).not.toHaveBeenCalled();
   });
+
+  it('does not render or focus the hidden mobile input when reader input is disabled', () => {
+    render(
+      <ReaderView
+        content="example"
+        lines={null}
+        fontSize={12}
+        lineHeight={null}
+        scrollToken={0}
+        onInput={undefined}
+        isMobile={true}
+      />
+    );
+
+    const container = document.querySelector('.reader-view');
+    const input = document.querySelector('.reader-view-mobile-input');
+    const containerFocus = vi.spyOn(container, 'focus').mockImplementation(() => {});
+
+    fireEvent.click(screen.getByText('example'));
+
+    expect(input).toBeNull();
+    expect(containerFocus).toHaveBeenCalledWith({ preventScroll: true });
+  });
 });

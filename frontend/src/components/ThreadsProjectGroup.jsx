@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ThreadsSessionItem from './ThreadsSessionItem';
+import { downloadProjectArchive } from '../utils/projectArchiveDownload';
 
 export default function ThreadsProjectGroup({
   projectName,
@@ -71,6 +72,25 @@ export default function ThreadsProjectGroup({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <line x1="12" y1="5" x2="12" y2="19" />
               <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </button>
+        )}
+
+        {projectPath && (
+          <button
+            type="button"
+            className="threads-project-download-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadProjectArchive(projectPath);
+            }}
+            title="Zip and download project"
+            aria-label={`Zip and download ${projectName || 'project'}`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
           </button>
         )}
@@ -216,12 +236,31 @@ export default function ThreadsProjectGroup({
           flex-shrink: 0;
         }
 
+        .threads-project-download-btn {
+          width: 22px;
+          height: 22px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: transparent;
+          border: none;
+          color: var(--sidebar-text-muted, var(--text-muted, #636366));
+          border-radius: 4px;
+          cursor: pointer;
+          opacity: 0;
+          transition: all 0.12s ease;
+          margin-left: 4px;
+          flex-shrink: 0;
+        }
+
         .threads-project-header:hover .threads-project-add-btn,
+        .threads-project-header:hover .threads-project-download-btn,
         .threads-project-header:hover .threads-project-close-btn {
           opacity: 1;
         }
 
         .threads-project-add-btn:hover,
+        .threads-project-download-btn:hover,
         .threads-project-close-btn:hover {
           background: var(--sidebar-hover, rgba(255, 255, 255, 0.08));
           color: var(--sidebar-text, var(--text-primary, #fafafa));

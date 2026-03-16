@@ -1,14 +1,19 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import ThreadsSidebar from './ThreadsSidebar';
 
 const toggleTheme = vi.fn();
+const downloadProjectArchiveMock = vi.fn();
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
     theme: 'dark',
     toggleTheme
   })
+}));
+
+vi.mock('../utils/projectArchiveDownload', () => ({
+  downloadProjectArchive: (...args) => downloadProjectArchiveMock(...args)
 }));
 
 function buildSession(id, title, overrides = {}) {
@@ -66,6 +71,10 @@ function buildProps(overrides = {}) {
 }
 
 describe('ThreadsSidebar', () => {
+  beforeEach(() => {
+    downloadProjectArchiveMock.mockReset();
+  });
+
   it('renders new thread button and threads section', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
@@ -165,6 +174,14 @@ describe('ThreadsSidebar', () => {
     await screen.getByLabelText('Close project').click();
 
     expect(onCloseProject).toHaveBeenCalledWith('C:\\repo', ['session-1', 'session-2']);
+  });
+
+  it('downloads a zipped project from the project group header', async () => {
+    render(<ThreadsSidebar {...buildProps()} />);
+
+    await screen.getByLabelText('Zip and download terminal v4').click();
+
+    expect(downloadProjectArchiveMock).toHaveBeenCalledWith('C:\\repo');
   });
 
   it('uses theme-aware sidebar palette tokens', () => {

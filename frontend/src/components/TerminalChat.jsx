@@ -695,16 +695,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     const cursorLine = buffer.baseY + buffer.cursorY;
     const cursorColumn = Math.min(buffer.cursorX, cols);
     const nullCell = buffer.getNullCell();
-    const maxLines = platformConfig.readerMaxLines ?? bufferLineCount;
-    const startLine = bufferLineCount > maxLines ? bufferLineCount - maxLines : 0;
-    const lines = [];
-    let lastNonEmpty = -1;
+    const rowLines = [];
 
-    for (let i = startLine; i < bufferLineCount; i++) {
-      const lineIndex = i - startLine;
+    for (let i = 0; i < bufferLineCount; i++) {
       const line = buffer.getLine(i);
       if (!line || cols <= 0) {
-        lines.push([]);
+        rowLines.push({
+          absoluteIndex: i,
+          isWrapped: false,
+          segments: [],
+          hasContent: false
+        });
         continue;
       }
 
@@ -725,7 +726,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       let maxCol = Math.max(lastContentCol, cursorClamp);
 
       if (maxCol < 0) {
-        lines.push([]);
+        rowLines.push({
+          absoluteIndex: i,
+          isWrapped: Boolean(line.isWrapped),
+          segments: [],
+          hasContent: false
+        });
         continue;
       }
 
@@ -779,6 +785,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         if (cell.isUnderline()) decorations.push('underline');
         if (cell.isStrikethrough()) decorations.push('line-through');
         if (cell.isOverline()) decorations.push('overline');
+        if (cell.isBold()) {
+          style.fontWeight = '700';
+        }
+        if (cell.isItalic()) {
+          style.fontStyle = 'italic';
+        }
         if (decorations.length > 0) {
           style.textDecoration = decorations.join(' ');
         }
@@ -842,17 +854,76 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         lineHasContent = true;
       }
 
-      lines.push(segments);
-      if (lineHasContent) {
-        lastNonEmpty = lineIndex;
-      }
+      rowLines.push({
+        absoluteIndex: i,
+        isWrapped: Boolean(line.isWrapped),
+        segments,
+        hasContent: lineHasContent
+      });
     }
 
+    const logicalLines = [];
+    let currentLogicalLine = null;
+
+    const pushCurrentLogicalLine = () => {
+      if (!currentLogicalLine) return;
+      logicalLines.push(currentLogicalLine);
+      currentLogicalLine = null;
+    };
+
+    for (const row of rowLines) {
+      if (!currentLogicalLine || !row.isWrapped) {
+        pushCurrentLogicalLine();
+        currentLogicalLine = {
+          rowIndexes: [row.absoluteIndex],
+          segments: [...row.segments],
+          hasContent: row.hasContent
+        };
+        continue;
+      }
+
+      currentLogicalLine.rowIndexes.push(row.absoluteIndex);
+      currentLogicalLine.hasContent = currentLogicalLine.hasContent || row.hasContent;
+
+      for (const segment of row.segments) {
+        const previousSegment = currentLogicalLine.segments[currentLogicalLine.segments.length - 1];
+        if (
+          previousSegment &&
+          previousSegment.isCursor === segment.isCursor &&
+          JSON.stringify(previousSegment.style) === JSON.stringify(segment.style)
+        ) {
+          previousSegment.text += segment.text;
+        } else {
+          currentLogicalLine.segments.push({ ...segment, style: { ...segment.style } });
+        }
+      }
+    }
+    pushCurrentLogicalLine();
+
+    const maxLines = platformConfig.readerMaxLines ?? logicalLines.length;
+    const startLogicalLine = logicalLines.length > maxLines ? logicalLines.length - maxLines : 0;
+    const slicedLogicalLines = logicalLines.slice(startLogicalLine);
     const viewportBottomAbsolute = Math.min(bufferLineCount - 1, buffer.baseY + term.rows - 1);
-    const viewportBottom = viewportBottomAbsolute >= startLine ? viewportBottomAbsolute - startLine : -1;
-    const cursorLineIndex = cursorLine >= startLine ? cursorLine - startLine : -1;
+    let lastNonEmpty = -1;
+    let viewportBottom = -1;
+    let cursorLineIndex = -1;
+
+    slicedLogicalLines.forEach((line, index) => {
+      if (line.hasContent) {
+        lastNonEmpty = index;
+      }
+      if (line.rowIndexes.includes(viewportBottomAbsolute)) {
+        viewportBottom = index;
+      }
+      if (line.rowIndexes.includes(cursorLine)) {
+        cursorLineIndex = index;
+      }
+    });
+
     const lastLineIndex = Math.max(lastNonEmpty, cursorLineIndex, viewportBottom);
-    const visibleLines = lastLineIndex >= 0 ? lines.slice(0, lastLineIndex + 1) : [];
+    const visibleLines = lastLineIndex >= 0
+      ? slicedLogicalLines.slice(0, lastLineIndex + 1).map((line) => line.segments)
+      : [];
     const textLines = visibleLines.map((lineSegments) => lineSegments.map((segment) => segment.text).join(''));
     replaceReaderBuffer(textLines.join('\n'));
     setReaderLines(visibleLines);
@@ -3837,7 +3908,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           onScrollDirection={onScrollDirection}
           onViewportStateChange={onViewportStateChange}
           onLoadMore={handleReaderLoadMore}
-          onInput={handleReaderInput}
+          onInput={inputEnabled !== false ? handleReaderInput : undefined}
           isMobile={isMobile}
         />
       )}
