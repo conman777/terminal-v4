@@ -65,8 +65,8 @@ export function truncateBody(body: string): { body: string; truncated: boolean }
   };
 }
 
-// Log store keyed by port number
-const logStores = new Map<number, ProxyLogEntry[]>();
+// Log store keyed by scope+port.
+const logStores = new Map<string, ProxyLogEntry[]>();
 
 // Max logs per port
 const MAX_LOGS_PER_PORT = 200;
@@ -80,13 +80,14 @@ function generateId(): string {
 /**
  * Add a log entry for a request
  */
-export function addProxyLog(port: number, entry: Omit<ProxyLogEntry, 'id'>): void {
+export function addProxyLog(scopeId: string, port: number, entry: Omit<ProxyLogEntry, 'id'>): void {
   const id = generateId();
+  const storeKey = getPreviewStoreKey(scopeId, port);
 
-  if (!logStores.has(port)) {
-    logStores.set(port, []);
+  if (!logStores.has(storeKey)) {
+    logStores.set(storeKey, []);
   }
-  const logs = logStores.get(port)!;
+  const logs = logStores.get(storeKey)!;
 
   const logEntry = {
     id,
@@ -104,26 +105,59 @@ export function addProxyLog(port: number, entry: Omit<ProxyLogEntry, 'id'>): voi
 /**
  * Get all logs for a port
  */
-export function getProxyLogs(port: number, since?: number): ProxyLogEntry[] {
-  const logs = logStores.get(port) || [];
+export function getProxyLogs(scopeId: string, port: number, since?: number): ProxyLogEntry[] {
+  const logs = logStores.get(getPreviewStoreKey(scopeId, port)) || [];
   if (since) {
     return logs.filter(log => log.timestamp > since);
   }
   return [...logs];
 }
 
+export function getProxyLogsAfterCursor(
+  scopeId: string,
+  port: number,
+  cursor: { timestamp: number; id: string | null }
+): ProxyLogEntry[] {
+  const logs = logStores.get(getPreviewStoreKey(scopeId, port)) || [];
+  if (!cursor.timestamp) {
+    return [...logs];
+  }
+
+  const result: ProxyLogEntry[] = [];
+  let passedCursor = cursor.id === null;
+
+  for (const log of logs) {
+    if (log.timestamp < cursor.timestamp) {
+      continue;
+    }
+    if (log.timestamp > cursor.timestamp) {
+      result.push(log);
+      continue;
+    }
+    if (passedCursor) {
+      result.push(log);
+      continue;
+    }
+    if (log.id === cursor.id) {
+      passedCursor = true;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Clear logs for a port
  */
-export function clearProxyLogs(port: number): void {
-  logStores.delete(port);
+export function clearProxyLogs(scopeId: string, port: number): void {
+  logStores.delete(getPreviewStoreKey(scopeId, port));
 }
 
 /**
  * Get latest log timestamp for a port (for polling)
  */
-export function getLatestLogTimestamp(port: number): number {
-  const logs = logStores.get(port);
+export function getLatestLogTimestamp(scopeId: string, port: number): number {
+  const logs = logStores.get(getPreviewStoreKey(scopeId, port));
   if (!logs || logs.length === 0) return 0;
   return logs[logs.length - 1].timestamp;
 }
@@ -131,6 +165,12 @@ export function getLatestLogTimestamp(port: number): number {
 /**
  * Get all ports that have been previewed (have logs)
  */
-export function getActivePreviewPorts(): number[] {
-  return Array.from(logStores.keys()).sort((a, b) => a - b);
+export function getActivePreviewPorts(scopeId: string): number[] {
+  const prefix = `${scopeId}:`;
+  return Array.from(logStores.keys())
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => Number.parseInt(key.slice(prefix.length), 10))
+    .filter((port) => Number.isFinite(port))
+    .sort((a, b) => a - b);
 }
+import { getPreviewStoreKey } from './preview-scope.js';

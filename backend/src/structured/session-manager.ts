@@ -155,6 +155,7 @@ export class StructuredSessionManager {
     });
 
     session.process = process;
+    const activeProcess = process;
 
     // Stream events from the process
     try {
@@ -180,7 +181,9 @@ export class StructuredSessionManager {
       this.notifySubscribers(session, errorEvent);
       this.scheduleSave(session);
     } finally {
-      session.process = null;
+      if (session.process === activeProcess) {
+        session.process = null;
+      }
     }
   }
 

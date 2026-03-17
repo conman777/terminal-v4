@@ -276,19 +276,19 @@ describe('MobileDrawer', () => {
     expect(downloadProjectArchiveMock).toHaveBeenCalledWith('C:\\repo');
   });
 
-  it('does not render a preview button when no preview is available', () => {
+  it('keeps the preview button visible even when no preview url is available yet', () => {
     render(<MobileDrawer {...buildProps({ previewUrl: '' })} />);
 
     expect(screen.getByRole('button', { name: 'Terminal' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
   });
 
-  it('switches to preview when a preview url is available', () => {
+  it('switches to preview even when no preview url is available yet', () => {
     const onViewChange = vi.fn();
     const onClose = vi.fn();
 
     render(<MobileDrawer {...buildProps({
-      previewUrl: 'https://example.com',
+      previewUrl: '',
       onViewChange,
       onClose,
     })} />);

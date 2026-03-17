@@ -5,6 +5,7 @@ import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { apiFetch } from '../utils/api';
 import { useConversationScroll } from '../hooks/useConversationScroll';
+import { quoteTerminalPath } from '../utils/mobileTerminalInput';
 import './MobileChatView.css';
 
 function SparkleIcon({ size = 14 }) {
@@ -125,7 +126,7 @@ export function MobileChatView({
       if (path) {
         await apiFetch(`/api/terminal/${sessionId}/input`, {
           method: 'POST',
-          body: { command: `${path} ` }
+          body: { command: `${quoteTerminalPath(path)} ` }
         });
       }
     } catch (err) {

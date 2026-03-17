@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { getWindowsSystemBinaryPath, parseWindowsListeningPorts } from './preview-api-routes';
+import { getWindowsSystemBinaryPath, mergePreviewedPorts, parseWindowsListeningPorts } from './preview-api-routes';
 
 describe('preview-api-routes Windows helpers', () => {
   const originalSystemRoot = process.env.SystemRoot;
@@ -32,5 +32,48 @@ describe('preview-api-routes Windows helpers', () => {
 
     expect(Array.from(ports.keys()).sort((a, b) => a - b)).toEqual([5173, 8081]);
     expect(ports.get(8081)).toEqual({ process: '', cwd: null });
+  });
+
+  it('merges request-scoped previewed ports without dropping active ports', () => {
+    const merged = mergePreviewedPorts([
+      {
+        port: 8080,
+        listening: true,
+        previewable: true,
+        probeStatus: 'html',
+        reachable: true,
+        frontendLikely: true,
+        common: true,
+        process: 'node',
+        cwd: 'app'
+      }
+    ], [8080, 4173]);
+
+    expect(merged).toEqual([
+      {
+        port: 4173,
+        listening: false,
+        previewed: true,
+        previewable: false,
+        probeStatus: 'unreachable',
+        reachable: false,
+        frontendLikely: false,
+        common: false,
+        process: null,
+        cwd: null
+      },
+      {
+        port: 8080,
+        listening: true,
+        previewed: true,
+        previewable: true,
+        probeStatus: 'html',
+        reachable: true,
+        frontendLikely: true,
+        common: true,
+        process: 'node',
+        cwd: 'app'
+      }
+    ]);
   });
 });

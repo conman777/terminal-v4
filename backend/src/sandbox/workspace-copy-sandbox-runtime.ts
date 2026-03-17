@@ -79,4 +79,19 @@ export class WorkspaceCopySandboxRuntime implements SandboxRuntime {
       }
     };
   }
+
+  cleanupTerminal(request: { sessionId: string; userId: string; sandbox: { runtimeId: string | null } }): void {
+    const runtimeId = request.sandbox.runtimeId || request.sessionId;
+    const sandboxRoot = path.join(
+      this.#sandboxesRoot,
+      sanitizeSegment(request.userId),
+      sanitizeSegment(runtimeId)
+    );
+
+    try {
+      fs.rmSync(sandboxRoot, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  }
 }

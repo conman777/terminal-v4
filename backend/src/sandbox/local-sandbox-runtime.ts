@@ -20,4 +20,6 @@ export class LocalSandboxRuntime implements SandboxRuntime {
       }
     };
   }
+
+  cleanupTerminal(): void {}
 }

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesktopStatusBar } from './DesktopStatusBar';
 
 const toggleAutocorrectMock = vi.fn();
@@ -111,15 +112,6 @@ describe('DesktopStatusBar', () => {
     expect(onSelectAiType).toHaveBeenCalledWith('codex');
   });
 
-  it('launches the selected AI from the footer', () => {
-    const onLaunchAi = vi.fn();
-    render(<DesktopStatusBar {...buildProps({ aiType: 'gemini', onLaunchAi })} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Launch Gemini' }));
-
-    expect(onLaunchAi).toHaveBeenCalledTimes(1);
-  });
-
   it('captures a custom command from the footer menu', () => {
     const onAddCustomAiCommand = vi.fn();
     const promptSpy = vi.spyOn(window, 'prompt')
@@ -161,6 +153,46 @@ describe('DesktopStatusBar', () => {
     expect(onComposerChange).toHaveBeenCalledWith('the ');
   });
 
+  it('clears pending autocorrect undo when the caret moves', async () => {
+    function Wrapper() {
+      const [composerValue, setComposerValue] = useState('teh');
+      return (
+        <DesktopStatusBar
+          {...buildProps({
+            composerValue,
+            onComposerChange: setComposerValue
+          })}
+        />
+      );
+    }
+
+    render(<Wrapper />);
+
+    await waitFor(() => {
+      expect(getSpellCheckerMock).toHaveBeenCalledTimes(1);
+    });
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    fireEvent.keyDown(composer, {
+      key: ' ',
+      target: { selectionStart: 3 }
+    });
+
+    await waitFor(() => {
+      expect(composer).toHaveValue('the ');
+    });
+
+    fireEvent.select(composer, {
+      target: { selectionStart: 0, selectionEnd: 0 }
+    });
+    fireEvent.keyDown(composer, {
+      key: 'Backspace',
+      target: { selectionStart: 0, selectionEnd: 0 }
+    });
+
+    expect(composer).toHaveValue('the ');
+  });
+
   it('routes mic transcripts into the AskV composer', () => {
     const onComposerChange = vi.fn();
     render(<DesktopStatusBar {...buildProps({ composerValue: 'Existing draft', onComposerChange })} />);
@@ -177,7 +209,7 @@ describe('DesktopStatusBar', () => {
       composerValue: '/',
       onComposerChange,
       onComposerSubmit,
-      runtimeInfo: { providerId: 'claude', label: 'Opus 4.6 Â· Ctx 11%' }
+      runtimeInfo: { providerId: 'claude', label: 'Opus 4.6 | Ctx 11%' }
     })} />);
 
     expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
@@ -228,13 +260,13 @@ describe('DesktopStatusBar', () => {
   it('renders runtime info and lets the user switch git branches', () => {
     const onSelectGitBranch = vi.fn();
     render(<DesktopStatusBar {...buildProps({
-      runtimeInfo: { label: 'Opus 4.6 · Ctx 11%' },
+      runtimeInfo: { label: 'Opus 4.6 | Ctx 11%' },
       gitBranches: ['main', 'feature/ui'],
       currentGitBranch: 'main',
       onSelectGitBranch
     })} />);
 
-    expect(screen.getByText('Opus 4.6 · Ctx 11%')).toBeInTheDocument();
+    expect(screen.getByText('Opus 4.6 | Ctx 11%')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Select git branch' }));
     fireEvent.click(screen.getByRole('button', { name: 'feature/ui' }));
@@ -247,7 +279,7 @@ describe('DesktopStatusBar', () => {
       sessionSummary: 'gpt-5.4 high 100% left ~\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4'
     })} />);
 
-    expect(screen.getByText('gpt-5.4 high 100% left ~\\…\\coding projects\\terminal v4')).toBeInTheDocument();
+    expect(screen.getByText('gpt-5.4 high 100% left ~\\...\\coding projects\\terminal v4')).toBeInTheDocument();
   });
 
   it('uses theme-aware composer styles instead of hardcoded dark surfaces', () => {

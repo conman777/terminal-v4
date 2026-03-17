@@ -82,16 +82,30 @@ describe('Process log route auth', () => {
     });
   });
 
-  it('allows unauthenticated GET on process log listing', async () => {
-    await withApp(async ({ app }) => {
+  it('requires auth for process log listing', async () => {
+    await withApp(async ({ app, accessToken }) => {
+      await supertest(app.server)
+        .get('/api/process-logs')
+        .expect(401);
+
       const response = await supertest(app.server)
         .get('/api/process-logs')
+        .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
 
       expect(response.body).toMatchObject({
         count: expect.any(Number),
         processes: expect.any(Array)
       });
+    });
+  });
+
+  it('does not bypass API auth on preview subdomains', async () => {
+    await withApp(async ({ app }) => {
+      await supertest(app.server)
+        .get('/api/process-logs')
+        .set('Host', 'preview-4173.localhost')
+        .expect(401);
     });
   });
 

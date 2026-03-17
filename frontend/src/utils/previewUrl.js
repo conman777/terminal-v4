@@ -218,6 +218,9 @@ export function withAuthToken(url) {
     if (!fullUrl.searchParams.has('token')) {
       fullUrl.searchParams.set('token', token);
     }
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) && fullUrl.origin !== window.location.origin) {
+      return fullUrl.toString();
+    }
     return `${fullUrl.pathname}${fullUrl.search}${fullUrl.hash}`;
   } catch {
     const separator = url.includes('?') ? '&' : '?';
@@ -301,7 +304,7 @@ export function toPreviewUrl(inputUrl) {
         ? canUseSubdomain
         : (!preferPathBased && canUseSubdomain);
       if (shouldUseSubdomain) {
-        return `http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`;
+        return withAuthToken(`http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`);
       }
       return `/preview/${parsed.port}${path}`;
     }

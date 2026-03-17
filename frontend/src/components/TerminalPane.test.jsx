@@ -126,6 +126,24 @@ describe('TerminalPane', () => {
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 
+  it('renders the command composer inside the desktop terminal stack', () => {
+    render(<TerminalPane {...buildProps()} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    expect(composer.closest('.desktop-terminal-stack')).not.toBeNull();
+  });
+
+  it('renders the DesktopStatusBar with the Ask V4 placeholder visible', () => {
+    render(<TerminalPane {...buildProps()} />);
+
+    const composer = screen.getByPlaceholderText('Ask V4 anything');
+    expect(composer).toBeInTheDocument();
+
+    const statusBar = composer.closest('.desktop-status-bar-shell');
+    expect(statusBar).not.toBeNull();
+    expect(statusBar.closest('.desktop-terminal-stack')).not.toBeNull();
+  });
+
   it('hides the fullscreen button when there is only one selectable session', () => {
     render(<TerminalPane {...buildProps()} />);
 

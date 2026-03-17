@@ -33,4 +33,9 @@ export interface SandboxTerminalLaunchResult {
 export interface SandboxRuntime {
   readonly kind: string;
   prepareTerminalLaunch(request: SandboxTerminalLaunchRequest): SandboxTerminalLaunchResult;
+  cleanupTerminal?(request: {
+    sessionId: string;
+    userId: string;
+    sandbox: TerminalSandboxInfo;
+  }): Promise<void> | void;
 }

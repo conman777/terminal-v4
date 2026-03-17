@@ -774,8 +774,13 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
     }; // end setupSession
 
     const handleAuth = (raw: Buffer | string) => {
+      const text = raw instanceof Buffer ? raw.toString() : raw.toString();
+      const trimmed = text.trim();
+      if (!trimmed) {
+        return;
+      }
+
       try {
-        const text = raw instanceof Buffer ? raw.toString() : raw.toString();
         const msg = JSON.parse(text);
         if (msg?.type !== 'auth' || typeof msg.token !== 'string') {
           socket.close(4401, 'Expected auth message');
@@ -790,7 +795,9 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
         socket.off('message', handleAuth);
         setupSession(payload.sub);
       } catch {
-        socket.close(4401, 'Invalid auth message');
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+          socket.close(4401, 'Invalid auth message');
+        }
       }
     };
 

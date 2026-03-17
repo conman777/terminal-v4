@@ -129,6 +129,43 @@ export function getProcessLogsByPort(port: number, since?: number): ProcessLogEn
   return [...process.logs];
 }
 
+export function getProcessLogsByPortAfterCursor(
+  port: number,
+  cursor: { timestamp: number; id: string | null }
+): ProcessLogEntry[] {
+  const pid = portToPid.get(port);
+  if (pid === undefined) return [];
+
+  const process = processLogs.get(pid);
+  if (!process) return [];
+
+  if (!cursor.timestamp) {
+    return [...process.logs];
+  }
+
+  const result: ProcessLogEntry[] = [];
+  let passedCursor = cursor.id === null;
+
+  for (const log of process.logs) {
+    if (log.timestamp < cursor.timestamp) {
+      continue;
+    }
+    if (log.timestamp > cursor.timestamp) {
+      result.push(log);
+      continue;
+    }
+    if (passedCursor) {
+      result.push(log);
+      continue;
+    }
+    if (log.id === cursor.id) {
+      passedCursor = true;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Get logs for a PID
  */

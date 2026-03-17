@@ -94,7 +94,7 @@ describe('useViewportHeight', () => {
     expect(result.current).toBe(812);
   });
 
-  it('tracks the visual viewport offset top when the keyboard shifts the viewport', () => {
+  it('tracks the visual viewport offset top without double-counting it into height', () => {
     setVisualViewport(640, 0);
     const input = document.createElement('input');
     document.body.appendChild(input);
@@ -109,7 +109,7 @@ describe('useViewportHeight', () => {
       window.visualViewport.__listeners.get('resize')?.();
     });
 
-    expect(result.current).toEqual({ height: 650, offsetTop: 248 });
+    expect(result.current).toEqual({ height: 402, offsetTop: 248 });
     input.remove();
   });
 

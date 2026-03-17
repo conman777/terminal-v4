@@ -77,12 +77,24 @@ describe('Terminal WebSocket auth', () => {
     });
   });
 
-  it('closes with 4401 when malformed JSON is sent', async () => {
-    await withApp(async ({ port }) => {
+  it('allows plain terminal input before auth if a valid auth frame follows', async () => {
+    await withApp(async ({ port, accessToken }) => {
       const { ws, closeEvent } = await connectWs(port);
-      ws.send('not valid json');
-      const { code } = await closeEvent;
-      expect(code).toBe(4401);
+      ws.send('ls\r');
+      ws.send(JSON.stringify({ type: 'auth', token: accessToken }));
+
+      const raceResult = await Promise.race([
+        closeEvent.then(e => ({ kind: 'close' as const, code: e.code })),
+        new Promise<{ kind: 'timeout' }>(res => setTimeout(() => res({ kind: 'timeout' }), 500))
+      ]);
+
+      ws.close();
+
+      if (raceResult.kind === 'close') {
+        expect(raceResult.code).not.toBe(4401);
+      } else {
+        expect(raceResult.kind).toBe('timeout');
+      }
     });
   });
 

@@ -14,6 +14,12 @@ const VERTICAL_SWIPE_THRESHOLD_PX = 64;
 const SWIPE_AXIS_BIAS_PX = 18;
 const MAX_GESTURE_DURATION_MS = 700;
 
+function isInteractiveGestureTarget(target) {
+  return target instanceof Element && Boolean(
+    target.closest('button, a, input, textarea, select, [role="button"], [role="menuitem"], [role="menuitemradio"]')
+  );
+}
+
 export function MobileHeader({
   activeSessions,
   activeSessionId,
@@ -132,6 +138,10 @@ export function MobileHeader({
   }, [activeSessionId]);
 
   const handleTopRowTouchStart = useCallback((event) => {
+    if (isInteractiveGestureTarget(event.target)) {
+      topRowGestureRef.current = null;
+      return;
+    }
     const touch = event.touches?.[0];
     if (!touch) return;
     topRowGestureRef.current = {
@@ -165,7 +175,7 @@ export function MobileHeader({
       return;
     }
 
-    if (mobileView === 'preview') {
+    if (mobileView === 'preview' || chatMode) {
       return;
     }
 
@@ -179,7 +189,7 @@ export function MobileHeader({
     if (deltaY < 0 && keybarOpen) {
       onToggleKeybar?.();
     }
-  }, [keybarOpen, mobileView, onToggleKeybar, showDrawer]);
+  }, [chatMode, keybarOpen, mobileView, onToggleKeybar, showDrawer]);
 
   const handleTopRowTouchCancel = useCallback(() => {
     topRowGestureRef.current = null;

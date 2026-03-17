@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { exec } from 'node:child_process';
 import { win32 as pathWin32 } from 'node:path';
 import { clearCookies, listCookies, hasCookies } from '../preview/cookie-store';
-import { getProxyLogs, clearProxyLogs, getActivePreviewPorts } from '../preview/request-log-store';
-import { getProcessLogsByPort } from '../preview/process-log-store';
+import { getProxyLogs, getProxyLogsAfterCursor, clearProxyLogs, getActivePreviewPorts } from '../preview/request-log-store';
+import { getProcessLogsByPort, getProcessLogsByPortAfterCursor } from '../preview/process-log-store';
+import { resolvePreviewScopeId } from '../preview/preview-scope.js';
 
 // Rate limiter for eval endpoint
 interface RateLimitEntry {
@@ -54,6 +55,7 @@ const NON_PREVIEW_PROCESS_PREFIXES = [
   'kafka',
   'influxd'
 ];
+const COMMON_DEV_PORTS = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8885, 8888];
 const APP_PORT = (() => {
   const parsed = Number.parseInt(process.env.PORT || '3020', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 3020;
@@ -83,6 +85,8 @@ interface PortProbeResult {
   frontendLikely: boolean;
   previewable: boolean;
 }
+
+type CachedActivePortResponse = Omit<ActivePortResponse, 'previewed'>;
 
 export function getWindowsSystemBinaryPath(...segments: string[]): string {
   const root = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows';
@@ -151,8 +155,8 @@ async function scanListeningPortsWindows(): Promise<Map<number, ActivePortInfo>>
   });
 }
 
-let activePortsCache: { expiresAt: number; ports: ActivePortResponse[] } | null = null;
-let activePortsInFlight: Promise<ActivePortResponse[]> | null = null;
+let activePortsCache: { expiresAt: number; ports: CachedActivePortResponse[] } | null = null;
+let activePortsInFlight: Promise<CachedActivePortResponse[]> | null = null;
 
 // Clean up old rate limit entries every 5 minutes
 const evalRateLimiterCleanupInterval = setInterval(() => {
@@ -284,26 +288,52 @@ async function scanListeningPorts(): Promise<Map<number, ActivePortInfo>> {
   });
 }
 
-async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
+export function mergePreviewedPorts(
+  ports: CachedActivePortResponse[],
+  previewedPorts: number[]
+): ActivePortResponse[] {
+  const previewedSet = new Set(previewedPorts);
+  const merged = ports.map((portInfo) => ({
+    ...portInfo,
+    previewed: previewedSet.has(portInfo.port)
+  }));
+
+  for (const port of previewedPorts) {
+    if (merged.some((portInfo) => portInfo.port === port)) continue;
+    merged.push({
+      port,
+      listening: false,
+      previewed: true,
+      previewable: false,
+      probeStatus: 'unreachable',
+      reachable: false,
+      frontendLikely: false,
+      common: COMMON_DEV_PORTS.includes(port),
+      process: null,
+      cwd: null
+    });
+  }
+
+  return merged.sort((a, b) => a.port - b.port);
+}
+
+async function listActivePortsSnapshot(previewScopeId: string | null): Promise<ActivePortResponse[]> {
   const now = Date.now();
+  const previewedPorts = previewScopeId ? getActivePreviewPorts(previewScopeId) : [];
   if (activePortsCache && activePortsCache.expiresAt > now) {
-    return activePortsCache.ports;
+    return mergePreviewedPorts(activePortsCache.ports, previewedPorts);
   }
   if (activePortsInFlight) {
-    return activePortsInFlight;
+    return mergePreviewedPorts(await activePortsInFlight, previewedPorts);
   }
 
   activePortsInFlight = (async () => {
-    const previewedPorts = getActivePreviewPorts();
     const portInfo = await scanListeningPorts();
     const listeningPorts = Array.from(portInfo.keys());
     const listeningSet = new Set(listeningPorts);
-    const previewedSet = new Set(previewedPorts);
-    const commonDevPorts = [3000, 3001, 3002, 3003, 4000, 5000, 5173, 5174, 8000, 8080, 8885, 8888];
-    const allPorts = [...new Set([...previewedPorts, ...listeningPorts])].sort((a, b) => a - b);
     const probeByPort = new Map<number, PortProbeResult>();
 
-    await Promise.all(allPorts.map(async (port) => {
+    await Promise.all(listeningPorts.map(async (port) => {
       if (!listeningSet.has(port)) {
         probeByPort.set(port, {
           probeStatus: 'unreachable',
@@ -326,7 +356,10 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
       probeByPort.set(port, await probePortPreviewability(port));
     }));
 
-    const ports = allPorts.map((port) => {
+    const ports = listeningPorts
+      .slice()
+      .sort((a, b) => a - b)
+      .map((port) => {
       const info = portInfo.get(port);
       const probe = probeByPort.get(port) || {
         probeStatus: 'unreachable',
@@ -337,12 +370,11 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
       return {
         port,
         listening: listeningSet.has(port),
-        previewed: previewedSet.has(port),
         previewable: probe.previewable,
         probeStatus: probe.probeStatus,
         reachable: probe.reachable,
         frontendLikely: probe.frontendLikely,
-        common: commonDevPorts.includes(port),
+        common: COMMON_DEV_PORTS.includes(port),
         process: info?.process || null,
         cwd: info?.cwd || null
       };
@@ -356,7 +388,7 @@ async function listActivePortsSnapshot(): Promise<ActivePortResponse[]> {
   })();
 
   try {
-    return await activePortsInFlight;
+    return mergePreviewedPorts(await activePortsInFlight, previewedPorts);
   } finally {
     activePortsInFlight = null;
   }
@@ -476,6 +508,11 @@ function isExcludedProcessForPreview(processName: string | null | undefined): bo
 export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<void> {
   // Preview: Get stored cookies for a port
   app.get<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     const port = parseInt(request.params.port, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       reply.code(400).send({ error: 'Invalid port number' });
@@ -483,19 +520,24 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
     }
     reply.send({
       port,
-      hasCookies: hasCookies(port),
-      cookies: listCookies(port)
+      hasCookies: hasCookies(userId, port),
+      cookies: listCookies(userId, port)
     });
   });
 
   // Preview: Clear stored cookies for a port
   app.delete<{ Params: { port: string } }>('/api/preview/:port/cookies', async (request, reply) => {
+    const userId = request.userId;
+    if (!userId) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
     const port = parseInt(request.params.port, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
-    clearCookies(port);
+    clearCookies(userId, port);
     reply.send({ success: true, port });
   });
 
@@ -512,7 +554,7 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       return;
     }
     const since = request.query.since ? parseInt(request.query.since, 10) : undefined;
-    const logs = getProxyLogs(port, since);
+    const logs = getProxyLogs(userId, port, since);
     reply.send({ port, logs });
   });
 
@@ -528,7 +570,7 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       reply.code(400).send({ error: 'Invalid port number' });
       return;
     }
-    clearProxyLogs(port);
+    clearProxyLogs(userId, port);
     reply.send({ success: true, port });
   });
 
@@ -540,7 +582,7 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       return;
     }
 
-    const ports = await listActivePortsSnapshot();
+    const ports = await listActivePortsSnapshot(resolvePreviewScopeId(request));
     reply.send({ ports });
   });
 
@@ -581,8 +623,8 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       }
 
       let closed = false;
-      let proxyCursor = since;
-      let processCursor = since;
+      let proxyCursor = { timestamp: since, id: null as string | null };
+      let processCursor = { timestamp: since, id: null as string | null };
       const sendEvent = (eventName: string, payload: unknown): void => {
         if (closed) return;
         try {
@@ -596,17 +638,17 @@ export async function registerPreviewApiRoutes(app: FastifyInstance): Promise<vo
       const flushLogs = () => {
         if (closed) return;
         if (includeProxy) {
-          const proxyLogs = getProxyLogs(port, proxyCursor);
+          const proxyLogs = getProxyLogsAfterCursor(userId, port, proxyCursor);
           for (const entry of proxyLogs) {
             sendEvent('proxy', entry);
-            proxyCursor = Math.max(proxyCursor, entry.timestamp);
+            proxyCursor = { timestamp: entry.timestamp, id: entry.id };
           }
         }
         if (includeServer) {
-          const processLogs = getProcessLogsByPort(port, processCursor);
+          const processLogs = getProcessLogsByPortAfterCursor(port, processCursor);
           for (const entry of processLogs) {
             sendEvent('server', entry);
-            processCursor = Math.max(processCursor, entry.timestamp);
+            processCursor = { timestamp: entry.timestamp, id: entry.id };
           }
         }
       };

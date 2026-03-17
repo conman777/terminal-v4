@@ -5,16 +5,21 @@ function compactText(value) {
 }
 
 function parseClaudeRuntimeInfo(lines) {
-  const statusLine = lines.find((line) => /\bCtx:\s*\d+%/i.test(line) || /\bClaude Max\b/i.test(line) || /\bOpus 4\.6\b/i.test(line) || /\bSonnet 4\.6\b/i.test(line));
+  const statusLine = lines.find((line) => (
+    /\bCtx:\s*\d+%/i.test(line)
+    || /\bClaude Max\b/i.test(line)
+    || /\bOpus 4\.6\b/i.test(line)
+    || /\bSonnet 4\.6\b/i.test(line)
+  ));
   if (!statusLine) return null;
 
-  const modelMatch = statusLine.match(/\b(Opus 4\.6|Sonnet 4\.6)(?:\s+with\s+[^|Â·]+)?/i);
+  const modelMatch = statusLine.match(/\b(Opus 4\.6|Sonnet 4\.6)(?:\s+with\s+[^|]+)?/i);
   const ctxMatch = statusLine.match(/Ctx:\s*(\d+%)/i);
   const tierMatch = statusLine.match(/\bClaude Max\b/i);
 
   return {
     providerId: 'claude',
-    label: [modelMatch?.[0], ctxMatch ? `Ctx ${ctxMatch[1]}` : null, tierMatch?.[0]].filter(Boolean).join(' Â· ')
+    label: [modelMatch?.[0], ctxMatch ? `Ctx ${ctxMatch[1]}` : null, tierMatch?.[0]].filter(Boolean).join(' | ')
   };
 }
 
@@ -28,7 +33,7 @@ function parseCodexRuntimeInfo(lines) {
 
   return {
     providerId: 'codex',
-    label: [modelMatch?.[1], leftMatch?.[1]].filter(Boolean).join(' Â· ')
+    label: [modelMatch?.[1], leftMatch?.[1]].filter(Boolean).join(' | ')
   };
 }
 

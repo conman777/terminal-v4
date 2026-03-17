@@ -16,7 +16,7 @@ function readViewportMetrics() {
 
   const viewport = window.visualViewport;
   const rawHeight = viewport
-    ? viewport.height + (viewport.offsetTop || 0)
+    ? viewport.height
     : window.innerHeight;
   const rawOffsetTop = viewport?.offsetTop;
   const inputFocused = isEditableElementFocused();

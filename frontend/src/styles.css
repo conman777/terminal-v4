@@ -214,6 +214,7 @@
 body, html, #root {
   margin: 0;
   padding: 0;
+  height: 100%;
   min-height: 100%;
   background: var(--bg-base);
   font-family: var(--font-ui);
@@ -221,6 +222,17 @@ body, html, #root {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+}
+
+html,
+body {
+  overflow: hidden;
+}
+
+#root {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 /* Prevent body scroll on mobile - important for keyboard handling */
@@ -259,6 +271,8 @@ button {
 
 .layout {
   display: flex;
+  width: 100%;
+  min-height: 100%;
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
@@ -3579,7 +3593,7 @@ button {
   min-width: 320px;
   display: flex;
   flex-direction: column;
-  background: #0f172a;
+  background: var(--terminal-bg, var(--bg-surface, #17191c));
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   box-shadow: none;
@@ -3784,6 +3798,60 @@ button {
   min-height: 0;
   position: relative;
   overflow: hidden;
+}
+
+.preview-terminal-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-shrink: 0;
+  background: var(--terminal-chrome-bg, #17191c);
+  border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+}
+
+.preview-terminal-composer-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background: var(--bg-surface, #1e2028);
+  color: var(--text-primary, #f8fafc);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  outline: none;
+}
+
+.preview-terminal-composer-input:focus {
+  border-color: var(--accent-primary, #38bdf8);
+}
+
+.preview-terminal-composer-input::placeholder {
+  color: var(--text-muted, rgba(255, 255, 255, 0.4));
+}
+
+.preview-terminal-composer-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default, rgba(255, 255, 255, 0.1));
+  background: color-mix(in srgb, var(--accent-primary, #38bdf8) 14%, var(--bg-elevated, #1e2028));
+  color: var(--text-primary, #f8fafc);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.preview-terminal-composer-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preview-terminal-composer-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-primary, #38bdf8) 22%, var(--bg-elevated, #1e2028));
 }
 
 .preview-terminal-content .terminal-chat {
@@ -6278,7 +6346,7 @@ button {
   color: var(--text-muted);
 }
 
-/* Mobile footer with segmented control */
+/* Mobile footer with preview/terminal switcher */
 .preview-mobile-footer {
   display: none;
 }
@@ -6318,7 +6386,7 @@ button {
     position: absolute;
     top: 3px;
     left: 3px;
-    width: calc((100% - 6px) / 3);
+    width: calc((100% - 6px) / 2);
     height: calc(100% - 6px);
     background: rgba(255, 255, 255, 0.12);
     border-radius: 8px;
@@ -6549,20 +6617,24 @@ button {
   .preview-mobile-terminal-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
+    gap: 10px;
+    padding: 10px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(24, 24, 27, 0.95);
+    background:
+      linear-gradient(180deg, rgba(18, 24, 39, 0.98), rgba(14, 18, 30, 0.94));
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04);
     flex-shrink: 0;
   }
 
   .preview-mobile-terminal-sessions {
     flex: 1;
     display: flex;
-    gap: 8px;
+    gap: 10px;
     overflow-x: auto;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
+    min-width: 0;
+    padding: 2px 0;
   }
 
   .preview-mobile-terminal-sessions::-webkit-scrollbar {
@@ -6570,49 +6642,95 @@ button {
   }
 
   .preview-mobile-session-chip {
-    display: flex;
+    position: relative;
+    flex: 0 0 auto;
+    min-width: 136px;
+    max-width: min(220px, 58vw);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 6px;
-    padding: 8px 14px;
-    min-height: 44px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    color: var(--text-secondary);
-    font-size: 14px;
+    gap: 8px;
+    padding: 10px 12px;
+    min-height: 46px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.03));
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 15px;
+    color: color-mix(in srgb, var(--text-secondary) 92%, white 8%);
+    font-size: 13px;
     white-space: nowrap;
     cursor: pointer;
-    transition: all 0.15s ease;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.04),
+      0 10px 18px rgba(2, 6, 23, 0.18);
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
   }
 
-.preview-mobile-session-chip .session-indicator {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
+  .preview-mobile-session-chip .session-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .preview-mobile-session-chip .session-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
 
 @media (max-width: 430px) {
   .preview-mobile-mode-chip {
     display: none;
   }
+
+  .preview-mobile-session-chip {
+    min-width: 122px;
+    max-width: min(192px, 62vw);
+    padding: 10px 11px;
+  }
 }
 
-.preview-mobile-session-chip .session-status-label {
-  font-size: 9px;
-  padding: 3px 5px;
-}
-
-  .preview-mobile-session-chip.active {
-    background: var(--tab-active-bg);
-    border-color: var(--tab-active-border);
-    color: var(--tab-active-text);
-    box-shadow: var(--tab-active-shadow);
+  .preview-mobile-session-chip .session-status-label {
+    font-size: 9px;
+    line-height: 1;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 4px 6px;
+    border-radius: 999px;
+    border: 1px solid transparent;
   }
 
-.preview-mobile-session-chip.busy:not(.active) {
-  border-color: rgba(59, 130, 246, 0.35);
-  color: var(--text-primary, #e5e7eb);
-}
+  .preview-mobile-session-chip.active {
+    background:
+      linear-gradient(180deg, rgba(59, 130, 246, 0.24), rgba(37, 99, 235, 0.18)),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+    border-color: rgba(96, 165, 250, 0.52);
+    color: var(--tab-active-text);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 0 0 1px rgba(59, 130, 246, 0.12),
+      0 16px 30px rgba(37, 99, 235, 0.22);
+  }
+
+  .preview-mobile-session-chip.active .session-name {
+    color: #f8fbff;
+  }
+
+  .preview-mobile-session-chip:hover {
+    border-color: rgba(148, 163, 184, 0.28);
+    color: var(--text-primary);
+  }
+
+  .preview-mobile-session-chip.busy:not(.active) {
+    border-color: rgba(59, 130, 246, 0.35);
+    color: var(--text-primary, #e5e7eb);
+    background:
+      linear-gradient(180deg, rgba(59, 130, 246, 0.1), rgba(255, 255, 255, 0.03));
+  }
 
   .preview-mobile-session-chip.busy.active {
     border-color: var(--tab-busy-active-border);
@@ -6621,7 +6739,7 @@ button {
   }
 
   .preview-mobile-session-chip:active {
-    transform: scale(0.96);
+    transform: translateY(1px) scale(0.98);
   }
 
   .preview-mobile-terminal-empty {
@@ -6651,6 +6769,18 @@ button {
 
   .preview-mobile-terminal-btn-reconnect {
     color: var(--accent-primary-light);
+  }
+
+  .preview-mobile-terminal-btn-back {
+    min-width: auto;
+    padding: 0 12px;
+    border: 1px solid rgba(96, 165, 250, 0.24);
+    border-radius: 999px;
+    background: rgba(59, 130, 246, 0.12);
+    color: #dbeafe;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   }
 
   .preview-mobile-terminal-btn-focus {
@@ -6726,11 +6856,13 @@ button {
 .preview-console-header {
   display: flex;
   align-items: center;
+  gap: 8px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-subtle);
   background: #1f1f1f;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  position: relative;
 }
 
 .preview-console-handle {
@@ -6769,6 +6901,22 @@ button {
 .preview-console-clear:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+.preview-console-toggle {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 0 12px;
+  min-height: 32px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.preview-console-toggle:active {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Filter chips and search */
@@ -12551,7 +12699,6 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
   padding: 0 10px;
   background: var(--terminal-chrome-bg, #17191c);
   border-top: none;
@@ -12793,18 +12940,25 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   height: 100%;
-  position: relative;
+  min-height: 0;
   overflow: hidden;
   background: var(--terminal-bg, var(--bg-surface, #17191c));
 }
 
 .terminal-with-status .desktop-terminal-stack {
   position: relative;
-  flex: 1;
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: inherit;
+}
+
+.terminal-with-status .desktop-terminal-stack > .desktop-status-bar-shell {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 4;
 }
 
 .terminal-with-status .desktop-terminal-runtime {
@@ -12832,7 +12986,7 @@ textarea:focus-visible {
 
 .terminal-with-status.terminal-first .desktop-terminal-stack,
 .terminal-with-status .desktop-terminal-stack.terminal-first {
-  height: 100%;
+  min-height: 0;
 }
 
 .cli-activity-strip {
@@ -12977,8 +13131,8 @@ textarea:focus-visible {
   position: relative;
   inset: auto;
   z-index: 1;
-  flex: 1 1 auto;
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
   opacity: 1;
   pointer-events: auto;
   overflow: hidden;
@@ -12994,7 +13148,8 @@ textarea:focus-visible {
 
 .terminal-with-status.terminal-first .desktop-terminal-runtime .terminal-chat,
 .terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat {
-  height: 100%;
+  height: auto;
+  min-height: 0;
 }
 
 .terminal-with-status .desktop-terminal-runtime.is-hidden {

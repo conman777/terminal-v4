@@ -21,7 +21,10 @@ export default function ClaudeCodeInput({
 }) {
   const [text, setText] = useState('');
   const { autocorrectEnabled } = useAutocorrect();
-  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(text, setText, autocorrectEnabled);
+  const {
+    handleKeyDown: autocorrectKeyDown,
+    handleSelectionChange: handleAutocorrectSelectionChange
+  } = useAutocorrectInput(text, setText, autocorrectEnabled);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const textareaRef = useRef(null);
@@ -223,6 +226,7 @@ export default function ClaudeCodeInput({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onSelect={handleAutocorrectSelectionChange}
           placeholder={getPlaceholder()}
           aria-label="Claude message"
           disabled={disabled || isProcessing || isRecording || isTranscribing}
@@ -281,7 +285,7 @@ export default function ClaudeCodeInput({
           className={isProcessing ? 'processing' : ''}
           aria-label="Send message"
         >
-          {isProcessing ? '...' : '→'}
+          {isProcessing ? '...' : '->'}
         </button>
       </form>
     </div>

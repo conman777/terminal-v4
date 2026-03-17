@@ -131,12 +131,16 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const fitAddonRef = useRef(null);
   const webglAddonRef = useRef(null);
   const socketRef = useRef(null);
+  const sendSocketInputRef = useRef(null);
+  const socketReadyForInputRef = useRef(false);
+  const preAuthSocketInputRef = useRef('');
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
   const touchScrollAccRef = useRef(0);
   const touchVelocityRef = useRef(0);   // px/ms, for momentum
   const touchLastTimeRef = useRef(0);
   const momentumAnimRef = useRef(null);
+  const mobileOverlayComposingRef = useRef(false);
   const clientIdRef = useRef(null);
   const inputBufferRef = useRef('');
   const inputFlushRef = useRef(null);
@@ -427,10 +431,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Send data to terminal via WebSocket
   const sendToTerminal = useCallback((data) => {
-    const socket = socketRef.current;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(data);
-    }
+    if (!data) return;
+    sendSocketInputRef.current?.(data);
   }, []);
 
   // Favicon flashing
@@ -465,11 +467,27 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Mobile keyboard input handler - forwards keystrokes to terminal
   const handleMobileInput = useCallback((e) => {
+    if (mobileOverlayComposingRef.current) {
+      return;
+    }
     const value = e.target.value;
     if (value && sendTerminalInputRef.current) {
       sendTerminalInputRef.current(value);
     }
     e.target.value = ''; // Clear after sending
+  }, []);
+
+  const handleMobileCompositionStart = useCallback(() => {
+    mobileOverlayComposingRef.current = true;
+  }, []);
+
+  const handleMobileCompositionEnd = useCallback((e) => {
+    mobileOverlayComposingRef.current = false;
+    const value = e.target.value;
+    if (value && sendTerminalInputRef.current) {
+      sendTerminalInputRef.current(value);
+    }
+    e.target.value = '';
   }, []);
 
   // Mobile paste handler - intercepts paste events on the invisible input overlay
@@ -482,6 +500,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, []);
 
   const handleMobileKeyDown = useCallback((e) => {
+    if (e.isComposing || e.keyCode === 229 || mobileOverlayComposingRef.current) {
+      return;
+    }
     if (!sendTerminalInputRef.current) return;
     // Handle special keys
     if (e.key === 'Enter') {
@@ -572,10 +593,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (sendTerminalInputRef.current) {
       sendTerminalInputRef.current(data);
     } else {
-      // Fallback: send directly if ref not ready yet
-      const socket = socketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(data);
+      if (sendSocketInputRef.current?.(data)) {
         return;
       }
       apiFetch(`/api/terminal/${sessionId}/input`, {
@@ -1865,9 +1883,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!text || disposed) return;
       const resolvedText = rewriteTerminalAgentInput(text);
       capturePreviewFromInput(resolvedText);
-      const socket = socketRef.current;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(resolvedText);
+      if (sendSocketInputRef.current?.(resolvedText)) {
         onSendMessageRef.current?.(resolvedText);
         return;
       }
@@ -1878,6 +1894,35 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }).catch((error) => {
         console.error('Failed to send terminal input:', error);
       });
+    };
+
+    const flushQueuedSocketInput = () => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN || !socketReadyForInputRef.current) {
+        return false;
+      }
+
+      const payload = preAuthSocketInputRef.current;
+      if (!payload) {
+        return true;
+      }
+
+      preAuthSocketInputRef.current = '';
+      socket.send(payload);
+      return true;
+    };
+
+    const sendSocketInput = (payload) => {
+      const socket = socketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return false;
+      }
+      if (!socketReadyForInputRef.current) {
+        preAuthSocketInputRef.current += payload;
+        return true;
+      }
+      socket.send(payload);
+      return true;
     };
 
     const flushInputBuffer = () => {
@@ -1978,6 +2023,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (!hasMeaningfulClipboardText(text)) return false;
       return !shouldPreferImageOverText(text);
     };
+    sendSocketInputRef.current = sendSocketInput;
     sendTerminalInputRef.current = sendUserInput;
     enqueueExternalInputRef.current = enqueueExternalInput;
     if (pendingExternalInputRef.current.length > 0) {
@@ -2782,6 +2828,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         let processingQueue = false;
         let didOpen = false;
         let authConnected = false;
+        socketReadyForInputRef.current = false;
         const HEARTBEAT_INTERVAL = 10000;
         const HEARTBEAT_TIMEOUT = isMobile ? 30000 : 45000;
         const CONNECT_TIMEOUT = isMobile ? 20000 : 15000;
@@ -2792,6 +2839,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         };
 
         const markDisconnected = () => {
+          socketReadyForInputRef.current = false;
           onConnectionChange?.(false);
           if (!didOpen) {
             setIsLoadingHistory(false);
@@ -3075,6 +3123,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
+              socketReadyForInputRef.current = true;
+              flushQueuedSocketInput();
               flushPendingTrackedResize(msg.clientId);
               syncPtySize({ clientId: msg.clientId });
               if (!authConnected) {
@@ -3603,6 +3653,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     return () => {
       disposed = true;
       detectedUrlsRef.current.clear();
+      sendSocketInputRef.current = null;
+      socketReadyForInputRef.current = false;
+      preAuthSocketInputRef.current = '';
       clientIdRef.current = null;
       ptyOwnerStateRef.current = {
         isOwner: null,
@@ -3887,6 +3940,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           className="mobile-keyboard-input"
           onInput={handleMobileInput}
           onKeyDown={handleMobileKeyDown}
+          onCompositionStart={handleMobileCompositionStart}
+          onCompositionEnd={handleMobileCompositionEnd}
           onPaste={handleMobilePaste}
           style={{ pointerEvents: keybarOpen && !isScrollMode ? 'auto' : 'none' }}
           autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}

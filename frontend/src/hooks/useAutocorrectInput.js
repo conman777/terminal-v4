@@ -12,13 +12,17 @@ export function useAutocorrectInput(text, setText, enabled) {
     getSpellChecker().then(spell => { spellRef.current = spell; });
   }, [enabled]);
 
+  const clearPendingCorrection = useCallback(() => {
+    correctionRef.current = null;
+  }, []);
+
   const handleKeyDown = useCallback((e) => {
     const spell = spellRef.current;
 
     // One backspace undoes the last correction
     if (e.key === 'Backspace' && correctionRef.current) {
       const { original, corrected, atIndex } = correctionRef.current;
-      correctionRef.current = null;
+      clearPendingCorrection();
       e.preventDefault();
       setText(prev => {
         const before = prev.slice(0, atIndex);
@@ -30,7 +34,7 @@ export function useAutocorrectInput(text, setText, enabled) {
 
     // Any key other than space clears pending undo
     if (e.key !== ' ') {
-      correctionRef.current = null;
+      clearPendingCorrection();
       return false;
     }
 
@@ -53,7 +57,20 @@ export function useAutocorrectInput(text, setText, enabled) {
     e.preventDefault(); // we inserted the space ourselves
 
     return true;
-  }, [text, setText]);
+  }, [clearPendingCorrection, text, setText]);
 
-  return { handleKeyDown };
+  const handleSelectionChange = useCallback((event) => {
+    const correction = correctionRef.current;
+    if (!correction) return;
+
+    const selectionStart = event?.target?.selectionStart;
+    const selectionEnd = event?.target?.selectionEnd;
+    const expectedCursor = correction.atIndex + correction.corrected.length + 1;
+
+    if (selectionStart !== expectedCursor || selectionEnd !== expectedCursor) {
+      clearPendingCorrection();
+    }
+  }, [clearPendingCorrection]);
+
+  return { handleKeyDown, handleSelectionChange, clearPendingCorrection };
 }

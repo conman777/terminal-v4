@@ -200,7 +200,7 @@ export function TerminalSessionProvider({ children }) {
           lastCwdRef.current = data.projectInfo.cwd;
           addRecentFolder(data.projectInfo.cwd);
         }
-      } else if (!selectedSessionId && isMountedRef.current) {
+      } else if (isMountedRef.current) {
         setProjectInfo(null);
         lastCwdRef.current = null;
       }

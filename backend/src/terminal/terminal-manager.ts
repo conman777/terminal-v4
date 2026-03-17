@@ -477,6 +477,7 @@ export class TerminalManager {
     }
 
     this.#sessions.delete(session.id);
+    this.#cleanupSandbox(session);
   }
 
   async #saveSessionToDisk(session: ManagedTerminal): Promise<void> {
@@ -1048,7 +1049,24 @@ export class TerminalManager {
       session.subscribers.forEach((subscriber) => subscriber(null));
       session.subscribers.clear();
       this.#sessions.delete(session.id);
+      this.#cleanupSandbox(session);
     }
+  }
+
+  #cleanupSandbox(session: ManagedTerminal): void {
+    const sandboxRuntime = this.#sandboxRuntime;
+    const cleanup = sandboxRuntime.cleanupTerminal;
+    if (!cleanup) {
+      return;
+    }
+
+    Promise.resolve(cleanup.call(sandboxRuntime, {
+      sessionId: session.id,
+      userId: session.userId,
+      sandbox: session.sandbox
+    })).catch((error) => {
+      console.error(`Failed to clean up sandbox for ${session.id}:`, error);
+    });
   }
 
   createSession(userId: string, options: TerminalCreateOptions = {}): TerminalSessionSnapshot {
@@ -1495,7 +1513,7 @@ export class TerminalManager {
       throw new Error('Branch cannot be empty');
     }
 
-    await execFileAsync('git', ['checkout', '--', trimmedBranch], { cwd: session.cwd, timeout: 15000 });
+    await execFileAsync('git', ['checkout', trimmedBranch], { cwd: session.cwd, timeout: 15000 });
     return this.listGitBranches(userId, id);
   }
 
@@ -1545,6 +1563,7 @@ export class TerminalManager {
       }
 
       this.#sessions.delete(id);
+      this.#cleanupSandbox(session);
       closed = true;
     } else if (this.#useTmux) {
       // Session might not be active but tmux session could still exist
@@ -1628,6 +1647,9 @@ export class TerminalManager {
           destroyTmuxSession(session.id);
         } else if (session.usesTmux) {
           console.log(`[TerminalManager] Detaching from tmux session ${session.id} (session will persist)`);
+        }
+        if (!persist) {
+          this.#cleanupSandbox(session);
         }
       } catch (err) {
         console.error(`Error killing session ${session.id}:`, err);

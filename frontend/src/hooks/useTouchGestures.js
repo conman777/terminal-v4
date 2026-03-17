@@ -1,4 +1,6 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+
+const TOUCH_MOVE_THRESHOLD_PX = 10;
 
 /**
  * Hook to track touch gestures and distinguish taps from scrolls.
@@ -44,7 +46,10 @@ export function useTouchGestures(isMobile, onTap, options = {}) {
     if (!state) return;
     const touch = event.touches?.[0];
     if (!touch) return;
-    if (Math.abs(touch.clientX - state.startX) > 15 || Math.abs(touch.clientY - state.startY) > 15) {
+    if (
+      Math.abs(touch.clientX - state.startX) > TOUCH_MOVE_THRESHOLD_PX
+      || Math.abs(touch.clientY - state.startY) > TOUCH_MOVE_THRESHOLD_PX
+    ) {
       state.moved = true;
       clearLongPressTimer();
     }
@@ -73,6 +78,11 @@ export function useTouchGestures(isMobile, onTap, options = {}) {
   }, [clearLongPressTimer, isMobile, onTap]);
 
   const handleTouchCancelCapture = useCallback(() => {
+    touchStateRef.current = null;
+    clearLongPressTimer();
+  }, [clearLongPressTimer]);
+
+  useEffect(() => () => {
     touchStateRef.current = null;
     clearLongPressTimer();
   }, [clearLongPressTimer]);

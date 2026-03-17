@@ -20,11 +20,12 @@ const stopRequestSchema = z.object({
 });
 
 export async function registerProcessRoutes(app: FastifyInstance): Promise<void> {
+  const ensureAuthenticated = (request: { userId?: string }): boolean => Boolean(request.userId);
+
   // GET /api/processes - List all repos with running status
   // Query param: paths (comma-separated list of repo paths)
   app.get('/api/processes', async (request, reply) => {
-    const userId = request.userId;
-    if (!userId) {
+    if (!ensureAuthenticated(request)) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
@@ -48,8 +49,7 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
 
   // POST /api/processes/start - Start a repo's application
   app.post('/api/processes/start', async (request, reply) => {
-    const userId = request.userId;
-    if (!userId) {
+    if (!ensureAuthenticated(request)) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
@@ -74,8 +74,7 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
 
   // POST /api/processes/stop - Stop a process by PID
   app.post('/api/processes/stop', async (request, reply) => {
-    const userId = request.userId;
-    if (!userId) {
+    if (!ensureAuthenticated(request)) {
       reply.code(401).send({ error: 'Unauthorized' });
       return;
     }
@@ -100,9 +99,12 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET /api/preview/:port/process-logs - Get server-side logs for a port
-  app.get('/api/preview/:port/process-logs', {
-    config: { skipAuth: true } // Allow CLI/unauthenticated access for debugging
-  }, async (request, reply) => {
+  app.get('/api/preview/:port/process-logs', async (request, reply) => {
+    if (!ensureAuthenticated(request)) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const params = request.params as { port: string };
     const port = parseInt(params.port, 10);
 
@@ -139,9 +141,12 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET /api/process-logs/:pid - Get logs by PID directly
-  app.get('/api/process-logs/:pid', {
-    config: { skipAuth: true }
-  }, async (request, reply) => {
+  app.get('/api/process-logs/:pid', async (request, reply) => {
+    if (!ensureAuthenticated(request)) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const params = request.params as { pid: string };
     const pid = parseInt(params.pid, 10);
 
@@ -181,9 +186,12 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
   });
 
   // GET /api/process-logs - List all tracked processes
-  app.get('/api/process-logs', {
-    config: { skipAuth: true }
-  }, async (request, reply) => {
+  app.get('/api/process-logs', async (request, reply) => {
+    if (!ensureAuthenticated(request)) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const query = request.query as { active?: string };
     const activeOnly = query.active === 'true';
 
@@ -207,6 +215,11 @@ export async function registerProcessRoutes(app: FastifyInstance): Promise<void>
 
   // DELETE /api/process-logs/:pid - Clear logs for a process
   app.delete('/api/process-logs/:pid', async (request, reply) => {
+    if (!ensureAuthenticated(request)) {
+      reply.code(401).send({ error: 'Unauthorized' });
+      return;
+    }
+
     const params = request.params as { pid: string };
     const pid = parseInt(params.pid, 10);
 

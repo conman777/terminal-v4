@@ -16,6 +16,7 @@ import {
   type PreviewLogEntry,
   type GetLogsOptions
 } from '../preview/preview-logs-service.js';
+import { getPreviewScopeIdOrAnonymous, resolvePreviewScopeId } from '../preview/preview-scope.js';
 
 // Validate port number
 function isValidPort(port: number): boolean {
@@ -99,7 +100,8 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
       }
     }
 
-    const added = addLogs(port, entries);
+    const scopeId = getPreviewScopeIdOrAnonymous(request);
+    const added = addLogs(scopeId, port, entries);
 
     return reply.send({ success: true, count: added.length });
   });
@@ -120,6 +122,12 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     };
   }>, reply: FastifyReply) => {
     if (!allowUnauthPreviewLogRead && !request.userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+    const scopeId = allowUnauthPreviewLogRead
+      ? getPreviewScopeIdOrAnonymous(request)
+      : (request.userId ?? resolvePreviewScopeId(request));
+    if (!scopeId) {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
     const port = parseInt(request.params.port, 10);
@@ -152,8 +160,8 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
       }
     }
 
-    const logs = getLogs(port, options);
-    const stats = getLogStats(port);
+    const logs = getLogs(scopeId, port, options);
+    const stats = getLogStats(scopeId, port);
 
     return reply.send({
       port,
@@ -170,13 +178,16 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
   app.delete('/api/preview/:port/logs', async (request: FastifyRequest<{
     Params: { port: string };
   }>, reply: FastifyReply) => {
+    if (!request.userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
     const port = parseInt(request.params.port, 10);
 
     if (!isValidPort(port)) {
       return reply.code(400).send({ error: 'Invalid port. Must be 1-65535.' });
     }
 
-    const cleared = clearLogs(port);
+    const cleared = clearLogs(request.userId, port);
 
     return reply.send({ success: true, cleared });
   });
@@ -186,7 +197,10 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
    * List all active ports with log counts
    */
   app.get('/api/preview/logs', async (request: FastifyRequest, reply: FastifyReply) => {
-    const ports = getActivePorts();
+    if (!request.userId) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+    const ports = getActivePorts(request.userId);
 
     return reply.send({
       ports,

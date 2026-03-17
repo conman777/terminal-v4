@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { getAccessTokenMock } = vi.hoisted(() => ({
+  getAccessTokenMock: vi.fn(() => null)
+}));
+
 vi.mock('./auth', () => ({
-  getAccessToken: vi.fn(() => null)
+  getAccessToken: getAccessTokenMock
 }));
 
 vi.mock('./api', () => ({
@@ -19,6 +23,8 @@ const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
 describe('toPreviewUrl', () => {
   beforeEach(() => {
     localStorage.clear();
+    getAccessTokenMock.mockReset();
+    getAccessTokenMock.mockReturnValue(null);
   });
 
   afterEach(() => {
@@ -36,6 +42,17 @@ describe('toPreviewUrl', () => {
     const result = toPreviewUrl('http://localhost:5173/app');
     expect(result).toContain('preview-5173.127.0.0.1.nip.io');
     expect(result).toContain('/app');
+  });
+
+  it('adds auth tokens to generated preview subdomain URLs', () => {
+    getAccessTokenMock.mockReturnValue('preview-token');
+    localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'subdomain-first');
+    localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, '127.0.0.1.nip.io');
+
+    const result = toPreviewUrl('http://localhost:5173/app');
+
+    expect(result).toContain('preview-5173.127.0.0.1.nip.io');
+    expect(result).toContain('token=preview-token');
   });
 
   it('falls back to path mode on loopback when base is not locally resolvable', () => {

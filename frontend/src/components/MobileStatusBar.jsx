@@ -8,6 +8,7 @@ import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
 import { useAutocorrect } from '../contexts/AutocorrectContext';
 import { AI_TYPE_OPTIONS, getAiDisplayLabel, getAiTypeOptions } from '../utils/aiProviders';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
+import { buildTerminalAttachmentPrefix } from '../utils/mobileTerminalInput';
 
 export function MobileStatusBar({
   sessionId,
@@ -45,7 +46,10 @@ export function MobileStatusBar({
   const aiMenuRef = useRef(null);
   const { sendToSession } = useTerminalSession();
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
-  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(inputText, setInputText, autocorrectEnabled);
+  const {
+    handleKeyDown: autocorrectKeyDown,
+    handleSelectionChange: handleAutocorrectSelectionChange
+  } = useAutocorrectInput(inputText, setInputText, autocorrectEnabled);
   const aiOptions = useMemo(() => getAiTypeOptions(customAiProviders), [customAiProviders]);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
   const slashSuggestions = useMemo(
@@ -74,10 +78,10 @@ export function MobileStatusBar({
   const sendToTerminal = useCallback(async (text, currentAttachments = attachments) => {
     if (!sessionId) return;
     const trimmed = String(text || '').trim();
-    const attachmentPaths = currentAttachments
+    const attachmentPrefix = buildTerminalAttachmentPrefix(currentAttachments
       .map((attachment) => attachment?.path)
-      .filter((path) => typeof path === 'string' && path.trim());
-    const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
+      .filter((path) => typeof path === 'string' && path.trim()));
+    const payload = [attachmentPrefix, trimmed].filter(Boolean).join(' ').trim();
     if (!payload) return;
 
     try {
@@ -282,7 +286,7 @@ export function MobileStatusBar({
                 aria-label={`Remove ${attachment.name}`}
                 onClick={() => removeAttachment(attachment.path)}
               >
-                ×
+                x
               </button>
             </div>
           ))}
@@ -314,6 +318,7 @@ export function MobileStatusBar({
           value={inputText}
           onChange={(event) => setInputText(event.target.value)}
           onKeyDown={handleKeyDown}
+          onSelect={handleAutocorrectSelectionChange}
           onPaste={handlePaste}
           placeholder={composerPlaceholder}
           aria-label="Command composer"

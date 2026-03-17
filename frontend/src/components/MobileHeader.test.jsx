@@ -121,6 +121,41 @@ describe('MobileHeader', () => {
     expect(onToggleKeybar).not.toHaveBeenCalled();
   });
 
+  it('does not toggle keybar when conversation mode is active', () => {
+    const onToggleKeybar = vi.fn();
+    const { container } = render(
+      <MobileHeader {...buildProps({ chatMode: true, keybarOpen: false, onToggleKeybar })} />
+    );
+    const topRow = container.querySelector('.mobile-header-top-row');
+    expect(topRow).toBeTruthy();
+
+    fireEvent.touchStart(topRow, {
+      touches: [{ clientX: 180, clientY: 12 }]
+    });
+    fireEvent.touchEnd(topRow, {
+      changedTouches: [{ clientX: 180, clientY: 98 }]
+    });
+
+    expect(onToggleKeybar).not.toHaveBeenCalled();
+  });
+
+  it('ignores swipe gestures that start on interactive header controls', () => {
+    const onToggleKeybar = vi.fn();
+    render(<MobileHeader {...buildProps({ onToggleKeybar })} />);
+
+    const menuButton = screen.getByRole('button', { name: /menu/i });
+
+    fireEvent.touchStart(menuButton, {
+      touches: [{ clientX: 10, clientY: 20 }]
+    });
+    fireEvent.touchEnd(menuButton, {
+      changedTouches: [{ clientX: 96, clientY: 22 }]
+    });
+
+    expect(screen.queryByRole('dialog', { name: /mobile menu/i })).not.toBeInTheDocument();
+    expect(onToggleKeybar).not.toHaveBeenCalled();
+  });
+
   it('opens session picker when there are many sessions and jumps to selected session', () => {
     const onSelectSession = vi.fn();
     render(

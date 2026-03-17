@@ -34,7 +34,7 @@ function formatSessionSummary(summary) {
     tailParts = parts.slice(-2);
   }
 
-  const compactPath = `${root}${separator}…${separator}${tailParts.join(separator)}`;
+  const compactPath = `${root}${separator}...${separator}${tailParts.join(separator)}`;
   return prefix ? `${prefix} ${compactPath}` : compactPath;
 }
 
@@ -72,7 +72,10 @@ export function DesktopStatusBar({
   composerDisabled = false
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
-  const { handleKeyDown: autocorrectKeyDown } = useAutocorrectInput(
+  const {
+    handleKeyDown: autocorrectKeyDown,
+    handleSelectionChange: handleAutocorrectSelectionChange
+  } = useAutocorrectInput(
     composerValue,
     (nextValue) => onComposerChange?.(typeof nextValue === 'function' ? nextValue(composerValue) : nextValue),
     autocorrectEnabled
@@ -281,7 +284,7 @@ export function DesktopStatusBar({
                   aria-label={`Remove ${attachment.name}`}
                   onClick={() => onComposerAttachmentRemove?.(attachment.path)}
                 >
-                  ×
+                  x
                 </button>
               </div>
             ))}
@@ -309,6 +312,7 @@ export function DesktopStatusBar({
           value={composerValue}
           onChange={(event) => onComposerChange?.(event.target.value)}
           onKeyDown={handleComposerKeyDown}
+          onSelect={handleAutocorrectSelectionChange}
           onPaste={handleComposerPaste}
           placeholder={composerPlaceholder}
           aria-label="Command composer"
@@ -512,6 +516,9 @@ export function DesktopStatusBar({
           flex-direction: column;
           align-items: stretch;
           justify-content: flex-start;
+          flex-shrink: 0;
+          position: relative;
+          z-index: 3;
           gap: 8px;
           height: auto;
           min-height: 120px;

@@ -6,6 +6,7 @@ import {
   hasMeaningfulClipboardText,
   shouldPreferImageOverText
 } from '../utils/clipboardImage';
+import { quoteTerminalPath } from '../utils/mobileTerminalInput';
 
 export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   const keybarRef = useRef(null);
@@ -104,7 +105,7 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
           if (shouldUseImage) {
             const path = await uploadScreenshot(imageFile);
             if (path) {
-              await sendKeyRaw(`${path} `);
+              await sendKeyRaw(`${quoteTerminalPath(path)} `);
               return;
             }
           }

@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 
 const LONG_PRESS_DELAY = 500;  // ms to trigger long press
 const MOVE_THRESHOLD = 10;     // pixels - cancel if finger moves more than this
@@ -65,6 +65,12 @@ export function useLongPress(onLongPress, delay = LONG_PRESS_DELAY) {
     // Prevent default context menu on mobile
     e.preventDefault();
   }, []);
+
+  useEffect(() => () => {
+    clear();
+    touchStartRef.current = null;
+    triggeredRef.current = false;
+  }, [clear]);
 
   return {
     onTouchStart,

@@ -20,11 +20,12 @@ vi.mock('../utils/api', () => ({
 }));
 
 function TestConsumer() {
-  const { loadingSessions, selectSession } = useTerminalSession();
+  const { loadingSessions, projectInfo, selectSession } = useTerminalSession();
 
   return (
     <>
       <span data-testid="loading-state">{loadingSessions ? 'loading' : 'idle'}</span>
+      <span data-testid="project-cwd">{projectInfo?.cwd ?? 'none'}</span>
       <button type="button" onClick={() => selectSession('session-2')}>
         switch
       </button>
@@ -120,6 +121,83 @@ describe('TerminalSessionContext', () => {
 
     const terminalLoadCallsAfterSwitch = apiFetch.mock.calls.filter(([url]) => url === '/api/terminal').length;
     expect(terminalLoadCallsAfterSwitch).toBe(terminalLoadCallsBeforeSwitch);
+  });
+
+  it('clears stale project info when the next selected session has no project metadata', async () => {
+    localStorage.setItem('lastActiveSession', 'session-1');
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+
+    try {
+      apiFetch.mockImplementation(async (url) => {
+        if (url === '/api/terminal') {
+          return {
+            ok: true,
+            json: async () => ({
+              sessions: [
+                { id: 'session-1', isActive: true, title: 'Terminal 1' },
+                { id: 'session-2', isActive: true, title: 'Terminal 2' }
+              ]
+            })
+          };
+        }
+
+        if (url === '/api/state?sessionId=session-1') {
+          return {
+            ok: true,
+            json: async () => ({
+              sessions: [
+                { id: 'session-1', isActive: true, title: 'Terminal 1' },
+                { id: 'session-2', isActive: true, title: 'Terminal 2' }
+              ],
+              projectInfo: { cwd: 'C:\\repo\\one' }
+            })
+          };
+        }
+
+        if (url === '/api/state?sessionId=session-2') {
+          return {
+            ok: true,
+            json: async () => ({
+              sessions: [
+                { id: 'session-1', isActive: true, title: 'Terminal 1' },
+                { id: 'session-2', isActive: true, title: 'Terminal 2' }
+              ],
+              projectInfo: null
+            })
+          };
+        }
+
+        throw new Error(`Unexpected apiFetch call: ${url}`);
+      });
+
+      render(
+        <TerminalSessionProvider>
+          <TestConsumer />
+        </TerminalSessionProvider>
+      );
+
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-cwd')).toHaveTextContent('C:\\repo\\one');
+      });
+
+      await act(async () => {
+        screen.getByRole('button', { name: 'switch' }).click();
+      });
+
+      await act(async () => {
+        window.dispatchEvent(new Event('focus'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('project-cwd')).toHaveTextContent('none');
+      });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
   });
 
   it('restores an inactive saved session only once during startup', async () => {

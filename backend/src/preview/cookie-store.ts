@@ -6,6 +6,7 @@ import { parse as parseCookie } from 'cookie';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ensureDataDir } from '../utils/data-dir';
+import { getPreviewStoreKey } from './preview-scope.js';
 
 interface StoredCookie {
   name: string;
@@ -20,8 +21,8 @@ interface StoredCookie {
   createdAt: number;
 }
 
-// Cookie store keyed by port number
-const cookieStores = new Map<number, Map<string, StoredCookie>>();
+// Cookie store keyed by scope+port.
+const cookieStores = new Map<string, Map<string, StoredCookie>>();
 
 // Persistence configuration
 const DATA_DIR = ensureDataDir();
@@ -36,8 +37,7 @@ function loadCookiesFromDisk(): void {
     const data = fs.readFileSync(COOKIE_FILE, 'utf-8');
     const parsed = JSON.parse(data) as Record<string, Record<string, StoredCookie>>;
 
-    for (const [portStr, cookies] of Object.entries(parsed)) {
-      const port = parseInt(portStr, 10);
+    for (const [storeKey, cookies] of Object.entries(parsed)) {
       const portStore = new Map<string, StoredCookie>();
 
       for (const [key, cookie] of Object.entries(cookies)) {
@@ -52,11 +52,11 @@ function loadCookiesFromDisk(): void {
       }
 
       if (portStore.size > 0) {
-        cookieStores.set(port, portStore);
+        cookieStores.set(storeKey, portStore);
       }
     }
 
-    console.log(`[cookie-store] Loaded cookies for ${cookieStores.size} ports`);
+    console.log(`[cookie-store] Loaded cookies for ${cookieStores.size} preview scope(s)`);
   } catch (err) {
     console.error('[cookie-store] Failed to load cookies from disk:', err);
   }
@@ -77,7 +77,7 @@ function saveCookiesToDisk(): void {
 
       const data: Record<string, Record<string, StoredCookie>> = {};
 
-      for (const [port, store] of cookieStores.entries()) {
+      for (const [storeKey, store] of cookieStores.entries()) {
         const portCookies: Record<string, StoredCookie> = {};
         for (const [key, cookie] of store.entries()) {
           // Skip expired cookies when saving
@@ -86,7 +86,7 @@ function saveCookiesToDisk(): void {
           }
         }
         if (Object.keys(portCookies).length > 0) {
-          data[port.toString()] = portCookies;
+          data[storeKey] = portCookies;
         }
       }
 
@@ -183,11 +183,12 @@ function pathMatches(cookiePath: string | undefined, requestPath: string): boole
 /**
  * Store cookies from Set-Cookie headers
  */
-export function storeCookies(port: number, setCookieHeaders: string[]): void {
-  if (!cookieStores.has(port)) {
-    cookieStores.set(port, new Map());
+export function storeCookies(scopeId: string, port: number, setCookieHeaders: string[]): void {
+  const storeKey = getPreviewStoreKey(scopeId, port);
+  if (!cookieStores.has(storeKey)) {
+    cookieStores.set(storeKey, new Map());
   }
-  const store = cookieStores.get(port)!;
+  const store = cookieStores.get(storeKey)!;
 
   for (const header of setCookieHeaders) {
     const cookie = parseSetCookie(header);
@@ -220,8 +221,8 @@ export function storeCookies(port: number, setCookieHeaders: string[]): void {
 /**
  * Get Cookie header value for a request
  */
-export function getCookieHeader(port: number, requestPath: string): string | null {
-  const store = cookieStores.get(port);
+export function getCookieHeader(scopeId: string, port: number, requestPath: string): string | null {
+  const store = cookieStores.get(getPreviewStoreKey(scopeId, port));
   if (!store || store.size === 0) return null;
 
   const cookies: string[] = [];
@@ -253,16 +254,16 @@ export function getCookieHeader(port: number, requestPath: string): string | nul
 /**
  * Clear all cookies for a port
  */
-export function clearCookies(port: number): void {
-  cookieStores.delete(port);
+export function clearCookies(scopeId: string, port: number): void {
+  cookieStores.delete(getPreviewStoreKey(scopeId, port));
   saveCookiesToDisk();
 }
 
 /**
  * Get all stored cookies for a port (for debugging/display)
  */
-export function listCookies(port: number): Array<{ name: string; value: string; path?: string }> {
-  const store = cookieStores.get(port);
+export function listCookies(scopeId: string, port: number): Array<{ name: string; value: string; path?: string }> {
+  const store = cookieStores.get(getPreviewStoreKey(scopeId, port));
   if (!store) return [];
 
   const result: Array<{ name: string; value: string; path?: string }> = [];
@@ -283,7 +284,7 @@ export function listCookies(port: number): Array<{ name: string; value: string; 
 /**
  * Check if a port has any stored cookies
  */
-export function hasCookies(port: number): boolean {
-  const store = cookieStores.get(port);
+export function hasCookies(scopeId: string, port: number): boolean {
+  const store = cookieStores.get(getPreviewStoreKey(scopeId, port));
   return store !== undefined && store.size > 0;
 }

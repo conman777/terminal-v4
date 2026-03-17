@@ -105,6 +105,50 @@ describe('TerminalManager', () => {
     expect(manager.listSessions(TEST_USER_ID)[0]?.sandbox).toEqual(snapshot.sandbox);
   });
 
+  it('cleans up sandbox workspaces when a sandboxed session closes', () => {
+    const fakeProcess = new FakeTerminalProcess();
+    const cleanupTerminal = vi.fn();
+    const sandboxRuntime = {
+      kind: 'test-runtime',
+      prepareTerminalLaunch: vi.fn((request) => ({
+        shell: request.shell,
+        cwd: request.cwd,
+        env: request.env,
+        sandbox: {
+          mode: request.sandbox.mode,
+          workspaceRoot: request.sandbox.workspaceRoot,
+          runtimeId: 'sandbox-456',
+          runtimeKind: 'test-runtime'
+        }
+      })),
+      cleanupTerminal
+    };
+    const manager = new TerminalManager({
+      spawnTerminal: vi.fn(() => fakeProcess),
+      useTmux: false,
+      sandboxRuntime
+    });
+
+    const cwd = process.cwd();
+    const snapshot = manager.createSession(TEST_USER_ID, {
+      cwd,
+      sandboxMode: 'workspace-write'
+    });
+    const closed = manager.close(TEST_USER_ID, snapshot.id);
+
+    expect(closed).toBe(true);
+    expect(cleanupTerminal).toHaveBeenCalledWith({
+      sessionId: snapshot.id,
+      userId: TEST_USER_ID,
+      sandbox: {
+        mode: 'workspace-write',
+        workspaceRoot: cwd,
+        runtimeId: 'sandbox-456',
+        runtimeKind: 'test-runtime'
+      }
+    });
+  });
+
   it('batches rapid PTY output into one subscriber event', () => {
     vi.useFakeTimers();
     try {

@@ -42,8 +42,8 @@ interface PortLogData {
   lastActivity: number;
 }
 
-// In-memory storage: port -> logs
-const portLogs = new Map<number, PortLogData>();
+// In-memory storage: scope+port -> logs
+const portLogs = new Map<string, PortLogData>();
 
 // Configuration
 const MAX_LOGS_PER_PORT = 500;
@@ -58,12 +58,13 @@ function generateId(): string {
 /**
  * Add a log entry for a port
  */
-export function addLog(port: number, entry: Omit<PreviewLogEntry, 'id'>): PreviewLogEntry {
-  let portData = portLogs.get(port);
+export function addLog(scopeId: string, port: number, entry: Omit<PreviewLogEntry, 'id'>): PreviewLogEntry {
+  const storeKey = getPreviewStoreKey(scopeId, port);
+  let portData = portLogs.get(storeKey);
 
   if (!portData) {
     portData = { logs: [], lastActivity: Date.now() };
-    portLogs.set(port, portData);
+    portLogs.set(storeKey, portData);
   }
 
   const logEntry: PreviewLogEntry = {
@@ -85,8 +86,8 @@ export function addLog(port: number, entry: Omit<PreviewLogEntry, 'id'>): Previe
 /**
  * Add multiple log entries (batch)
  */
-export function addLogs(port: number, entries: Omit<PreviewLogEntry, 'id'>[]): PreviewLogEntry[] {
-  return entries.map(entry => addLog(port, entry));
+export function addLogs(scopeId: string, port: number, entries: Omit<PreviewLogEntry, 'id'>[]): PreviewLogEntry[] {
+  return entries.map(entry => addLog(scopeId, port, entry));
 }
 
 export interface GetLogsOptions {
@@ -99,9 +100,9 @@ export interface GetLogsOptions {
 /**
  * Get logs for a port with optional filtering
  */
-export function getLogs(port: number, options: GetLogsOptions = {}): PreviewLogEntry[] {
+export function getLogs(scopeId: string, port: number, options: GetLogsOptions = {}): PreviewLogEntry[] {
   // In-memory storage
-  const portData = portLogs.get(port);
+  const portData = portLogs.get(getPreviewStoreKey(scopeId, port));
   if (!portData) {
     return [];
   }
@@ -135,8 +136,8 @@ export function getLogs(port: number, options: GetLogsOptions = {}): PreviewLogE
 /**
  * Get summary stats for a port
  */
-export function getLogStats(port: number): { total: number; byType: Record<string, number>; byLevel: Record<string, number> } | null {
-  const portData = portLogs.get(port);
+export function getLogStats(scopeId: string, port: number): { total: number; byType: Record<string, number>; byLevel: Record<string, number> } | null {
+  const portData = portLogs.get(getPreviewStoreKey(scopeId, port));
   if (!portData) {
     return null;
   }
@@ -161,8 +162,8 @@ export function getLogStats(port: number): { total: number; byType: Record<strin
 /**
  * Clear all logs for a port
  */
-export function clearLogs(port: number): boolean {
-  const portData = portLogs.get(port);
+export function clearLogs(scopeId: string, port: number): boolean {
+  const portData = portLogs.get(getPreviewStoreKey(scopeId, port));
   if (!portData) {
     return false;
   }
@@ -176,10 +177,14 @@ export function clearLogs(port: number): boolean {
 /**
  * Get list of active ports with log counts
  */
-export function getActivePorts(): Array<{ port: number; count: number; lastActivity: number }> {
+export function getActivePorts(scopeId: string): Array<{ port: number; count: number; lastActivity: number }> {
   const result: Array<{ port: number; count: number; lastActivity: number }> = [];
+  const prefix = `${scopeId}:`;
 
-  for (const [port, data] of portLogs.entries()) {
+  for (const [storeKey, data] of portLogs.entries()) {
+    if (!storeKey.startsWith(prefix)) continue;
+    const port = Number.parseInt(storeKey.slice(prefix.length), 10);
+    if (!Number.isFinite(port)) continue;
     result.push({
       port,
       count: data.logs.length,
@@ -228,3 +233,4 @@ export function stopCleanupInterval(): void {
     cleanupInterval = null;
   }
 }
+import { getPreviewStoreKey } from './preview-scope.js';

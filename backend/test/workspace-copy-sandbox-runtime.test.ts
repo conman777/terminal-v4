@@ -74,4 +74,40 @@ describe('WorkspaceCopySandboxRuntime', () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it('cleans up sandbox workspaces when a session ends', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'terminal-v4-sandbox-'));
+    const sourceRoot = path.join(tempRoot, 'source-project');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'README.md'), 'host copy', 'utf-8');
+
+    try {
+      const runtime = new WorkspaceCopySandboxRuntime(path.join(tempRoot, 'data'));
+      runtime.prepareTerminalLaunch({
+        sessionId: 'session-cleanup',
+        userId: 'user-cleanup',
+        shell: 'bash',
+        cwd: sourceRoot,
+        cols: 120,
+        rows: 32,
+        sandbox: {
+          mode: 'workspace-write',
+          workspaceRoot: sourceRoot
+        }
+      });
+
+      const sandboxRoot = path.join(tempRoot, 'data', 'sandboxes', 'user-cleanup', 'session-cleanup');
+      expect(fs.existsSync(sandboxRoot)).toBe(true);
+
+      runtime.cleanupTerminal({
+        sessionId: 'session-cleanup',
+        userId: 'user-cleanup',
+        sandbox: { runtimeId: 'session-cleanup' }
+      });
+
+      expect(fs.existsSync(sandboxRoot)).toBe(false);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

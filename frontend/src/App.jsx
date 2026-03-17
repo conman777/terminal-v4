@@ -34,6 +34,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
 import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
+import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 
@@ -361,9 +362,6 @@ function AppContent() {
     const normalizedView = view === 'preview' || view === 'claude' || view === 'terminal'
       ? view
       : 'terminal';
-    if (normalizedView === 'preview' && !previewUrl) {
-      return;
-    }
     if (normalizedView === 'preview' && keybarOpen) {
       setKeybarOpen(false);
     }
@@ -375,7 +373,7 @@ function AppContent() {
       }
     }
     setMobileView(normalizedView);
-  }, [activeSessionId, activeSessions, keybarOpen, previewUrl]);
+  }, [activeSessionId, activeSessions, keybarOpen]);
 
   const handleMobileViewportStateChange = useCallback((atBottom) => {
     mobileViewportAtBottomRef.current = atBottom;
@@ -448,6 +446,9 @@ function AppContent() {
 
   // Toggle keybar and reset header collapse when opening
   const handleToggleKeybar = useCallback(() => {
+    if (chatMode) {
+      return;
+    }
     const willOpen = !keybarOpen;
     setKeybarOpen(willOpen);
     // When opening keybar, ensure header is visible and focus terminal
@@ -458,7 +459,7 @@ function AppContent() {
         focusTerminalRef.current();
       }
     }
-  }, [keybarOpen, resetScrollDirection]);
+  }, [chatMode, keybarOpen, resetScrollDirection]);
 
   // Register focus terminal callback from MobileTerminalCarousel
   const handleRegisterFocusTerminal = useCallback((focusFn) => {
@@ -619,17 +620,15 @@ function AppContent() {
   }, [chatMode, mobileVisibleSessionId, resetScrollDirection]);
 
   useEffect(() => {
+    if (!chatMode || !keybarOpen) return;
+    setKeybarOpen(false);
+  }, [chatMode, keybarOpen]);
+
+  useEffect(() => {
     if (!mobileHeaderInputLock) return;
     mobileViewportAtBottomRef.current = true;
     resetScrollDirection();
   }, [mobileHeaderInputLock, resetScrollDirection]);
-
-  useEffect(() => {
-    if (!isMobile) return;
-    if (mobileView !== 'preview') return;
-    if (previewUrl) return;
-    setMobileView('terminal');
-  }, [isMobile, mobileView, previewUrl]);
 
   // Track focused session for recency ordering and unread state
   useEffect(() => {
@@ -1259,6 +1258,13 @@ function AppContent() {
       }
     : undefined;
 
+  const scopedSidebarData = useMemo(() => scopeThreadsSidebarData({
+    sessionsGroupedByProject,
+    pinnedSessions,
+    archivedSessions,
+    activeSessions
+  }), [activeSessions, archivedSessions, pinnedSessions, sessionsGroupedByProject]);
+
   // Grouped props for Header
   const headerSessionProps = {
     activeSessions, inactiveSessions, activeSessionId,
@@ -1267,7 +1273,7 @@ function AppContent() {
     onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
     onReorderSessions: handleReorderSessions,
     loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
-    sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
+    sessionActivity, sessionsGroupedByProject: scopedSidebarData.sessionsGroupedByProject, showTabStatusLabels,
     sessionAiTypes, onSetSessionAiType: handleSetSessionAiType, customAiProviders,
   };
 
@@ -1424,9 +1430,9 @@ function AppContent() {
           <ThreadsSidebar
             isCollapsed={sidebarCollapsed}
             onToggle={toggleSidebar}
-            sessionsGroupedByProject={sessionsGroupedByProject}
-            pinnedSessions={pinnedSessions}
-            archivedSessions={archivedSessions}
+            sessionsGroupedByProject={scopedSidebarData.sessionsGroupedByProject}
+            pinnedSessions={scopedSidebarData.pinnedSessions}
+            archivedSessions={scopedSidebarData.archivedSessions}
             activeSessionId={activeSessionId}
             sessionActivity={sessionActivity}
             onSelectSession={handleSelectSession}

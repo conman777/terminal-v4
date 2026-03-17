@@ -42,9 +42,9 @@ export function isPublicApiRoute(url: string): boolean {
 
 export function registerAuthHook(app: FastifyInstance): void {
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for preview subdomain requests (they're proxied to other apps)
+    // Skip auth only for non-API preview subdomain requests that proxy upstream apps.
     const host = request.headers.host || '';
-    if (PREVIEW_SUBDOMAIN_REGEX.test(host)) {
+    if (PREVIEW_SUBDOMAIN_REGEX.test(host) && !request.url.startsWith('/api/')) {
       return;
     }
 

@@ -1,6 +1,6 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { promises as fs } from 'fs';
-import { join } from 'path';
+import { basename, join, resolve } from 'path';
 
 const SCREENSHOT_DIR = '/tmp/preview-screenshots';
 const RECORDING_DIR = '/tmp/preview-recordings';
@@ -17,6 +17,27 @@ let recordingPages: Map<string, { page: Page; context: BrowserContext; outputPat
 
 const MAX_CONTEXTS = 10;
 const CONTEXT_TTL = 5 * 60 * 1000; // 5 minutes
+
+export function resolveScreenshotPath(filename: string): string | null {
+  if (typeof filename !== 'string' || !filename.trim()) {
+    return null;
+  }
+
+  const trimmed = filename.trim();
+  if (basename(trimmed) !== trimmed) {
+    return null;
+  }
+  if (!trimmed.toLowerCase().endsWith('.png')) {
+    return null;
+  }
+
+  const candidate = resolve(SCREENSHOT_DIR, trimmed);
+  const root = resolve(SCREENSHOT_DIR);
+  if (candidate !== root && !candidate.startsWith(`${root}/`) && !candidate.startsWith(`${root}\\`)) {
+    return null;
+  }
+  return candidate;
+}
 
 // Ensure screenshot directories exist
 async function ensureDirectories(): Promise<void> {
@@ -315,7 +336,10 @@ export async function listScreenshots(): Promise<Array<{ filename: string; size:
 // Delete screenshot
 export async function deleteScreenshot(filename: string): Promise<boolean> {
   try {
-    const filepath = join(SCREENSHOT_DIR, filename);
+    const filepath = resolveScreenshotPath(filename);
+    if (!filepath) {
+      return false;
+    }
     await fs.unlink(filepath);
     return true;
   } catch (error) {
@@ -326,7 +350,10 @@ export async function deleteScreenshot(filename: string): Promise<boolean> {
 // Get screenshot buffer
 export async function getScreenshot(filename: string): Promise<Buffer | null> {
   try {
-    const filepath = join(SCREENSHOT_DIR, filename);
+    const filepath = resolveScreenshotPath(filename);
+    if (!filepath) {
+      return null;
+    }
     return await fs.readFile(filepath);
   } catch (error) {
     return null;

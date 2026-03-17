@@ -721,21 +721,20 @@ export const TerminalPane = memo(function TerminalPane({
                   onTurn={handleTurn}
                 />
               </div>
-            </div>
               <DesktopStatusBar
-              sessionId={pane.sessionId}
-              sessionTitle={currentSession?.title}
-              sessionSummary={paneSummaryText}
-              cwd={currentCwd || projectInfo?.cwd}
-              gitBranch={projectInfo?.gitBranch}
-              isActive={shouldHighlightActiveChrome}
-              onImageUpload={handleImageUpload}
-              isTerminalPanelOpen={isTerminalPanelOpen}
-              showTerminalToggle={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput)}
-              onToggleTerminalPanel={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
-              connectionState={connectionState}
-              aiType={currentAiType}
-              aiOptions={aiOptions}
+                sessionId={pane.sessionId}
+                sessionTitle={currentSession?.title}
+                sessionSummary={paneSummaryText}
+                cwd={currentCwd || projectInfo?.cwd}
+                gitBranch={projectInfo?.gitBranch}
+                isActive={shouldHighlightActiveChrome}
+                onImageUpload={handleImageUpload}
+                isTerminalPanelOpen={isTerminalPanelOpen}
+                showTerminalToggle={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput)}
+                onToggleTerminalPanel={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
+                connectionState={connectionState}
+                aiType={currentAiType}
+                aiOptions={aiOptions}
                 onSelectAiType={handleSelectAiType}
                 onAddCustomAiCommand={handleAddCustomAiCommand}
                 onLaunchAi={handleLaunchAgent}
@@ -745,15 +744,16 @@ export const TerminalPane = memo(function TerminalPane({
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
-              composerPlaceholder="Ask V4 anything"
-              composerDisabled={!pane.sessionId}
-              runtimeInfo={runtimeInfo}
-              gitBranches={gitBranchInfo?.branches || []}
-              currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
-              isLoadingGitBranches={isLoadingGitBranches}
-              isSwitchingGitBranch={isSwitchingGitBranch}
-              onSelectGitBranch={handleSelectGitBranch}
+                composerPlaceholder="Ask V4 anything"
+                composerDisabled={!pane.sessionId}
+                runtimeInfo={runtimeInfo}
+                gitBranches={gitBranchInfo?.branches || []}
+                currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
+                isLoadingGitBranches={isLoadingGitBranches}
+                isSwitchingGitBranch={isSwitchingGitBranch}
+                onSelectGitBranch={handleSelectGitBranch}
               />
+            </div>
           </div>
         ) : (
           <div className="pane-empty pane-home">

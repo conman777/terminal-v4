@@ -6,6 +6,11 @@ import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } 
 import { rewriteSetCookieHeaders } from '../preview/cookie-rewrite.js';
 import { addProxyLog, filterHeaders, truncateBody } from '../preview/request-log-store.js';
 import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocket-interceptor.js';
+import {
+  buildPreviewTokenCookie,
+  getPreviewAuthToken,
+  getPreviewScopeIdOrAnonymous
+} from '../preview/preview-scope.js';
 
 const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
   .split(',')
@@ -2143,9 +2148,15 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       }
       forwardHeaders['x-forwarded-for'] = request.ip || '127.0.0.1';
 
+      const previewScopeId = getPreviewScopeIdOrAnonymous(request);
+      const previewAuthToken = getPreviewAuthToken(request);
+      const previewScopeCookie = previewAuthToken
+        ? buildPreviewTokenCookie(previewAuthToken, forwardedProto === 'https')
+        : null;
+
       // Inject server-side stored cookies (browser-like cookie jar)
       const cookiePath = new URL(requestPath, `http://localhost:${port}`).pathname;
-      const storedCookies = getCookieHeader(port, cookiePath);
+      const storedCookies = getCookieHeader(previewScopeId, port, cookiePath);
       if (storedCookies) {
         // Merge with any cookies from the request (prefer browser cookies)
         const existingCookies = forwardHeaders['cookie'] || '';
@@ -2307,9 +2318,11 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           rewrittenCookies = rewriteSetCookieHeaders(setCookieHeaders, rewriteOptions);
         }
         // Store cookies server-side for browser-like behavior in iframe
-        storeCookies(port, rewrittenCookies);
-        // Forward rewritten cookies to browser for client-side access
-        reply.header('set-cookie', rewrittenCookies);
+        storeCookies(previewScopeId, port, rewrittenCookies);
+        const responseCookies = previewScopeCookie ? [previewScopeCookie, ...rewrittenCookies] : rewrittenCookies;
+        reply.header('set-cookie', responseCookies);
+      } else if (previewScopeCookie) {
+        reply.header('set-cookie', previewScopeCookie);
       }
 
       // Allow iframe embedding
@@ -2885,7 +2898,7 @@ html[data-preview-force-anim="1"] :is(
       }
 
       // Log the successful request with full details
-      addProxyLog(port, {
+      addProxyLog(previewScopeId, port, {
         timestamp: startTime,
         method: request.method,
         url: request.url,
@@ -2910,7 +2923,7 @@ html[data-preview-force-anim="1"] :is(
       const message = error instanceof Error ? error.message : String(error);
 
       // Log the failed request
-      addProxyLog(port, {
+      addProxyLog(previewScopeId, port, {
         timestamp: Date.now(),
         method: request.method,
         url: request.url,
