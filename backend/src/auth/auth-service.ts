@@ -176,12 +176,13 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
 
   const localUser = getUserById(storedToken.user_id);
   if (localUser && !isExternalAuthMirrorUser(localUser)) {
+    const nextRefreshToken = generateRefreshToken(localUser.id);
     deleteRefreshToken(storedToken.id);
     return {
       user: toPublicUser(localUser),
       tokens: {
         accessToken: generateAccessToken(localUser),
-        refreshToken: generateRefreshToken(localUser.id)
+        refreshToken: nextRefreshToken
       }
     };
   }
@@ -193,9 +194,6 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
     throw new Error('User not found');
   }
 
-  // Delete old refresh token (rotation)
-  deleteRefreshToken(storedToken.id);
-
   // Generate new tokens
   const username = getNeonUsername(user);
   upsertExternalAuthMirrorUser(user.id, username);
@@ -203,6 +201,7 @@ export async function refreshTokens(refreshToken: string): Promise<AuthResult> {
     accessToken: generateAccessToken(user.id, username),
     refreshToken: generateRefreshToken(user.id)
   };
+  deleteRefreshToken(storedToken.id);
 
   return {
     user: {

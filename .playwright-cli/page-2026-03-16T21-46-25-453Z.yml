@@ -1,0 +1,102 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [active] [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: terminal v4
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - dialog "Mobile menu" [ref=e238]:
+    - generic [ref=e239]:
+      - generic [ref=e240]:
+        - generic [ref=e241]:
+          - heading "Workspace" [level=2] [ref=e242]
+          - generic [ref=e243]: 1 active
+        - button "Close menu" [ref=e244] [cursor=pointer]:
+          - img [ref=e245]
+      - button "Terminal" [ref=e249] [cursor=pointer]:
+        - img [ref=e250]
+        - generic [ref=e252]: Terminal
+    - generic [ref=e253]:
+      - generic [ref=e254]:
+        - button "New Terminal" [ref=e255] [cursor=pointer]:
+          - img [ref=e256]
+          - generic [ref=e257]: New Terminal
+        - generic [ref=e258]: Threads
+        - generic [ref=e260]:
+          - generic [ref=e261]:
+            - img [ref=e263]
+            - generic [ref=e265]: terminal v4
+            - generic [ref=e266]: "1"
+          - button "terminal v4 just now" [ref=e268] [cursor=pointer]:
+            - generic [ref=e270]: terminal v4
+            - generic [ref=e272]: just now
+      - generic [ref=e274]:
+        - button "Process Manager" [ref=e275] [cursor=pointer]:
+          - img [ref=e276]
+          - generic [ref=e278]: Process Manager
+        - button "Bookmarks" [ref=e279] [cursor=pointer]:
+          - img [ref=e280]
+          - generic [ref=e282]: Bookmarks
+        - button "Notes" [ref=e283] [cursor=pointer]:
+          - img [ref=e284]
+          - generic [ref=e287]: Notes
+      - button "Projects" [ref=e289] [cursor=pointer]:
+        - img [ref=e291]
+        - generic [ref=e293]: Projects
+        - img [ref=e295]
+    - button "Settings" [ref=e298] [cursor=pointer]:
+      - img [ref=e299]
+      - generic [ref=e302]: Settings
+  - main [ref=e24]:
+    - generic [ref=e26]:
+      - generic [ref=e182]:
+        - generic [ref=e186]:
+          - textbox "Terminal input" [ref=e187]
+          - generic:
+            - generic:
+              - generic: Microsoft Windows [Version 10.0.26200.8037
+            - generic:
+              - generic: "]"
+            - generic:
+              - generic: (c) Microsoft Corporation. All rights rese
+            - generic:
+              - generic: rved.
+            - generic:
+              - generic: C:\Users\conor\OneDrive\Personal\Documents
+            - generic:
+              - generic: \coding projects\terminal v4>
+        - textbox "Terminal input"
+      - generic [ref=e188]:
+        - generic [ref=e189]:
+          - textbox "Command composer" [ref=e190]:
+            - /placeholder: Ask V4 anything
+          - generic [ref=e191]:
+            - generic [ref=e192]:
+              - button "Choose AI coder" [ref=e194] [cursor=pointer]:
+                - generic [ref=e196]: CLI (default)
+                - img [ref=e197]
+              - button "Launch CLI (default)" [ref=e199] [cursor=pointer]:
+                - img [ref=e200]
+              - button "Disable autocorrect" [ref=e202] [cursor=pointer]: ABC
+              - button "Upload image" [ref=e203] [cursor=pointer]:
+                - img [ref=e204]
+              - button "Voice input (local Whisper)" [ref=e209] [cursor=pointer]:
+                - img [ref=e210]
+              - button "Voice input (Groq cloud)" [ref=e214] [cursor=pointer]:
+                - img [ref=e215]
+              - button "More terminal actions" [ref=e218] [cursor=pointer]:
+                - img [ref=e219]
+            - button "Send to terminal" [disabled] [ref=e223]:
+              - img [ref=e224]
+        - generic "Mobile composer context" [ref=e226]:
+          - 'generic "Branch: windowsapp" [ref=e227]':
+            - img [ref=e228]
+            - button "Select git branch" [ref=e233] [cursor=pointer]:
+              - generic [ref=e234]: windowsapp
+              - img [ref=e235]

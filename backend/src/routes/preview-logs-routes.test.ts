@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { stopCleanupInterval } from '../preview/preview-logs-service';
-import { registerPreviewLogsRoutes } from './preview-logs-routes';
+import { isAllowedPreviewLogOrigin, registerPreviewLogsRoutes } from './preview-logs-routes';
 
 async function createTestApp(withUser = false) {
   const app = Fastify();
@@ -98,5 +98,17 @@ describe('preview-logs routes', () => {
       }
     });
     expect(authorizedResponse.statusCode).toBe(200);
+  });
+
+  it('allows same-origin path preview log requests', () => {
+    expect(isAllowedPreviewLogOrigin('http://localhost:3020', 'localhost:3020')).toBe(true);
+  });
+
+  it('allows configured preview subdomain origins', () => {
+    expect(isAllowedPreviewLogOrigin('https://preview-8080.conordart.com', 'code.conordart.com')).toBe(true);
+  });
+
+  it('rejects spoofed origins that only contain the preview substring', () => {
+    expect(isAllowedPreviewLogOrigin('https://evil-preview-8080.attacker.com', 'code.conordart.com')).toBe(false);
   });
 });

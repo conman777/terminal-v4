@@ -1,0 +1,17 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - img [ref=e6]
+    - heading "Terminal" [level=1] [ref=e9]
+  - generic [ref=e10]:
+    - heading "Sign In" [level=2] [ref=e11]
+    - generic [ref=e12]:
+      - generic [ref=e13]: Username
+      - textbox "Username" [ref=e14]:
+        - /placeholder: Enter username
+    - generic [ref=e15]:
+      - generic [ref=e16]: Password
+      - textbox "Password" [ref=e17]:
+        - /placeholder: Enter password
+    - button "Sign In" [ref=e18] [cursor=pointer]
+    - generic [ref=e20]: or
+    - button "Sign in with Passkey" [ref=e21] [cursor=pointer]

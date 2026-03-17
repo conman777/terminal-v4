@@ -208,83 +208,77 @@ export async function registerSettingsRoutes(app: FastifyInstance): Promise<void
       upsertExternalAuthMirrorUser(userId, request.username);
     }
 
-    // Upsert the settings
-    const existing = db.prepare('SELECT user_id FROM user_settings WHERE user_id = ?').get(userId);
+    db.prepare('INSERT OR IGNORE INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, recent_folders, pinned_folders, sidebar_projects, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      userId,
+      null,
+      null,
+      null,
+      0,
+      null,
+      0,
+      'dark',
+      null,
+      'off',
+      null,
+      null,
+      null,
+      now
+    );
 
-    if (existing) {
-      // Build dynamic update
-      const updates: string[] = ['updated_at = ?'];
-      const values: (string | number | null)[] = [now];
+    const updates: string[] = ['updated_at = ?'];
+    const values: (string | number | null)[] = [now];
 
-      if (groqApiKey !== undefined) {
-        updates.push('groq_api_key = ?');
-        values.push(groqApiKey === '' ? null : groqApiKey);
-      }
-      if (previewUrl !== undefined) {
-        updates.push('preview_url = ?');
-        values.push(previewUrl === '' ? null : previewUrl);
-      }
-      if (terminalFontSize !== undefined) {
-        updates.push('terminal_font_size = ?');
-        values.push(terminalFontSize);
-      }
-      if (sidebarCollapsed !== undefined) {
-        updates.push('sidebar_collapsed = ?');
-        values.push(sidebarCollapsed ? 1 : 0);
-      }
-      if (terminalWebglEnabled !== undefined) {
-        updates.push('terminal_webgl_enabled = ?');
-        values.push(terminalWebglEnabled ? 1 : 0);
-      }
-      if (desktopAllowTerminalInput !== undefined) {
-        updates.push('desktop_allow_terminal_input = ?');
-        values.push(desktopAllowTerminalInput ? 1 : 0);
-      }
-      if (theme !== undefined) {
-        updates.push('theme = ?');
-        values.push(theme);
-      }
-      if (tabOrder !== undefined) {
-        updates.push('tab_order = ?');
-        values.push(tabOrder ? JSON.stringify(tabOrder) : null);
-      }
-      if (sandboxDefaultMode !== undefined) {
-        updates.push('sandbox_default_mode = ?');
-        values.push(sandboxDefaultMode ?? 'off');
-      }
-      if (recentFolders !== undefined) {
-        updates.push('recent_folders = ?');
-        values.push(recentFolders ? JSON.stringify(recentFolders) : null);
-      }
-      if (pinnedFolders !== undefined) {
-        updates.push('pinned_folders = ?');
-        values.push(pinnedFolders ? JSON.stringify(pinnedFolders) : null);
-      }
-      if (sidebarProjects !== undefined) {
-        updates.push('sidebar_projects = ?');
-        values.push(sidebarProjects ? JSON.stringify(sidebarProjects) : null);
-      }
-
-      values.push(userId);
-      db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
-    } else {
-      db.prepare('INSERT INTO user_settings (user_id, groq_api_key, preview_url, terminal_font_size, sidebar_collapsed, terminal_webgl_enabled, desktop_allow_terminal_input, theme, tab_order, sandbox_default_mode, recent_folders, pinned_folders, sidebar_projects, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-        userId,
-        groqApiKey || null,
-        previewUrl || null,
-        terminalFontSize ?? null,
-        sidebarCollapsed ? 1 : 0,
-        terminalWebglEnabled === undefined ? null : terminalWebglEnabled ? 1 : 0,
-        desktopAllowTerminalInput === undefined ? 0 : desktopAllowTerminalInput ? 1 : 0,
-        theme || 'dark',
-        tabOrder ? JSON.stringify(tabOrder) : null,
-        sandboxDefaultMode || 'off',
-        recentFolders ? JSON.stringify(recentFolders) : null,
-        pinnedFolders ? JSON.stringify(pinnedFolders) : null,
-        sidebarProjects ? JSON.stringify(sidebarProjects) : null,
-        now
-      );
+    if (groqApiKey !== undefined) {
+      updates.push('groq_api_key = ?');
+      values.push(groqApiKey === '' ? null : groqApiKey);
     }
+    if (previewUrl !== undefined) {
+      updates.push('preview_url = ?');
+      values.push(previewUrl === '' ? null : previewUrl);
+    }
+    if (terminalFontSize !== undefined) {
+      updates.push('terminal_font_size = ?');
+      values.push(terminalFontSize);
+    }
+    if (sidebarCollapsed !== undefined) {
+      updates.push('sidebar_collapsed = ?');
+      values.push(sidebarCollapsed ? 1 : 0);
+    }
+    if (terminalWebglEnabled !== undefined) {
+      updates.push('terminal_webgl_enabled = ?');
+      values.push(terminalWebglEnabled ? 1 : 0);
+    }
+    if (desktopAllowTerminalInput !== undefined) {
+      updates.push('desktop_allow_terminal_input = ?');
+      values.push(desktopAllowTerminalInput ? 1 : 0);
+    }
+    if (theme !== undefined) {
+      updates.push('theme = ?');
+      values.push(theme);
+    }
+    if (tabOrder !== undefined) {
+      updates.push('tab_order = ?');
+      values.push(tabOrder ? JSON.stringify(tabOrder) : null);
+    }
+    if (sandboxDefaultMode !== undefined) {
+      updates.push('sandbox_default_mode = ?');
+      values.push(sandboxDefaultMode ?? 'off');
+    }
+    if (recentFolders !== undefined) {
+      updates.push('recent_folders = ?');
+      values.push(recentFolders ? JSON.stringify(recentFolders) : null);
+    }
+    if (pinnedFolders !== undefined) {
+      updates.push('pinned_folders = ?');
+      values.push(pinnedFolders ? JSON.stringify(pinnedFolders) : null);
+    }
+    if (sidebarProjects !== undefined) {
+      updates.push('sidebar_projects = ?');
+      values.push(sidebarProjects ? JSON.stringify(sidebarProjects) : null);
+    }
+
+    values.push(userId);
+    db.prepare(`UPDATE user_settings SET ${updates.join(', ')} WHERE user_id = ?`).run(...values);
 
     return { success: true };
   });

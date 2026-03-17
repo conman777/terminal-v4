@@ -1,0 +1,126 @@
+- generic [ref=e3]:
+  - generic [ref=e55]:
+    - generic [ref=e56]:
+      - button "Go up" [ref=e57] [cursor=pointer]:
+        - img [ref=e58]
+      - generic [ref=e60]:
+        - button "C:" [ref=e62] [cursor=pointer]
+        - generic [ref=e63]:
+          - generic [ref=e64]: /
+          - button "Users" [ref=e65] [cursor=pointer]
+        - generic [ref=e66]:
+          - generic [ref=e67]: /
+          - button "conor" [ref=e68] [cursor=pointer]
+        - generic [ref=e69]:
+          - generic [ref=e70]: /
+          - button "OneDrive" [ref=e71] [cursor=pointer]
+        - generic [ref=e72]:
+          - generic [ref=e73]: /
+          - button "Personal" [ref=e74] [cursor=pointer]
+        - generic [ref=e75]:
+          - generic [ref=e76]: /
+          - button "Documents" [ref=e77] [cursor=pointer]
+        - generic [ref=e78]:
+          - generic [ref=e79]: /
+          - button "coding projects" [ref=e80] [cursor=pointer]
+        - generic [ref=e81]:
+          - generic [ref=e82]: /
+          - button "terminal v4" [ref=e83] [cursor=pointer]
+    - generic [ref=e84]:
+      - generic [ref=e85]:
+        - generic [ref=e86]:
+          - generic [ref=e87]: AI
+          - generic [ref=e88]:
+            - combobox "AI" [ref=e89] [cursor=pointer]:
+              - option "CLI" [selected]
+              - option "Claude Code"
+              - option "Codex"
+              - option "Gemini CLI"
+            - img
+        - generic [ref=e90]:
+          - generic [ref=e91]: Tab name
+          - textbox "Tab name" [ref=e92]:
+            - /placeholder: Optional
+      - generic [ref=e93]:
+        - img
+        - textbox "Search folders" [ref=e94]:
+          - /placeholder: Search folders...
+      - generic [ref=e95]:
+        - button "backend" [ref=e96] [cursor=pointer]:
+          - img [ref=e97]
+          - generic [ref=e99]: backend
+          - img [ref=e100]
+        - button "bitcoin-overlay" [ref=e102] [cursor=pointer]:
+          - img [ref=e103]
+          - generic [ref=e105]: bitcoin-overlay
+          - img [ref=e106]
+        - button "data" [ref=e108] [cursor=pointer]:
+          - img [ref=e109]
+          - generic [ref=e111]: data
+          - img [ref=e112]
+        - button "desktop" [ref=e114] [cursor=pointer]:
+          - img [ref=e115]
+          - generic [ref=e117]: desktop
+          - img [ref=e118]
+        - button "docs" [ref=e120] [cursor=pointer]:
+          - img [ref=e121]
+          - generic [ref=e123]: docs
+          - img [ref=e124]
+        - button "frontend" [ref=e126] [cursor=pointer]:
+          - img [ref=e127]
+          - generic [ref=e129]: frontend
+          - img [ref=e130]
+        - button "node_modules" [ref=e132] [cursor=pointer]:
+          - img [ref=e133]
+          - generic [ref=e135]: node_modules
+          - img [ref=e136]
+        - button "output" [ref=e138] [cursor=pointer]:
+          - img [ref=e139]
+          - generic [ref=e141]: output
+          - img [ref=e142]
+        - button "scripts" [ref=e144] [cursor=pointer]:
+          - img [ref=e145]
+          - generic [ref=e147]: scripts
+          - img [ref=e148]
+        - button "test-results" [ref=e150] [cursor=pointer]:
+          - img [ref=e151]
+          - generic [ref=e153]: test-results
+          - img [ref=e154]
+        - button "tests" [ref=e156] [cursor=pointer]:
+          - img [ref=e157]
+          - generic [ref=e159]: tests
+          - img [ref=e160]
+      - generic [ref=e162]:
+        - generic [ref=e163]:
+          - img [ref=e164]
+          - text: Recent
+        - generic [ref=e167]:
+          - button "terminal v4" [ref=e168] [cursor=pointer]
+          - button "uplifting" [ref=e169] [cursor=pointer]
+          - button "timer" [ref=e170] [cursor=pointer]
+          - button "coding projects" [ref=e171] [cursor=pointer]
+    - generic [ref=e172]:
+      - generic "C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4" [ref=e173]:
+        - img [ref=e174]
+        - text: terminal v4
+      - generic [ref=e176]:
+        - button "Cancel" [ref=e177] [cursor=pointer]
+        - button "Open here" [ref=e178] [cursor=pointer]:
+          - text: Open here
+          - img [ref=e179]
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: No active terminal
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [active] [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - main [ref=e24]:
+    - generic [ref=e27]:
+      - heading "Welcome to Terminal" [level=2] [ref=e28]
+      - paragraph [ref=e29]: Create a new terminal session to get started.

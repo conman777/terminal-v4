@@ -1,0 +1,61 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: terminal v4
+        - generic [ref=e430]: "2"
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - main [ref=e24]:
+    - generic [ref=e26]:
+      - generic [ref=e431]:
+        - generic [ref=e435]:
+          - textbox "Terminal input" [ref=e436]
+          - generic:
+            - generic:
+              - generic: Microsoft Windows [Version 10.0.26200.8037
+            - generic:
+              - generic: "]"
+            - generic:
+              - generic: (c) Microsoft Corporation. All rights rese
+            - generic:
+              - generic: rved.
+            - generic:
+              - generic: C:\Users\conor\OneDrive\Personal\Documents
+            - generic:
+              - generic: \coding projects\terminal v4>
+        - textbox "Terminal input"
+      - generic [ref=e188]:
+        - generic [ref=e189]:
+          - textbox "Command composer" [ref=e190]:
+            - /placeholder: Ask V4 anything
+          - generic [ref=e191]:
+            - generic [ref=e192]:
+              - button "Choose AI coder" [ref=e194] [cursor=pointer]:
+                - generic [ref=e196]: CLI (default)
+                - img [ref=e197]
+              - button "Launch CLI (default)" [ref=e199] [cursor=pointer]:
+                - img [ref=e200]
+              - button "Disable autocorrect" [ref=e202] [cursor=pointer]: ABC
+              - button "Upload image" [ref=e203] [cursor=pointer]:
+                - img [ref=e204]
+              - button "Voice input (local Whisper)" [ref=e209] [cursor=pointer]:
+                - img [ref=e210]
+              - button "Voice input (Groq cloud)" [ref=e214] [cursor=pointer]:
+                - img [ref=e215]
+              - button "More terminal actions" [ref=e218] [cursor=pointer]:
+                - img [ref=e219]
+            - button "Send to terminal" [disabled] [ref=e223]:
+              - img [ref=e224]
+        - generic "Mobile composer context" [ref=e437]:
+          - 'generic "Branch: windowsapp" [ref=e438]':
+            - img [ref=e439]
+            - button "Select git branch" [ref=e444] [cursor=pointer]:
+              - generic [ref=e445]: windowsapp
+              - img [ref=e446]

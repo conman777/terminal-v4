@@ -1,5 +1,6 @@
 // Server-side request log store for preview proxy
 // Captures all requests going through the proxy for debugging
+import { getPreviewStoreKey } from './preview-scope.js';
 
 // Max body size to capture (50KB)
 const MAX_BODY_SIZE = 50 * 1024;
@@ -124,7 +125,7 @@ export function getProxyLogsAfterCursor(
   }
 
   const result: ProxyLogEntry[] = [];
-  let passedCursor = cursor.id === null;
+  let matchedCursor = cursor.id === null;
 
   for (const log of logs) {
     if (log.timestamp < cursor.timestamp) {
@@ -134,13 +135,17 @@ export function getProxyLogsAfterCursor(
       result.push(log);
       continue;
     }
-    if (passedCursor) {
+    if (matchedCursor) {
       result.push(log);
       continue;
     }
     if (log.id === cursor.id) {
-      passedCursor = true;
+      matchedCursor = true;
     }
+  }
+
+  if (!matchedCursor && cursor.id !== null) {
+    return logs.filter((log) => log.timestamp >= cursor.timestamp);
   }
 
   return result;
@@ -173,4 +178,3 @@ export function getActivePreviewPorts(scopeId: string): number[] {
     .filter((port) => Number.isFinite(port))
     .sort((a, b) => a - b);
 }
-import { getPreviewStoreKey } from './preview-scope.js';

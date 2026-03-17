@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import WebSocket from 'ws';
+import { isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import { INSPECTOR_SCRIPT } from '../inspector/inspector-script.js';
 import { storeCookies, getCookieHeader, clearCookies, listCookies, hasCookies } from '../preview/cookie-store.js';
@@ -236,11 +237,51 @@ const PREVIEW_DEBUG_SCRIPT = `
   const MAIN_DOMAIN = ctx.mainDomain;
   const PREVIEW_BASE_PATH = ctx.basePath;
   const PREVIEW_ORIGIN = location.origin;
+  const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
   const VIRTUAL_PROTOCOL = PREVIEW_ORIGIN.startsWith('https:') ? 'https:' : 'http:';
   const VIRTUAL_ORIGIN = VIRTUAL_PROTOCOL + '//localhost:' + PORT;
   const SHOULD_NAMESPACE_STORAGE = !!PREVIEW_BASE_PATH;
   const COMPAT_PATH_MODE = !!PREVIEW_BASE_PATH;
   var lastReportedLocation = null;
+  var trustedParentOrigin = '';
+
+  function getExpectedParentOrigin() {
+    if (PREVIEW_BASE_PATH || MAIN_IS_LOCAL) {
+      return PREVIEW_ORIGIN;
+    }
+    return location.protocol + '//code.' + MAIN_DOMAIN;
+  }
+
+  function getTrustedParentOrigin() {
+    if (trustedParentOrigin) return trustedParentOrigin;
+    var expectedOrigin = getExpectedParentOrigin();
+    try {
+      if (document.referrer) {
+        var referrerOrigin = new URL(document.referrer).origin;
+        if (referrerOrigin === expectedOrigin || referrerOrigin === PREVIEW_ORIGIN) {
+          trustedParentOrigin = referrerOrigin;
+          return trustedParentOrigin;
+        }
+      }
+    } catch (e) {}
+    trustedParentOrigin = expectedOrigin;
+    return trustedParentOrigin;
+  }
+
+  function postToPreviewParent(payload) {
+    try {
+      if (!window.parent || window.parent === window) return;
+      var parentOrigin = getTrustedParentOrigin();
+      if (!parentOrigin) return;
+      window.parent.postMessage(payload, parentOrigin);
+    } catch (e) {}
+  }
+
+  function isTrustedPreviewParentMessage(event) {
+    if (!event || !window.parent || window.parent === window) return false;
+    if (event.source !== window.parent) return false;
+    return event.origin === getTrustedParentOrigin();
+  }
 
   function stripPreviewBasePath(path) {
     if (!path) return '/';
@@ -470,10 +511,10 @@ const PREVIEW_DEBUG_SCRIPT = `
       var canonicalUrl = getCanonicalLocation();
       if (canonicalUrl === lastReportedLocation) return;
       lastReportedLocation = canonicalUrl;
-      window.parent.postMessage({
+      postToPreviewParent({
         type: 'preview-location',
         url: canonicalUrl
-      }, '*');
+      });
     } catch (e) {}
   }
 
@@ -677,12 +718,12 @@ const PREVIEW_DEBUG_SCRIPT = `
     try {
       var localSnapshot = typeof localStorage !== 'undefined' ? readStorageSnapshot(localStorage) : null;
       var sessionSnapshot = typeof sessionStorage !== 'undefined' ? readStorageSnapshot(sessionStorage) : null;
-      window.parent.postMessage({
+      postToPreviewParent({
         type: 'preview-storage-sync',
         port: PORT,
         local: localSnapshot,
         session: sessionSnapshot
-      }, '*');
+      });
     } catch (e) {}
   }
 
@@ -729,6 +770,9 @@ const PREVIEW_DEBUG_SCRIPT = `
   try {
     if (typeof window !== 'undefined') {
       window.addEventListener('message', function(event) {
+        if (!isTrustedPreviewParentMessage(event)) {
+          return;
+        }
         var payload = event.data || {};
         if (payload.type === 'preview-clear-storage') {
           try { if (typeof localStorage !== 'undefined') localStorage.clear(); } catch (e) {}
@@ -746,7 +790,7 @@ const PREVIEW_DEBUG_SCRIPT = `
         }
       });
 
-      window.parent.postMessage({ type: 'preview-storage-request', port: PORT }, '*');
+      postToPreviewParent({ type: 'preview-storage-request', port: PORT });
 
       if (typeof localStorage !== 'undefined') {
         hookStorage(localStorage);
@@ -1000,7 +1044,6 @@ const PREVIEW_DEBUG_SCRIPT = `
   }
 
   // Send logs to code.{domain} for subdomains, or same-origin for path-based/localhost preview
-  const MAIN_IS_LOCAL = MAIN_DOMAIN === 'localhost' || MAIN_DOMAIN === '127.0.0.1' || MAIN_DOMAIN === '0.0.0.0';
   const API_BASE = (PREVIEW_BASE_PATH || MAIN_IS_LOCAL)
     ? location.origin
     : location.protocol + '//code.' + MAIN_DOMAIN;
@@ -1036,9 +1079,7 @@ const PREVIEW_DEBUG_SCRIPT = `
   function queueLog(entry) {
     pendingLogs.push(entry);
     // Also send to parent via postMessage for browser UI
-    try {
-      window.parent.postMessage({ ...entry, type: 'preview-' + entry.type }, '*');
-    } catch {}
+    postToPreviewParent({ ...entry, type: 'preview-' + entry.type });
     // Debounce flush
     if (flushTimeout) clearTimeout(flushTimeout);
     flushTimeout = setTimeout(flushLogs, 100);
@@ -1351,6 +1392,9 @@ const PREVIEW_DEBUG_SCRIPT = `
 
   // Listen for commands from parent
   window.addEventListener('message', function(event) {
+    if (!isTrustedPreviewParentMessage(event)) {
+      return;
+    }
     if (event.data && event.data.type === 'preview-capture-dom') {
       window.__captureDOM();
     }
@@ -1830,12 +1874,42 @@ function rewriteJsImports(
   return rewritten;
 }
 
-function isPrivateHostname(hostname: string): boolean {
-  const lower = hostname.toLowerCase();
-  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1') {
+export function isPrivateHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase().split('%')[0];
+  if (lower === 'localhost' || lower === '127.0.0.1' || lower === '0.0.0.0' || lower === '::1' || lower === '::') {
     return true;
   }
-  return /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(lower);
+
+  const version = isIP(lower);
+  if (version === 4) {
+    const parts = lower.split('.').map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 4 || parts.some((part) => Number.isNaN(part) || part < 0 || part > 255)) {
+      return true;
+    }
+
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  if (version === 6) {
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    if (/^fe[89ab]/.test(lower)) return true;
+
+    const mappedMatch = lower.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mappedMatch?.[1]) {
+      return isPrivateHostname(mappedMatch[1]);
+    }
+    return false;
+  }
+
+  return false;
 }
 
 function rewriteLocalAbsoluteUrl(

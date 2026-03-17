@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { afterEach, describe, expect, it } from 'vitest';
-import { registerPreviewSubdomainRoutes } from './preview-subdomain-routes';
+import { isPrivateHostname, registerPreviewSubdomainRoutes } from './preview-subdomain-routes';
 
 async function createTestApp() {
   const app = Fastify();
@@ -49,5 +49,15 @@ describe('preview-subdomain routes', () => {
     });
 
     expect(response.statusCode).toBe(404);
+  });
+
+  it('treats reserved and link-local addresses as private', () => {
+    expect(isPrivateHostname('169.254.169.254')).toBe(true);
+    expect(isPrivateHostname('100.64.0.1')).toBe(true);
+    expect(isPrivateHostname('198.19.0.1')).toBe(true);
+    expect(isPrivateHostname('224.0.0.1')).toBe(true);
+    expect(isPrivateHostname('fd00::1')).toBe(true);
+    expect(isPrivateHostname('fe80::1')).toBe(true);
+    expect(isPrivateHostname('8.8.8.8')).toBe(false);
   });
 });

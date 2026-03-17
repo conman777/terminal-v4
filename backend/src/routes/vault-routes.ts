@@ -25,6 +25,10 @@ function readStoredValue(value: string): string {
   }
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
+}
+
 export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
   // GET /api/vault - list all keys (masked)
   app.get('/api/vault', async (request, reply) => {
@@ -70,23 +74,20 @@ export async function registerVaultRoutes(app: FastifyInstance): Promise<void> {
 
     const db = getDatabase();
     const trimmedName = name.trim();
-
-    const existing = db.prepare(
-      'SELECT id FROM api_key_vault WHERE user_id = ? AND key_name = ?'
-    ).get(userId, trimmedName);
-
-    if (existing) {
-      reply.code(409).send({ error: `A key named "${trimmedName}" already exists` });
-      return;
-    }
-
     const id = randomUUID();
     const now = new Date().toISOString();
     const encryptedValue = encryptSecret(value);
-
-    db.prepare(
-      'INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, userId, trimmedName, encryptedValue, now);
+    try {
+      db.prepare(
+        'INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?, ?, ?, ?, ?)'
+      ).run(id, userId, trimmedName, encryptedValue, now);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        reply.code(409).send({ error: `A key named "${trimmedName}" already exists` });
+        return;
+      }
+      throw error;
+    }
 
     return {
       key: {

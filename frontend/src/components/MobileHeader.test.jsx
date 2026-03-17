@@ -139,6 +139,26 @@ describe('MobileHeader', () => {
     expect(onToggleKeybar).not.toHaveBeenCalled();
   });
 
+  it('shows the preview title instead of duplicate view tabs while preview is open', () => {
+    const onViewChange = vi.fn();
+    const { container } = render(
+      <MobileHeader
+        {...buildProps({
+          mobileView: 'preview',
+          previewUrl: 'https://example.com',
+          onViewChange
+        })}
+      />
+    );
+
+    expect(container.querySelector('.mobile-header-title')).toHaveTextContent('Preview');
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to terminal' }));
+    expect(onViewChange).toHaveBeenCalledWith('terminal');
+  });
+
   it('ignores swipe gestures that start on interactive header controls', () => {
     const onToggleKeybar = vi.fn();
     render(<MobileHeader {...buildProps({ onToggleKeybar })} />);

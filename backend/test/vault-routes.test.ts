@@ -105,4 +105,24 @@ describe('Vault routes', () => {
       expect(revealResponse.body).toEqual({ value: 'sk-test-123456' });
     });
   });
+
+  it('rejects duplicate key names with a conflict response', async () => {
+    await withApp(async ({ app, accessToken }) => {
+      await supertest(app.server)
+        .post('/api/vault')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ name: 'vault-test-duplicate', value: 'sk-test-123456' })
+        .expect(200);
+
+      const duplicateResponse = await supertest(app.server)
+        .post('/api/vault')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({ name: 'vault-test-duplicate', value: 'sk-test-abcdef' })
+        .expect(409);
+
+      expect(duplicateResponse.body).toEqual({
+        error: 'A key named "vault-test-duplicate" already exists'
+      });
+    });
+  });
 });

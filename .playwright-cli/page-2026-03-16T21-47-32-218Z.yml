@@ -1,0 +1,48 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: terminal v4
+        - generic [ref=e430]: "2"
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - main [ref=e24]:
+    - generic [ref=e26]:
+      - generic:
+        - generic:
+          - generic [ref=e435]:
+            - textbox [ref=e491]
+            - generic:
+              - generic:
+                - generic: Microsoft Windows [Version 10.0.26200.8037
+              - generic:
+                - generic: "]"
+              - generic:
+                - generic: (c) Microsoft Corporation. All rights rese
+              - generic:
+                - generic: rved.
+              - generic:
+                - generic: C:\Users\conor\OneDrive\Personal\Documents
+              - generic:
+                - generic: \coding projects\terminal v4>
+          - textbox
+      - generic [ref=e492]:
+        - generic [ref=e494]:
+          - img [ref=e496]
+          - paragraph [ref=e498]: Send a message — Claude will respond here.
+        - generic [ref=e499]:
+          - textbox "Message Claude…" [ref=e500]
+          - button "Voice input (Groq cloud)" [ref=e502] [cursor=pointer]:
+            - img [ref=e503]
+          - button "Upload image" [ref=e505] [cursor=pointer]:
+            - img [ref=e506]
+          - button "Interrupt (Ctrl+C)" [ref=e509] [cursor=pointer]:
+            - img [ref=e510]
+          - button "Send message" [disabled] [ref=e512]:
+            - img [ref=e513]

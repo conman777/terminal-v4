@@ -1,0 +1,169 @@
+- generic [ref=e3]:
+  - generic [ref=e304]:
+    - generic [ref=e305]:
+      - button "Go up" [ref=e306] [cursor=pointer]:
+        - img [ref=e307]
+      - generic [ref=e309]:
+        - button "C:" [ref=e311] [cursor=pointer]
+        - generic [ref=e312]:
+          - generic [ref=e313]: /
+          - button "Users" [ref=e314] [cursor=pointer]
+        - generic [ref=e315]:
+          - generic [ref=e316]: /
+          - button "conor" [ref=e317] [cursor=pointer]
+        - generic [ref=e318]:
+          - generic [ref=e319]: /
+          - button "OneDrive" [ref=e320] [cursor=pointer]
+        - generic [ref=e321]:
+          - generic [ref=e322]: /
+          - button "Personal" [ref=e323] [cursor=pointer]
+        - generic [ref=e324]:
+          - generic [ref=e325]: /
+          - button "Documents" [ref=e326] [cursor=pointer]
+        - generic [ref=e327]:
+          - generic [ref=e328]: /
+          - button "coding projects" [ref=e329] [cursor=pointer]
+        - generic [ref=e330]:
+          - generic [ref=e331]: /
+          - button "terminal v4" [ref=e332] [cursor=pointer]
+    - generic [ref=e333]:
+      - generic [ref=e334]:
+        - generic [ref=e335]:
+          - generic [ref=e336]: AI
+          - generic [ref=e337]:
+            - combobox "AI" [ref=e338] [cursor=pointer]:
+              - option "CLI" [selected]
+              - option "Claude Code"
+              - option "Codex"
+              - option "Gemini CLI"
+            - img
+        - generic [ref=e339]:
+          - generic [ref=e340]: Tab name
+          - textbox "Tab name" [ref=e341]:
+            - /placeholder: Optional
+      - generic [ref=e342]:
+        - img
+        - textbox "Search folders" [ref=e343]:
+          - /placeholder: Search folders...
+      - generic [ref=e344]:
+        - button "backend" [ref=e345] [cursor=pointer]:
+          - img [ref=e346]
+          - generic [ref=e348]: backend
+          - img [ref=e349]
+        - button "bitcoin-overlay" [ref=e351] [cursor=pointer]:
+          - img [ref=e352]
+          - generic [ref=e354]: bitcoin-overlay
+          - img [ref=e355]
+        - button "data" [ref=e357] [cursor=pointer]:
+          - img [ref=e358]
+          - generic [ref=e360]: data
+          - img [ref=e361]
+        - button "desktop" [ref=e363] [cursor=pointer]:
+          - img [ref=e364]
+          - generic [ref=e366]: desktop
+          - img [ref=e367]
+        - button "docs" [ref=e369] [cursor=pointer]:
+          - img [ref=e370]
+          - generic [ref=e372]: docs
+          - img [ref=e373]
+        - button "frontend" [ref=e375] [cursor=pointer]:
+          - img [ref=e376]
+          - generic [ref=e378]: frontend
+          - img [ref=e379]
+        - button "node_modules" [ref=e381] [cursor=pointer]:
+          - img [ref=e382]
+          - generic [ref=e384]: node_modules
+          - img [ref=e385]
+        - button "output" [ref=e387] [cursor=pointer]:
+          - img [ref=e388]
+          - generic [ref=e390]: output
+          - img [ref=e391]
+        - button "scripts" [ref=e393] [cursor=pointer]:
+          - img [ref=e394]
+          - generic [ref=e396]: scripts
+          - img [ref=e397]
+        - button "test-results" [ref=e399] [cursor=pointer]:
+          - img [ref=e400]
+          - generic [ref=e402]: test-results
+          - img [ref=e403]
+        - button "tests" [ref=e405] [cursor=pointer]:
+          - img [ref=e406]
+          - generic [ref=e408]: tests
+          - img [ref=e409]
+      - generic [ref=e411]:
+        - generic [ref=e412]:
+          - img [ref=e413]
+          - text: Recent
+        - generic [ref=e416]:
+          - button "terminal v4" [ref=e417] [cursor=pointer]
+          - button "uplifting" [ref=e418] [cursor=pointer]
+          - button "timer" [ref=e419] [cursor=pointer]
+          - button "coding projects" [ref=e420] [cursor=pointer]
+    - generic [ref=e421]:
+      - generic "C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4" [ref=e422]:
+        - img [ref=e423]
+        - text: terminal v4
+      - generic [ref=e425]:
+        - button "Cancel" [ref=e426] [cursor=pointer]
+        - button "Open here" [ref=e427] [cursor=pointer]:
+          - text: Open here
+          - img [ref=e428]
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: terminal v4
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [active] [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - main [ref=e24]:
+    - generic [ref=e26]:
+      - generic [ref=e182]:
+        - generic [ref=e186]:
+          - textbox "Terminal input" [ref=e187]
+          - generic:
+            - generic:
+              - generic: Microsoft Windows [Version 10.0.26200.8037
+            - generic:
+              - generic: "]"
+            - generic:
+              - generic: (c) Microsoft Corporation. All rights rese
+            - generic:
+              - generic: rved.
+            - generic:
+              - generic: C:\Users\conor\OneDrive\Personal\Documents
+            - generic:
+              - generic: \coding projects\terminal v4>
+        - textbox "Terminal input"
+      - generic [ref=e188]:
+        - generic [ref=e189]:
+          - textbox "Command composer" [ref=e190]:
+            - /placeholder: Ask V4 anything
+          - generic [ref=e191]:
+            - generic [ref=e192]:
+              - button "Choose AI coder" [ref=e194] [cursor=pointer]:
+                - generic [ref=e196]: CLI (default)
+                - img [ref=e197]
+              - button "Launch CLI (default)" [ref=e199] [cursor=pointer]:
+                - img [ref=e200]
+              - button "Disable autocorrect" [ref=e202] [cursor=pointer]: ABC
+              - button "Upload image" [ref=e203] [cursor=pointer]:
+                - img [ref=e204]
+              - button "Voice input (local Whisper)" [ref=e209] [cursor=pointer]:
+                - img [ref=e210]
+              - button "Voice input (Groq cloud)" [ref=e214] [cursor=pointer]:
+                - img [ref=e215]
+              - button "More terminal actions" [ref=e218] [cursor=pointer]:
+                - img [ref=e219]
+            - button "Send to terminal" [disabled] [ref=e223]:
+              - img [ref=e224]
+        - generic "Mobile composer context" [ref=e226]:
+          - 'generic "Branch: windowsapp" [ref=e227]':
+            - img [ref=e228]
+            - button "Select git branch" [ref=e233] [cursor=pointer]:
+              - generic [ref=e234]: windowsapp
+              - img [ref=e235]

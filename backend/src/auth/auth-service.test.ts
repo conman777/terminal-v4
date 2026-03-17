@@ -174,6 +174,29 @@ describe('auth-service', () => {
     );
   });
 
+  it('keeps the existing refresh token if rotation cannot mint a replacement', async () => {
+    vi.mocked(getRefreshTokenByHash).mockReturnValue({
+      id: 'rt-3',
+      user_id: 'user-1',
+      token_hash: 'hash',
+      expires_at: '2999-01-01T00:00:00.000Z',
+      created_at: '2026-03-11T00:00:00.000Z'
+    });
+    vi.mocked(getNeonUserById).mockResolvedValue({
+      id: 'user-1',
+      email: 'conor@example.com',
+      display_name: 'conor',
+      password_hash: 'hash',
+      created_at: '2026-03-11T00:00:00.000Z'
+    });
+    vi.mocked(createRefreshToken).mockImplementationOnce(() => {
+      throw new Error('insert failed');
+    });
+
+    await expect(refreshTokens('refresh-token')).rejects.toThrow('insert failed');
+    expect(deleteRefreshToken).not.toHaveBeenCalledWith('rt-3');
+  });
+
   it('skips mirror rows during username login and falls through to Neon auth', async () => {
     vi.mocked(getUserByUsername).mockReturnValue({
       id: 'user-1',

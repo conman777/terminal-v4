@@ -144,7 +144,7 @@ export function getProcessLogsByPortAfterCursor(
   }
 
   const result: ProcessLogEntry[] = [];
-  let passedCursor = cursor.id === null;
+  let matchedCursor = cursor.id === null;
 
   for (const log of process.logs) {
     if (log.timestamp < cursor.timestamp) {
@@ -154,13 +154,17 @@ export function getProcessLogsByPortAfterCursor(
       result.push(log);
       continue;
     }
-    if (passedCursor) {
+    if (matchedCursor) {
       result.push(log);
       continue;
     }
     if (log.id === cursor.id) {
-      passedCursor = true;
+      matchedCursor = true;
     }
+  }
+
+  if (!matchedCursor && cursor.id !== null) {
+    return process.logs.filter((log) => log.timestamp >= cursor.timestamp);
   }
 
   return result;

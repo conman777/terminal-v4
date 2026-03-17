@@ -109,6 +109,8 @@ describe('settings-routes desktop terminal input preference', () => {
     expect(getResponse.statusCode).toBe(200);
     expect(getResponse.json()).toMatchObject({
       theme: 'light',
+      terminalFontSize: null,
+      terminalWebglEnabled: null,
     });
 
     await app.close();

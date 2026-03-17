@@ -18,9 +18,57 @@ import {
 } from '../preview/preview-logs-service.js';
 import { getPreviewScopeIdOrAnonymous, resolvePreviewScopeId } from '../preview/preview-scope.js';
 
+const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
+  .split(',')
+  .map((host) => host.trim())
+  .filter(Boolean);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const PREVIEW_SUBDOMAIN_PATTERN = new RegExp(
+  `^preview-\\d+\\.(?:${PREVIEW_SUBDOMAIN_BASES.map(escapeRegExp).join('|')})$`,
+  'i'
+);
+
 // Validate port number
 function isValidPort(port: number): boolean {
   return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
+function normalizeHostHeader(host: string | undefined): string | null {
+  if (!host) return null;
+  try {
+    return new URL(`http://${host}`).host.toLowerCase();
+  } catch {
+    return host.toLowerCase();
+  }
+}
+
+export function isAllowedPreviewLogOrigin(origin: string | undefined, requestHost: string | undefined): boolean {
+  if (!origin) return false;
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+
+    const normalizedRequestHost = normalizeHostHeader(requestHost);
+    if (normalizedRequestHost && parsed.host.toLowerCase() === normalizedRequestHost) {
+      return true;
+    }
+
+    return PREVIEW_SUBDOMAIN_PATTERN.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function applyPreviewLogCors(reply: FastifyReply, origin: string): void {
+  reply.header('Access-Control-Allow-Origin', origin);
+  reply.header('Access-Control-Allow-Credentials', 'true');
+  reply.header('Vary', 'Origin');
 }
 
 export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<void> {
@@ -40,11 +88,10 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     config: { skipAuth: true }
   }, async (request, reply) => {
     const origin = request.headers.origin;
-    if (origin && origin.includes('preview-')) {
-      reply.header('Access-Control-Allow-Origin', origin);
+    if (origin && isAllowedPreviewLogOrigin(origin, request.headers.host)) {
+      applyPreviewLogCors(reply, origin);
       reply.header('Access-Control-Allow-Methods', 'POST, OPTIONS');
       reply.header('Access-Control-Allow-Headers', 'Content-Type, X-Preview-Log-Key, Authorization');
-      reply.header('Access-Control-Allow-Credentials', 'true');
     }
     return reply.code(204).send();
   });
@@ -59,9 +106,8 @@ export async function registerPreviewLogsRoutes(app: FastifyInstance): Promise<v
     preHandler: async (request, reply) => {
       // Add CORS headers for cross-origin requests from preview subdomains
       const origin = request.headers.origin;
-      if (origin && origin.includes('preview-')) {
-        reply.header('Access-Control-Allow-Origin', origin);
-        reply.header('Access-Control-Allow-Credentials', 'true');
+      if (origin && isAllowedPreviewLogOrigin(origin, request.headers.host)) {
+        applyPreviewLogCors(reply, origin);
       }
 
       if (previewLogIngestKey) {

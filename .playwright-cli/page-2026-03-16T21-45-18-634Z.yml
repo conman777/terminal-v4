@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "Menu" [ref=e6] [cursor=pointer]:
+        - img [ref=e7]
+      - button "Open session picker" [ref=e8] [cursor=pointer]:
+        - generic [ref=e11]: No active terminal
+        - img [ref=e12]
+      - generic [ref=e14]:
+        - button "New terminal" [ref=e15] [cursor=pointer]:
+          - img [ref=e16]
+        - button "More actions" [ref=e18] [cursor=pointer]:
+          - img [ref=e19]
+  - dialog "Mobile gesture tips" [ref=e30]:
+    - generic [ref=e31]:
+      - button "Close gesture tips" [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+      - heading "Mobile gestures" [level=2] [ref=e36]
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - generic [ref=e39]: →
+          - generic [ref=e40]:
+            - generic [ref=e41]: Swipe right from left edge
+            - generic [ref=e42]: Opens the session drawer.
+        - generic [ref=e43]:
+          - generic [ref=e44]: ↓
+          - generic [ref=e45]:
+            - generic [ref=e46]: Swipe down on header
+            - generic [ref=e47]: Shows the keyboard bar.
+        - generic [ref=e48]:
+          - generic [ref=e49]: ⋯
+          - generic [ref=e50]:
+            - generic [ref=e51]: Long-press a session tab
+            - generic [ref=e52]: Rename, change AI, or close.
+      - button "Got it" [ref=e53] [cursor=pointer]
+  - main [ref=e24]:
+    - generic [ref=e27]:
+      - heading "Welcome to Terminal" [level=2] [ref=e28]
+      - paragraph [ref=e29]: Create a new terminal session to get started.

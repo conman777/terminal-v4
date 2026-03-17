@@ -244,6 +244,54 @@ describe('request-log-store', () => {
 
       expect(afterCursor.map((log) => log.url)).toEqual(['/second', '/third']);
     });
+
+    it('falls back to timestamp filtering when cursor id is no longer present', () => {
+      addProxyLog(testScopeId, testPort, {
+        timestamp: 1000,
+        method: 'GET',
+        url: '/first',
+        status: 200,
+        statusText: 'OK',
+        duration: 10,
+        requestSize: null,
+        responseSize: 100,
+        contentType: 'text/html',
+        error: null
+      });
+
+      addProxyLog(testScopeId, testPort, {
+        timestamp: 1000,
+        method: 'GET',
+        url: '/second',
+        status: 200,
+        statusText: 'OK',
+        duration: 10,
+        requestSize: null,
+        responseSize: 100,
+        contentType: 'text/html',
+        error: null
+      });
+
+      addProxyLog(testScopeId, testPort, {
+        timestamp: 1001,
+        method: 'GET',
+        url: '/third',
+        status: 200,
+        statusText: 'OK',
+        duration: 10,
+        requestSize: null,
+        responseSize: 100,
+        contentType: 'text/html',
+        error: null
+      });
+
+      const afterCursor = getProxyLogsAfterCursor(testScopeId, testPort, {
+        timestamp: 1000,
+        id: 'missing-cursor-id'
+      });
+
+      expect(afterCursor.map((log) => log.url)).toEqual(['/first', '/second', '/third']);
+    });
   });
 
   describe('clearProxyLogs', () => {
