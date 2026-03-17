@@ -139,7 +139,7 @@ describe('MobileHeader', () => {
     expect(onToggleKeybar).not.toHaveBeenCalled();
   });
 
-  it('shows the preview title instead of duplicate view tabs while preview is open', () => {
+  it('shows the preview title and surface tabs while preview is open', () => {
     const onViewChange = vi.fn();
     const { container } = render(
       <MobileHeader
@@ -152,7 +152,8 @@ describe('MobileHeader', () => {
     );
 
     expect(container.querySelector('.mobile-header-title')).toHaveTextContent('Preview');
-    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Terminal' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Preview' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Back to terminal' }));
@@ -380,20 +381,16 @@ describe('MobileHeader', () => {
     expect(screen.getByRole('button', { name: /open session picker/i })).toHaveTextContent('active thread');
   });
 
-  it('does not offer preview from the header overflow when there is no preview URL', () => {
+  it('disables the preview surface tab when there is no preview URL', () => {
     render(<MobileHeader {...buildProps({ previewUrl: '' })} />);
-
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
-
-    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Preview' })).toBeDisabled();
   });
 
-  it('offers preview from the header overflow when a preview URL exists', () => {
+  it('switches to preview from the surface tab when a preview URL exists', () => {
     const onViewChange = vi.fn();
     render(<MobileHeader {...buildProps({ previewUrl: 'https://example.com', onViewChange })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
-    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Preview' }));
 
     expect(onViewChange).toHaveBeenCalledWith('preview');
   });

@@ -7848,8 +7848,8 @@ button {
   display: none;
   flex-direction: column;
   position: fixed;
-  /* Match visual viewport offset so header stays aligned with layout */
-  top: var(--mobile-viewport-offset, 0px);
+  /* Keep header visually pinned during mobile keyboard viewport shifts */
+  top: 0;
   left: 0;
   right: 0;
   background: var(--bg-primary, #09090b);
@@ -8131,6 +8131,39 @@ button {
   align-items: center;
   padding: 0 calc(4px + env(safe-area-inset-right, 0px)) 0 calc(4px + env(safe-area-inset-left, 0px));
   background: var(--bg-primary, #09090b);
+}
+
+.mobile-header-surface-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 0 calc(8px + env(safe-area-inset-right, 0px)) 8px calc(8px + env(safe-area-inset-left, 0px));
+}
+
+.mobile-header-surface-tab {
+  min-height: 30px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 35%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mobile-header-surface-tab.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 58%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
+.mobile-header-surface-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Scrollable session tabs */
@@ -8866,8 +8899,8 @@ button {
     /* --mobile-header-height is set dynamically by MobileHeader component */
     /* Use fixed positioning for reliable iOS keyboard handling */
     position: fixed;
-    /* Offset top to match visual viewport when iOS scrolls on keyboard open */
-    top: var(--mobile-viewport-offset, 0px);
+    /* Keep app chrome pinned while keyboard animates */
+    top: 0;
     left: 0;
     right: 0;
     /* Bottom is set dynamically: viewport height from top */
@@ -12155,6 +12188,60 @@ textarea:focus-visible {
 /* ==========================================================================
    Mobile Terminal Carousel
    ========================================================================== */
+
+.mobile-shell-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) 10px 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 96%, black 4%), color-mix(in srgb, var(--bg-primary) 90%, black 10%));
+  border-bottom: 1px solid color-mix(in srgb, var(--border-default) 35%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.mobile-shell-top-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+}
+
+.mobile-shell-surface-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.mobile-shell-surface-tab {
+  min-height: 30px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 35%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.mobile-shell-surface-tab.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 58%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
+.mobile-shell-surface-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 
 .mobile-terminal-carousel {
   display: flex;

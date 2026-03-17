@@ -306,7 +306,7 @@ function AppContent() {
   const previousActiveSessionRef = useRef(null);
   const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
   const isMobile = useMobileDetect();
-  const { height: viewportHeight, offsetTop: viewportOffsetTop } = useViewportMetrics();
+  const { height: viewportHeight } = useViewportMetrics();
   const mobileHeaderInputLock = useMobileHeaderInputLock(isMobile);
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
@@ -1230,10 +1230,8 @@ function AppContent() {
   }, [closeSession, removeSidebarProject]);
 
   const mobileKeybarOffset = isMobile && keybarOpen ? keybarHeight : 0;
-  // When a non-terminal input is focused (mobileHeaderInputLock), track the actual
-  // visualViewport height and offset so the layout fits above the iOS keyboard.
-  // When no input is focused, snap to 100dvh and zero offset immediately — this
-  // prevents the layout from staying squished while iOS animates the keyboard away.
+  // Mobile layout always follows visual viewport height so keyboard open/close
+  // keeps composer and terminal content in sync on iOS/Android.
   const effectiveNavCollapsed = isMobile ? false : (shouldKeepMobileHeaderVisible ? false : isNavCollapsed);
   const mobileKeyboardDebugEnabled = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -1246,12 +1244,10 @@ function AppContent() {
   }, []);
   const layoutStyle = isMobile
     ? {
-        '--mobile-viewport-height': mobileHeaderInputLock && viewportHeight
+        '--mobile-viewport-height': viewportHeight
           ? `${Math.round(viewportHeight)}px`
           : '100dvh',
-        '--mobile-viewport-offset': mobileHeaderInputLock && viewportOffsetTop
-          ? `${Math.round(viewportOffsetTop)}px`
-          : '0px'
+        '--mobile-viewport-offset': '0px'
       }
     : undefined;
 

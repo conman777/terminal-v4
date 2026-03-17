@@ -213,6 +213,7 @@ export function MobileHeader({
   }, [previewUrl]);
 
   const isPreviewView = mobileView === 'preview';
+  const hasPreviewSurface = Boolean(previewUrl);
   const overflowItems = [
     showConversationToggle && !isPreviewView ? {
       label: chatMode ? 'Terminal view' : 'Conversation view',
@@ -412,6 +413,28 @@ export function MobileHeader({
               />
             )}
           </div>
+        </div>
+        <div className="mobile-header-surface-tabs" role="tablist" aria-label="Mobile surfaces">
+          <button
+            type="button"
+            role="tab"
+            className={`mobile-header-surface-tab${mobileView === 'terminal' ? ' active' : ''}`}
+            aria-selected={mobileView === 'terminal' ? 'true' : 'false'}
+            onClick={() => onViewChange?.('terminal')}
+          >
+            Terminal
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={`mobile-header-surface-tab${mobileView === 'preview' ? ' active' : ''}`}
+            aria-selected={mobileView === 'preview' ? 'true' : 'false'}
+            onClick={() => onViewChange?.('preview')}
+            disabled={!hasPreviewSurface}
+            title={hasPreviewSurface ? 'Open preview' : 'Preview unavailable'}
+          >
+            Preview
+          </button>
         </div>
       </header>
 
