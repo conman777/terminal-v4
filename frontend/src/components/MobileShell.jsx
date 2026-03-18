@@ -1,398 +1,390 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Dropdown } from './Dropdown';
-import { MobileDrawer } from './MobileDrawer';
-import { MobileKeybar } from './MobileKeybar';
-import { MobileSessionPicker } from './MobileSessionPicker';
-import { MobileTerminalSurface } from './MobileTerminalSurface';
-import { useTheme } from '../contexts/ThemeContext';
-import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TerminalChat } from './TerminalChat';
+import { DesktopConversationView } from './DesktopConversationView';
+import { DesktopStatusBar } from './DesktopStatusBar';
+import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
+import { useStructuredSession } from '../hooks/useStructuredSession';
+import { getAiInitialCommand, getAiTypeOptions } from '../utils/aiProviders';
+import { getPreferredSessionTopic } from '../utils/sessionTopic';
+import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
+import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
-const MOBILE_SURFACE_STORAGE_KEY = 'mobileShellSurfaceV1';
-
-function clampSurface(nextSurface, previewUrl) {
-  if (nextSurface === 'preview') {
-    return previewUrl ? 'preview' : 'terminal';
-  }
-  return 'terminal';
+function getSessionLabel(session) {
+  if (!session) return 'New session';
+  return getPreferredSessionTopic(session.thread?.topic, session.title || 'New session');
 }
 
-function MenuIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="3" y1="12" x2="21" y2="12" />
-      <line x1="3" y1="6" x2="21" y2="6" />
-      <line x1="3" y1="18" x2="21" y2="18" />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  );
-}
-
-function KeyboardIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="2" y="4" width="20" height="16" rx="2" ry="2" />
-      <path d="M6 8h.001M10 8h.001M14 8h.001M18 8h.001M8 12h.001M12 12h.001M16 12h.001M6 16h12" />
-    </svg>
-  );
-}
-
-function MoreIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-      <circle cx="12" cy="5" r="2" />
-      <circle cx="12" cy="12" r="2" />
-      <circle cx="12" cy="19" r="2" />
-    </svg>
-  );
+function getPathLabel(path) {
+  if (!path || typeof path !== 'string') return 'No workspace selected';
+  return path;
 }
 
 export function MobileShell({
-  activeSessions,
-  activeSessionId,
-  sessionActivity,
-  sessionAiTypes,
-  customAiProviders,
-  projects,
-  projectsLoading,
-  currentPath,
-  sessionsGroupedByProject,
-  previewUrl,
-  projectInfo,
-  showFileManager,
-  showStatusLabels,
-  fontSize,
-  webglEnabled,
-  viewportHeight,
+  sessions = [],
+  activeSessionId = null,
   onSelectSession,
   onCreateSession,
-  onRenameSession,
-  onCloseSession,
+  projectInfo,
+  sessionActivity = {},
+  onSessionBusyChange,
+  fontSize = 14,
+  webglEnabled,
+  onUrlDetected,
+  viewportHeight,
+  onViewChange,
+  onChatModeChange,
+  accessoryOpen = false,
+  onAccessoryToggle,
+  onAccessoryHeightChange,
+  onRegisterFocusTerminal,
+  sessionAiTypes = {},
+  customAiProviders = [],
   onSetSessionAiType,
   onAddCustomAiProvider,
-  onFolderSelect,
-  onAddScanFolder,
-  onOpenSettings,
-  onOpenApiSettings,
-  onOpenBrowserSettings,
-  onOpenBookmarks,
-  onOpenNotes,
-  onOpenProcessManager,
-  onToggleFileManager,
-  onPreviewUrlChange,
-  onStartProject,
-  onSendToTerminal,
-  onSendToClaudeCode,
-  onUrlDetected,
-  onSessionBusyChange,
-  PreviewPanelComponent,
+  showSessionStrip = true,
 }) {
-  const { theme, toggleTheme } = useTheme();
-  const headerRef = useRef(null);
-  const focusTerminalRef = useRef(null);
-  const [showDrawer, setShowDrawer] = useState(false);
-  const [showSessionPicker, setShowSessionPicker] = useState(false);
-  const [keybarOpen, setKeybarOpen] = useState(false);
-  const [keybarHeight, setKeybarHeight] = useState(0);
+  const [connectionState, setConnectionState] = useState('connecting');
+  const [currentCwd, setCurrentCwd] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [composerValue, setComposerValue] = useState('');
+  const [composerAttachments, setComposerAttachments] = useState([]);
+  const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
+  const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
+  const [gitBranchInfo, setGitBranchInfo] = useState(null);
+  const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
+  const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
+  const [transportNotice, setTransportNotice] = useState('');
+  const imageInputRef = useRef(null);
+  const hasConnectedOnceRef = useRef(false);
+  const { listSessionGitBranches, checkoutSessionGitBranch } = useTerminalSession();
 
-  const activeSession = useMemo(
-    () => activeSessions.find((session) => session.id === activeSessionId) || activeSessions[0] || null,
-    [activeSessionId, activeSessions]
+  const currentSession = useMemo(
+    () => sessions.find((session) => session.id === activeSessionId) || sessions[0] || null,
+    [activeSessionId, sessions]
   );
-  const [activeSurface, setActiveSurface] = useState(() => {
-    try {
-      const stored = localStorage.getItem(MOBILE_SURFACE_STORAGE_KEY);
-      return clampSurface(stored || 'terminal', previewUrl);
-    } catch {
-      return 'terminal';
-    }
+  const isStructuredSession = Boolean(currentSession?.id?.startsWith('ss-'));
+  const useTerminalFirstLayout = !isStructuredSession;
+  const currentAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? null) : null;
+  const aiOptions = useMemo(
+    () => getAiTypeOptions(customAiProviders),
+    [customAiProviders]
+  );
+  const launchCommand = useMemo(
+    () => getAiInitialCommand(currentAiType, customAiProviders),
+    [currentAiType, customAiProviders]
+  );
+  const runtimeInfo = useMemo(
+    () => parseTerminalRuntimeInfo(terminalScreenSnapshot, currentAiType),
+    [currentAiType, terminalScreenSnapshot]
+  );
+
+  const {
+    turns,
+    isLoading: isConversationHistoryLoading,
+    isSendReady,
+    handleTurn,
+    handleRegisterSendText,
+    handleChatSend,
+    handleRawSend,
+    handleInterrupt,
+  } = useMobileChatTurns({
+    sessionId: currentSession?.id ?? null,
+    chatMode: Boolean(currentSession?.id) && !isStructuredSession,
   });
 
-  const activeSessionDisplay = getSessionDisplayInfo(activeSession, 'No active terminal');
-  const activeSessionSubtitle = getCompactSessionSubtitle(activeSession, 'No active terminal');
-  const activeActivity = activeSession ? sessionActivity?.[activeSession.id] : null;
-  const activeSessionIsBusy = typeof activeActivity?.isBusy === 'boolean'
-    ? activeActivity.isBusy
-    : Boolean(activeSession?.isBusy);
-
-  useLayoutEffect(() => {
-    if (!headerRef.current) return;
-    const height = Math.round(headerRef.current.getBoundingClientRect().height || 0);
-    if (height > 0) {
-      document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
-    }
-  }, []);
+  const {
+    messages: structuredMessages,
+    currentToolCalls: structuredToolCalls,
+    pendingApproval,
+    isStreaming: structuredIsStreaming,
+    connectionState: structuredConnectionState,
+    sendMessage: structuredSendMessage,
+    interrupt: structuredInterrupt,
+    approve: structuredApprove,
+  } = useStructuredSession({
+    sessionId: isStructuredSession ? currentSession?.id ?? null : null,
+    active: isStructuredSession,
+  });
 
   useEffect(() => {
-    if (!headerRef.current) return;
+    onViewChange?.('terminal');
+    onChatModeChange?.(false);
+    onAccessoryHeightChange?.(0);
+  }, [onAccessoryHeightChange, onChatModeChange, onViewChange]);
 
-    const updateHeight = () => {
-      if (!headerRef.current) return;
-      const height = Math.round(headerRef.current.getBoundingClientRect().height || headerRef.current.offsetHeight || 0);
-      document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
+  useEffect(() => {
+    setConnectionState('connecting');
+    setCurrentCwd(null);
+    setComposerValue('');
+    setComposerAttachments([]);
+    setTerminalScreenSnapshot('');
+    setIsTerminalPanelOpen(false);
+    setGitBranchInfo(null);
+    setIsLoadingGitBranches(false);
+    setIsSwitchingGitBranch(false);
+    setTransportNotice('');
+    hasConnectedOnceRef.current = false;
+  }, [currentSession?.id]);
+
+  useEffect(() => {
+    if (!currentSession?.id) return undefined;
+
+    let cancelled = false;
+    setIsLoadingGitBranches(true);
+
+    listSessionGitBranches(currentSession.id)
+      .then((data) => {
+        if (!cancelled) {
+          setGitBranchInfo(data);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingGitBranches(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
+  }, [currentSession?.id, listSessionGitBranches, projectInfo?.gitBranch]);
 
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(headerRef.current);
-
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const normalizedSurface = clampSurface(activeSurface, previewUrl);
-    if (normalizedSurface !== activeSurface) {
-      setActiveSurface(normalizedSurface);
-    }
-  }, [activeSurface, previewUrl]);
-
-  useEffect(() => {
+  const handleSelectGitBranch = useCallback(async (nextBranch) => {
+    if (!currentSession?.id || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
+    setIsSwitchingGitBranch(true);
     try {
-      localStorage.setItem(MOBILE_SURFACE_STORAGE_KEY, activeSurface);
-    } catch {
-      // Ignore storage failures.
-    }
-  }, [activeSurface]);
-
-  useEffect(() => {
-    if (activeSurface === 'terminal') return;
-    setKeybarOpen(false);
-  }, [activeSurface]);
-
-  const handleRegisterFocusTerminal = useCallback((focusFn) => {
-    focusTerminalRef.current = focusFn;
-  }, []);
-
-  const handleSetSurface = useCallback((nextSurface) => {
-    setActiveSurface(clampSurface(nextSurface, previewUrl));
-  }, [previewUrl]);
-
-  const handleToggleKeybar = useCallback(() => {
-    if (activeSurface !== 'terminal') return;
-    setKeybarOpen((current) => {
-      const next = !current;
-      if (next) {
-        focusTerminalRef.current?.();
+      const result = await checkoutSessionGitBranch(currentSession.id, nextBranch);
+      if (result) {
+        setGitBranchInfo(result);
       }
-      return next;
-    });
-  }, [activeSurface]);
+    } finally {
+      setIsSwitchingGitBranch(false);
+    }
+  }, [checkoutSessionGitBranch, currentSession?.id, gitBranchInfo?.currentBranch]);
 
-  const handleRenameActiveSession = useCallback(() => {
-    if (!activeSession) return;
-    const nextName = window.prompt('Rename terminal', activeSessionDisplay.primaryLabel);
-    if (typeof nextName !== 'string') {
+  const handleConnectionChange = useCallback((connected) => {
+    if (connected) {
+      hasConnectedOnceRef.current = true;
+      setConnectionState('online');
       return;
     }
-    const trimmed = nextName.trim();
-    if (trimmed) {
-      onRenameSession?.(activeSession.id, trimmed);
+    setConnectionState(hasConnectedOnceRef.current ? 'offline' : 'connecting');
+  }, []);
+
+  const handleActivityChange = useCallback((isBusy) => {
+    if (!currentSession?.id) return;
+    onSessionBusyChange?.(currentSession.id, isBusy);
+  }, [currentSession?.id, onSessionBusyChange]);
+
+  const handleScreenSnapshot = useCallback((snapshot) => {
+    const next = typeof snapshot?.text === 'string' ? snapshot.text : '';
+    setTerminalScreenSnapshot((previous) => (previous === next ? previous : next));
+  }, []);
+
+  const handleImageUpload = useCallback(() => {
+    imageInputRef.current?.click?.();
+  }, []);
+
+  const handleToggleTerminalPanel = useCallback(() => {
+    setIsTerminalPanelOpen((isOpen) => !isOpen);
+  }, []);
+
+  const handleOpenTerminalPanel = useCallback(() => {
+    setIsTerminalPanelOpen(true);
+  }, []);
+
+  const handleComposerSubmit = useCallback((text) => {
+    if (!currentSession?.id) return;
+    const trimmed = typeof text === 'string' ? text.trim() : '';
+    const attachmentPaths = composerAttachments
+      .map((attachment) => attachment?.path)
+      .filter((path) => typeof path === 'string' && path.trim());
+    if (!trimmed && attachmentPaths.length === 0) return;
+
+    const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
+    if (!payload) return;
+
+    const result = handleChatSend(payload);
+    setComposerValue('');
+    setComposerAttachments([]);
+    setTransportNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+  }, [composerAttachments, currentSession?.id, handleChatSend]);
+
+  const handleComposerAttachmentAdd = useCallback((attachment) => {
+    if (!attachment?.path) return;
+    setComposerAttachments((current) => {
+      if (current.some((item) => item.path === attachment.path)) return current;
+      return [...current, attachment];
+    });
+  }, []);
+
+  const handleComposerAttachmentRemove = useCallback((pathToRemove) => {
+    setComposerAttachments((current) => current.filter((attachment) => attachment.path !== pathToRemove));
+  }, []);
+
+  const launchAiType = useCallback((aiTypeToLaunch, commandOverride = null) => {
+    const nextLaunchCommand = commandOverride || getAiInitialCommand(aiTypeToLaunch, customAiProviders);
+    if (!nextLaunchCommand) return;
+    const result = handleChatSend(nextLaunchCommand);
+    setTransportNotice(result?.queued ? 'Terminal is still connecting. Launch command queued.' : '');
+  }, [customAiProviders, handleChatSend]);
+
+  const handleSelectAiType = useCallback((nextAiType) => {
+    if (!currentSession?.id) return;
+    onSetSessionAiType?.(currentSession.id, nextAiType);
+    if (nextAiType) {
+      launchAiType(nextAiType);
     }
-  }, [activeSession, activeSessionDisplay.primaryLabel, onRenameSession]);
+  }, [currentSession?.id, launchAiType, onSetSessionAiType]);
 
-  const overflowItems = [
-    activeSession ? {
-      label: 'Rename session',
-      onClick: handleRenameActiveSession,
-    } : null,
-    activeSession ? {
-      label: 'Close session',
-      danger: true,
-      onClick: () => onCloseSession?.(activeSession.id),
-    } : null,
-    activeSession ? { separator: true } : null,
-    {
-      label: showFileManager ? 'Hide file manager' : 'File manager',
-      active: showFileManager,
-      onClick: () => onToggleFileManager?.(),
-    },
-    {
-      label: 'Bookmarks',
-      onClick: () => onOpenBookmarks?.(),
-    },
-    {
-      label: 'Notes',
-      onClick: () => onOpenNotes?.(),
-    },
-    {
-      label: 'Process manager',
-      onClick: () => onOpenProcessManager?.(),
-    },
-    {
-      label: theme === 'dark' ? 'Light mode' : 'Dark mode',
-      onClick: toggleTheme,
-    },
-    {
-      label: 'Settings',
-      onClick: () => onOpenSettings?.(),
-    },
-  ].filter(Boolean);
-
-  const mobileView = activeSurface === 'preview' ? 'preview' : 'terminal';
-  const mobileKeybarOffset = activeSurface === 'terminal' && keybarOpen ? keybarHeight : 0;
+  const handleAddCustomAiCommand = useCallback((label, command) => {
+    if (!currentSession?.id) return;
+    const provider = onAddCustomAiProvider?.(label, command);
+    if (!provider?.id) return;
+    onSetSessionAiType?.(currentSession.id, provider.id);
+    launchAiType(provider.id, provider.initialCommand);
+  }, [currentSession?.id, launchAiType, onAddCustomAiProvider, onSetSessionAiType]);
 
   return (
-    <>
-      <header ref={headerRef} className="mobile-shell-header">
-        <div className="mobile-shell-top-row">
-          <button
-            className="mobile-header-btn-modern"
-            onClick={() => setShowDrawer(true)}
-            aria-label="Menu"
-            type="button"
-          >
-            <MenuIcon />
-          </button>
+    <div className="mobile-shell mobile-shell-parity">
+      {showSessionStrip && sessions.length > 1 ? (
+        <div className="mobile-shell-session-strip" role="tablist" aria-label="Sessions">
+          {sessions.map((session) => {
+            const isActive = session.id === currentSession?.id;
+            const sessionState = sessionActivity[session.id];
+            const statusLabel = sessionState?.isBusy ? 'Running' : sessionState?.hasUnread ? 'Updated' : 'Ready';
 
-          <button
-            type="button"
-            className={`mobile-header-session-switcher${activeSessionIsBusy ? ' busy' : ''}`}
-            onClick={() => setShowSessionPicker(true)}
-            aria-label="Open session picker"
-          >
-            <span className={`mobile-header-session-dot ${activeSessionIsBusy ? 'busy' : 'idle'}`} aria-hidden="true" />
-            <span className="mobile-header-session-copy">
-              <span className="mobile-header-session-name">{activeSessionDisplay.primaryLabel}</span>
-              {activeSessionSubtitle && (
-                <span className="mobile-header-session-subtitle">{activeSessionSubtitle}</span>
-              )}
-            </span>
-            {activeSessions.length > 1 && (
-              <span className="mobile-header-session-count" aria-hidden="true">{activeSessions.length}</span>
-            )}
-          </button>
-
-          <div className="mobile-header-actions-right">
-            {activeSurface === 'terminal' && (
+            return (
               <button
+                key={session.id}
                 type="button"
-                className={`mobile-header-btn-modern${keybarOpen ? ' active' : ''}`}
-                onClick={handleToggleKeybar}
-                aria-label={keybarOpen ? 'Hide keyboard bar' : 'Show keyboard bar'}
-                title={keybarOpen ? 'Hide keyboard bar' : 'Show keyboard bar'}
+                role="tab"
+                aria-selected={isActive ? 'true' : 'false'}
+                className={`mobile-shell-session-card${isActive ? ' active' : ''}`}
+                onClick={() => onSelectSession?.(session.id)}
               >
-                <KeyboardIcon />
+                <span className="mobile-shell-session-title">{getSessionLabel(session)}</span>
+                <span className="mobile-shell-session-meta">{getPathLabel(session.thread?.projectPath || session.cwd)}</span>
+                <span className="mobile-shell-session-status">{statusLabel}</span>
               </button>
-            )}
-            <button
-              type="button"
-              className="mobile-header-btn-modern"
-              onClick={() => onCreateSession?.()}
-              aria-label="New terminal"
-              title="New terminal"
-            >
-              <PlusIcon />
-            </button>
-            <Dropdown
-              trigger={(
-                <button className="mobile-header-btn-modern" type="button" aria-label="More actions">
-                  <MoreIcon />
-                </button>
-              )}
-              items={overflowItems}
-              align="right"
-            />
-          </div>
+            );
+          })}
         </div>
+      ) : null}
 
-      </header>
+      <section className={`mobile-shell-stage mobile-shell-stage-parity${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
+        {currentSession ? (
+          <div className={`terminal-with-status mobile-terminal-shell${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
+            <div className={`desktop-terminal-stack mobile-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
+              {!useTerminalFirstLayout ? (
+                <div className="desktop-conversation-surface mobile-conversation-surface">
+                  <DesktopConversationView
+                    turns={turns}
+                    isStreaming={structuredIsStreaming}
+                    isLoadingHistory={isConversationHistoryLoading}
+                    onSend={structuredSendMessage}
+                    onSendRaw={handleRawSend}
+                    onInterrupt={structuredInterrupt}
+                    onImageUpload={handleImageUpload}
+                    sessionId={currentSession.id}
+                    aiType={currentAiType}
+                    connectionState={structuredConnectionState}
+                    isSendReady={structuredConnectionState === 'online'}
+                    terminalPreview=""
+                    terminalScreenSnapshot={terminalScreenSnapshot}
+                    launchCommand=""
+                    launchQueued={false}
+                    onLaunchAgent={undefined}
+                    onOpenTerminal={handleOpenTerminalPanel}
+                    conversationNotice=""
+                    showTerminalMirror={false}
+                    interactivePromptEvent={null}
+                    mode="structured"
+                    structuredMessages={structuredMessages}
+                    structuredToolCalls={structuredToolCalls}
+                    pendingApproval={pendingApproval}
+                    onApprove={structuredApprove}
+                  />
+                </div>
+              ) : null}
 
-      <MobileKeybar
-        sessionId={activeSession?.id || null}
-        isOpen={activeSurface === 'terminal' ? keybarOpen : false}
-        onHeightChange={(height) => setKeybarHeight(Math.max(0, Math.round(height)))}
-      />
+              <div
+                className={`desktop-terminal-runtime mobile-terminal-runtime${useTerminalFirstLayout || isTerminalPanelOpen ? ' inline-panel-open' : ' is-hidden'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
+                aria-hidden={!useTerminalFirstLayout && !isTerminalPanelOpen ? 'true' : undefined}
+              >
+                <TerminalChat
+                  key={`${currentSession.id}-${refreshToken}`}
+                  surface="mobile"
+                  sessionId={currentSession.id}
+                  keybarOpen={accessoryOpen}
+                  viewportHeight={viewportHeight}
+                  onUrlDetected={onUrlDetected}
+                  fontSize={fontSize}
+                  webglEnabled={webglEnabled}
+                  inputEnabled={useTerminalFirstLayout || isTerminalPanelOpen}
+                  usesTmux={currentSession?.usesTmux}
+                  onRegisterImageUpload={(trigger) => {
+                    imageInputRef.current = { click: trigger };
+                  }}
+                  onRegisterFocusTerminal={onRegisterFocusTerminal}
+                  onConnectionChange={handleConnectionChange}
+                  onCwdChange={setCurrentCwd}
+                  onActivityChange={handleActivityChange}
+                  onScreenSnapshot={handleScreenSnapshot}
+                  onRegisterSendText={handleRegisterSendText}
+                  onTurn={handleTurn}
+                />
+              </div>
 
-      <div className="main-pane mobile-shell-pane">
-        <main
-          className="terminal-main mobile-shell-main"
-          style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
-        >
-          {activeSurface === 'terminal' && (
-            <div className="terminal-pane">
-              <MobileTerminalSurface
-                session={activeSession}
-                keybarOpen={keybarOpen}
-                viewportHeight={viewportHeight}
-                onUrlDetected={onUrlDetected}
-                fontSize={fontSize}
-                webglEnabled={webglEnabled}
-                onRegisterFocusTerminal={handleRegisterFocusTerminal}
-                onSessionBusyChange={onSessionBusyChange}
-                sessionAiTypes={sessionAiTypes}
-                customAiProviders={customAiProviders}
-                onSetSessionAiType={onSetSessionAiType}
-                onAddCustomAiProvider={onAddCustomAiProvider}
+              <DesktopStatusBar
+                sessionId={currentSession.id}
+                sessionTitle={currentSession.title}
+                sessionSummary={currentSession.thread?.topic || currentSession.title || ''}
+                cwd={currentCwd || projectInfo?.cwd || currentSession?.cwd || ''}
+                gitBranch={projectInfo?.gitBranch}
+                isActive
+                isTerminalPanelOpen={isTerminalPanelOpen}
+                showTerminalToggle={!useTerminalFirstLayout}
+                onToggleTerminalPanel={!useTerminalFirstLayout ? handleToggleTerminalPanel : undefined}
+                connectionState={connectionState}
+                aiType={currentAiType}
+                aiOptions={aiOptions}
+                onSelectAiType={handleSelectAiType}
+                onAddCustomAiCommand={handleAddCustomAiCommand}
+                composerValue={composerValue}
+                composerAttachments={composerAttachments}
+                onComposerChange={setComposerValue}
+                onComposerSubmit={handleComposerSubmit}
+                onComposerAttachmentAdd={handleComposerAttachmentAdd}
+                onComposerAttachmentRemove={handleComposerAttachmentRemove}
+                composerPlaceholder="Ask V4 anything"
+                composerDisabled={!currentSession.id}
+                runtimeInfo={runtimeInfo}
+                gitBranches={gitBranchInfo?.branches || []}
+                currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
+                isLoadingGitBranches={isLoadingGitBranches}
+                isSwitchingGitBranch={isSwitchingGitBranch}
+                onSelectGitBranch={handleSelectGitBranch}
               />
             </div>
-          )}
+          </div>
+        ) : (
+          <div className="mobile-shell-empty-state">
+            <p className="mobile-shell-empty-kicker">Workspace</p>
+            <h2>Create a session to start working.</h2>
+            <p>The mobile shell now stays focused on the same terminal and composer flow as desktop.</p>
+            <button type="button" className="mobile-shell-primary-button" onClick={() => onCreateSession?.()}>
+              Create session
+            </button>
+          </div>
+        )}
+      </section>
 
-          {activeSurface === 'preview' && PreviewPanelComponent && (
-            <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
-              <PreviewPanelComponent
-                url={previewUrl}
-                onClose={() => handleSetSurface('terminal')}
-                onUrlChange={onPreviewUrlChange}
-                projectInfo={projectInfo}
-                onStartProject={onStartProject}
-                onSendToTerminal={onSendToTerminal}
-                onSendToClaudeCode={onSendToClaudeCode}
-                activeSessions={activeSessions}
-                activeSessionId={activeSessionId}
-                sessionActivity={sessionActivity}
-                onSessionBusyChange={onSessionBusyChange}
-                fontSize={fontSize}
-                webglEnabled={webglEnabled}
-                onUrlDetected={onPreviewUrlChange || onUrlDetected}
-                showStatusLabels={showStatusLabels}
-                mobileShellMode="integrated"
-              />
-            </Suspense>
-          )}
-        </main>
-      </div>
-
-      <MobileDrawer
-        isOpen={showDrawer}
-        onClose={() => setShowDrawer(false)}
-        onCreateSession={onCreateSession}
-        onOpenSettings={onOpenSettings}
-        onOpenApiSettings={onOpenApiSettings}
-        onOpenBrowserSettings={onOpenBrowserSettings}
-        onOpenBookmarks={onOpenBookmarks}
-        onOpenNotes={onOpenNotes}
-        onOpenProcessManager={onOpenProcessManager}
-        projects={projects}
-        projectsLoading={projectsLoading}
-        onFolderSelect={onFolderSelect}
-        currentPath={currentPath}
-        onAddScanFolder={onAddScanFolder}
-        mobileView={mobileView}
-        onViewChange={handleSetSurface}
-        previewUrl={previewUrl}
-        activeSessions={activeSessions}
-        activeSessionId={activeSessionId}
-        sessionActivity={sessionActivity}
-        onSelectSession={onSelectSession}
-        sessionsGroupedByProject={sessionsGroupedByProject}
-      />
-
-      <MobileSessionPicker
-        isOpen={showSessionPicker}
-        onClose={() => setShowSessionPicker(false)}
-        sessions={activeSessions}
-        activeSessionId={activeSessionId}
-        sessionActivity={sessionActivity}
-        sessionAiTypes={sessionAiTypes}
-        onSelectSession={onSelectSession}
-      />
-    </>
+      {transportNotice ? (
+        <div className="mobile-shell-launch-notice" role="status" aria-live="polite">
+          {transportNotice}
+        </div>
+      ) : null}
+    </div>
   );
 }

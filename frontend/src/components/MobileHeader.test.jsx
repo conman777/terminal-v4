@@ -397,4 +397,22 @@ describe('MobileHeader', () => {
 
     expect(onViewChange).toHaveBeenCalledWith('preview');
   });
+
+  it('can hide preview and conversation-only navigation from the header', () => {
+    render(
+      <MobileHeader
+        {...buildProps({
+          previewUrl: 'https://example.com',
+          showPreviewNavigation: false,
+          showConversationToggle: false
+        })}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /more actions/i }));
+
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /conversation view/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /terminal view/i })).not.toBeInTheDocument();
+  });
 });

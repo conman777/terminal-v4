@@ -63,13 +63,13 @@ This document provides a comprehensive overview of all features in Terminal v4.
 ## Mobile Experience
 
 ### Mobile UI Components
-- **Mobile Keybar**: Dedicated row with common keys (Esc, Tab, Ctrl, arrows, Fn keys)
-- **Terminal Carousel**: Swipe between terminal sessions
-- **Touch Gestures**: Swipe, long-press, and pinch support
-- **Mobile Action Bar**: Quick access to split, files, settings
-- **Mobile Header**: Compact header with hamburger menu
-- **Mobile Status Bar**: Session info and system stats
-- **Mobile Drawer**: Side navigation panel
+- **Mobile Header**: Compact top bar for session switching, new terminal actions, overflow utilities, and drawer access
+- **Mobile Drawer**: Sidebar-style mobile navigation for threads, projects, bookmarks, notes, and settings
+- **Mobile Shell**: Phone-sized container for the same terminal runtime and composer flow used on desktop
+- **Session Picker**: Header-driven active-session switching without a persistent desktop-style tab strip
+- **Shared Terminal Runtime**: Mobile uses the same `TerminalChat` transport, session lifecycle, and reconnect path as desktop
+- **Shared Ask V4 Composer**: Mobile reuses the desktop composer bar, including AI selection, attachments, slash commands, and voice input
+- **Structured Session View**: Structured sessions reuse the desktop conversation surface with an inline terminal toggle
 
 ### Mobile Optimizations
 - **Viewport Height Handling**: Proper handling of mobile browser chrome

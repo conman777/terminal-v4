@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } from 'react';
-import { TerminalChat } from './components/TerminalChat';
-import ClaudeCodePanel from './components/ClaudeCodePanel';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
-import { MobileKeybar } from './components/MobileKeybar';
 // SessionTabBar is now rendered inside Header
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
 import { Header } from './components/Header';
 import { FileManager } from './components/FileManager';
 import ThreadsSidebar from './components/ThreadsSidebar';
-import { MobileTerminalCarousel } from './components/MobileTerminalCarousel';
-import { MobileGestureHints } from './components/MobileGestureHints';
+import { MobileHeader } from './components/MobileHeader';
+import { MobileShell } from './components/MobileShell';
 import { MobileKeyboardDebugOverlay } from './components/MobileKeyboardDebugOverlay';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -1380,50 +1377,6 @@ function AppContent() {
         onSelect={handleAddProjectSelect}
       />
 
-      {isMobile && (
-        <>
-          <Header
-            isMobile={true}
-            sessionProps={headerSessionProps}
-            modalProps={headerModalProps}
-            showPreview={showPreview}
-            onTogglePreview={togglePreview}
-            showFileManager={showFileManager}
-            onToggleFileManager={toggleFileManager}
-            showSystemResources={showSystemResources}
-            onToggleSystemResources={toggleSystemResources}
-            user={user}
-            logout={logout}
-            mobileProps={{
-              isNavCollapsed: effectiveNavCollapsed,
-              onToggleKeybar: handleToggleKeybar,
-              keybarOpen,
-              projects,
-              projectsLoading,
-              onFolderSelect: handleSidebarFolderSelect,
-              currentPath: projectInfo?.cwd,
-              onAddScanFolder: openAddScanFolderModal,
-              mobileView,
-              onViewChange: handleMobileViewChange,
-              previewUrl,
-              onNavigateToPath: handleNavigateToPath,
-              chatMode,
-              onToggleChatMode: () => setChatMode(v => {
-                const next = !v;
-                if (next) setKeybarOpen(false);
-                return next;
-              }),
-            }}
-          />
-          <MobileKeybar
-            sessionId={mobileKeybarSessionId}
-            isOpen={keybarOpen}
-            onHeightChange={handleKeybarHeightChange}
-          />
-          <MobileGestureHints />
-        </>
-      )}
-
       {/* Desktop layout with sidebar */}
       {!isMobile && (
         <>
@@ -1599,78 +1552,84 @@ function AppContent() {
       {/* Mobile layout */}
       {isMobile && (
         <div className="main-pane">
+          <MobileHeader
+            activeSessions={activeSessions}
+            activeSessionId={activeSessionId}
+            onSelectSession={handleSelectSession}
+            onCreateSession={handleRequestNewSession}
+            onRenameSession={handleRenameThread}
+            onCloseSession={closeSession}
+            onOpenSettings={handleOpenSettings}
+            onOpenApiSettings={() => setShowApiSettings(true)}
+            onOpenBrowserSettings={() => setShowBrowserSettings(true)}
+            onOpenBookmarks={() => setShowBookmarks(true)}
+            onOpenNotes={() => setShowNotes(true)}
+            onOpenProcessManager={() => setShowProcessManager(true)}
+            keybarOpen={keybarOpen}
+            onToggleKeybar={handleToggleKeybar}
+            projects={projects}
+            projectsLoading={projectsLoading}
+            onFolderSelect={handleSidebarFolderSelect}
+            currentPath={projectInfo?.cwd || ''}
+            onAddScanFolder={openAddScanFolderModal}
+            mobileView={mobileView}
+            onViewChange={handleMobileViewChange}
+            previewUrl={previewUrl}
+            showFileManager={showFileManager}
+            onToggleFileManager={toggleFileManager}
+            isNavCollapsed={false}
+            sessionActivity={sessionActivity}
+            sessionsGroupedByProject={scopedSidebarData.sessionsGroupedByProject}
+            sessionAiTypes={sessionAiTypes}
+            onSetSessionAiType={handleSetSessionAiType}
+            chatMode={chatMode}
+            onToggleChatMode={() => setChatMode((value) => !value)}
+            showPreviewNavigation={false}
+            showConversationToggle={false}
+            showDrawerViewTabs={false}
+          />
           <main
             className="terminal-main"
             style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
           >
-            {/* Terminal pane with swipe carousel */}
-            {mobileView === 'terminal' && (
-              <div className="terminal-pane">
-                <MobileTerminalCarousel
-                  sessions={activeSessions}
-                  currentIndex={effectiveMobileIndex}
-                  onIndexChange={handleMobileTerminalIndexChange}
-                  keybarOpen={keybarOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={handleUrlDetected}
-                  fontSize={terminalFontSize}
-                  webglEnabled={terminalWebglEnabled}
-                  onScrollDirection={handleScrollDirectionSafe}
-                  onViewportStateChange={handleMobileViewportStateChange}
-                  onRegisterFocusTerminal={handleRegisterFocusTerminal}
-                  onSessionBusyChange={handleSessionBusyChange}
-                  sessionAiTypes={sessionAiTypes}
-                  customAiProviders={customAiProviders}
-                  onSetSessionAiType={handleSetSessionAiType}
-                  onAddCustomAiProvider={handleAddCustomAiProvider}
-                  chatMode={chatMode}
-                  onChatModeChange={setChatMode}
-                />
-              </div>
-            )}
-
-            {/* Mobile Claude Code pane */}
-            {mobileView === 'claude' && (
-              <div className="terminal-pane claude-code-pane">
-                <ClaudeCodePanel
-                  sessionId={activeClaudeSession?.id || null}
-                  keybarOpen={keybarOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={handleUrlDetected}
-                  fontSize={terminalFontSize}
-                  webglEnabled={terminalWebglEnabled}
-                  onScrollDirection={handleScrollDirectionSafe}
-                  onViewportStateChange={handleMobileViewportStateChange}
-                  onRegisterFocusTerminal={handleRegisterFocusTerminal}
-                  onSessionBusyChange={handleSessionBusyChange}
-                  usesTmux={activeClaudeSession?.usesTmux}
-                  chatMode={chatMode}
-                />
-              </div>
-            )}
-
-            {/* Mobile preview - full screen when active */}
-            {mobileView === 'preview' && (
-              <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
-                <PreviewPanel
-                  url={previewUrl}
-                  onClose={() => handleMobileViewChange('terminal')}
-                  onUrlChange={handlePreviewUrlChange}
-                  projectInfo={projectInfo}
-                  onStartProject={handleStartProject}
-                  onSendToTerminal={handleSendToTerminal}
-                  onSendToClaudeCode={handleSendToClaudeCode}
-                  activeSessions={activeSessions}
-                  activeSessionId={activeSessionId}
-                  sessionActivity={sessionActivity}
-                  onSessionBusyChange={handleSessionBusyChange}
-                  fontSize={terminalFontSize}
-                  webglEnabled={terminalWebglEnabled}
-                  onUrlDetected={handlePreviewUrlChange}
-                  showStatusLabels={showTabStatusLabels}
-                />
-              </Suspense>
-            )}
+            <MobileShell
+              sessions={activeSessions}
+              activeSessionId={activeSessionId}
+              onSelectSession={selectSession}
+              onCreateSession={handleRequestNewSession}
+              previewUrl={previewUrl}
+              onPreviewUrlChange={handlePreviewUrlChange}
+              projectInfo={projectInfo}
+              onStartProject={handleStartProject}
+              onSendToTerminal={handleSendToTerminal}
+              onSendToClaudeCode={handleSendToClaudeCode}
+              sessionActivity={sessionActivity}
+              onSessionBusyChange={handleSessionBusyChange}
+              fontSize={terminalFontSize}
+              webglEnabled={terminalWebglEnabled}
+              onUrlDetected={handleUrlDetected}
+              viewportHeight={viewportHeight}
+              mobileView={mobileView}
+              onViewChange={handleMobileViewChange}
+              chatMode={chatMode}
+              onChatModeChange={setChatMode}
+              accessoryOpen={keybarOpen}
+              onAccessoryToggle={handleToggleKeybar}
+              onAccessoryHeightChange={handleKeybarHeightChange}
+              onRegisterFocusTerminal={handleRegisterFocusTerminal}
+              sessionAiTypes={sessionAiTypes}
+              customAiProviders={customAiProviders}
+              onSetSessionAiType={handleSetSessionAiType}
+              onAddCustomAiProvider={handleAddCustomAiProvider}
+              showSessionStrip={false}
+              onOpenFiles={toggleFileManager}
+              onOpenBookmarks={() => setShowBookmarks(true)}
+              onOpenNotes={() => setShowNotes(true)}
+              onOpenSystemResources={toggleSystemResources}
+              onOpenSettings={handleOpenSettings}
+              onLogout={logout}
+              showStatusLabels={showTabStatusLabels}
+            />
           </main>
         </div>
       )}

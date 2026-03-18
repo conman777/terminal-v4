@@ -51,6 +51,9 @@ export function MobileHeader({
   onSetSessionAiType,
   chatMode = false,
   onToggleChatMode,
+  showPreviewNavigation = true,
+  showConversationToggle = true,
+  showDrawerViewTabs = true,
 }) {
   const { theme, toggleTheme } = useTheme();
   const visibleActiveSessions = activeSessions.filter((session) => !session.thread?.archived);
@@ -211,7 +214,7 @@ export function MobileHeader({
 
   const isPreviewView = mobileView === 'preview';
   const overflowItems = [
-    !isPreviewView ? {
+    showConversationToggle && !isPreviewView ? {
       label: chatMode ? 'Terminal view' : 'Conversation view',
       icon: chatMode ? (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -247,7 +250,7 @@ export function MobileHeader({
       onClick: () => handleCloseFromMenu(activeSessionId)
     } : null,
     { separator: true },
-    !isPreviewView && !chatMode && previewUrl ? {
+    showPreviewNavigation && !isPreviewView && !chatMode && previewUrl ? {
       label: 'Preview',
       icon: (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -435,6 +438,7 @@ export function MobileHeader({
         sessionActivity={sessionActivity}
         onSelectSession={onSelectSession}
         sessionsGroupedByProject={sessionsGroupedByProject}
+        showViewTabs={showDrawerViewTabs}
       />
 
       <MobileSessionPicker

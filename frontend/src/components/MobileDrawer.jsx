@@ -87,7 +87,8 @@ export function MobileDrawer({
   activeSessionId,
   sessionActivity,
   onSelectSession,
-  sessionsGroupedByProject = []
+  sessionsGroupedByProject = [],
+  showViewTabs = true
 }) {
   const drawerSwipeRef = useRef(null);
   const drawerRef = useRef(null);
@@ -318,26 +319,28 @@ export function MobileDrawer({
               </svg>
             </button>
           </div>
-          <div className="mobile-drawer-toolbar-modern">
-            {viewTabs.map((tab) => {
-              const icon = tab.key === 'terminal'
-                ? <TerminalGlyph />
-                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="12" y1="3" x2="12" y2="21" /></svg>;
+          {showViewTabs ? (
+            <div className="mobile-drawer-toolbar-modern">
+              {viewTabs.map((tab) => {
+                const icon = tab.key === 'terminal'
+                  ? <TerminalGlyph />
+                  : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="12" y1="3" x2="12" y2="21" /></svg>;
 
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  className={`mobile-drawer-toolbar-btn-modern${mobileView === tab.key ? ' active' : ''}${tab.disabled ? ' disabled' : ''}`}
-                  onClick={() => !tab.disabled && handleViewChange(tab.key)}
-                  disabled={tab.disabled}
-                >
-                  {icon}
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </div>
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    className={`mobile-drawer-toolbar-btn-modern${mobileView === tab.key ? ' active' : ''}${tab.disabled ? ' disabled' : ''}`}
+                    onClick={() => !tab.disabled && handleViewChange(tab.key)}
+                    disabled={tab.disabled}
+                  >
+                    {icon}
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
 
         <div className="mobile-drawer-content-modern">

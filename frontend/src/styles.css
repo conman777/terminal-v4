@@ -14888,6 +14888,831 @@ textarea:focus-visible {
   }
 }
 
+/* ===========================================
+   Mobile Shell Rewrite
+   =========================================== */
+
+.mobile-shell {
+  --mobile-shell-gap: 14px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  height: 100%;
+  padding:
+    calc(14px + env(safe-area-inset-top, 0px))
+    14px
+    calc(10px + env(safe-area-inset-bottom, 0px));
+  gap: var(--mobile-shell-gap);
+  background:
+    radial-gradient(circle at top right, rgba(34, 211, 238, 0.14), transparent 34%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.92), rgba(2, 6, 23, 0.98));
+}
+
+[data-theme="light"] .mobile-shell {
+  background:
+    radial-gradient(circle at top right, rgba(8, 145, 178, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(239, 246, 255, 0.98));
+}
+
+.mobile-shell-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--bg-surface) 88%, transparent), color-mix(in srgb, var(--terminal-bg) 84%, transparent));
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(22px);
+}
+
+.mobile-shell-header-copy {
+  min-width: 0;
+}
+
+.mobile-shell-kicker {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-primary-dim) 76%, transparent);
+  color: var(--accent-primary-light);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mobile-shell-header h1 {
+  margin: 10px 0 6px;
+  font-size: clamp(1.35rem, 5vw, 1.85rem);
+  line-height: 1.05;
+}
+
+.mobile-shell-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell-header-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.mobile-shell-icon-button,
+.mobile-shell-primary-button,
+.mobile-shell-menu-action,
+.mobile-shell-menu-close,
+.mobile-shell-tab,
+.mobile-shell-action-key,
+.mobile-shell-send,
+.mobile-shell-accessory-toggle {
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: none;
+  color: inherit;
+}
+
+.mobile-shell-icon-button,
+.mobile-shell-primary-button,
+.mobile-shell-send {
+  min-height: 42px;
+  padding: 0 14px;
+  font-weight: 700;
+}
+
+.mobile-shell-icon-button {
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border-color: color-mix(in srgb, var(--border-default) 74%, transparent);
+  color: var(--text-secondary);
+}
+
+.mobile-shell-icon-button:active {
+  transform: translateY(1px);
+}
+
+.mobile-shell-session-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(170px, 1fr);
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+
+.mobile-shell-session-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-shell-session-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  text-align: left;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 66%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.mobile-shell-session-card.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 68%, transparent);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-primary-dim) 68%, transparent), color-mix(in srgb, var(--bg-surface) 90%, transparent));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 34%, transparent), var(--shadow-md);
+  color: var(--text-primary);
+}
+
+.mobile-shell-session-title,
+.mobile-shell-session-meta,
+.mobile-shell-session-status,
+.mobile-shell-status-label,
+.mobile-bubble-body,
+.mobile-shell-empty-state p,
+.mobile-shell-accessory-copy {
+  overflow-wrap: anywhere;
+}
+
+.mobile-shell-session-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-shell-session-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.mobile-shell-session-status {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+}
+
+.mobile-shell-session-status.ready {
+  color: var(--text-secondary);
+}
+
+.mobile-shell-session-status.updated {
+  color: var(--accent-secondary);
+}
+
+.mobile-shell-session-status.busy {
+  color: var(--accent-primary-light);
+}
+
+.mobile-shell-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mobile-shell-tab {
+  min-height: 46px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
+  border-color: color-mix(in srgb, var(--border-default) 64%, transparent);
+}
+
+.mobile-shell-tab.active {
+  color: var(--text-primary);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-primary-dim) 72%, transparent), color-mix(in srgb, var(--bg-elevated) 90%, transparent));
+  border-color: color-mix(in srgb, var(--accent-primary) 62%, transparent);
+  box-shadow: var(--shadow-float);
+}
+
+.mobile-shell-status-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--bg-surface) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 84%, transparent);
+}
+
+.mobile-shell-status-card strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.mobile-shell-status-label {
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mobile-shell-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 54%, transparent);
+  background: color-mix(in srgb, var(--terminal-bg) 88%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), var(--shadow-lg);
+}
+
+.mobile-shell-runtime,
+.mobile-shell-assistant,
+.mobile-shell-preview {
+  position: absolute;
+  inset: 0;
+}
+
+.mobile-shell-runtime {
+  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-base);
+}
+
+.mobile-shell-runtime.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mobile-shell-assistant,
+.mobile-shell-preview {
+  z-index: 2;
+}
+
+.mobile-shell-assistant {
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(circle at top left, rgba(129, 140, 248, 0.12), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, transparent), color-mix(in srgb, var(--terminal-bg) 94%, transparent));
+}
+
+.mobile-shell-conversation {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.mobile-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 86%;
+  padding: 12px 14px;
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  white-space: pre-wrap;
+}
+
+.mobile-bubble-assistant {
+  align-self: flex-start;
+  background: color-mix(in srgb, var(--bg-surface) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-default) 54%, transparent);
+}
+
+.mobile-bubble-user {
+  align-self: flex-end;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 24%, var(--bg-elevated) 76%), color-mix(in srgb, var(--accent-secondary) 18%, var(--bg-elevated) 82%));
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 34%, transparent);
+}
+
+.mobile-bubble-role {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.mobile-bubble-body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mobile-bubble-streaming .mobile-bubble-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  animation: mobileShellCursor 1s steps(1) infinite;
+}
+
+.mobile-shell-composer {
+  padding: 0 16px 16px;
+}
+
+.mobile-shell-composer-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.mobile-shell-composer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.mobile-shell-composer-input {
+  width: 100%;
+  min-height: 54px;
+  max-height: 140px;
+  resize: vertical;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 74%, transparent);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.45;
+}
+
+.mobile-shell-composer-input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent-primary) 78%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary-glow) 78%, transparent);
+}
+
+.mobile-shell-send,
+.mobile-shell-primary-button {
+  color: #03131a;
+  background: linear-gradient(135deg, var(--accent-primary-light), var(--accent-primary));
+  box-shadow: var(--shadow-float);
+}
+
+[data-theme="light"] .mobile-shell-send,
+[data-theme="light"] .mobile-shell-primary-button {
+  color: white;
+}
+
+.mobile-shell-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+  gap: 10px;
+}
+
+.mobile-shell-empty-state.preview {
+  background:
+    radial-gradient(circle at top left, rgba(34, 211, 238, 0.12), transparent 36%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, transparent), color-mix(in srgb, var(--bg-primary) 94%, transparent));
+}
+
+.mobile-shell-empty-kicker {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-primary-light);
+}
+
+.mobile-shell-empty-state h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  line-height: 1.1;
+}
+
+.mobile-shell-empty-state p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.mobile-shell-accessory {
+  position: relative;
+  flex-shrink: 0;
+  padding: 12px 14px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 56%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  box-shadow: var(--shadow-md);
+}
+
+.mobile-shell-accessory-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.mobile-shell-accessory-toggle {
+  min-height: 34px;
+  padding: 0 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+  color: var(--text-secondary);
+}
+
+.mobile-shell-accessory-copy {
+  margin-top: 10px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mobile-shell-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.mobile-shell-action-key {
+  min-height: 42px;
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  border-color: color-mix(in srgb, var(--border-default) 62%, transparent);
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.mobile-shell-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  border: 0;
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.mobile-shell-menu {
+  position: fixed;
+  left: 14px;
+  right: 14px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 141;
+  padding: 16px;
+  border-radius: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
+  box-shadow: var(--shadow-modal);
+  backdrop-filter: blur(24px);
+}
+
+.mobile-shell-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-shell-menu-close {
+  min-height: 34px;
+  padding: 0 12px;
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--text-secondary);
+}
+
+.mobile-shell-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mobile-shell-menu-action {
+  min-height: 52px;
+  padding: 0 14px;
+  text-align: left;
+  font-weight: 700;
+  background: color-mix(in srgb, var(--bg-primary) 94%, transparent);
+  border-color: color-mix(in srgb, var(--border-default) 62%, transparent);
+}
+
+.mobile-shell-menu-action.danger {
+  color: var(--error);
+}
+
+.mobile-shell-preview {
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+}
+
+.mobile-shell-preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+@keyframes mobileShellCursor {
+  0%, 49% {
+    opacity: 1;
+  }
+
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .mobile-shell {
+    padding-inline: 10px;
+    gap: 12px;
+  }
+
+  .mobile-shell-header {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-shell-header-actions {
+    justify-content: stretch;
+  }
+
+  .mobile-shell-header-actions > * {
+    flex: 1;
+  }
+
+  .mobile-shell-status-card {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-shell-action-grid,
+  .mobile-shell-menu-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mobile-bubble {
+    max-width: 92%;
+  }
+}
+
+.mobile-shell.mobile-shell-parity {
+  gap: 12px;
+  padding:
+    calc(10px + env(safe-area-inset-top, 0px))
+    10px
+    calc(10px + env(safe-area-inset-bottom, 0px));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-primary) 94%, black 6%), color-mix(in srgb, var(--bg-primary) 98%, black 2%));
+}
+
+.mobile-shell-parity .mobile-shell-icon-button,
+.mobile-shell-parity .mobile-shell-primary-button {
+  min-height: 42px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 76%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mobile-shell-parity .mobile-shell-icon-button:active,
+.mobile-shell-parity .mobile-shell-primary-button:active {
+  transform: translateY(1px);
+}
+
+.mobile-shell-parity .mobile-shell-primary-button {
+  background: color-mix(in srgb, var(--accent-primary) 18%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
+}
+
+.mobile-shell-parity .mobile-shell-session-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scroll-snap-type: x proximity;
+}
+
+.mobile-shell-parity .mobile-shell-session-card {
+  flex: 0 0 min(248px, calc(100vw - 32px));
+  gap: 4px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  box-shadow: none;
+  scroll-snap-align: start;
+}
+
+.mobile-shell-parity .mobile-shell-session-card.active {
+  border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-primary) 12%, var(--bg-elevated)),
+    color-mix(in srgb, var(--bg-surface) 92%, transparent)
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+.mobile-shell-parity .mobile-shell-session-title {
+  font-size: 13px;
+}
+
+.mobile-shell-parity .mobile-shell-session-meta,
+.mobile-shell-parity .mobile-shell-session-status {
+  font-size: 11px;
+}
+
+.mobile-shell-parity .mobile-shell-session-status {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.mobile-shell-parity .mobile-shell-stage.mobile-shell-stage-parity {
+  display: flex;
+  min-height: 0;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--terminal-bg) 96%, transparent),
+      color-mix(in srgb, var(--bg-surface) 96%, transparent)
+    );
+  box-shadow: var(--shadow-lg);
+}
+
+.mobile-shell-parity .mobile-terminal-shell {
+  width: 100%;
+}
+
+.mobile-shell-parity .mobile-terminal-stack {
+  min-height: 0;
+}
+
+.mobile-shell-parity .mobile-conversation-surface {
+  padding-top: 0;
+}
+
+.mobile-shell-parity .mobile-terminal-runtime.inline-panel-open {
+  flex: 0 0 min(34vh, 280px);
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 48%, transparent);
+}
+
+.mobile-shell-parity .mobile-terminal-runtime.terminal-first {
+  flex: 1 1 0;
+  border-top: none;
+}
+
+.mobile-shell-parity .desktop-conversation-view {
+  border-radius: 0;
+  background: transparent;
+}
+
+.mobile-shell-parity .desktop-conversation-header {
+  padding: 12px 14px 10px;
+  border-bottom-color: color-mix(in srgb, var(--border-default) 40%, transparent);
+}
+
+.mobile-shell-parity .desktop-thread {
+  padding-inline: 12px;
+}
+
+.mobile-shell-parity .desktop-thread-inner {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.mobile-shell-parity .desktop-agent-status-card,
+.mobile-shell-parity .cc-assistant-bubble,
+.mobile-shell-parity .cc-user-bubble,
+.mobile-shell-parity .cc-error-bubble {
+  border-radius: 14px;
+}
+
+.mobile-shell-parity .desktop-conversation-composer {
+  padding: 12px;
+  border-top-color: color-mix(in srgb, var(--border-default) 40%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 90%, transparent);
+}
+
+.mobile-shell-parity .desktop-conversation-input {
+  min-height: 42px;
+  font-size: 14px;
+}
+
+.mobile-shell-parity .desktop-status-bar-shell {
+  gap: 6px;
+  min-height: 0;
+  padding: 10px 10px 12px;
+}
+
+.mobile-shell-parity .status-bar-meta-row,
+.mobile-shell-parity .status-composer-shell,
+.mobile-shell-parity .status-composer-footer-row {
+  max-width: none;
+}
+
+.mobile-shell-parity .status-composer-shell {
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.mobile-shell-parity .status-composer-input {
+  min-height: 52px;
+  font-size: 14px;
+}
+
+.mobile-shell-parity .status-bar-right {
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.mobile-shell-parity .status-ai-selector-label,
+.mobile-shell-parity .status-branch-trigger-label,
+.mobile-shell-parity .status-branch-fallback,
+.mobile-shell-parity .status-session-summary-label {
+  max-width: 112px;
+}
+
+.mobile-shell-parity .status-runtime-meta {
+  justify-content: flex-start;
+  margin-left: 0;
+}
+
+.mobile-shell-parity .status-composer-footer-row {
+  margin-top: 0;
+  padding-inline: 2px;
+}
+
+.mobile-shell-parity .mobile-shell-empty-state {
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 20px;
+  background: transparent;
+}
+
+.mobile-shell-parity .mobile-shell-empty-state h2 {
+  font-size: 1.2rem;
+}
+
+.mobile-shell-parity .mobile-shell-launch-notice {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 12%, var(--bg-surface));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .mobile-shell.mobile-shell-parity {
+    padding-inline: 8px;
+    gap: 10px;
+  }
+
+  .mobile-shell-parity .mobile-shell-session-card {
+    flex-basis: calc(100vw - 24px);
+  }
+
+  .mobile-shell-parity .desktop-status-bar-shell {
+    padding-inline: 8px;
+  }
+
+  .mobile-shell-parity .status-bar-right {
+    justify-content: space-between;
+  }
+
+  .mobile-shell-parity .status-ai-selector-label,
+  .mobile-shell-parity .status-branch-trigger-label,
+  .mobile-shell-parity .status-branch-fallback,
+  .mobile-shell-parity .status-session-summary-label {
+    max-width: 88px;
+  }
+}
+
 /* Accessibility: respect user's reduced-motion preference */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

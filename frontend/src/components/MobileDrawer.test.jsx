@@ -326,4 +326,11 @@ describe('MobileDrawer', () => {
 
     expect(screen.getByLabelText('Ready to review')).toBeInTheDocument();
   });
+
+  it('can hide the view tabs when mobile navigation owns the current view', () => {
+    render(<MobileDrawer {...buildProps({ showViewTabs: false })} />);
+
+    expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).not.toBeInTheDocument();
+  });
 });
