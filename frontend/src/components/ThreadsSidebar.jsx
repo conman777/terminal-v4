@@ -65,17 +65,29 @@ export default function ThreadsSidebar({
     return [...manualGroups, ...projectGroups];
   }, [projectGroups, projects]);
 
+  const heroStats = useMemo(() => ([
+    { label: 'Projects', value: String(visibleProjectGroups.length) },
+    { label: 'Pins', value: String(pinnedSessions.length) },
+    { label: 'Archive', value: String(archivedSessions.length) },
+  ]), [archivedSessions.length, pinnedSessions.length, visibleProjectGroups.length]);
+
   return (
     <aside className={`threads-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       {/* Top bar: title + collapse */}
       <div className="ts-topbar">
         {!isCollapsed && (
-          <div className="ts-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            <span>V4</span>
+          <div className="ts-title" aria-label="V4 Terminal">
+            <span className="ts-title-mark" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2.5" y="4.5" width="19" height="15" rx="3" />
+                <path d="M7 9.25 10.75 12 7 14.75" />
+                <line x1="13.25" y1="15" x2="17.5" y2="15" />
+              </svg>
+            </span>
+            <div className="ts-title-copy">
+              <strong>V4</strong>
+              <span>Terminal</span>
+            </div>
           </div>
         )}
         <button
@@ -93,6 +105,25 @@ export default function ThreadsSidebar({
       {/* New thread button */}
       {!isCollapsed && (
         <div className="ts-new-thread-row">
+          <section className="ts-hero-card" aria-label="V4 workspace overview">
+            <div className="ts-hero-head">
+              <span className="ts-hero-kicker">Command Surface</span>
+              <span className={`ts-hero-state ${showPreview ? 'preview-open' : ''}`}>
+                {showPreview ? 'Preview live' : 'Terminal focus'}
+              </span>
+            </div>
+            <h2 className="ts-hero-brand">V4</h2>
+            <p className="ts-hero-copy">A project-native terminal workspace built around threads, live preview, and fast context switching.</p>
+            <div className="ts-hero-stats">
+              {heroStats.map((stat) => (
+                <div key={stat.label} className="ts-hero-stat">
+                  <span>{stat.label}</span>
+                  <strong>{stat.value}</strong>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <div className="ts-quick-actions">
             <button className="ts-quick-action-btn" type="button" onClick={onOpenBookmarks}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -326,31 +357,32 @@ export default function ThreadsSidebar({
 
       <style>{`
         .threads-sidebar {
-          --sidebar-bg: #101723;
-          --sidebar-shell-bg: #111a27;
-          --sidebar-content-bg: #0f1620;
-          --sidebar-hover: rgba(149, 175, 211, 0.08);
-          --sidebar-active: rgba(36, 95, 153, 0.28);
-          --sidebar-border: rgba(110, 132, 164, 0.22);
-          --sidebar-text: #e7eef9;
-          --sidebar-text-muted: #9caec8;
+          --sidebar-bg: rgba(8, 13, 24, 0.88);
+          --sidebar-shell-bg: rgba(10, 16, 28, 0.86);
+          --sidebar-content-bg: rgba(6, 11, 19, 0.72);
+          --sidebar-hover: rgba(255, 255, 255, 0.06);
+          --sidebar-active: rgba(248, 113, 113, 0.16);
+          --sidebar-border: rgba(255, 255, 255, 0.08);
+          --sidebar-text: #f4efe6;
+          --sidebar-text-muted: #b8b0a2;
           --sidebar-cutout-bg: var(--bg-primary);
           --sidebar-theme-text: var(--text-primary);
           --sidebar-theme-muted: var(--text-muted);
-          width: 260px;
+          width: 332px;
           height: 100%;
-          background: linear-gradient(
-            180deg,
-            #111a27 0%,
-            #101723 44%,
-            #0f141d 100%
-          );
-          border-right: 1px solid var(--sidebar-border);
+          background:
+            radial-gradient(circle at top left, rgba(244, 114, 182, 0.14), transparent 34%),
+            radial-gradient(circle at 78% 18%, rgba(251, 191, 36, 0.16), transparent 28%),
+            linear-gradient(180deg, rgba(18, 12, 16, 0.96) 0%, rgba(10, 13, 22, 0.96) 38%, rgba(6, 10, 18, 0.98) 100%);
+          border: 1px solid var(--sidebar-border);
+          border-radius: 30px;
+          box-shadow: 0 30px 80px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04);
           display: flex;
           flex-direction: column;
           transition: width 0.2s ease;
           flex-shrink: 0;
           z-index: 50;
+          overflow: hidden;
         }
 
         html[data-window-active="false"] .threads-sidebar {
@@ -365,18 +397,18 @@ export default function ThreadsSidebar({
         }
 
         .threads-sidebar.collapsed {
-          width: 48px;
+          width: 68px;
         }
 
         /* ── Top bar ── */
         .ts-topbar {
-          height: 48px;
+          height: 72px;
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 0 12px;
+          padding: 0 16px 0 18px;
           flex-shrink: 0;
-          background: var(--sidebar-shell-bg);
+          background: transparent;
         }
 
         .threads-sidebar.collapsed .ts-topbar {
@@ -388,26 +420,54 @@ export default function ThreadsSidebar({
           flex: 1;
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 12px;
           color: var(--sidebar-text);
-          font-size: 14px;
-          font-weight: 600;
         }
 
-        .ts-title svg {
-          opacity: 0.6;
+        .ts-title-mark {
+          width: 40px;
+          height: 40px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 14px;
+          background: linear-gradient(135deg, rgba(250, 204, 21, 0.18), rgba(244, 114, 182, 0.16));
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          color: #fff0d5;
+        }
+
+        .ts-title-copy {
+          display: flex;
+          flex-direction: column;
+          line-height: 1;
+          gap: 4px;
+        }
+
+        .ts-title-copy strong {
+          font-family: 'Syne', var(--font-ui);
+          font-size: 20px;
+          font-weight: 700;
+          letter-spacing: -0.04em;
+        }
+
+        .ts-title-copy span {
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.22em;
+          color: var(--sidebar-text-muted);
         }
 
         .ts-collapse-btn {
-          width: 28px;
-          height: 28px;
+          width: 36px;
+          height: 36px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: transparent;
-          border: none;
+          background: rgba(255, 255, 255, 0.04);
+          border: 1px solid rgba(255, 255, 255, 0.08);
           color: var(--sidebar-text-muted);
-          border-radius: 6px;
+          border-radius: 12px;
           cursor: pointer;
           transition: all 0.12s ease;
           flex-shrink: 0;
@@ -420,32 +480,129 @@ export default function ThreadsSidebar({
 
         /* ── New thread button ── */
         .ts-new-thread-row {
-          padding: 4px 10px 8px;
+          padding: 0 14px 14px;
           flex-shrink: 0;
-          background: var(--sidebar-shell-bg);
+          background: transparent;
+        }
+
+        .ts-hero-card {
+          position: relative;
+          overflow: hidden;
+          margin-bottom: 14px;
+          padding: 16px;
+          border-radius: 24px;
+          background:
+            radial-gradient(circle at top right, rgba(250, 204, 21, 0.2), transparent 30%),
+            linear-gradient(145deg, rgba(76, 29, 149, 0.26), rgba(127, 29, 29, 0.18) 46%, rgba(17, 24, 39, 0.72));
+          border: 1px solid rgba(255, 255, 255, 0.09);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        .ts-hero-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          margin-bottom: 14px;
+        }
+
+        .ts-hero-kicker,
+        .ts-hero-state {
+          display: inline-flex;
+          align-items: center;
+          min-height: 26px;
+          padding: 0 10px;
+          border-radius: 999px;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+        }
+
+        .ts-hero-kicker {
+          color: #fff3d6;
+          background: rgba(255, 255, 255, 0.07);
+        }
+
+        .ts-hero-state {
+          color: #ffd6b8;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        .ts-hero-state.preview-open {
+          color: #fff1cf;
+          background: rgba(251, 191, 36, 0.14);
+        }
+
+        .ts-hero-brand {
+          margin: 0;
+          font-family: 'Syne', var(--font-ui);
+          font-size: 60px;
+          line-height: 0.88;
+          letter-spacing: -0.08em;
+          color: #fff7eb;
+        }
+
+        .ts-hero-copy {
+          margin: 12px 0 0;
+          color: rgba(244, 239, 230, 0.76);
+          font-size: 13px;
+          line-height: 1.55;
+          max-width: 24ch;
+        }
+
+        .ts-hero-stats {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 8px;
+          margin-top: 16px;
+        }
+
+        .ts-hero-stat {
+          padding: 10px;
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .ts-hero-stat span {
+          display: block;
+          margin-bottom: 8px;
+          color: rgba(244, 239, 230, 0.58);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+
+        .ts-hero-stat strong {
+          display: block;
+          color: #fff5e6;
+          font-size: 22px;
+          font-weight: 700;
         }
 
         .ts-quick-actions {
-          display: flex;
-          flex-direction: column;
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 6px;
-          margin-bottom: 14px;
+          margin-bottom: 12px;
         }
 
         .ts-quick-action-btn {
           width: 100%;
-          min-height: 30px;
+          min-height: 42px;
           display: flex;
           align-items: center;
           gap: 8px;
-          padding: 0 10px;
-          background: transparent;
-          border: 1px solid transparent;
+          padding: 0 12px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           color: var(--sidebar-text-muted);
-          border-radius: 6px;
+          border-radius: 14px;
           cursor: pointer;
           font-size: 12px;
-          font-weight: 500;
+          font-weight: 600;
           transition: all 0.12s ease;
         }
 
@@ -463,25 +620,26 @@ export default function ThreadsSidebar({
 
         .ts-new-thread-btn {
           width: 100%;
-          height: 32px;
+          height: 48px;
           display: flex;
           align-items: center;
           gap: 8px;
-          padding: 0 12px;
-          background: color-mix(in srgb, var(--sidebar-hover) 72%, transparent);
-          border: 1px solid var(--sidebar-border);
-          color: var(--sidebar-text);
-          border-radius: 6px;
+          justify-content: center;
+          padding: 0 16px;
+          background: linear-gradient(135deg, rgba(251, 191, 36, 0.88), rgba(244, 114, 182, 0.82));
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          color: #1a1116;
+          border-radius: 16px;
           cursor: pointer;
           font-size: 13px;
-          font-weight: 400;
+          font-weight: 700;
           transition: all 0.12s ease;
+          box-shadow: 0 14px 30px rgba(244, 114, 182, 0.14);
         }
 
         .ts-new-thread-btn:hover {
-          background: var(--sidebar-hover);
-          border-color: color-mix(in srgb, var(--sidebar-border) 70%, white 30%);
-          color: #f8fbff;
+          transform: translateY(-1px);
+          filter: brightness(1.02);
         }
 
         /* ── Content area ── */
@@ -490,7 +648,7 @@ export default function ThreadsSidebar({
           overflow-y: auto;
           scrollbar-width: thin;
           scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-          padding: 0;
+          padding: 0 8px 0 10px;
           background: var(--sidebar-content-bg);
         }
 
@@ -507,7 +665,7 @@ export default function ThreadsSidebar({
           display: flex;
           align-items: center;
           justify-content: space-between;
-          padding: 10px 14px 6px;
+          padding: 6px 10px 8px;
           font-size: 11px;
           font-weight: 600;
           color: var(--sidebar-text-muted);
@@ -523,7 +681,7 @@ export default function ThreadsSidebar({
           display: flex;
           align-items: center;
           gap: 6px;
-          padding: 6px 14px;
+          padding: 6px 10px;
           font-size: 11px;
           font-weight: 600;
           color: var(--sidebar-text-muted);
@@ -560,6 +718,10 @@ export default function ThreadsSidebar({
           justify-content: center;
           padding: 40px 20px;
           color: var(--sidebar-text-muted);
+          border: 1px dashed rgba(255, 255, 255, 0.08);
+          border-radius: 18px;
+          background: rgba(255, 255, 255, 0.03);
+          margin: 8px 10px 12px;
         }
 
         .threads-empty p {
@@ -590,12 +752,12 @@ export default function ThreadsSidebar({
           align-items: center;
           gap: 8px;
           width: calc(100% - 20px);
-          margin: 6px 10px;
-          padding: 8px 10px;
-          background: transparent;
-          border: none;
+          margin: 8px 10px;
+          padding: 10px 12px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           color: var(--sidebar-text-muted);
-          border-radius: 6px;
+          border-radius: 14px;
           cursor: pointer;
           font-size: 13px;
           font-weight: 400;
@@ -614,9 +776,9 @@ export default function ThreadsSidebar({
         /* ── Settings footer ── */
         .ts-sidebar-footer {
           flex-shrink: 0;
-          padding: 6px 10px 10px;
-          border-top: none;
-          background: var(--sidebar-shell-bg);
+          padding: 12px 14px 14px;
+          border-top: 1px solid rgba(255, 255, 255, 0.06);
+          background: linear-gradient(180deg, rgba(8, 12, 21, 0.18), rgba(8, 12, 21, 0.54));
           display: flex;
           align-items: center;
           gap: 6px;
@@ -627,11 +789,11 @@ export default function ThreadsSidebar({
           align-items: center;
           gap: 8px;
           flex: 1;
-          padding: 8px 10px;
-          background: transparent;
-          border: none;
+          padding: 10px 12px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           color: var(--sidebar-text-muted);
-          border-radius: 6px;
+          border-radius: 14px;
           cursor: pointer;
           font-size: 13px;
           font-weight: 400;
@@ -644,16 +806,16 @@ export default function ThreadsSidebar({
         }
 
         .ts-footer-icon-btn {
-          width: 34px;
-          height: 34px;
+          width: 42px;
+          height: 42px;
           display: flex;
           align-items: center;
           justify-content: center;
           padding: 0;
-          background: transparent;
-          border: none;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.06);
           color: var(--sidebar-text-muted);
-          border-radius: 6px;
+          border-radius: 14px;
           cursor: pointer;
           transition: all 0.12s ease;
           flex-shrink: 0;
@@ -667,11 +829,19 @@ export default function ThreadsSidebar({
         @media (max-width: 768px) {
           .threads-sidebar {
             width: 100%;
+            border-radius: 0;
+            border-left: none;
+            border-top: none;
+            border-bottom: none;
           }
 
           .ts-topbar {
             height: 52px;
             padding: 0 12px;
+          }
+
+          .ts-hero-brand {
+            font-size: 46px;
           }
         }
       `}</style>

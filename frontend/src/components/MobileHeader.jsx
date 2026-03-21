@@ -341,34 +341,14 @@ export function MobileHeader({
             </svg>
           </button>
 
-          {isPreviewView ? (
-            <div className="mobile-header-title-block">
+          <div className="mobile-header-title-block">
+            <span className="mobile-header-kicker">V4 Terminal</span>
+            {isPreviewView ? (
               <span className="mobile-header-title">Preview</span>
-            </div>
-          ) : (
-            <button
-              type="button"
-              className={`mobile-header-session-switcher${activeSessionIsBusy ? ' busy' : ''}`}
-              onClick={() => setShowSessionPicker(true)}
-              aria-label="Open session picker"
-            >
-              <span className={`mobile-header-session-dot ${activeSessionIsBusy ? 'busy' : 'idle'}`} aria-hidden="true" />
-              <span className="mobile-header-session-copy">
-                <span className="mobile-header-session-name">
-                  {activeVisibleSession ? activeSessionDisplay.primaryLabel : 'No active terminal'}
-                </span>
-                {activeVisibleSession && activeSessionSubtitle && (
-                  <span className="mobile-header-session-subtitle">{activeSessionSubtitle}</span>
-                )}
-              </span>
-              {visibleActiveSessions.length > 1 && (
-                <span className="mobile-header-session-count" aria-hidden="true">{visibleActiveSessions.length}</span>
-              )}
-              <svg className="mobile-header-session-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="9 6 15 12 9 18" />
-              </svg>
-            </button>
-          )}
+            ) : (
+              <span className="mobile-header-brand">V4</span>
+            )}
+          </div>
 
           <div className="mobile-header-actions-right">
             {!isPreviewView && (
@@ -414,6 +394,35 @@ export function MobileHeader({
             )}
           </div>
         </div>
+        {!isPreviewView && (
+          <div className="mobile-header-session-row">
+            <button
+              type="button"
+              className={`mobile-header-session-switcher${activeSessionIsBusy ? ' busy' : ''}`}
+              onClick={() => setShowSessionPicker(true)}
+              aria-label="Open session picker"
+            >
+              <span className={`mobile-header-session-dot ${activeSessionIsBusy ? 'busy' : 'idle'}`} aria-hidden="true" />
+              <span className="mobile-header-session-copy">
+                <span className="mobile-header-session-name">
+                  {activeVisibleSession ? activeSessionDisplay.primaryLabel : 'No active terminal'}
+                </span>
+                {activeVisibleSession && activeSessionSubtitle && (
+                  <span className="mobile-header-session-subtitle">{activeSessionSubtitle}</span>
+                )}
+              </span>
+              <span className="mobile-header-session-meta">
+                <span className="mobile-header-session-count-label">{sessionCountLabel}</span>
+                {visibleActiveSessions.length > 1 && (
+                  <span className="mobile-header-session-count" aria-hidden="true">{visibleActiveSessions.length}</span>
+                )}
+              </span>
+              <svg className="mobile-header-session-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+            </button>
+          </div>
+        )}
         <div className="mobile-header-surface-tabs" role="tablist" aria-label="Mobile surfaces">
           <button
             type="button"

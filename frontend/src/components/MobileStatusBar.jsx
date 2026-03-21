@@ -27,7 +27,7 @@ export function MobileStatusBar({
   isSwitchingGitBranch = false,
   onSelectGitBranch,
   onSendMessage,
-  composerPlaceholder = 'Ask V4 anything'
+  composerPlaceholder = 'Ask V4 to do anything'
 }) {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState([]);
@@ -527,20 +527,24 @@ export function MobileStatusBar({
 
       <style>{`
         .mobile-composer-shell {
+          position: relative;
           display: flex;
           flex-direction: column;
           align-items: center;
           gap: 6px;
-          padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
+          padding: 10px 10px calc(12px + env(safe-area-inset-bottom));
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
-          background: var(--terminal-bg, #0b0f17);
+          background:
+            radial-gradient(circle at 12% 0%, rgba(244, 114, 182, 0.12), transparent 24%),
+            radial-gradient(circle at 88% 0%, rgba(251, 191, 36, 0.12), transparent 18%),
+            var(--terminal-bg, #0b0f17);
           backdrop-filter: blur(18px);
           -webkit-tap-highlight-color: transparent;
         }
 
         .mobile-composer-shell:focus-within {
           gap: 4px;
-          padding: 4px 8px calc(6px + env(safe-area-inset-bottom));
+          padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
           background: color-mix(in srgb, var(--terminal-bg, #0b0f17) 96%, black 4%);
         }
 
@@ -549,19 +553,21 @@ export function MobileStatusBar({
           flex-direction: column;
           gap: 8px;
           width: min(100%, 880px);
-          padding: 12px 12px 10px;
-          border-radius: 16px;
+          padding: 14px 14px 12px;
+          border-radius: 22px;
           background: color-mix(in srgb, var(--bg-surface) 94%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
+          box-shadow:
+            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent),
+            0 16px 32px rgba(0, 0, 0, 0.22);
           outline: none;
           -webkit-tap-highlight-color: transparent;
         }
 
         .mobile-composer-shell:focus-within .mobile-composer-form {
           gap: 6px;
-          padding: 9px 10px 8px;
-          border-radius: 13px;
+          padding: 11px 12px 10px;
+          border-radius: 18px;
           box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent);
         }
 
@@ -658,7 +664,7 @@ export function MobileStatusBar({
           align-items: center;
           justify-content: space-between;
           gap: 8px;
-          padding-top: 8px;
+          padding-top: 10px;
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
         }
 
@@ -697,11 +703,11 @@ export function MobileStatusBar({
           align-items: center;
           justify-content: center;
           gap: 6px;
-          min-height: 30px;
-          padding: 0 9px;
+          min-height: 34px;
+          padding: 0 10px;
           background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          border-radius: 9px;
+          border-radius: 12px;
           color: var(--text-secondary, #d5deea);
           cursor: pointer;
           transition: all 0.15s ease;
@@ -709,7 +715,7 @@ export function MobileStatusBar({
         }
 
         .mobile-status-btn {
-          min-width: 30px;
+          min-width: 34px;
           padding: 0 8px;
           font-size: 10px;
           font-weight: 700;
@@ -810,14 +816,15 @@ export function MobileStatusBar({
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 32px;
-          height: 32px;
-          border-radius: 999px;
+          width: 42px;
+          height: 42px;
+          border-radius: 14px;
           border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
           background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated));
           color: var(--text-primary);
           cursor: pointer;
           flex-shrink: 0;
+          box-shadow: 0 12px 24px rgba(0, 0, 0, 0.16);
         }
 
         .mobile-composer-attachments {
