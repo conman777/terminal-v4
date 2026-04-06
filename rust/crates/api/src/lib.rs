@@ -2345,6 +2345,7 @@ async fn handle_structured_ws(
     history: Vec<terminal_v4_core::StructuredSessionEvent>,
     mut subscription: tokio::sync::broadcast::Receiver<terminal_v4_core::StructuredSessionEvent>,
 ) {
+    // Send full event history on connect so client can rebuild state
     for event in history {
         if socket
             .send(Message::Text(
@@ -2363,9 +2364,16 @@ async fn handle_structured_ws(
         }
     }
 
+    // Keep connection alive even when broadcast channel is closed (inactive session).
+    // Without this, persisted sessions would close the WS immediately after history,
+    // causing the frontend to enter a reconnect loop.
+    let mut broadcast_closed = false;
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(15));
+    ping_interval.tick().await; // consume first immediate tick
+
     loop {
         tokio::select! {
-            event = subscription.recv() => {
+            event = subscription.recv(), if !broadcast_closed => {
                 match event {
                     Ok(event) => {
                         if socket
@@ -2385,7 +2393,15 @@ async fn handle_structured_ws(
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Channel closed (no active process) — keep WS alive for client messages
+                        broadcast_closed = true;
+                    }
+                }
+            }
+            _ = ping_interval.tick() => {
+                if socket.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
                 }
             }
             message = socket.recv() => {
