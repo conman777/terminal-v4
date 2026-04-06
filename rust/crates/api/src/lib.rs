@@ -199,7 +199,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/system/rebuild", post(trigger_rebuild))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
-    Router::new()
+    let router = Router::new()
         .route("/api/health", get(health))
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
@@ -217,7 +217,22 @@ pub fn app(state: AppState) -> Router {
         )
         .merge(protected)
         .layer(cors)
-        .with_state(state)
+        .with_state(state.clone());
+
+    // Serve frontend static files with SPA fallback
+    let frontend_dir = state.config().data_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("frontend").join("dist"))
+        .unwrap_or_else(|| PathBuf::from("frontend/dist"));
+
+    if frontend_dir.exists() {
+        let serve_dir = tower_http::services::ServeDir::new(&frontend_dir)
+            .not_found_service(tower_http::services::ServeFile::new(frontend_dir.join("index.html")));
+        router.fallback_service(serve_dir)
+    } else {
+        router
+    }
 }
 
 async fn health() -> Json<HealthResponse> {
