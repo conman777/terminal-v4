@@ -4,6 +4,7 @@ pub mod git;
 mod state;
 mod structured;
 mod terminal;
+pub mod tmux;
 pub mod turn_detector;
 
 use auth::{authenticate_token, require_auth, AuthenticatedUser};

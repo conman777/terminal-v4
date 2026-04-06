@@ -109,6 +109,7 @@ struct LiveSessionState {
     thread: Option<ThreadMetadata>,
     is_busy: bool,
     last_activity_at: i64,
+    uses_tmux: bool,
 }
 
 /// Coalesces rapid PTY output into fewer broadcasts.
@@ -242,6 +243,30 @@ impl TerminalManager {
         }
     }
 
+    /// Recover orphaned tmux sessions on startup.
+    /// Checks for tmux sessions that match our naming convention but don't
+    /// have active in-memory sessions. Logs them for awareness.
+    pub async fn recover_orphaned_tmux_sessions(&self) {
+        if !crate::tmux::is_tmux_available().await {
+            return;
+        }
+
+        let orphaned = crate::tmux::list_sessions().await;
+        if orphaned.is_empty() {
+            return;
+        }
+
+        let active = self.inner.sessions.lock().await;
+        for session_id in &orphaned {
+            if !active.contains_key(session_id) {
+                tracing::info!(
+                    session_id = session_id.as_str(),
+                    "Found orphaned tmux session — available for restore"
+                );
+            }
+        }
+    }
+
     pub async fn list_sessions(
         &self,
         user_id: &str,
@@ -302,7 +327,7 @@ impl TerminalManager {
                 created_at: state.created_at.clone(),
                 updated_at: state.updated_at.clone(),
                 history,
-                uses_tmux: false,
+                uses_tmux: state.uses_tmux,
                 current_cols: Some(state.current_cols),
                 current_rows: Some(state.current_rows),
                 sandbox: state.sandbox.clone(),
@@ -380,7 +405,7 @@ impl TerminalManager {
                 created_at: state.created_at.clone(),
                 updated_at: state.updated_at.clone(),
                 history: state.history.clone(),
-                uses_tmux: false,
+                uses_tmux: state.uses_tmux,
                 current_cols: Some(state.current_cols),
                 current_rows: Some(state.current_rows),
                 sandbox: state.sandbox.clone(),
@@ -837,6 +862,7 @@ impl TerminalManager {
                 thread: None,
                 is_busy: false,
                 last_activity_at: now_millis(),
+                uses_tmux: false,
             }),
             io,
             broadcaster,
@@ -981,7 +1007,7 @@ fn summary_from_live_state(state: &LiveSessionState) -> TerminalSessionSummary {
         message_count: state.history.len(),
         is_active: true,
         is_busy: state.is_busy,
-        uses_tmux: false,
+        uses_tmux: state.uses_tmux,
         sandbox: state.sandbox.clone(),
         thread: state.thread.clone(),
     }
