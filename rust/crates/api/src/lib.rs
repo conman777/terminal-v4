@@ -5,13 +5,16 @@ pub mod git;
 pub mod passkey;
 pub mod preview;
 pub mod processes;
+pub mod screenshots;
 mod state;
 mod structured;
 pub mod system_stats;
 mod terminal;
 pub mod tmux;
+pub mod transcribe;
 pub mod turn_detector;
 pub mod vault;
+pub mod webcontainer;
 
 use auth::{authenticate_token, require_auth, AuthenticatedUser};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -193,6 +196,16 @@ pub fn app(state: AppState) -> Router {
         .route("/api/process-logs/{pid}", get(get_process_logs).delete(clear_process_logs))
         .route("/api/process-logs", get(list_all_processes))
         .route("/api/preview/{port}/process-logs", get(get_process_logs_by_port))
+        // WebContainer
+        .route("/api/webcontainer/files", get(get_webcontainer_files))
+        // Transcription
+        .route("/api/transcribe/health", get(transcribe_health))
+        .route("/api/transcribe", post(transcribe_audio))
+        // Screenshots
+        .route("/api/preview/{port}/screenshot", post(take_preview_screenshot))
+        .route("/api/preview/{port}/screenshot/element", post(take_element_screenshot))
+        .route("/api/preview/screenshots", get(list_screenshots_handler))
+        .route("/api/preview/screenshots/{filename}", get(get_screenshot_handler).delete(delete_screenshot_handler))
         // System stats routes
         .route("/api/system/stats", get(get_system_stats))
         .route("/api/system/stats/history", get(get_stats_history))
@@ -2000,6 +2013,164 @@ async fn dev_proxy_inner(
         .map_err(ApiError::internal)?;
 
     Ok(preview::proxy::into_axum_response(resp))
+}
+
+// --- WebContainer handler ---
+
+#[derive(Debug, Deserialize)]
+struct WebContainerQuery {
+    path: String,
+}
+
+async fn get_webcontainer_files(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<WebContainerQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let tree = webcontainer::get_file_tree(&query.path)
+        .await
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(tree))
+}
+
+// --- Transcription handlers ---
+
+#[derive(Debug, Deserialize)]
+struct TranscribeHealthQuery {
+    provider: Option<String>,
+}
+
+async fn transcribe_health(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<TranscribeHealthQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let health = transcribe::health_check(query.provider.as_deref())
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::to_value(health).unwrap_or_default()))
+}
+
+async fn transcribe_audio(
+    Extension(_user): Extension<AuthenticatedUser>,
+    mut multipart: axum_extra::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    let mut audio_data = None;
+    let mut filename = "audio.webm".to_string();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "file" {
+            if let Some(fname) = field.file_name() {
+                filename = fname.to_string();
+            }
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("Read error: {e}")))?;
+            if data.len() > 25 * 1024 * 1024 {
+                return Err(ApiError::bad_request("Audio exceeds 25MB limit"));
+            }
+            audio_data = Some(data.to_vec());
+        }
+    }
+
+    let data = audio_data.ok_or_else(|| ApiError::bad_request("No audio file provided"))?;
+    let result = transcribe::transcribe(data, &filename, None)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+
+// --- Screenshot handlers ---
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotInput {
+    selector: Option<String>,
+    full_page: Option<bool>,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+async fn take_preview_screenshot(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<ScreenshotInput>,
+) -> Result<Json<Value>, ApiError> {
+    let url = format!("http://localhost:{port}");
+    let result = screenshots::take_screenshot(
+        &url,
+        input.selector.as_deref(),
+        input.full_page.unwrap_or(false),
+        input.width,
+        input.height,
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+
+async fn take_element_screenshot(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<ScreenshotInput>,
+) -> Result<Json<Value>, ApiError> {
+    let selector = input
+        .selector
+        .ok_or_else(|| ApiError::bad_request("selector is required"))?;
+    let url = format!("http://localhost:{port}");
+    let result = screenshots::take_screenshot(
+        &url,
+        Some(&selector),
+        false,
+        input.width,
+        input.height,
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+
+async fn list_screenshots_handler(
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let list = screenshots::list_screenshots()
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "screenshots": list })))
+}
+
+async fn get_screenshot_handler(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(filename): Path<String>,
+) -> Result<axum::response::Response, ApiError> {
+    let data = screenshots::get_screenshot(&filename)
+        .await
+        .map_err(|e| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: e,
+        })?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/png")], data).into_response())
+}
+
+async fn delete_screenshot_handler(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(filename): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let deleted = screenshots::delete_screenshot(&filename)
+        .await
+        .map_err(ApiError::internal)?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Screenshot not found".to_string(),
+        })
+    }
 }
 
 // --- Process handlers ---

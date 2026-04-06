@@ -18,7 +18,7 @@ native-tls.workspace = true
 portable-pty.workspace = true
 rand = "0.9"
 regex-lite = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 sysinfo = "0.33"
 url = "2"
 # webauthn-rs requires OpenSSL; enable on Linux deployment
