@@ -59,13 +59,35 @@ fn build_desktop_backend_path() -> Option<String> {
 
 fn spawn_backend() -> Result<Child> {
   let repo_root = resolve_repo_root()?;
+
+  // Prefer Rust backend if binary exists
+  let rust_binary = find_rust_binary(&repo_root);
+  if let Some(rust_bin) = rust_binary {
+    eprintln!("[tauri] Starting Rust backend: {}", rust_bin.display());
+    return Command::new(&rust_bin)
+      .env("HOST", DESKTOP_HOST)
+      .env("PORT", DESKTOP_PORT.to_string())
+      .env("TERMINAL_V4_DESKTOP", "true")
+      .env("TERMINAL_V4_SHARE_MODE", "off")
+      .stdout(Stdio::inherit())
+      .stderr(Stdio::inherit())
+      .stdin(Stdio::null())
+      .spawn()
+      .map_err(|err| io_error(format!("Failed to launch Rust backend: {err}")));
+  }
+
+  // Fallback to Node backend
   let backend_dir = repo_root.join("backend");
   let backend_entry = backend_dir.join("dist").join("index.js");
 
   if !backend_entry.exists() {
-    return Err(io_error("backend/dist/index.js is missing. Run npm run desktop:predev first."));
+    return Err(io_error(
+      "No backend found. Either build the Rust backend (cargo build -p terminal-v4-api) \
+       or the Node backend (cd backend && npm run build)."
+    ));
   }
 
+  eprintln!("[tauri] Starting Node backend: {}", backend_entry.display());
   let mut command = Command::new("node");
   command
     .arg("--enable-source-maps")
@@ -85,7 +107,23 @@ fn spawn_backend() -> Result<Child> {
 
   command
     .spawn()
-    .map_err(|err| io_error(format!("Failed to launch backend process: {err}")))
+    .map_err(|err| io_error(format!("Failed to launch Node backend: {err}")))
+}
+
+fn find_rust_binary(repo_root: &PathBuf) -> Option<PathBuf> {
+  let binary_name = if cfg!(windows) {
+    "terminal-v4-api.exe"
+  } else {
+    "terminal-v4-api"
+  };
+
+  // Check release first, then debug
+  let candidates = [
+    repo_root.join("rust").join("target").join("release").join(binary_name),
+    repo_root.join("rust").join("target").join("debug").join(binary_name),
+  ];
+
+  candidates.into_iter().find(|path| path.exists())
 }
 
 fn wait_for_backend() -> Result<()> {

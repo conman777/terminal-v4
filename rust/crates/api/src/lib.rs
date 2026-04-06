@@ -144,7 +144,6 @@ pub fn app(state: AppState) -> Router {
             "/api/projects/scan-dirs",
             get(list_project_scan_dirs).post(add_project_scan_dir),
         )
-        .route("/api/preview/active-ports", get(get_active_preview_ports))
         .route("/api/fs/list", get(list_filesystem_folders))
         .route("/api/settings", get(get_settings).patch(update_settings))
         .route("/api/system/preview-config", get(get_preview_config))
@@ -186,7 +185,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/preview/external/logs", get(get_external_logs).post(ingest_external_log).delete(clear_external_logs))
         // Dev proxy routes
         .route("/api/dev-proxy/{port}", get(dev_proxy_handler))
-        .route("/api/dev-proxy/{port}/*rest", get(dev_proxy_handler_path).post(dev_proxy_handler_path).put(dev_proxy_handler_path).delete(dev_proxy_handler_path))
+        .route("/api/dev-proxy/{port}/{*rest}", get(dev_proxy_handler_path).post(dev_proxy_handler_path).put(dev_proxy_handler_path).delete(dev_proxy_handler_path))
         // Process routes
         .route("/api/processes", get(list_processes))
         .route("/api/processes/start", post(start_process))
@@ -1213,10 +1212,6 @@ async fn get_preview_config() -> Json<Value> {
         "cookiePolicy": cookie_policy,
         "rewriteScope": rewrite_scope
     }))
-}
-
-async fn get_active_preview_ports() -> Json<Value> {
-    Json(json!({ "ports": [] }))
 }
 
 async fn list_filesystem_folders(
