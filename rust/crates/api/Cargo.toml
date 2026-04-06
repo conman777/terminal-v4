@@ -11,11 +11,14 @@ axum.workspace = true
 axum-extra = { version = "0.10", features = ["multipart"] }
 bcrypt.workspace = true
 hex.workspace = true
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 jsonwebtoken.workspace = true
 native-tls.workspace = true
 portable-pty.workspace = true
 rand = "0.9"
 regex-lite = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
 sysinfo = "0.33"
 url = "2"
 # webauthn-rs requires OpenSSL; enable on Linux deployment

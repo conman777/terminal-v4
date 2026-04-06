@@ -3,6 +3,7 @@ mod external_auth;
 pub mod files;
 pub mod git;
 pub mod passkey;
+pub mod preview;
 pub mod processes;
 mod state;
 mod structured;
@@ -176,6 +177,16 @@ pub fn app(state: AppState) -> Router {
         .route("/api/auth/passkey/register/complete", post(passkey_register_complete))
         .route("/api/auth/passkey/credentials", get(passkey_list_credentials))
         .route("/api/auth/passkey/credentials/{id}", delete(passkey_delete_credential))
+        // Preview routes
+        .route("/api/preview/{port}/cookies", get(get_preview_cookies).delete(clear_preview_cookies))
+        .route("/api/preview/{port}/logs", get(get_preview_logs).post(ingest_preview_log).delete(clear_preview_logs))
+        .route("/api/preview/logs", get(list_preview_log_ports))
+        .route("/api/preview/active-ports", get(get_active_preview_ports_scan))
+        .route("/api/proxy-external", get(proxy_external_url))
+        .route("/api/preview/external/logs", get(get_external_logs).post(ingest_external_log).delete(clear_external_logs))
+        // Dev proxy routes
+        .route("/api/dev-proxy/{port}", get(dev_proxy_handler))
+        .route("/api/dev-proxy/{port}/*rest", get(dev_proxy_handler_path).post(dev_proxy_handler_path).put(dev_proxy_handler_path).delete(dev_proxy_handler_path))
         // Process routes
         .route("/api/processes", get(list_processes))
         .route("/api/processes/start", post(start_process))
@@ -1796,6 +1807,189 @@ async fn download_directory(
         data,
     )
         .into_response())
+}
+
+// --- Preview handlers ---
+
+async fn get_preview_cookies(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> Result<Json<Value>, ApiError> {
+    let cookies = state.cookie_store().list_cookies(&user.user_id, port).await;
+    Ok(Json(json!({ "cookies": cookies })))
+}
+
+async fn clear_preview_cookies(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> StatusCode {
+    state.cookie_store().clear_cookies(&user.user_id, port).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn get_preview_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Query(query): Query<PreviewLogQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let logs = state
+        .preview_log_store()
+        .get_logs(
+            port,
+            query.log_type.as_deref(),
+            query.level.as_deref(),
+            query.since,
+            query.limit,
+        )
+        .await;
+    Ok(Json(json!({ "logs": logs })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewLogQuery {
+    #[serde(rename = "type")]
+    log_type: Option<String>,
+    level: Option<String>,
+    since: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn ingest_preview_log(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+    Json(entries): Json<Vec<preview::logs::PreviewLogEntry>>,
+) -> StatusCode {
+    for entry in entries {
+        state.preview_log_store().add_log(port, entry).await;
+    }
+    StatusCode::OK
+}
+
+async fn clear_preview_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> StatusCode {
+    state.preview_log_store().clear_logs(port).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn list_preview_log_ports(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let ports = state.preview_log_store().active_ports().await;
+    let entries: Vec<Value> = ports
+        .into_iter()
+        .map(|(port, count)| json!({ "port": port, "logCount": count }))
+        .collect();
+    Ok(Json(json!({ "ports": entries })))
+}
+
+async fn get_active_preview_ports_scan(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let ports = state.port_scanner().get_active_ports().await;
+    Ok(Json(json!({ "ports": ports })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ExternalProxyQuery {
+    url: String,
+}
+
+async fn proxy_external_url(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<ExternalProxyQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let resp = preview::external_proxy::proxy_external(&query.url)
+        .await
+        .map_err(ApiError::bad_request)?;
+
+    Ok((
+        StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY),
+        [(axum::http::header::CONTENT_TYPE, resp.content_type)],
+        resp.body,
+    )
+        .into_response())
+}
+
+// External logs share the same store on a virtual port (65535)
+const EXTERNAL_LOG_PORT: u16 = 65535;
+
+async fn get_external_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let logs = state
+        .preview_log_store()
+        .get_logs(EXTERNAL_LOG_PORT, None, None, None, None)
+        .await;
+    Ok(Json(json!({ "logs": logs })))
+}
+
+async fn ingest_external_log(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(entries): Json<Vec<preview::logs::PreviewLogEntry>>,
+) -> StatusCode {
+    for entry in entries {
+        state.preview_log_store().add_log(EXTERNAL_LOG_PORT, entry).await;
+    }
+    StatusCode::OK
+}
+
+async fn clear_external_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> StatusCode {
+    state.preview_log_store().clear_logs(EXTERNAL_LOG_PORT).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn dev_proxy_handler(
+    State(_state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    dev_proxy_inner(port, "/", request).await
+}
+
+async fn dev_proxy_handler_path(
+    State(_state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path((port, rest)): Path<(u16, String)>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let path = format!("/{rest}");
+    dev_proxy_inner(port, &path, request).await
+}
+
+async fn dev_proxy_inner(
+    port: u16,
+    path: &str,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let method = request.method().as_str().to_string();
+    let headers = request.headers().clone();
+    let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+        .await
+        .ok()
+        .map(|b| b.to_vec());
+
+    let api_origin = std::env::var("API_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:3020".to_string());
+
+    let resp = preview::dev_proxy::proxy_dev_request(port, path, &method, &headers, body, &api_origin)
+        .await
+        .map_err(ApiError::internal)?;
+
+    Ok(preview::proxy::into_axum_response(resp))
 }
 
 // --- Process handlers ---

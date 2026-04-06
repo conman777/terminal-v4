@@ -35,6 +35,9 @@ struct AppStateInner {
     structured_session_manager: StructuredSessionManager,
     process_manager: crate::processes::ProcessManager,
     stats_collector: Arc<crate::system_stats::SystemStatsCollector>,
+    cookie_store: crate::preview::cookie_jar::CookieStore,
+    port_scanner: crate::preview::port_scan::PortScanner,
+    preview_log_store: crate::preview::logs::PreviewLogStore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +170,9 @@ impl AppState {
                 structured_session_manager,
                 process_manager: crate::processes::ProcessManager::new(),
                 stats_collector: Arc::new(crate::system_stats::SystemStatsCollector::new()),
+                cookie_store: crate::preview::cookie_jar::CookieStore::new(),
+                port_scanner: crate::preview::port_scan::PortScanner::new(),
+                preview_log_store: crate::preview::logs::PreviewLogStore::new(),
                 config,
                 db: Mutex::new(connection),
                 file_lock: Mutex::new(()),
@@ -183,6 +189,18 @@ impl AppState {
 
     pub fn terminal_manager(&self) -> TerminalManager {
         self.inner.terminal_manager.clone()
+    }
+
+    pub fn cookie_store(&self) -> &crate::preview::cookie_jar::CookieStore {
+        &self.inner.cookie_store
+    }
+
+    pub fn port_scanner(&self) -> &crate::preview::port_scan::PortScanner {
+        &self.inner.port_scanner
+    }
+
+    pub fn preview_log_store(&self) -> &crate::preview::logs::PreviewLogStore {
+        &self.inner.preview_log_store
     }
 
     pub fn process_manager(&self) -> &crate::processes::ProcessManager {
