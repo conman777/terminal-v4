@@ -2,8 +2,10 @@ mod auth;
 mod external_auth;
 pub mod files;
 pub mod git;
+pub mod processes;
 mod state;
 mod structured;
+pub mod system_stats;
 mod terminal;
 pub mod tmux;
 pub mod turn_detector;
@@ -168,6 +170,17 @@ pub fn app(state: AppState) -> Router {
         .route("/api/files/unzip", post(unzip_file))
         .route("/api/files/screenshot", post(upload_screenshot))
         .route("/api/fs/download", get(download_directory))
+        // Process routes
+        .route("/api/processes", get(list_processes))
+        .route("/api/processes/start", post(start_process))
+        .route("/api/processes/stop", post(stop_process))
+        .route("/api/process-logs/{pid}", get(get_process_logs).delete(clear_process_logs))
+        .route("/api/process-logs", get(list_all_processes))
+        .route("/api/preview/{port}/process-logs", get(get_process_logs_by_port))
+        // System stats routes
+        .route("/api/system/stats", get(get_system_stats))
+        .route("/api/system/stats/history", get(get_stats_history))
+        .route("/api/system/rebuild", post(trigger_rebuild))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     Router::new()
@@ -1711,6 +1724,157 @@ async fn download_directory(
         data,
     )
         .into_response())
+}
+
+// --- Process handlers ---
+
+async fn list_processes(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let processes = state.process_manager().list_active().await;
+    Ok(Json(json!({ "processes": processes })))
+}
+
+#[derive(Debug, Deserialize)]
+struct StartProcessInput {
+    cwd: String,
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+async fn start_process(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<StartProcessInput>,
+) -> Result<Json<Value>, ApiError> {
+    let args: Vec<&str> = input.args.iter().map(|s| s.as_str()).collect();
+    let info = state
+        .process_manager()
+        .start(&input.cwd, &input.command, &args)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "process": info })))
+}
+
+#[derive(Debug, Deserialize)]
+struct StopProcessInput {
+    pid: u32,
+}
+
+async fn stop_process(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<StopProcessInput>,
+) -> Result<Json<Value>, ApiError> {
+    let stopped = state
+        .process_manager()
+        .stop(input.pid)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "stopped": stopped })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessLogQuery {
+    since: Option<i64>,
+}
+
+async fn get_process_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(pid): Path<u32>,
+    Query(query): Query<ProcessLogQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let logs = state
+        .process_manager()
+        .get_logs_by_pid(pid, query.since)
+        .await
+        .unwrap_or_default();
+    Ok(Json(json!({ "logs": logs })))
+}
+
+async fn clear_process_logs(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(pid): Path<u32>,
+) -> StatusCode {
+    state.process_manager().clear_logs(pid).await;
+    StatusCode::NO_CONTENT
+}
+
+async fn list_all_processes(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let processes = state.process_manager().list_all().await;
+    Ok(Json(json!({ "processes": processes })))
+}
+
+async fn get_process_logs_by_port(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Query(query): Query<ProcessLogQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let logs = state
+        .process_manager()
+        .get_logs_by_port(port, query.since)
+        .await
+        .unwrap_or_default();
+    Ok(Json(json!({ "logs": logs })))
+}
+
+// --- System stats handlers ---
+
+async fn get_system_stats(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let stats = state.stats_collector().get_current().await;
+    Ok(Json(json!({ "stats": stats })))
+}
+
+#[derive(Debug, Deserialize)]
+struct StatsHistoryQuery {
+    range: Option<String>,
+}
+
+async fn get_stats_history(
+    State(state): State<AppState>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<StatsHistoryQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let range = query.range.as_deref().unwrap_or("24h");
+    let history = state.stats_collector().get_history(range).await;
+    Ok(Json(json!({ "history": history })))
+}
+
+async fn trigger_rebuild(
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let output = tokio::process::Command::new(if cfg!(windows) {
+        "powershell"
+    } else {
+        "bash"
+    })
+    .args(if cfg!(windows) {
+        vec!["-File", "rebuild.ps1"]
+    } else {
+        vec!["rebuild.sh"]
+    })
+    .output()
+    .await
+    .map_err(|e| ApiError::internal(format!("Rebuild failed: {e}")))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok(Json(json!({
+        "success": output.status.success(),
+        "stdout": stdout,
+        "stderr": stderr
+    })))
 }
 
 fn validate_string(

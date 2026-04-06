@@ -33,6 +33,8 @@ struct AppStateInner {
     external_auth: Option<Arc<dyn ExternalAuthProvider>>,
     terminal_manager: TerminalManager,
     structured_session_manager: StructuredSessionManager,
+    process_manager: crate::processes::ProcessManager,
+    stats_collector: Arc<crate::system_stats::SystemStatsCollector>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +165,8 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 terminal_manager: TerminalManager::new(config.clone()),
                 structured_session_manager,
+                process_manager: crate::processes::ProcessManager::new(),
+                stats_collector: Arc::new(crate::system_stats::SystemStatsCollector::new()),
                 config,
                 db: Mutex::new(connection),
                 file_lock: Mutex::new(()),
@@ -179,6 +183,14 @@ impl AppState {
 
     pub fn terminal_manager(&self) -> TerminalManager {
         self.inner.terminal_manager.clone()
+    }
+
+    pub fn process_manager(&self) -> &crate::processes::ProcessManager {
+        &self.inner.process_manager
+    }
+
+    pub fn stats_collector(&self) -> Arc<crate::system_stats::SystemStatsCollector> {
+        self.inner.stats_collector.clone()
     }
 
     pub fn structured_session_manager(&self) -> StructuredSessionManager {
