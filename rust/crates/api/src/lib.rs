@@ -2,6 +2,7 @@ mod auth;
 mod external_auth;
 pub mod files;
 pub mod git;
+pub mod passkey;
 pub mod processes;
 mod state;
 mod structured;
@@ -170,6 +171,11 @@ pub fn app(state: AppState) -> Router {
         .route("/api/files/unzip", post(unzip_file))
         .route("/api/files/screenshot", post(upload_screenshot))
         .route("/api/fs/download", get(download_directory))
+        // Passkey routes (authed)
+        .route("/api/auth/passkey/register/begin", post(passkey_register_begin))
+        .route("/api/auth/passkey/register/complete", post(passkey_register_complete))
+        .route("/api/auth/passkey/credentials", get(passkey_list_credentials))
+        .route("/api/auth/passkey/credentials/{id}", delete(passkey_delete_credential))
         // Process routes
         .route("/api/processes", get(list_processes))
         .route("/api/processes/start", post(start_process))
@@ -192,6 +198,8 @@ pub fn app(state: AppState) -> Router {
             "/api/structured/sessions/{id}/ws",
             get(connect_structured_ws),
         )
+        .route("/api/auth/passkey/authenticate/begin", post(passkey_auth_begin))
+        .route("/api/auth/passkey/authenticate/complete", post(passkey_auth_complete))
         .route("/api/terminal/{id}/ws", get(connect_terminal_ws))
         .route(
             "/api/terminal/{id}/stream",
@@ -1522,6 +1530,70 @@ fn iso_timestamp() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339 formatting should succeed")
+}
+
+// --- Passkey handlers ---
+// WebAuthn challenge endpoints return 501 until webauthn-rs is enabled (requires OpenSSL).
+// List/delete endpoints work against the DB directly.
+
+async fn passkey_register_begin(
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
+    )
+}
+
+async fn passkey_register_complete(
+    Extension(_user): Extension<AuthenticatedUser>,
+) -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
+    )
+}
+
+async fn passkey_auth_begin() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
+    )
+}
+
+async fn passkey_auth_complete() -> impl IntoResponse {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
+    )
+}
+
+async fn passkey_list_credentials(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let conn = state.lock_db().map_err(ApiError::internal)?;
+    let creds = passkey::db::list_credentials(&conn, &user.user_id)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "credentials": creds })))
+}
+
+async fn passkey_delete_credential(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(credential_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let conn = state.lock_db().map_err(ApiError::internal)?;
+    let deleted = passkey::db::delete_credential(&conn, &user.user_id, &credential_id)
+        .map_err(ApiError::internal)?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Credential not found".to_string(),
+        })
+    }
 }
 
 // --- File handlers ---

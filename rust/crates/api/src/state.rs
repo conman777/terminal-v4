@@ -888,6 +888,23 @@ impl AppState {
                 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
                 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
 
+                CREATE TABLE IF NOT EXISTS passkey_credentials (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    credential_id TEXT NOT NULL UNIQUE,
+                    public_key BLOB NOT NULL,
+                    counter INTEGER NOT NULL DEFAULT 0,
+                    device_type TEXT NOT NULL DEFAULT 'singleDevice',
+                    backed_up INTEGER NOT NULL DEFAULT 0,
+                    transports TEXT,
+                    name TEXT,
+                    created_at TEXT NOT NULL,
+                    last_used_at TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_passkey_credentials_user_id ON passkey_credentials(user_id);
+                CREATE INDEX IF NOT EXISTS idx_passkey_credentials_credential_id ON passkey_credentials(credential_id);
+
                 CREATE TABLE IF NOT EXISTS api_key_vault (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -1125,7 +1142,7 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
-    fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+    pub fn lock_db(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
         self.inner
             .db
             .lock()

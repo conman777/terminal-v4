@@ -17,6 +17,10 @@ portable-pty.workspace = true
 rand = "0.9"
 regex-lite = "0.1"
 sysinfo = "0.33"
+url = "2"
+# webauthn-rs requires OpenSSL; enable on Linux deployment
+# webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+# webauthn-rs-proto = "0.5"
 postgres-native-tls.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
