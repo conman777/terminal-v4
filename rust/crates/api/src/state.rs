@@ -650,6 +650,88 @@ impl AppState {
         Ok(true)
     }
 
+    // --- Vault ---
+
+    pub fn list_vault_keys(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<Vec<crate::vault::VaultEntry>, String> {
+        let connection = self.lock_db()?;
+        let mut stmt = connection
+            .prepare("SELECT id, key_name, key_value, created_at FROM api_key_vault WHERE user_id = ? ORDER BY created_at")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([&user.user_id], |row| {
+                Ok(crate::vault::VaultEntry {
+                    id: row.get(0)?,
+                    key_name: row.get(1)?,
+                    key_value: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row.map_err(|e| e.to_string())?);
+        }
+        Ok(entries)
+    }
+
+    pub fn add_vault_key(
+        &self,
+        user: &AuthenticatedUser,
+        id: &str,
+        key_name: &str,
+        key_value: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let connection = self.lock_db()?;
+        connection
+            .execute(
+                "INSERT INTO api_key_vault (id, user_id, key_name, key_value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, user.user_id, key_name, key_value, created_at],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn get_vault_key(
+        &self,
+        user: &AuthenticatedUser,
+        key_id: &str,
+    ) -> Result<Option<crate::vault::VaultEntry>, String> {
+        let connection = self.lock_db()?;
+        let mut stmt = connection
+            .prepare("SELECT id, key_name, key_value, created_at FROM api_key_vault WHERE id = ? AND user_id = ?")
+            .map_err(|e| e.to_string())?;
+        let result = stmt
+            .query_row(rusqlite::params![key_id, user.user_id], |row| {
+                Ok(crate::vault::VaultEntry {
+                    id: row.get(0)?,
+                    key_name: row.get(1)?,
+                    key_value: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })
+            .ok();
+        Ok(result)
+    }
+
+    pub fn delete_vault_key(
+        &self,
+        user: &AuthenticatedUser,
+        key_id: &str,
+    ) -> Result<bool, String> {
+        let connection = self.lock_db()?;
+        let count = connection
+            .execute(
+                "DELETE FROM api_key_vault WHERE id = ? AND user_id = ?",
+                rusqlite::params![key_id, user.user_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(count > 0)
+    }
+
     pub fn list_terminal_sessions(
         &self,
         user: &AuthenticatedUser,
@@ -793,6 +875,15 @@ impl AppState {
 
                 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
                 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
+
+                CREATE TABLE IF NOT EXISTS api_key_vault (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    key_name TEXT NOT NULL,
+                    key_value TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, key_name)
+                );
                 ",
             )
             .map_err(|error| error.to_string())

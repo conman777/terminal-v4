@@ -1,11 +1,13 @@
 mod auth;
 mod external_auth;
+pub mod files;
 pub mod git;
 mod state;
 mod structured;
 mod terminal;
 pub mod tmux;
 pub mod turn_detector;
+pub mod vault;
 
 use auth::{authenticate_token, require_auth, AuthenticatedUser};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -149,6 +151,23 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/notes", get(list_notes).post(create_note))
         .route("/api/notes/{id}", put(update_note).delete(delete_note))
+        // Vault routes
+        .route("/api/vault", get(list_vault_keys).post(add_vault_key))
+        .route(
+            "/api/vault/{id}/reveal",
+            get(reveal_vault_key),
+        )
+        .route("/api/vault/{id}", delete(delete_vault_key))
+        // File routes
+        .route("/api/files/list", get(list_files))
+        .route("/api/files/mkdir", post(mkdir))
+        .route("/api/files/upload", post(upload_file))
+        .route("/api/files/download", get(download_file))
+        .route("/api/files/delete", post(delete_file))
+        .route("/api/files/rename", post(rename_file))
+        .route("/api/files/unzip", post(unzip_file))
+        .route("/api/files/screenshot", post(upload_screenshot))
+        .route("/api/fs/download", get(download_directory))
         .layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     Router::new()
@@ -1381,6 +1400,317 @@ async fn delete_note(
             message: "Note not found".to_string(),
         })
     }
+}
+
+// --- Vault handlers ---
+
+async fn list_vault_keys(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let encryption_key = vault_encryption_key();
+    let entries = state
+        .list_vault_keys(&user)
+        .map_err(ApiError::internal)?;
+    let masked: Vec<Value> = entries
+        .into_iter()
+        .map(|e| {
+            let display_value = vault::decrypt_secret(&e.key_value, &encryption_key)
+                .map(|v| vault::mask_key(&v))
+                .unwrap_or_else(|_| vault::mask_key(&e.key_value));
+            json!({
+                "id": e.id,
+                "keyName": e.key_name,
+                "keyValue": display_value,
+                "createdAt": e.created_at
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "keys": masked })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddVaultKeyInput {
+    key_name: String,
+    key_value: String,
+}
+
+async fn add_vault_key(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<AddVaultKeyInput>,
+) -> Result<Json<Value>, ApiError> {
+    validate_string(&input.key_name, 1, 100, "keyName")?;
+    validate_string(&input.key_value, 1, 10000, "keyValue")?;
+    let encryption_key = vault_encryption_key();
+    let encrypted = vault::encrypt_secret(&input.key_value, &encryption_key)
+        .map_err(ApiError::internal)?;
+    let id = Uuid::new_v4().to_string();
+    let now = iso_timestamp();
+    state
+        .add_vault_key(&user, &id, input.key_name.trim(), &encrypted, &now)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "id": id,
+        "keyName": input.key_name.trim(),
+        "keyValue": vault::mask_key(&input.key_value),
+        "createdAt": now
+    })))
+}
+
+async fn reveal_vault_key(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(key_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let entry = state
+        .get_vault_key(&user, &key_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Key not found".to_string(),
+        })?;
+    let encryption_key = vault_encryption_key();
+    let decrypted = vault::decrypt_secret(&entry.key_value, &encryption_key)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "id": entry.id,
+        "keyName": entry.key_name,
+        "keyValue": decrypted,
+        "createdAt": entry.created_at
+    })))
+}
+
+async fn delete_vault_key(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(key_id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let deleted = state
+        .delete_vault_key(&user, &key_id)
+        .map_err(ApiError::internal)?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Key not found".to_string(),
+        })
+    }
+}
+
+fn vault_encryption_key() -> String {
+    std::env::var("VAULT_ENCRYPTION_KEY")
+        .unwrap_or_else(|_| "dev-vault-key-change-in-production".to_string())
+}
+
+fn iso_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("rfc3339 formatting should succeed")
+}
+
+// --- File handlers ---
+
+#[derive(Debug, Deserialize)]
+struct FilePathQuery {
+    path: String,
+}
+
+async fn list_files(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entries = files::list_directory(&query.path)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "entries": entries })))
+}
+
+#[derive(Debug, Deserialize)]
+struct MkdirInput {
+    path: String,
+}
+
+async fn mkdir(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<MkdirInput>,
+) -> Result<StatusCode, ApiError> {
+    files::create_directory(&input.path)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(StatusCode::CREATED)
+}
+
+async fn upload_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    mut multipart: axum_extra::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    let mut file_path = None;
+    let mut file_data = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "path" {
+            file_path = Some(
+                field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(format!("Failed to read path: {e}")))?,
+            );
+        } else if name == "file" {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("Failed to read file: {e}")))?;
+            if data.len() > 100 * 1024 * 1024 {
+                return Err(ApiError::bad_request("File exceeds 100MB limit"));
+            }
+            file_data = Some(data);
+        }
+    }
+
+    let path = file_path.ok_or_else(|| ApiError::bad_request("Missing path field"))?;
+    let data = file_data.ok_or_else(|| ApiError::bad_request("Missing file field"))?;
+
+    files::write_file(&path, &data)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "success": true, "path": path })))
+}
+
+async fn download_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let data = tokio::fs::read(&query.path)
+        .await
+        .map_err(|e| ApiError::internal(format!("Failed to read file: {e}")))?;
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        data,
+    )
+        .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct DeleteFileInput {
+    path: String,
+}
+
+async fn delete_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<DeleteFileInput>,
+) -> Result<StatusCode, ApiError> {
+    files::delete_path(&input.path)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct RenameInput {
+    from: String,
+    to: String,
+}
+
+async fn rename_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<RenameInput>,
+) -> Result<StatusCode, ApiError> {
+    files::rename_path(&input.from, &input.to)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct UnzipInput {
+    path: String,
+    target: String,
+}
+
+async fn unzip_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<UnzipInput>,
+) -> Result<Json<Value>, ApiError> {
+    let count = files::extract_zip(&input.path, &input.target)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "extracted": count })))
+}
+
+async fn upload_screenshot(
+    Extension(_user): Extension<AuthenticatedUser>,
+    mut multipart: axum_extra::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    let mut file_path = None;
+    let mut file_data = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "path" {
+            file_path = Some(
+                field
+                    .text()
+                    .await
+                    .map_err(|e| ApiError::bad_request(format!("Failed to read path: {e}")))?,
+            );
+        } else if name == "file" {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| ApiError::bad_request(format!("Failed to read file: {e}")))?;
+            if data.len() > 10 * 1024 * 1024 {
+                return Err(ApiError::bad_request("Image exceeds 10MB limit"));
+            }
+            let mime = files::detect_image_mime(&data);
+            if mime.is_none() {
+                return Err(ApiError::bad_request("File is not a recognized image format"));
+            }
+            file_data = Some(data);
+        }
+    }
+
+    let path = file_path.ok_or_else(|| ApiError::bad_request("Missing path field"))?;
+    let data = file_data.ok_or_else(|| ApiError::bad_request("Missing file field"))?;
+
+    files::write_file(&path, &data)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "success": true, "path": path })))
+}
+
+async fn download_directory(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let data = tokio::task::spawn_blocking(move || files::create_zip_archive(&query.path))
+        .await
+        .map_err(|e| ApiError::internal(format!("ZIP task failed: {e}")))?
+        .map_err(ApiError::internal)?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/zip"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"download.zip\"",
+            ),
+        ],
+        data,
+    )
+        .into_response())
 }
 
 fn validate_string(
