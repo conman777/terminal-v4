@@ -13,6 +13,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = AppConfig::from_env();
     let state = ApiState::new(config.clone())?;
+    state
+        .terminal_manager()
+        .recover_orphaned_tmux_sessions()
+        .await;
     let listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
 
     tracing::info!(address = %config.bind_addr(), "Rust API listening");

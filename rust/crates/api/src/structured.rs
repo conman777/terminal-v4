@@ -237,11 +237,9 @@ impl StructuredSessionManager {
             return Ok(None);
         };
 
-        Ok(Some(
-            session
-                .thread
-                .unwrap_or_else(|| default_structured_thread(Some(session.cwd), &session.updated_at)),
-        ))
+        Ok(Some(session.thread.unwrap_or_else(|| {
+            default_structured_thread(Some(session.cwd), &session.updated_at)
+        })))
     }
 
     pub async fn update_thread(
@@ -264,10 +262,9 @@ impl StructuredSessionManager {
             if state.user_id != user_id {
                 return Ok(None);
             }
-            let mut thread = state
-                .thread
-                .clone()
-                .unwrap_or_else(|| default_structured_thread(Some(state.cwd.clone()), &state.updated_at));
+            let mut thread = state.thread.clone().unwrap_or_else(|| {
+                default_structured_thread(Some(state.cwd.clone()), &state.updated_at)
+            });
             apply_structured_thread_update(&mut thread, updates);
             state.updated_at = iso_timestamp();
             let updated_at = state.updated_at.clone();
@@ -534,10 +531,12 @@ impl StructuredSessionManager {
             } else {
                 snapshot.title.clone()
             };
-            let normalized_thread = snapshot
-                .thread
-                .clone()
-                .or_else(|| Some(default_structured_thread(Some(snapshot.cwd.clone()), &snapshot.updated_at)));
+            let normalized_thread = snapshot.thread.clone().or_else(|| {
+                Some(default_structured_thread(
+                    Some(snapshot.cwd.clone()),
+                    &snapshot.updated_at,
+                ))
+            });
             let (broadcaster, _) = broadcast::channel(256);
             loaded.insert(
                 snapshot.id.clone(),

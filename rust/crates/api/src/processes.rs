@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 const MAX_LOGS_PER_PROCESS: usize = 1000;
 const MAX_LOG_ENTRY_BYTES: usize = 50 * 1024;
@@ -22,11 +23,19 @@ pub struct ProcessInfo {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessLogEntry {
+    pub id: String,
+    pub timestamp: i64,
     pub stream: String,
     pub data: String,
-    pub ts: i64,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LogCursor {
+    pub timestamp: i64,
+    pub id: Option<String>,
+}
+
+#[derive(Clone)]
 pub struct ProcessManager {
     processes: Arc<Mutex<HashMap<u32, ManagedProcess>>>,
 }
@@ -164,7 +173,11 @@ impl ProcessManager {
         let procs = self.processes.lock().await;
         let proc = procs.get(&pid)?;
         let logs = if let Some(since) = since {
-            proc.logs.iter().filter(|l| l.ts > since).cloned().collect()
+            proc.logs
+                .iter()
+                .filter(|l| l.timestamp > since)
+                .cloned()
+                .collect()
         } else {
             proc.logs.clone()
         };
@@ -180,11 +193,60 @@ impl ProcessManager {
         let procs = self.processes.lock().await;
         let proc = procs.values().find(|p| p.info.port == Some(port))?;
         let logs = if let Some(since) = since {
-            proc.logs.iter().filter(|l| l.ts > since).cloned().collect()
+            proc.logs
+                .iter()
+                .filter(|l| l.timestamp > since)
+                .cloned()
+                .collect()
         } else {
             proc.logs.clone()
         };
         Some(logs)
+    }
+
+    pub async fn get_logs_by_port_after_cursor(
+        &self,
+        port: u16,
+        cursor: LogCursor,
+    ) -> Option<Vec<ProcessLogEntry>> {
+        let procs = self.processes.lock().await;
+        let proc = procs.values().find(|p| p.info.port == Some(port))?;
+
+        if cursor.timestamp <= 0 {
+            return Some(proc.logs.clone());
+        }
+
+        let mut result = Vec::new();
+        let mut matched_cursor = cursor.id.is_none();
+
+        for entry in &proc.logs {
+            if entry.timestamp < cursor.timestamp {
+                continue;
+            }
+            if entry.timestamp > cursor.timestamp {
+                result.push(entry.clone());
+                continue;
+            }
+            if matched_cursor {
+                result.push(entry.clone());
+                continue;
+            }
+            if cursor.id.as_deref() == Some(entry.id.as_str()) {
+                matched_cursor = true;
+            }
+        }
+
+        if !matched_cursor && cursor.id.is_some() {
+            return Some(
+                proc.logs
+                    .iter()
+                    .filter(|entry| entry.timestamp >= cursor.timestamp)
+                    .cloned()
+                    .collect(),
+            );
+        }
+
+        Some(result)
     }
 
     /// Get process info by port.
@@ -251,9 +313,10 @@ async fn read_stream(
         };
 
         let entry = ProcessLogEntry {
+            id: Uuid::new_v4().to_string(),
+            timestamp: now_millis(),
             stream: stream_name.to_string(),
             data: truncated,
-            ts: now_millis(),
         };
 
         let mut procs = processes.lock().await;
@@ -291,7 +354,10 @@ mod tests {
 
     #[test]
     fn detect_port_from_localhost() {
-        assert_eq!(detect_port("Listening on http://localhost:3000"), Some(3000));
+        assert_eq!(
+            detect_port("Listening on http://localhost:3000"),
+            Some(3000)
+        );
     }
 
     #[test]

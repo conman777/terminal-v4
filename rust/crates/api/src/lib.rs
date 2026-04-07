@@ -17,26 +17,47 @@ pub mod vault;
 pub mod webcontainer;
 
 use auth::{authenticate_token, require_auth, AuthenticatedUser};
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use state::{AppState, BookmarkUpdate, HistoryQuery, NoteUpdate, SettingsPatch};
+use std::convert::Infallible;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use structured::StructuredSessionManager;
 use terminal::{TerminalCreateOptions, TerminalSubscriptionEvent, ThreadUpdate};
 use terminal_v4_core::{HealthResponse, StructuredSessionSnapshot};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tower::ServiceExt as _;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
+use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 pub use state::AppState as ApiState;
+
+const ANONYMOUS_PREVIEW_SCOPE_ID: &str = "__preview_anonymous__";
+
+/// Maximum bytes buffered on a terminal WebSocket before dropping output and
+/// suggesting a resync.  Mirrors the TypeScript backend's
+/// `TERMINAL_WS_MAX_BUFFERED_BYTES` env-var (default 1 MB).
+fn terminal_ws_max_buffered_bytes() -> usize {
+    static CACHED: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        std::env::var("TERMINAL_WS_MAX_BUFFERED_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1_000_000)
+    })
+}
 
 #[derive(Debug)]
 struct ApiError {
@@ -122,9 +143,10 @@ pub fn app(state: AppState) -> Router {
             get(get_terminal_git_branches),
         )
         .route(
-            "/api/terminal/{id}/git-stats",
-            get(get_terminal_git_stats),
+            "/api/terminal/{id}/project-info",
+            get(get_terminal_project_info),
         )
+        .route("/api/terminal/{id}/git-stats", get(get_terminal_git_stats))
         .route(
             "/api/terminal/{id}/git-checkout",
             post(terminal_git_checkout),
@@ -159,10 +181,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/notes/{id}", put(update_note).delete(delete_note))
         // Vault routes
         .route("/api/vault", get(list_vault_keys).post(add_vault_key))
-        .route(
-            "/api/vault/{id}/reveal",
-            get(reveal_vault_key),
-        )
+        .route("/api/vault/{id}/reveal", get(reveal_vault_key))
         .route("/api/vault/{id}", delete(delete_vault_key))
         // File routes
         .route("/api/files/list", get(list_files))
@@ -174,38 +193,111 @@ pub fn app(state: AppState) -> Router {
         .route("/api/files/unzip", post(unzip_file))
         .route("/api/files/screenshot", post(upload_screenshot))
         .route("/api/fs/download", get(download_directory))
+        .route("/api/preview", get(get_preview_file))
         // Passkey routes (authed)
-        .route("/api/auth/passkey/register/begin", post(passkey_register_begin))
-        .route("/api/auth/passkey/register/complete", post(passkey_register_complete))
-        .route("/api/auth/passkey/credentials", get(passkey_list_credentials))
-        .route("/api/auth/passkey/credentials/{id}", delete(passkey_delete_credential))
+        .route(
+            "/api/auth/passkey/register/begin",
+            post(passkey_register_begin),
+        )
+        .route(
+            "/api/auth/passkey/register/complete",
+            post(passkey_register_complete),
+        )
+        .route(
+            "/api/auth/passkey/credentials",
+            get(passkey_list_credentials),
+        )
+        .route(
+            "/api/auth/passkey/credentials/{id}",
+            delete(passkey_delete_credential),
+        )
         // Preview routes
-        .route("/api/preview/{port}/cookies", get(get_preview_cookies).delete(clear_preview_cookies))
-        .route("/api/preview/{port}/logs", get(get_preview_logs).post(ingest_preview_log).delete(clear_preview_logs))
+        .route(
+            "/api/preview/{port}/cookies",
+            get(get_preview_cookies).delete(clear_preview_cookies),
+        )
+        .route(
+            "/api/preview/{port}/proxy-logs",
+            get(get_preview_proxy_logs).delete(clear_preview_proxy_logs),
+        )
+        .route(
+            "/api/preview/{port}/logs",
+            get(get_preview_logs)
+                .post(ingest_preview_log)
+                .delete(clear_preview_logs),
+        )
+        .route("/api/preview/{port}/log-stream", get(stream_preview_logs))
+        .route(
+            "/api/preview/{port}/storage",
+            get(get_preview_storage).post(update_preview_storage),
+        )
+        .route("/api/preview/{port}/evaluate", post(evaluate_preview))
         .route("/api/preview/logs", get(list_preview_log_ports))
-        .route("/api/preview/active-ports", get(get_active_preview_ports_scan))
+        .route(
+            "/api/preview/active-ports",
+            get(get_active_preview_ports_scan),
+        )
         .route("/api/proxy-external", get(proxy_external_url))
-        .route("/api/preview/external/logs", get(get_external_logs).post(ingest_external_log).delete(clear_external_logs))
+        .route(
+            "/api/preview/external/logs",
+            get(get_external_logs)
+                .post(ingest_external_log)
+                .delete(clear_external_logs),
+        )
         // Dev proxy routes
         .route("/api/dev-proxy/{port}", get(dev_proxy_handler))
-        .route("/api/dev-proxy/{port}/{*rest}", get(dev_proxy_handler_path).post(dev_proxy_handler_path).put(dev_proxy_handler_path).delete(dev_proxy_handler_path))
+        .route("/api/dev-proxy-ws/{port}", any(dev_proxy_ws_handler_root))
+        .route(
+            "/api/dev-proxy-ws/{port}/{*rest}",
+            any(dev_proxy_ws_handler_path),
+        )
+        .route(
+            "/api/dev-proxy/{port}/{*rest}",
+            get(dev_proxy_handler_path)
+                .post(dev_proxy_handler_path)
+                .put(dev_proxy_handler_path)
+                .delete(dev_proxy_handler_path),
+        )
         // Process routes
         .route("/api/processes", get(list_processes))
         .route("/api/processes/start", post(start_process))
         .route("/api/processes/stop", post(stop_process))
-        .route("/api/process-logs/{pid}", get(get_process_logs).delete(clear_process_logs))
+        .route(
+            "/api/process-logs/{pid}",
+            get(get_process_logs).delete(clear_process_logs),
+        )
         .route("/api/process-logs", get(list_all_processes))
-        .route("/api/preview/{port}/process-logs", get(get_process_logs_by_port))
+        .route(
+            "/api/preview/{port}/process-logs",
+            get(get_process_logs_by_port),
+        )
         // WebContainer
         .route("/api/webcontainer/files", get(get_webcontainer_files))
         // Transcription
         .route("/api/transcribe/health", get(transcribe_health))
         .route("/api/transcribe", post(transcribe_audio))
         // Screenshots
-        .route("/api/preview/{port}/screenshot", post(take_preview_screenshot))
-        .route("/api/preview/{port}/screenshot/element", post(take_element_screenshot))
+        .route(
+            "/api/preview/{port}/screenshot",
+            post(take_preview_screenshot),
+        )
+        .route(
+            "/api/preview/{port}/screenshot/element",
+            post(take_element_screenshot),
+        )
+        .route(
+            "/api/preview/{port}/recording/start",
+            post(start_preview_recording),
+        )
+        .route(
+            "/api/preview/recording/{recording_id}/stop",
+            post(stop_preview_recording),
+        )
         .route("/api/preview/screenshots", get(list_screenshots_handler))
-        .route("/api/preview/screenshots/{filename}", get(get_screenshot_handler).delete(delete_screenshot_handler))
+        .route(
+            "/api/preview/screenshots/{filename}",
+            get(get_screenshot_handler).delete(delete_screenshot_handler),
+        )
         // System stats routes
         .route("/api/system/stats", get(get_system_stats))
         .route("/api/system/stats/history", get(get_stats_history))
@@ -217,39 +309,143 @@ pub fn app(state: AppState) -> Router {
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh))
+        .route("/preview/{port}", any(preview_proxy_root))
+        .route("/preview/{port}/", any(preview_proxy_root))
+        .route("/preview/{port}/{*rest}", any(preview_proxy_path))
         .route(
             "/api/structured/sessions/{id}/ws",
             get(connect_structured_ws),
         )
-        .route("/api/auth/passkey/authenticate/begin", post(passkey_auth_begin))
-        .route("/api/auth/passkey/authenticate/complete", post(passkey_auth_complete))
-        .route("/api/terminal/{id}/ws", get(connect_terminal_ws))
         .route(
-            "/api/terminal/{id}/stream",
-            get(stream_terminal_session),
+            "/api/auth/passkey/authenticate/begin",
+            post(passkey_auth_begin),
         )
+        .route(
+            "/api/auth/passkey/authenticate/complete",
+            post(passkey_auth_complete),
+        )
+        .route("/api/terminal/{id}/ws", get(connect_terminal_ws))
+        .route("/api/terminal/{id}/stream", get(stream_terminal_session))
         .merge(protected)
-        .layer(cors)
         .with_state(state.clone());
 
     // Serve frontend static files with SPA fallback
-    let frontend_dir = state.config().data_dir
+    let frontend_dir = state
+        .config()
+        .data_dir
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.join("frontend").join("dist"))
         .unwrap_or_else(|| PathBuf::from("frontend/dist"));
 
-    if frontend_dir.exists() {
+    let router = if frontend_dir.exists() {
+        let fd = frontend_dir.clone();
+        let spa_fallback = tower::service_fn(move |request: axum::extract::Request| {
+            let fd = fd.clone();
+            async move {
+                let path = request.uri().path();
+
+                // API routes return proper 404 JSON (shouldn't normally reach here
+                // since API routes are registered above, but just in case)
+                if path.starts_with("/api/") {
+                    return Ok(axum::response::Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"error":"Not Found","message":"API route not found"}"#,
+                        ))
+                        .unwrap());
+                }
+
+                // Static assets with hashes should NOT fallback to index.html
+                // They're immutable - if missing, they're truly missing (stale cache)
+                if path.starts_with("/assets/") {
+                    return Ok(axum::response::Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from(
+                            r#"{"error":"Not Found","message":"Asset not found - please refresh the page"}"#,
+                        ))
+                        .unwrap());
+                }
+
+                // SPA fallback: serve index.html with no-cache headers
+                match tokio::fs::read(fd.join("index.html")).await {
+                    Ok(contents) => Ok(axum::response::Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/html")
+                        .header("cache-control", "no-cache, no-store, must-revalidate")
+                        .header("pragma", "no-cache")
+                        .header("expires", "0")
+                        .body(axum::body::Body::from(contents))
+                        .unwrap()),
+                    Err(_) => Ok(axum::response::Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(axum::body::Body::from("index.html not found"))
+                        .unwrap()),
+                }
+            }
+        });
         let serve_dir = tower_http::services::ServeDir::new(&frontend_dir)
-            .not_found_service(tower_http::services::ServeFile::new(frontend_dir.join("index.html")));
-        router.fallback_service(serve_dir)
+            .not_found_service(spa_fallback);
+        // Wrap the static file service with cache-control middleware
+        let static_handler = get(
+            |request: axum::extract::Request| async move {
+                let path = request.uri().path().to_string();
+                let mut response = serve_dir.oneshot(request).await.into_response();
+                // Set cache headers based on file type
+                if path.ends_with(".html") || path == "/" {
+                    let headers = response.headers_mut();
+                    headers.insert("cache-control", "no-cache, no-store, must-revalidate".parse().unwrap());
+                    headers.insert("pragma", "no-cache".parse().unwrap());
+                    headers.insert("expires", "0".parse().unwrap());
+                } else if response.status().is_success() {
+                    // JS/CSS/assets with hashes: cache for 1 year
+                    let headers = response.headers_mut();
+                    headers.insert("cache-control", "public, max-age=31536000, immutable".parse().unwrap());
+                }
+                response
+            },
+        );
+        router.fallback(static_handler)
     } else {
         router
-    }
+    };
+
+    router
+        .layer(middleware::from_fn_with_state(
+            state,
+            preview_host_middleware,
+        ))
+        .layer(cors)
 }
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse::ok())
+}
+
+async fn preview_host_middleware(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let Some(port) = preview_subdomain_port(request.headers()) else {
+        return next.run(request).await;
+    };
+
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
+    let (mut parts, body) = request.into_parts();
+    let ws = WebSocketUpgrade::from_request_parts(&mut parts, &state).await;
+    let request = axum::extract::Request::from_parts(parts, body);
+
+    match preview_subdomain_proxy_inner(state, port, path, request, ws).await {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
 }
 
 async fn register_disabled() -> impl IntoResponse {
@@ -960,6 +1156,29 @@ async fn get_terminal_git_branches(
     })))
 }
 
+async fn get_terminal_project_info(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let Some(project_info) = state
+        .terminal_manager()
+        .get_project_info(&user.user_id, &session_id)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Terminal session not found".to_string(),
+        });
+    };
+
+    Ok(Json(
+        serde_json::to_value(project_info)
+            .map_err(|error| ApiError::internal(error.to_string()))?,
+    ))
+}
+
 async fn update_terminal_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -1162,24 +1381,18 @@ async fn stream_terminal_session(
                         }
                     }
                     Ok(TerminalSubscriptionEvent::Closed) => {
-                        let _ = tx
-                            .send(Ok(Event::default().event("end").data("{}")))
-                            .await;
+                        let _ = tx.send(Ok(Event::default().event("end").data("{}"))).await;
                         break;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        let _ = tx
-                            .send(Ok(Event::default().event("end").data("{}")))
-                            .await;
+                        let _ = tx.send(Ok(Event::default().event("end").data("{}"))).await;
                         break;
                     }
                 }
             }
         } else {
-            let _ = tx
-                .send(Ok(Event::default().event("end").data("{}")))
-                .await;
+            let _ = tx.send(Ok(Event::default().event("end").data("{}"))).await;
         }
     });
 
@@ -1233,8 +1446,8 @@ async fn get_preview_config() -> Json<Value> {
     let rewrite_scope = std::env::var("PREVIEW_REWRITE_SCOPE").ok();
 
     Json(json!({
-        "subdomainBases": [],
-        "proxyHosts": [],
+        "subdomainBases": preview::subdomain_bases(),
+        "proxyHosts": preview::proxy_hosts(),
         "preferPathBased": default_mode == "path-first",
         "defaultMode": default_mode,
         "cookiePolicy": cookie_policy,
@@ -1464,9 +1677,7 @@ async fn list_vault_keys(
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
     let encryption_key = vault_encryption_key();
-    let entries = state
-        .list_vault_keys(&user)
-        .map_err(ApiError::internal)?;
+    let entries = state.list_vault_keys(&user).map_err(ApiError::internal)?;
     let masked: Vec<Value> = entries
         .into_iter()
         .map(|e| {
@@ -1499,8 +1710,8 @@ async fn add_vault_key(
     validate_string(&input.key_name, 1, 100, "keyName")?;
     validate_string(&input.key_value, 1, 10000, "keyValue")?;
     let encryption_key = vault_encryption_key();
-    let encrypted = vault::encrypt_secret(&input.key_value, &encryption_key)
-        .map_err(ApiError::internal)?;
+    let encrypted =
+        vault::encrypt_secret(&input.key_value, &encryption_key).map_err(ApiError::internal)?;
     let id = Uuid::new_v4().to_string();
     let now = iso_timestamp();
     state
@@ -1527,8 +1738,8 @@ async fn reveal_vault_key(
             message: "Key not found".to_string(),
         })?;
     let encryption_key = vault_encryption_key();
-    let decrypted = vault::decrypt_secret(&entry.key_value, &encryption_key)
-        .map_err(ApiError::internal)?;
+    let decrypted =
+        vault::decrypt_secret(&entry.key_value, &encryption_key).map_err(ApiError::internal)?;
     Ok(Json(json!({
         "id": entry.id,
         "keyName": entry.key_name,
@@ -1567,39 +1778,165 @@ fn iso_timestamp() -> String {
 }
 
 // --- Passkey handlers ---
-// WebAuthn challenge endpoints return 501 until webauthn-rs is enabled (requires OpenSSL).
-// List/delete endpoints work against the DB directly.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PasskeyRegisterCompleteInput {
+    credential: serde_json::Value,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PasskeyAuthBeginInput {
+    username: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PasskeyAuthCompleteInput {
+    username: String,
+    credential: serde_json::Value,
+}
 
 async fn passkey_register_begin(
-    Extension(_user): Extension<AuthenticatedUser>,
-) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
-    )
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let account = state
+        .get_user_public_by_id(&user.user_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "User not found".to_string(),
+        })?;
+    let existing = {
+        let conn = state.lock_db().map_err(ApiError::internal)?;
+        passkey::db::list_passkeys(&conn, &user.user_id).map_err(ApiError::internal)?
+    };
+    let options = state
+        .passkey_service()
+        .begin_registration(
+            &user.user_id,
+            &account.username,
+            &existing
+                .iter()
+                .map(|entry| entry.passkey.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(
+        serde_json::to_value(options).map_err(|error| ApiError::internal(error.to_string()))?,
+    ))
 }
 
 async fn passkey_register_complete(
-    Extension(_user): Extension<AuthenticatedUser>,
-) -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
-    )
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<PasskeyRegisterCompleteInput>,
+) -> Result<Json<Value>, ApiError> {
+    let credential: RegisterPublicKeyCredential = serde_json::from_value(input.credential)
+        .map_err(|_| ApiError::bad_request("Invalid credential payload"))?;
+    let passkey = state
+        .passkey_service()
+        .complete_registration(&user.user_id, credential)
+        .await
+        .map_err(ApiError::bad_request)?;
+    let conn = state.lock_db().map_err(ApiError::internal)?;
+    let saved =
+        passkey::db::create_credential(&conn, &user.user_id, &passkey, input.name.as_deref())
+            .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "id": saved.id,
+        "name": saved.name,
+        "credentialId": saved.credential_id,
+        "createdAt": saved.created_at,
+    })))
 }
 
-async fn passkey_auth_begin() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
-    )
+async fn passkey_auth_begin(
+    State(state): State<AppState>,
+    Json(input): Json<PasskeyAuthBeginInput>,
+) -> Result<Json<Value>, ApiError> {
+    let username = input.username.trim();
+    if username.is_empty() {
+        return Err(ApiError::bad_request("Username is required"));
+    }
+    let user = state
+        .get_user_public_by_username(username)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::bad_request("User not found"))?;
+    let passkeys = {
+        let conn = state.lock_db().map_err(ApiError::internal)?;
+        passkey::db::list_passkeys(&conn, &user.id).map_err(ApiError::internal)?
+    };
+    if passkeys.is_empty() {
+        return Err(ApiError::bad_request(
+            "No passkeys registered for this user",
+        ));
+    }
+    let options = state
+        .passkey_service()
+        .begin_authentication(
+            &user.id,
+            &passkeys
+                .iter()
+                .map(|entry| entry.passkey.clone())
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .map_err(ApiError::bad_request)?;
+    Ok(Json(
+        serde_json::to_value(options).map_err(|error| ApiError::internal(error.to_string()))?,
+    ))
 }
 
-async fn passkey_auth_complete() -> impl IntoResponse {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({ "error": "WebAuthn not available — enable webauthn-rs with OpenSSL" })),
+async fn passkey_auth_complete(
+    State(state): State<AppState>,
+    Json(input): Json<PasskeyAuthCompleteInput>,
+) -> Result<Json<terminal_v4_core::AuthResult>, ApiError> {
+    let username = input.username.trim();
+    if username.is_empty() {
+        return Err(ApiError::bad_request("Username is required"));
+    }
+    let user = state
+        .get_user_public_by_username(username)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "User not found".to_string(),
+        })?;
+    let credential: PublicKeyCredential = serde_json::from_value(input.credential)
+        .map_err(|_| ApiError::bad_request("Invalid credential payload"))?;
+    let auth_result = state
+        .passkey_service()
+        .complete_authentication(&user.id, credential)
+        .await
+        .map_err(|message| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message,
+        })?;
+    let credential_id =
+        passkey::db::lookup_credential_id(auth_result.cred_id()).map_err(ApiError::internal)?;
+    let conn = state.lock_db().map_err(ApiError::internal)?;
+    let mut stored = passkey::db::get_passkey_by_credential_id(&conn, &credential_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Credential not found".to_string(),
+        })?;
+    let _ = stored.passkey.update_credential(&auth_result);
+    passkey::db::update_credential_after_authentication(
+        &conn,
+        &stored.record.id,
+        &stored.passkey,
+        &iso_timestamp(),
     )
+    .map_err(ApiError::internal)?;
+    let auth_result = state
+        .issue_auth_result_for_public_user(user)
+        .map_err(ApiError::internal)?;
+    Ok(Json(auth_result))
 }
 
 async fn passkey_list_credentials(
@@ -1607,8 +1944,7 @@ async fn passkey_list_credentials(
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
     let conn = state.lock_db().map_err(ApiError::internal)?;
-    let creds = passkey::db::list_credentials(&conn, &user.user_id)
-        .map_err(ApiError::internal)?;
+    let creds = passkey::db::list_credentials(&conn, &user.user_id).map_err(ApiError::internal)?;
     Ok(Json(json!({ "credentials": creds })))
 }
 
@@ -1795,7 +2131,9 @@ async fn upload_screenshot(
             }
             let mime = files::detect_image_mime(&data);
             if mime.is_none() {
-                return Err(ApiError::bad_request("File is not a recognized image format"));
+                return Err(ApiError::bad_request(
+                    "File is not a recognized image format",
+                ));
             }
             file_data = Some(data);
         }
@@ -1834,13 +2172,47 @@ async fn download_directory(
 
 // --- Preview handlers ---
 
+#[derive(Debug, Deserialize)]
+struct PreviewFileQuery {
+    path: String,
+    file: Option<String>,
+}
+
+async fn get_preview_file(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<PreviewFileQuery>,
+) -> Result<axum::response::Response, ApiError> {
+    let file = preview::static_files::load_preview_file(&query.path, query.file.as_deref())
+        .await
+        .map_err(|message| {
+            let status = if message.starts_with("Access denied") {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            ApiError { status, message }
+        })?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, file.content_type),
+            (axum::http::header::CACHE_CONTROL, "no-cache"),
+        ],
+        file.bytes,
+    )
+        .into_response())
+}
+
 async fn get_preview_cookies(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
 ) -> Result<Json<Value>, ApiError> {
-    let cookies = state.cookie_store().list_cookies(&user.user_id, port).await;
-    Ok(Json(json!({ "cookies": cookies })))
+    let cookies = preview_cookies_for_user(&state, &user.user_id, port).await;
+    Ok(Json(json!({
+        "cookies": cookies,
+        "hasCookies": !cookies.is_empty(),
+    })))
 }
 
 async fn clear_preview_cookies(
@@ -1848,8 +2220,32 @@ async fn clear_preview_cookies(
     Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
 ) -> StatusCode {
-    state.cookie_store().clear_cookies(&user.user_id, port).await;
+    clear_preview_cookies_for_user(&state, &user.user_id, port).await;
     StatusCode::NO_CONTENT
+}
+
+#[derive(Debug, Deserialize)]
+struct ProxyLogQuery {
+    since: Option<i64>,
+}
+
+async fn get_preview_proxy_logs(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Query(query): Query<ProxyLogQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let logs = preview_proxy_logs_for_user(&state, &user.user_id, port, query.since).await;
+    Ok(Json(json!({ "port": port, "logs": logs })))
+}
+
+async fn clear_preview_proxy_logs(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> Json<Value> {
+    clear_preview_proxy_logs_for_user(&state, &user.user_id, port).await;
+    Json(json!({ "success": true, "port": port }))
 }
 
 async fn get_preview_logs(
@@ -1921,6 +2317,119 @@ async fn get_active_preview_ports_scan(
 }
 
 #[derive(Debug, Deserialize)]
+struct PreviewLogStreamQuery {
+    since: Option<i64>,
+    types: Option<String>,
+}
+
+async fn stream_preview_logs(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Query(query): Query<PreviewLogStreamQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let requested_types = query
+        .types
+        .as_deref()
+        .unwrap_or("proxy,server")
+        .split(',')
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    let include_proxy =
+        requested_types.is_empty() || requested_types.iter().any(|value| value == "proxy");
+    let include_server =
+        requested_types.is_empty() || requested_types.iter().any(|value| value == "server");
+    let poll_ms = preview_log_stream_poll_ms();
+    let initial_since = query.since.unwrap_or(0).max(0);
+
+    let request_log_store = state.request_log_store().clone();
+    let process_manager = state.process_manager().clone();
+    let user_id = user.user_id.clone();
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
+
+    tokio::spawn(async move {
+        let mut proxy_cursor = preview::request_logs::LogCursor {
+            timestamp: initial_since,
+            id: None,
+        };
+        let mut process_cursor = processes::LogCursor {
+            timestamp: initial_since,
+            id: None,
+        };
+        let mut last_ping_at = now_millis();
+
+        loop {
+            if include_proxy {
+                let entries = preview_proxy_logs_after_cursor_for_user(
+                    &request_log_store,
+                    &user_id,
+                    port,
+                    proxy_cursor.clone(),
+                )
+                .await;
+                for entry in entries {
+                    proxy_cursor = preview::request_logs::LogCursor {
+                        timestamp: entry.timestamp,
+                        id: Some(entry.id.clone()),
+                    };
+                    if tx
+                        .send(Ok(Event::default().event("proxy").data(
+                            serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string()),
+                        )))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+
+            if include_server {
+                if let Some(entries) = process_manager
+                    .get_logs_by_port_after_cursor(port, process_cursor.clone())
+                    .await
+                {
+                    for entry in entries {
+                        process_cursor = processes::LogCursor {
+                            timestamp: entry.timestamp,
+                            id: Some(entry.id.clone()),
+                        };
+                        if tx
+                            .send(Ok(Event::default().event("server").data(
+                                serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string()),
+                            )))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if now_millis() - last_ping_at >= 15_000 {
+                last_ping_at = now_millis();
+                if tx
+                    .send(Ok(Event::default()
+                        .event("ping")
+                        .data(json!({ "ts": last_ping_at }).to_string())))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15))))
+}
+
+#[derive(Debug, Deserialize)]
 struct ExternalProxyQuery {
     url: String,
 }
@@ -1961,7 +2470,10 @@ async fn ingest_external_log(
     Json(entries): Json<Vec<preview::logs::PreviewLogEntry>>,
 ) -> StatusCode {
     for entry in entries {
-        state.preview_log_store().add_log(EXTERNAL_LOG_PORT, entry).await;
+        state
+            .preview_log_store()
+            .add_log(EXTERNAL_LOG_PORT, entry)
+            .await;
     }
     StatusCode::OK
 }
@@ -1970,49 +2482,536 @@ async fn clear_external_logs(
     State(state): State<AppState>,
     Extension(_user): Extension<AuthenticatedUser>,
 ) -> StatusCode {
-    state.preview_log_store().clear_logs(EXTERNAL_LOG_PORT).await;
+    state
+        .preview_log_store()
+        .clear_logs(EXTERNAL_LOG_PORT)
+        .await;
     StatusCode::NO_CONTENT
 }
 
 async fn dev_proxy_handler(
-    State(_state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ApiError> {
-    dev_proxy_inner(port, "/", request).await
+    let query = request
+        .uri()
+        .query()
+        .map(|value| format!("/?{value}"))
+        .unwrap_or_else(|| "/".to_string());
+    dev_proxy_inner(state, &user.user_id, port, query, request).await
 }
 
 async fn dev_proxy_handler_path(
-    State(_state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path((port, rest)): Path<(u16, String)>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ApiError> {
-    let path = format!("/{rest}");
-    dev_proxy_inner(port, &path, request).await
+    let path = request
+        .uri()
+        .query()
+        .map(|value| format!("/{rest}?{value}"))
+        .unwrap_or_else(|| format!("/{rest}"));
+    dev_proxy_inner(state, &user.user_id, port, path, request).await
+}
+
+async fn dev_proxy_ws_handler_root(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let path = request
+        .uri()
+        .query()
+        .map(|value| format!("/?{value}"))
+        .unwrap_or_else(|| "/".to_string());
+    dev_proxy_ws_inner(port, path, ws, request).await
+}
+
+async fn dev_proxy_ws_handler_path(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path((port, rest)): Path<(u16, String)>,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let path = request
+        .uri()
+        .query()
+        .map(|value| format!("/{rest}?{value}"))
+        .unwrap_or_else(|| format!("/{rest}"));
+    dev_proxy_ws_inner(port, path, ws, request).await
 }
 
 async fn dev_proxy_inner(
+    state: AppState,
+    user_id: &str,
     port: u16,
-    path: &str,
+    path: String,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ApiError> {
+    let started_at = now_millis();
     let method = request.method().as_str().to_string();
     let headers = request.headers().clone();
+    let auth_token = preview_request_token(&request);
+    let ws_proxy_origin = websocket_proxy_origin(&headers);
     let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
         .await
         .ok()
         .map(|b| b.to_vec());
+    let request_size = body.as_ref().map(Vec::len);
 
-    let api_origin = std::env::var("API_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:3020".to_string());
+    let api_origin =
+        std::env::var("API_ORIGIN").unwrap_or_else(|_| "http://localhost:3020".to_string());
 
-    let resp = preview::dev_proxy::proxy_dev_request(port, path, &method, &headers, body, &api_origin)
+    match preview::dev_proxy::proxy_dev_request(
+        port,
+        &path,
+        &method,
+        &headers,
+        body,
+        &api_origin,
+        ws_proxy_origin.as_deref(),
+        auth_token.as_deref(),
+    )
+    .await
+    {
+        Ok(resp) => {
+            let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
+            let status_text = status.canonical_reason().map(str::to_string);
+            let content_type = resp
+                .headers
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let response_size = Some(resp.body.len());
+            state
+                .request_log_store()
+                .add_log(
+                    user_id,
+                    port,
+                    preview::request_logs::ProxyLogInput {
+                        timestamp: started_at,
+                        method: method.clone(),
+                        url: format!("http://localhost:{port}{path}"),
+                        status: Some(resp.status),
+                        status_text,
+                        duration: now_millis() - started_at,
+                        request_size,
+                        response_size,
+                        content_type,
+                        error: None,
+                    },
+                )
+                .await;
+
+            Ok(preview::proxy::into_axum_response(resp))
+        }
+        Err(error) => {
+            state
+                .request_log_store()
+                .add_log(
+                    user_id,
+                    port,
+                    preview::request_logs::ProxyLogInput {
+                        timestamp: started_at,
+                        method,
+                        url: format!("http://localhost:{port}{path}"),
+                        status: None,
+                        status_text: None,
+                        duration: now_millis() - started_at,
+                        request_size,
+                        response_size: None,
+                        content_type: None,
+                        error: Some(error.clone()),
+                    },
+                )
+                .await;
+            Err(ApiError::internal(error))
+        }
+    }
+}
+
+async fn dev_proxy_ws_inner(
+    port: u16,
+    path: String,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let ws = ws.map_err(|_| ApiError::bad_request("WebSocket upgrade required"))?;
+    let request_headers = request.headers().clone();
+    Ok(ws
+        .on_upgrade(move |socket| async move {
+            let _ = preview::ws_proxy::proxy_websocket(socket, port, &path, &request_headers, None)
+                .await;
+        })
+        .into_response())
+}
+
+async fn preview_proxy_root(
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let path = request
+        .uri()
+        .query()
+        .map(|value| format!("/?{value}"))
+        .unwrap_or_else(|| "/".to_string());
+    preview_proxy_inner(state, port, path, request, ws).await
+}
+
+async fn preview_proxy_path(
+    State(state): State<AppState>,
+    Path((port, rest)): Path<(u16, String)>,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    request: axum::extract::Request,
+) -> Result<axum::response::Response, ApiError> {
+    let path = request
+        .uri()
+        .query()
+        .map(|value| format!("/{rest}?{value}"))
+        .unwrap_or_else(|| format!("/{rest}"));
+    preview_proxy_inner(state, port, path, request, ws).await
+}
+
+async fn preview_proxy_inner(
+    state: AppState,
+    port: u16,
+    path: String,
+    request: axum::extract::Request,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Result<axum::response::Response, ApiError> {
+    preview_proxy_response(state, port, path, request, ws, PreviewRewriteMode::Path).await
+}
+
+async fn preview_subdomain_proxy_inner(
+    state: AppState,
+    port: u16,
+    path: String,
+    request: axum::extract::Request,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Result<axum::response::Response, ApiError> {
+    let preview_origin =
+        request_origin(request.headers()).unwrap_or_else(|| "http://localhost:3020".to_string());
+    let websocket_origin = websocket_proxy_origin(request.headers());
+    preview_proxy_response(
+        state,
+        port,
+        path,
+        request,
+        ws,
+        PreviewRewriteMode::Subdomain {
+            preview_origin,
+            websocket_origin,
+        },
+    )
+    .await
+}
+
+enum PreviewRewriteMode {
+    Path,
+    Subdomain {
+        preview_origin: String,
+        websocket_origin: Option<String>,
+    },
+}
+
+async fn preview_proxy_response(
+    state: AppState,
+    port: u16,
+    path: String,
+    request: axum::extract::Request,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    rewrite_mode: PreviewRewriteMode,
+) -> Result<axum::response::Response, ApiError> {
+    let scope_user_id = preview_scope_user_id(&state, &request);
+    let cookie_header = state
+        .cookie_store()
+        .get_cookie_header(&scope_user_id, port)
+        .await;
+    if let Ok(ws) = ws {
+        let request_headers = request.headers().clone();
+        let websocket_path = path.clone();
+        return Ok(ws
+            .on_upgrade(move |socket| async move {
+                let _ = preview::ws_proxy::proxy_websocket(
+                    socket,
+                    port,
+                    &websocket_path,
+                    &request_headers,
+                    cookie_header.as_deref(),
+                )
+                .await;
+            })
+            .into_response());
+    }
+
+    let started_at = now_millis();
+    let method = request.method().as_str().to_string();
+    let mut headers = request.headers().clone();
+    headers.remove(axum::http::header::COOKIE);
+    populate_forward_headers(&mut headers);
+    let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
         .await
-        .map_err(ApiError::internal)?;
+        .ok()
+        .map(|bytes| bytes.to_vec());
+    let request_size = body.as_ref().map(Vec::len);
 
-    Ok(preview::proxy::into_axum_response(resp))
+    if let Some(cookie_header) = cookie_header {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&cookie_header) {
+            headers.insert(axum::http::header::COOKIE, value);
+        }
+    }
+
+    let api_origin =
+        std::env::var("API_ORIGIN").unwrap_or_else(|_| "http://localhost:3020".to_string());
+    let hosts = preview::proxy_hosts();
+
+    match preview::proxy::proxy_request(port, &path, &method, &headers, body, &hosts).await {
+        Ok(mut response) => {
+            let set_cookies = response
+                .headers
+                .get_all(axum::http::header::SET_COOKIE)
+                .iter()
+                .filter_map(|value| value.to_str().ok().map(str::to_string))
+                .collect::<Vec<_>>();
+            for cookie in set_cookies {
+                state
+                    .cookie_store()
+                    .store_from_set_cookie(&scope_user_id, port, &cookie)
+                    .await;
+            }
+            response.headers.remove(axum::http::header::SET_COOKIE);
+
+            let content_type = response
+                .headers
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+
+            if let Some(content_type) = content_type.as_deref() {
+                if preview::script_inject::is_html_content_type(content_type) {
+                    if let Ok(html) = String::from_utf8(response.body.clone()) {
+                        let rewritten = match &rewrite_mode {
+                            PreviewRewriteMode::Path => {
+                                preview::path_rewrite::rewrite_html_for_path_preview(
+                                    &html,
+                                    port,
+                                    &api_origin,
+                                )
+                            }
+                            PreviewRewriteMode::Subdomain {
+                                preview_origin,
+                                websocket_origin,
+                            } => preview::host_rewrite::rewrite_html_for_subdomain_preview(
+                                &html,
+                                port,
+                                &api_origin,
+                                preview_origin,
+                                websocket_origin.as_deref(),
+                            ),
+                        };
+                        response.body = rewritten.into_bytes();
+                        update_proxy_response_length(&mut response);
+                    }
+                } else if is_css_content_type(content_type, &path) {
+                    if let Ok(css) = String::from_utf8(response.body.clone()) {
+                        let rewritten = match &rewrite_mode {
+                            PreviewRewriteMode::Path => {
+                                preview::path_rewrite::rewrite_css_for_path_preview(&css, port)
+                            }
+                            PreviewRewriteMode::Subdomain { preview_origin, .. } => {
+                                preview::host_rewrite::rewrite_css_for_subdomain_preview(
+                                    &css,
+                                    port,
+                                    preview_origin,
+                                )
+                            }
+                        };
+                        response.body = rewritten.into_bytes();
+                        update_proxy_response_length(&mut response);
+                    }
+                } else if is_javascript_content_type(content_type, &path) {
+                    if let (
+                        PreviewRewriteMode::Subdomain {
+                            preview_origin,
+                            websocket_origin,
+                        },
+                        Ok(script),
+                    ) = (&rewrite_mode, String::from_utf8(response.body.clone()))
+                    {
+                        let rewritten = preview::host_rewrite::rewrite_script_for_subdomain_preview(
+                            &script,
+                            port,
+                            preview_origin,
+                            websocket_origin.as_deref(),
+                        );
+                        response.body = rewritten.into_bytes();
+                        update_proxy_response_length(&mut response);
+                    }
+                }
+            }
+
+            let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::BAD_GATEWAY);
+            state
+                .request_log_store()
+                .add_log(
+                    &scope_user_id,
+                    port,
+                    preview::request_logs::ProxyLogInput {
+                        timestamp: started_at,
+                        method: method.clone(),
+                        url: format!("http://localhost:{port}{path}"),
+                        status: Some(response.status),
+                        status_text: status.canonical_reason().map(str::to_string),
+                        duration: now_millis() - started_at,
+                        request_size,
+                        response_size: Some(response.body.len()),
+                        content_type,
+                        error: None,
+                    },
+                )
+                .await;
+
+            Ok(preview::proxy::into_axum_response(response))
+        }
+        Err(error) => {
+            state
+                .request_log_store()
+                .add_log(
+                    &scope_user_id,
+                    port,
+                    preview::request_logs::ProxyLogInput {
+                        timestamp: started_at,
+                        method,
+                        url: format!("http://localhost:{port}{path}"),
+                        status: None,
+                        status_text: None,
+                        duration: now_millis() - started_at,
+                        request_size,
+                        response_size: None,
+                        content_type: None,
+                        error: Some(error.clone()),
+                    },
+                )
+                .await;
+            Err(ApiError::internal(error))
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewStorageUpdate {
+    #[serde(rename = "type")]
+    storage_type: String,
+    operation: String,
+    key: Option<String>,
+    value: Option<String>,
+    entries: Option<std::collections::HashMap<String, String>>,
+}
+
+async fn get_preview_storage(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(_port): Path<u16>,
+) -> Json<Value> {
+    Json(json!({
+        "message": "Storage snapshot requested. Data will be synced via preview page."
+    }))
+}
+
+async fn update_preview_storage(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<PreviewStorageUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let valid_types = ["localStorage", "sessionStorage", "cookies"];
+    let valid_operations = ["set", "remove", "clear", "import"];
+
+    if !valid_types.contains(&input.storage_type.as_str()) {
+        return Err(ApiError::bad_request("Invalid storage type"));
+    }
+    if !valid_operations.contains(&input.operation.as_str()) {
+        return Err(ApiError::bad_request("Invalid operation"));
+    }
+
+    if input.operation == "set" {
+        let key = input
+            .key
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("Missing or invalid key for set operation"))?;
+        let value = input
+            .value
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("Missing or invalid value for set operation"))?;
+        validate_preview_storage_key(key)?;
+        if value.len() > 100_000 {
+            return Err(ApiError::bad_request("Value too long (max 100KB)"));
+        }
+    }
+
+    if input.operation == "remove" {
+        let key = input
+            .key
+            .as_deref()
+            .ok_or_else(|| ApiError::bad_request("Missing or invalid key for remove operation"))?;
+        validate_preview_storage_key(key)?;
+    }
+
+    if input.operation == "import" {
+        let entries = input.entries.as_ref().ok_or_else(|| {
+            ApiError::bad_request("Missing or invalid entries for import operation")
+        })?;
+        for (key, value) in entries {
+            validate_preview_storage_key(key)?;
+            if value.len() > 100_000 {
+                return Err(ApiError::bad_request("Imported value too long (max 100KB)"));
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "port": port,
+        "type": input.storage_type,
+        "operation": input.operation
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewEvaluateInput {
+    expression: String,
+}
+
+async fn evaluate_preview(
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<PreviewEvaluateInput>,
+) -> Result<Json<Value>, ApiError> {
+    if !preview_eval_enabled() {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Preview eval endpoint is disabled".to_string(),
+        });
+    }
+
+    if input.expression.trim().is_empty() {
+        return Err(ApiError::bad_request("Invalid expression"));
+    }
+    if input.expression.len() > 10_000 {
+        return Err(ApiError::bad_request("Expression too long (max 10KB)"));
+    }
+
+    let client_id = user.user_id;
+    Ok(Json(json!({
+        "success": true,
+        "clientId": client_id,
+        "port": port,
+        "message": "Evaluation request queued. Result will be sent via preview console logs."
+    })))
 }
 
 // --- WebContainer handler ---
@@ -2095,6 +3094,13 @@ struct ScreenshotInput {
     height: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordingInput {
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
 async fn take_preview_screenshot(
     Extension(_user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
@@ -2122,16 +3128,47 @@ async fn take_element_screenshot(
         .selector
         .ok_or_else(|| ApiError::bad_request("selector is required"))?;
     let url = format!("http://localhost:{port}");
-    let result = screenshots::take_screenshot(
-        &url,
-        Some(&selector),
-        false,
-        input.width,
-        input.height,
-    )
-    .await
-    .map_err(ApiError::internal)?;
+    let result =
+        screenshots::take_screenshot(&url, Some(&selector), false, input.width, input.height)
+            .await
+            .map_err(ApiError::internal)?;
     Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+
+async fn start_preview_recording(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<RecordingInput>,
+) -> Result<Json<Value>, ApiError> {
+    let url = format!("http://localhost:{port}");
+    let result = screenshots::start_recording(&url, input.width, input.height)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "success": true,
+        "recordingId": result.recording_id,
+        "started": result.started,
+    })))
+}
+
+async fn stop_preview_recording(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(recording_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let Some(result) = screenshots::stop_recording(&recording_id)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Recording not found".to_string(),
+        });
+    };
+    Ok(Json(json!({
+        "success": true,
+        "filename": result.filename,
+        "duration": result.duration,
+    })))
 }
 
 async fn list_screenshots_handler(
@@ -2301,19 +3338,15 @@ async fn get_stats_history(
 async fn trigger_rebuild(
     Extension(_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let output = tokio::process::Command::new(if cfg!(windows) {
-        "powershell"
-    } else {
-        "bash"
-    })
-    .args(if cfg!(windows) {
-        vec!["-File", "rebuild.ps1"]
-    } else {
-        vec!["rebuild.sh"]
-    })
-    .output()
-    .await
-    .map_err(|e| ApiError::internal(format!("Rebuild failed: {e}")))?;
+    let output = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "bash" })
+        .args(if cfg!(windows) {
+            vec!["-File", "rebuild.ps1"]
+        } else {
+            vec!["rebuild.sh"]
+        })
+        .output()
+        .await
+        .map_err(|e| ApiError::internal(format!("Rebuild failed: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -2711,7 +3744,280 @@ fn visible_folder_names(path: &FsPath) -> Result<Vec<String>, String> {
 
 fn normalize_filesystem_path(path: &FsPath) -> String {
     let value = path.to_string_lossy().to_string();
-    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+    let value = value.strip_prefix(r"\\?\").unwrap_or(&value);
+    #[cfg(target_os = "macos")]
+    if let Some(stripped) = value.strip_prefix("/private") {
+        return stripped.to_string();
+    }
+    value.to_string()
+}
+
+fn now_millis() -> i64 {
+    (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000)
+        .try_into()
+        .expect("timestamp should fit in i64")
+}
+
+fn preview_log_stream_poll_ms() -> u64 {
+    std::env::var("PREVIEW_LOG_STREAM_POLL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(1000)
+}
+
+fn preview_eval_enabled() -> bool {
+    std::env::var("PREVIEW_EVAL_ENABLED")
+        .map(|value| value == "true")
+        .unwrap_or(false)
+}
+
+fn validate_preview_storage_key(key: &str) -> Result<(), ApiError> {
+    if key.len() > 256 {
+        return Err(ApiError::bad_request("Key too long (max 256 characters)"));
+    }
+    if !key
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        return Err(ApiError::bad_request(
+            "Key contains invalid characters (allowed: alphanumeric, underscore, dash, dot)",
+        ));
+    }
+    Ok(())
+}
+
+fn is_css_content_type(content_type: &str, path: &str) -> bool {
+    content_type.to_ascii_lowercase().contains("text/css")
+        || path.ends_with(".css")
+        || path.contains(".css?")
+}
+
+fn is_javascript_content_type(content_type: &str, path: &str) -> bool {
+    let content_type = content_type.to_ascii_lowercase();
+    content_type.contains("javascript")
+        || content_type.contains("ecmascript")
+        || path.ends_with(".js")
+        || path.contains(".js?")
+        || path.ends_with(".mjs")
+        || path.contains(".mjs?")
+}
+
+fn update_proxy_response_length(response: &mut preview::proxy::ProxyResponse) {
+    if let Ok(length) = axum::http::HeaderValue::from_str(&response.body.len().to_string()) {
+        response
+            .headers
+            .insert(axum::http::header::CONTENT_LENGTH, length);
+    }
+    response
+        .headers
+        .remove(axum::http::header::CONTENT_ENCODING);
+}
+
+fn websocket_proxy_origin(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = request_host(headers)?;
+    let proto = request_scheme(headers);
+    let ws_scheme = if proto.eq_ignore_ascii_case("https") {
+        "wss"
+    } else {
+        "ws"
+    };
+    Some(format!("{ws_scheme}://{host}"))
+}
+
+fn request_origin(headers: &axum::http::HeaderMap) -> Option<String> {
+    let host = request_host(headers)?;
+    Some(format!("{}://{host}", request_scheme(headers)))
+}
+
+fn preview_subdomain_port(headers: &axum::http::HeaderMap) -> Option<u16> {
+    let host = request_host(headers)?;
+    preview::extract_port_from_preview_subdomain(&host, &preview::subdomain_bases())
+}
+
+fn populate_forward_headers(headers: &mut axum::http::HeaderMap) {
+    if let Some(host) = request_host(headers) {
+        if let Ok(value) = axum::http::HeaderValue::from_str(&host) {
+            headers.insert("x-forwarded-host", value);
+        }
+    }
+
+    if let Ok(value) = axum::http::HeaderValue::from_str(request_scheme(headers)) {
+        headers.insert("x-forwarded-proto", value);
+    }
+
+    let request_host = request_host(headers);
+    let forwarded_port = request_host
+        .as_deref()
+        .and_then(host_port)
+        .unwrap_or_else(|| {
+            if request_scheme(headers).eq_ignore_ascii_case("https") {
+                "443"
+            } else {
+                "80"
+            }
+        });
+    if let Ok(value) = axum::http::HeaderValue::from_str(forwarded_port) {
+        headers.insert("x-forwarded-port", value);
+    }
+
+    headers.insert(
+        "x-forwarded-for",
+        axum::http::HeaderValue::from_static("127.0.0.1"),
+    );
+}
+
+fn request_host(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(',').next().unwrap_or(value).trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn request_scheme(headers: &axum::http::HeaderMap) -> &str {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("http")
+}
+
+fn host_port(host: &str) -> Option<&str> {
+    if host.starts_with('[') {
+        return host
+            .split_once(']')
+            .and_then(|(_, rest)| rest.strip_prefix(':'))
+            .filter(|value| !value.is_empty());
+    }
+
+    host.rsplit_once(':')
+        .map(|(_, port)| port)
+        .filter(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn preview_scope_user_id(state: &AppState, request: &axum::extract::Request) -> String {
+    preview_request_token(request)
+        .and_then(|token| {
+            authenticate_token(
+                &state.config().jwt_secret,
+                state.config().allowed_username.as_deref(),
+                &token,
+            )
+            .ok()
+        })
+        .map(|user| user.user_id)
+        .unwrap_or_else(|| ANONYMOUS_PREVIEW_SCOPE_ID.to_string())
+}
+
+fn preview_request_token(request: &axum::extract::Request) -> Option<String> {
+    if let Some(token) = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        return Some(token.to_string());
+    }
+
+    request.uri().query().and_then(|query| {
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            if key == "token" {
+                Some(value.to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+async fn preview_cookies_for_user(
+    state: &AppState,
+    user_id: &str,
+    port: u16,
+) -> Vec<preview::cookie_jar::StoredCookie> {
+    let cookies = state.cookie_store().list_cookies(user_id, port).await;
+    if !cookies.is_empty() || user_id == ANONYMOUS_PREVIEW_SCOPE_ID {
+        return cookies;
+    }
+    state
+        .cookie_store()
+        .list_cookies(ANONYMOUS_PREVIEW_SCOPE_ID, port)
+        .await
+}
+
+async fn clear_preview_cookies_for_user(state: &AppState, user_id: &str, port: u16) {
+    state.cookie_store().clear_cookies(user_id, port).await;
+    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
+        state
+            .cookie_store()
+            .clear_cookies(ANONYMOUS_PREVIEW_SCOPE_ID, port)
+            .await;
+    }
+}
+
+async fn preview_proxy_logs_for_user(
+    state: &AppState,
+    user_id: &str,
+    port: u16,
+    since: Option<i64>,
+) -> Vec<preview::request_logs::ProxyLogEntry> {
+    let mut logs = state
+        .request_log_store()
+        .get_logs(user_id, port, since)
+        .await;
+    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
+        logs.extend(
+            state
+                .request_log_store()
+                .get_logs(ANONYMOUS_PREVIEW_SCOPE_ID, port, since)
+                .await,
+        );
+    }
+    sort_proxy_logs(&mut logs);
+    logs
+}
+
+async fn clear_preview_proxy_logs_for_user(state: &AppState, user_id: &str, port: u16) {
+    state.request_log_store().clear_logs(user_id, port).await;
+    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
+        state
+            .request_log_store()
+            .clear_logs(ANONYMOUS_PREVIEW_SCOPE_ID, port)
+            .await;
+    }
+}
+
+async fn preview_proxy_logs_after_cursor_for_user(
+    request_log_store: &preview::request_logs::RequestLogStore,
+    user_id: &str,
+    port: u16,
+    cursor: preview::request_logs::LogCursor,
+) -> Vec<preview::request_logs::ProxyLogEntry> {
+    let mut entries = request_log_store
+        .get_logs_after_cursor(user_id, port, cursor.clone())
+        .await;
+    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
+        entries.extend(
+            request_log_store
+                .get_logs_after_cursor(ANONYMOUS_PREVIEW_SCOPE_ID, port, cursor)
+                .await,
+        );
+    }
+    sort_proxy_logs(&mut entries);
+    entries
+}
+
+fn sort_proxy_logs(entries: &mut Vec<preview::request_logs::ProxyLogEntry>) {
+    entries.sort_by(|left, right| {
+        left.timestamp
+            .cmp(&right.timestamp)
+            .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -2798,6 +4104,11 @@ async fn handle_terminal_ws(
     }
 
     let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+    let max_buffered = terminal_ws_max_buffered_bytes();
+    let mut buffered_bytes: usize = 0;
+    let mut backpressure_active = false;
+    let mut resync_pending = false;
+
     loop {
         tokio::select! {
             _ = ping_interval.tick() => {
@@ -2808,14 +4119,43 @@ async fn handle_terminal_ws(
             event = subscription.recv() => {
                 match event {
                     Ok(TerminalSubscriptionEvent::Output(output)) => {
+                        // Backpressure: if buffered bytes exceed the limit,
+                        // drop output and suggest a resync instead.
+                        let msg_len = output.text.len();
+                        if buffered_bytes + msg_len > max_buffered {
+                            backpressure_active = true;
+                            if !resync_pending {
+                                resync_pending = true;
+                                if send_ws_meta(
+                                    &mut socket,
+                                    framed,
+                                    json!({ "type": "resyncSuggested", "reason": "backpressure", "ts": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000 }),
+                                )
+                                .await
+                                .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        // Buffer has drained enough — clear backpressure state.
+                        if backpressure_active {
+                            backpressure_active = false;
+                            resync_pending = false;
+                        }
                         if let Some(seq) = output.seq {
                             if send_ws_meta(&mut socket, framed, json!({ "type": "serverCursor", "seq": seq })).await.is_err() {
                                 break;
                             }
                         }
+                        buffered_bytes += msg_len;
                         if send_ws_output(&mut socket, framed, &output.text).await.is_err() {
                             break;
                         }
+                        // After a successful await-ed send the data has been
+                        // handed off to the OS send buffer, so we can reclaim.
+                        buffered_bytes = buffered_bytes.saturating_sub(msg_len);
                     }
                     Ok(TerminalSubscriptionEvent::Closed) => break,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -2922,26 +4262,37 @@ mod tests {
     use super::{app, normalize_filesystem_path, ApiState};
     use crate::auth::issue_access_token;
     use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser};
+    use crate::preview;
     use crate::structured::{
         SpawnedStructuredProcess, StructuredProcessController, StructuredProvider,
         StructuredSessionManager, StructuredSpawnOptions,
     };
     use async_trait::async_trait;
     use axum::body::Body;
+    use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+    use axum::extract::ws::{Message, WebSocketUpgrade};
     use axum::http::{Request, StatusCode};
+    use axum::routing::{any, get};
     use bcrypt::{hash, DEFAULT_COST};
+    use futures_util::{SinkExt, StreamExt};
     use http_body_util::BodyExt;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use std::sync::{Arc, LazyLock, Mutex as StdMutex};
     use tempfile::tempdir;
     use terminal_v4_core::{AppConfig, HealthResponse, StructuredSessionEvent, UserSettings};
     use tokio::sync::{mpsc, Mutex};
     use tokio::time::{sleep, Duration};
+    use tokio_tungstenite::tungstenite;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tower::ServiceExt;
+
+    static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
     #[tokio::test]
     async fn health_route_returns_the_expected_payload() {
@@ -3774,6 +5125,11 @@ mod tests {
         let preview_payload: Value =
             serde_json::from_slice(&preview_body).expect("preview payload should deserialize");
         assert_eq!(preview_payload["defaultMode"], "path-first");
+        assert_eq!(
+            preview_payload["subdomainBases"],
+            json!(preview::subdomain_bases())
+        );
+        assert_eq!(preview_payload["proxyHosts"], json!(preview::proxy_hosts()));
     }
 
     #[tokio::test]
@@ -3783,6 +5139,11 @@ mod tests {
         let app = app(state.clone());
         let repo_path = state.config().data_dir.join("repo");
         fs::create_dir_all(repo_path.join(".git")).expect("git dir should exist");
+        fs::write(
+            repo_path.join("Cargo.toml"),
+            "[package]\nname = \"repo\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("cargo manifest should exist");
         let repo_path_string = repo_path.to_string_lossy().to_string();
 
         let create_response = app
@@ -3886,7 +5247,7 @@ mod tests {
             serde_json::from_slice(&detect_body).expect("detect payload should deserialize");
         assert_eq!(
             detect_payload["projectPath"],
-            repo_path.to_string_lossy().to_string()
+            Value::String(normalize_filesystem_path(&repo_path))
         );
 
         let state_response = app
@@ -3913,6 +5274,31 @@ mod tests {
             state_payload["projectInfo"]["cwd"],
             repo_path.to_string_lossy().to_string()
         );
+        assert_eq!(state_payload["projectInfo"]["projectType"], "rust");
+        assert_eq!(state_payload["projectInfo"]["startCommand"], "cargo run");
+
+        let project_info_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/terminal/{session_id}/project-info"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(project_info_response.status(), StatusCode::OK);
+        let project_info_body = project_info_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let project_info_payload: Value = serde_json::from_slice(&project_info_body)
+            .expect("project info payload should deserialize");
+        assert_eq!(project_info_payload["projectType"], "rust");
+        assert_eq!(project_info_payload["startCommand"], "cargo run");
 
         let get_thread_response = app
             .clone()
@@ -4152,7 +5538,493 @@ mod tests {
             .to_bytes();
         let preview_payload: Value =
             serde_json::from_slice(&preview_body).expect("preview payload should deserialize");
-        assert_eq!(preview_payload, json!({ "ports": [] }));
+        assert!(preview_payload["ports"].is_array());
+    }
+
+    #[tokio::test]
+    async fn preview_route_family_supports_file_serving_storage_and_proxy_logs() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-preview", "conor");
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .expect("api crate should be nested under rust/crates/api")
+            .to_path_buf();
+        let preview_dir =
+            tempfile::tempdir_in(&project_root).expect("preview temp dir should create in repo");
+        fs::write(
+            preview_dir.path().join("index.html"),
+            "<h1>Rust Preview</h1>",
+        )
+        .expect("preview file should write");
+
+        state
+            .request_log_store()
+            .add_log(
+                "user-preview",
+                5173,
+                preview::request_logs::ProxyLogInput {
+                    timestamp: 123,
+                    method: "GET".to_string(),
+                    url: "http://localhost:5173/".to_string(),
+                    status: Some(200),
+                    status_text: Some("OK".to_string()),
+                    duration: 5,
+                    request_size: None,
+                    response_size: Some(18),
+                    content_type: Some("text/html".to_string()),
+                    error: None,
+                },
+            )
+            .await;
+
+        let app = app(state);
+
+        let preview_path = preview_dir.path().to_string_lossy().replace('\\', "/");
+        let preview_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/preview?path={preview_path}&file=index.html"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(preview_response.status(), StatusCode::OK);
+        let preview_body = preview_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        assert_eq!(preview_body.as_ref(), b"<h1>Rust Preview</h1>");
+
+        let proxy_logs_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/preview/5173/proxy-logs")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(proxy_logs_response.status(), StatusCode::OK);
+        let proxy_logs_body = proxy_logs_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let proxy_logs_payload: Value =
+            serde_json::from_slice(&proxy_logs_body).expect("proxy logs should deserialize");
+        assert_eq!(proxy_logs_payload["logs"].as_array().map(Vec::len), Some(1));
+
+        let storage_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/preview/5173/storage")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(storage_response.status(), StatusCode::OK);
+
+        let invalid_storage_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/preview/5173/storage")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "type": "localStorage",
+                            "operation": "set",
+                            "key": "bad key!",
+                            "value": "123"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(invalid_storage_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn preview_recording_routes_start_and_stop_recordings() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock should acquire");
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-recording", "conor");
+        let app = app(state);
+        let temp = tempdir().expect("temp dir should create");
+        let bin_path = temp.path().join("fake-node");
+        let recordings_dir = temp.path().join("recordings");
+
+        fs::write(
+            &bin_path,
+            r#"#!/bin/sh
+mkdir -p "$TERMINAL_V4_RECORDING_OUTPUT_DIR"
+trap 'touch "$TERMINAL_V4_RECORDING_OUTPUT_DIR/test-recording.webm"; exit 0' TERM INT HUP
+echo READY
+while true; do
+  sleep 1
+done
+"#,
+        )
+        .expect("fake node script should write");
+        let mut permissions = fs::metadata(&bin_path)
+            .expect("script metadata should load")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&bin_path, permissions).expect("script permissions should update");
+
+        let previous_node_bin = std::env::var("PLAYWRIGHT_NODE_BIN").ok();
+        let previous_recording_dir = std::env::var("RECORDING_DIR").ok();
+        unsafe {
+            std::env::set_var("PLAYWRIGHT_NODE_BIN", &bin_path);
+            std::env::set_var("RECORDING_DIR", &recordings_dir);
+        }
+
+        let start_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/preview/5173/recording/start")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({ "width": 800, "height": 600 }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(start_response.status(), StatusCode::OK);
+        let start_body = start_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let start_payload: Value =
+            serde_json::from_slice(&start_body).expect("start payload should deserialize");
+        assert_eq!(start_payload["success"], Value::Bool(true));
+        let recording_id = start_payload["recordingId"]
+            .as_str()
+            .expect("recording id should be returned")
+            .to_string();
+
+        let stop_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/preview/recording/{recording_id}/stop"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(stop_response.status(), StatusCode::OK);
+        let stop_body = stop_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let stop_payload: Value =
+            serde_json::from_slice(&stop_body).expect("stop payload should deserialize");
+        assert_eq!(stop_payload["success"], Value::Bool(true));
+        assert_eq!(
+            stop_payload["filename"],
+            Value::String("test-recording.webm".to_string())
+        );
+
+        match previous_node_bin {
+            Some(value) => unsafe { std::env::set_var("PLAYWRIGHT_NODE_BIN", value) },
+            None => unsafe { std::env::remove_var("PLAYWRIGHT_NODE_BIN") },
+        }
+        match previous_recording_dir {
+            Some(value) => unsafe { std::env::set_var("RECORDING_DIR", value) },
+            None => unsafe { std::env::remove_var("RECORDING_DIR") },
+        }
+    }
+
+    #[tokio::test]
+    async fn path_preview_proxy_rewrites_html_and_surfaces_anonymous_logs_and_cookies() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-path-preview", "conor");
+        let app = app(state);
+        let (port, upstream_handle) = spawn_preview_upstream().await;
+
+        let preview_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/preview/{port}/?view=app"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(preview_response.status(), StatusCode::OK);
+        assert!(preview_response
+            .headers()
+            .get(axum::http::header::SET_COOKIE)
+            .is_none());
+        let preview_body = preview_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let preview_html =
+            String::from_utf8(preview_body.to_vec()).expect("html response should be utf-8");
+        assert!(preview_html.contains("data-preview-debug"));
+        assert!(preview_html.contains(&format!(r#"<base href="/preview/{port}/">"#)));
+        assert!(preview_html.contains(&format!(r#"href="/preview/{port}/styles.css""#)));
+        assert!(preview_html.contains(&format!(r#"src="/preview/{port}/main.js""#)));
+
+        let css_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/preview/{port}/styles.css"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(css_response.status(), StatusCode::OK);
+        let css_body = css_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let css_text = String::from_utf8(css_body.to_vec()).expect("css should be utf-8");
+        assert!(css_text.contains(&format!(r#"url("/preview/{port}/assets/bg.png")"#)));
+
+        let cookies_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/preview/{port}/cookies"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(cookies_response.status(), StatusCode::OK);
+        let cookies_body = cookies_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let cookies_payload: Value =
+            serde_json::from_slice(&cookies_body).expect("cookie payload should deserialize");
+        assert_eq!(cookies_payload["hasCookies"], Value::Bool(true));
+        assert_eq!(cookies_payload["cookies"][0]["name"], "session");
+
+        let proxy_logs_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/preview/{port}/proxy-logs"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(proxy_logs_response.status(), StatusCode::OK);
+        let proxy_logs_body = proxy_logs_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let proxy_logs_payload: Value =
+            serde_json::from_slice(&proxy_logs_body).expect("proxy logs should deserialize");
+        let logs = proxy_logs_payload["logs"]
+            .as_array()
+            .expect("logs should be an array");
+        assert!(logs.len() >= 2);
+        assert!(logs.iter().any(|entry| {
+            entry["url"]
+                .as_str()
+                .map(|value| value == format!("http://localhost:{port}/?view=app"))
+                .unwrap_or(false)
+        }));
+        assert!(logs.iter().any(|entry| {
+            entry["url"]
+                .as_str()
+                .map(|value| value == format!("http://localhost:{port}/styles.css"))
+                .unwrap_or(false)
+        }));
+
+        upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn preview_subdomain_host_proxy_intercepts_http_requests() {
+        let state = test_state();
+        let (upstream_port, upstream_handle) = spawn_preview_upstream().await;
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("http://127.0.0.1:{app_port}/?mode=subdomain"))
+            .header(
+                "Host",
+                format!("preview-{upstream_port}.localhost:{app_port}"),
+            )
+            .send()
+            .await
+            .expect("subdomain preview request should succeed");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let body = response.text().await.expect("response body should read");
+        assert!(body.contains("data-preview-debug"));
+        assert!(body.contains(r#"href="/styles.css""#));
+        assert!(body.contains(r#"src="/main.js""#));
+
+        app_handle.abort();
+        upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn path_preview_proxy_bridges_websocket_messages_to_upstream() {
+        let state = test_state();
+        let (upstream_port, upstream_handle) = spawn_preview_ws_upstream().await;
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+
+        let url = format!("ws://127.0.0.1:{app_port}/preview/{upstream_port}/hmr");
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("websocket client should connect");
+
+        let initial_message = socket
+            .next()
+            .await
+            .expect("initial websocket message should arrive")
+            .expect("initial websocket message should be valid");
+        assert_eq!(initial_message.into_text().expect("text frame"), "ready");
+
+        socket
+            .send(tungstenite::Message::Text("ping".into()))
+            .await
+            .expect("client should send websocket message");
+
+        let echoed_message = socket
+            .next()
+            .await
+            .expect("echoed websocket message should arrive")
+            .expect("echoed websocket message should be valid");
+        assert_eq!(echoed_message.into_text().expect("text frame"), "echo:ping");
+
+        let _ = socket.close(None).await;
+        app_handle.abort();
+        upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn preview_subdomain_host_proxy_bridges_websocket_messages_to_upstream() {
+        let state = test_state();
+        let (upstream_port, upstream_handle) = spawn_preview_ws_upstream().await;
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+
+        let mut request = format!("ws://127.0.0.1:{app_port}/hmr")
+            .into_client_request()
+            .expect("websocket request should build");
+        request.headers_mut().insert(
+            axum::http::header::HOST,
+            axum::http::HeaderValue::from_str(&format!(
+                "preview-{upstream_port}.localhost:{app_port}"
+            ))
+            .expect("host header should build"),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("websocket client should connect");
+
+        let initial_message = socket
+            .next()
+            .await
+            .expect("initial websocket message should arrive")
+            .expect("initial websocket message should be valid");
+        assert_eq!(initial_message.into_text().expect("text frame"), "ready");
+
+        socket
+            .send(tungstenite::Message::Text("subdomain".into()))
+            .await
+            .expect("client should send websocket message");
+
+        let echoed_message = socket
+            .next()
+            .await
+            .expect("echoed websocket message should arrive")
+            .expect("echoed websocket message should be valid");
+        assert_eq!(
+            echoed_message.into_text().expect("text frame"),
+            "echo:subdomain"
+        );
+
+        let _ = socket.close(None).await;
+        app_handle.abort();
+        upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn dev_proxy_websocket_route_bridges_messages_for_authenticated_clients() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-dev-proxy", "conor");
+        let (upstream_port, upstream_handle) = spawn_preview_ws_upstream().await;
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+
+        let url =
+            format!("ws://127.0.0.1:{app_port}/api/dev-proxy-ws/{upstream_port}/hmr?token={token}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("websocket client should connect");
+
+        let initial_message = socket
+            .next()
+            .await
+            .expect("initial websocket message should arrive")
+            .expect("initial websocket message should be valid");
+        assert_eq!(initial_message.into_text().expect("text frame"), "ready");
+
+        socket
+            .send(tungstenite::Message::Text("dev-proxy".into()))
+            .await
+            .expect("client should send websocket message");
+
+        let echoed_message = socket
+            .next()
+            .await
+            .expect("echoed websocket message should arrive")
+            .expect("echoed websocket message should be valid");
+        assert_eq!(
+            echoed_message.into_text().expect("text frame"),
+            "echo:dev-proxy"
+        );
+
+        let _ = socket.close(None).await;
+        app_handle.abort();
+        upstream_handle.abort();
     }
 
     #[tokio::test]
@@ -4338,12 +6210,10 @@ mod tests {
         assert_eq!(create_payload["provider"], "claude");
         assert_eq!(create_payload["model"], "sonnet");
         assert_eq!(create_payload["title"], "Agent thread");
-        assert!(
-            create_payload["thread"]["projectPath"]
-                .as_str()
-                .expect("project path should be a string")
-                .ends_with("structured-workspace")
-        );
+        assert!(create_payload["thread"]["projectPath"]
+            .as_str()
+            .expect("project path should be a string")
+            .ends_with("structured-workspace"));
         assert_eq!(create_payload["events"], json!([]));
 
         let list_response = app
@@ -4456,8 +6326,8 @@ mod tests {
             .await
             .expect("body should collect")
             .to_bytes();
-        let get_thread_payload: Value =
-            serde_json::from_slice(&get_thread_body).expect("get thread payload should deserialize");
+        let get_thread_payload: Value = serde_json::from_slice(&get_thread_body)
+            .expect("get thread payload should deserialize");
         assert_eq!(get_thread_payload["thread"]["topic"], "Review Rust rewrite");
         assert_eq!(get_thread_payload["thread"]["pinned"], true);
 
@@ -4644,6 +6514,113 @@ mod tests {
 
     fn test_app() -> axum::Router {
         app(test_state())
+    }
+
+    async fn spawn_preview_upstream() -> (u16, tokio::task::JoinHandle<()>) {
+        let upstream = axum::Router::new()
+            .route(
+                "/",
+                get(|| async {
+                    (
+                        [
+                            (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                            (axum::http::header::SET_COOKIE, "session=abc123; Path=/"),
+                        ],
+                        r#"
+                            <html>
+                              <head>
+                                <link rel="stylesheet" href="/styles.css">
+                              </head>
+                              <body>
+                                <script src="/main.js"></script>
+                              </body>
+                            </html>
+                        "#,
+                    )
+                }),
+            )
+            .route(
+                "/styles.css",
+                get(|| async {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                        r#"body { background-image: url("/assets/bg.png"); }"#,
+                    )
+                }),
+            )
+            .route(
+                "/main.js",
+                get(|| async {
+                    (
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/javascript; charset=utf-8",
+                        )],
+                        r#"console.log("preview main");"#,
+                    )
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have local addr")
+            .port();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, upstream)
+                .await
+                .expect("preview upstream should serve");
+        });
+
+        (port, handle)
+    }
+
+    async fn spawn_preview_ws_upstream() -> (u16, tokio::task::JoinHandle<()>) {
+        let upstream = axum::Router::new().route(
+            "/hmr",
+            any(
+                |ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>| async move {
+                    let ws = ws.expect("websocket upgrade should succeed");
+                    ws.on_upgrade(|mut socket| async move {
+                        let _ = socket.send(Message::Text("ready".into())).await;
+                        while let Some(Ok(message)) = socket.recv().await {
+                            match message {
+                                Message::Text(text) => {
+                                    let _ = socket
+                                        .send(Message::Text(format!("echo:{text}").into()))
+                                        .await;
+                                }
+                                Message::Close(frame) => {
+                                    let _ = socket.send(Message::Close(frame)).await;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
+                },
+            ),
+        );
+
+        spawn_router(upstream).await
+    }
+
+    async fn spawn_router(router: axum::Router) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should expose a local address")
+            .port();
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("router should serve");
+        });
+        (port, handle)
     }
 
     fn external_user(

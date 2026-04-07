@@ -54,17 +54,14 @@ pub struct ExternalProxyResponse {
 
 /// Validate a URL for external proxying. Blocks private/local IPs.
 fn validate_url(url: &str) -> Result<(), String> {
-    let parsed =
-        url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
+    let parsed = url::Url::parse(url).map_err(|e| format!("Invalid URL: {e}"))?;
 
     match parsed.scheme() {
         "http" | "https" => {}
         s => return Err(format!("Unsupported scheme: {s}")),
     }
 
-    let host = parsed
-        .host_str()
-        .ok_or("URL has no host")?;
+    let host = parsed.host_str().ok_or("URL has no host")?;
 
     // Block private/local IPs
     if is_private_host(host) {
@@ -87,10 +84,7 @@ fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return match ip {
             IpAddr::V4(v4) => {
-                v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.octets()[0] == 0
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.octets()[0] == 0
             }
             IpAddr::V6(v6) => v6.is_loopback(),
         };

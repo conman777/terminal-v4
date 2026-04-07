@@ -6,19 +6,31 @@ const MAX_FILE_SIZE: u64 = 1_024 * 1_024; // 1MB
 const MAX_TOTAL_SIZE: u64 = 50 * 1_024 * 1_024; // 50MB
 
 const EXCLUDE_DIRS: &[&str] = &[
-    "node_modules", ".git", ".svn", ".hg", "dist", "build", ".next", ".nuxt",
-    ".output", "coverage", ".cache", ".parcel-cache", ".turbo", "__pycache__",
-    ".pytest_cache", ".venv", "venv", "target",
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+    ".output",
+    "coverage",
+    ".cache",
+    ".parcel-cache",
+    ".turbo",
+    "__pycache__",
+    ".pytest_cache",
+    ".venv",
+    "venv",
+    "target",
 ];
 
-const EXCLUDE_FILES: &[&str] = &[
-    ".env.local", ".DS_Store", "Thumbs.db",
-];
+const EXCLUDE_FILES: &[&str] = &[".env.local", ".DS_Store", "Thumbs.db"];
 
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "woff", "woff2", "ttf", "eot",
-    "mp3", "mp4", "wav", "ogg", "zip", "tar", "gz", "pdf", "exe", "dll",
-    "so", "dylib", "ico", "svg",
+    "png", "jpg", "jpeg", "gif", "webp", "woff", "woff2", "ttf", "eot", "mp3", "mp4", "wav", "ogg",
+    "zip", "tar", "gz", "pdf", "exe", "dll", "so", "dylib", "ico", "svg",
 ];
 
 /// Build a WebContainer-compatible file tree for a project directory.
@@ -44,11 +56,7 @@ pub async fn get_file_tree(path: &str) -> Result<Value, String> {
     }))
 }
 
-async fn build_tree(
-    base: &Path,
-    current: &Path,
-    total_size: &mut u64,
-) -> Result<Value, String> {
+async fn build_tree(base: &Path, current: &Path, total_size: &mut u64) -> Result<Value, String> {
     let mut entries = serde_json::Map::new();
     let mut reader = fs::read_dir(current)
         .await

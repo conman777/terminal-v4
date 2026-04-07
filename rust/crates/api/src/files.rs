@@ -38,15 +38,12 @@ pub async fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
             Err(_) => continue,
         };
 
-        let modified = metadata
-            .modified()
-            .ok()
-            .and_then(|t| {
-                let datetime: time::OffsetDateTime = t.into();
-                datetime
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .ok()
-            });
+        let modified = metadata.modified().ok().and_then(|t| {
+            let datetime: time::OffsetDateTime = t.into();
+            datetime
+                .format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        });
 
         entries.push(FileEntry {
             path: entry.path().to_string_lossy().to_string(),
@@ -130,7 +127,9 @@ pub fn create_zip_archive(dir_path: &str) -> Result<Vec<u8>, String> {
 
     add_directory_to_zip(&mut zip, &resolved, &resolved, options)?;
 
-    let buffer = zip.finish().map_err(|e| format!("Failed to finish ZIP: {e}"))?;
+    let buffer = zip
+        .finish()
+        .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
     Ok(buffer.into_inner())
 }
 
@@ -182,8 +181,8 @@ pub async fn extract_zip(zip_path: &str, target_dir: &str) -> Result<usize, Stri
 
     // Run ZIP extraction in blocking task since zip crate is sync
     let count = tokio::task::spawn_blocking(move || {
-        let file = std::fs::File::open(&zip_resolved)
-            .map_err(|e| format!("Failed to open ZIP: {e}"))?;
+        let file =
+            std::fs::File::open(&zip_resolved).map_err(|e| format!("Failed to open ZIP: {e}"))?;
         let mut archive =
             zip::ZipArchive::new(file).map_err(|e| format!("Failed to read ZIP: {e}"))?;
 
@@ -213,7 +212,9 @@ pub async fn extract_zip(zip_path: &str, target_dir: &str) -> Result<usize, Stri
 
             if let Some(canonical_out) = canonical_out {
                 if !canonical_out.starts_with(&canonical_target) {
-                    return Err(format!("Zip Slip detected: {name} escapes target directory"));
+                    return Err(format!(
+                        "Zip Slip detected: {name} escapes target directory"
+                    ));
                 }
             }
 

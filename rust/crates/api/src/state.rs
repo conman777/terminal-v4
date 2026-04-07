@@ -35,9 +35,11 @@ struct AppStateInner {
     structured_session_manager: StructuredSessionManager,
     process_manager: crate::processes::ProcessManager,
     stats_collector: Arc<crate::system_stats::SystemStatsCollector>,
+    passkey_service: crate::passkey::PasskeyService,
     cookie_store: crate::preview::cookie_jar::CookieStore,
     port_scanner: crate::preview::port_scan::PortScanner,
     preview_log_store: crate::preview::logs::PreviewLogStore,
+    request_log_store: crate::preview::request_logs::RequestLogStore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +165,7 @@ impl AppState {
         fs::create_dir_all(&config.data_dir).map_err(|error| error.to_string())?;
         let connection = Connection::open(config.data_dir.join("terminal.db"))
             .map_err(|error| error.to_string())?;
+        let passkey_service = crate::passkey::PasskeyService::new(&config)?;
 
         let state = Self {
             inner: Arc::new(AppStateInner {
@@ -170,9 +173,11 @@ impl AppState {
                 structured_session_manager,
                 process_manager: crate::processes::ProcessManager::new(),
                 stats_collector: Arc::new(crate::system_stats::SystemStatsCollector::new()),
+                passkey_service,
                 cookie_store: crate::preview::cookie_jar::CookieStore::new(),
                 port_scanner: crate::preview::port_scan::PortScanner::new(),
                 preview_log_store: crate::preview::logs::PreviewLogStore::new(),
+                request_log_store: crate::preview::request_logs::RequestLogStore::new(),
                 config,
                 db: Mutex::new(connection),
                 file_lock: Mutex::new(()),
@@ -203,6 +208,10 @@ impl AppState {
         &self.inner.preview_log_store
     }
 
+    pub fn request_log_store(&self) -> &crate::preview::request_logs::RequestLogStore {
+        &self.inner.request_log_store
+    }
+
     pub fn process_manager(&self) -> &crate::processes::ProcessManager {
         &self.inner.process_manager
     }
@@ -213,6 +222,10 @@ impl AppState {
 
     pub fn structured_session_manager(&self) -> StructuredSessionManager {
         self.inner.structured_session_manager.clone()
+    }
+
+    pub fn passkey_service(&self) -> crate::passkey::PasskeyService {
+        self.inner.passkey_service.clone()
     }
 
     pub fn auth_me(&self, user: &AuthenticatedUser) -> AuthMeResponse {
@@ -747,11 +760,7 @@ impl AppState {
         Ok(result)
     }
 
-    pub fn delete_vault_key(
-        &self,
-        user: &AuthenticatedUser,
-        key_id: &str,
-    ) -> Result<bool, String> {
+    pub fn delete_vault_key(&self, user: &AuthenticatedUser, key_id: &str) -> Result<bool, String> {
         let connection = self.lock_db()?;
         let count = connection
             .execute(
@@ -996,7 +1005,10 @@ impl AppState {
         self.issue_auth_result_for_public_user(to_public_user(user))
     }
 
-    fn issue_auth_result_for_public_user(&self, user: UserPublic) -> Result<AuthResult, String> {
+    pub(crate) fn issue_auth_result_for_public_user(
+        &self,
+        user: UserPublic,
+    ) -> Result<AuthResult, String> {
         let refresh_token = self.create_refresh_token(&user.id)?;
         Ok(AuthResult {
             user: user.clone(),
@@ -1058,6 +1070,22 @@ impl AppState {
             username,
             created_at: user.created_at,
         })
+    }
+
+    pub(crate) fn get_user_public_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserPublic>, String> {
+        self.get_user_by_username(username)
+            .map(|value| value.map(|user| to_public_user(&user)))
+    }
+
+    pub(crate) fn get_user_public_by_id(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<UserPublic>, String> {
+        self.get_user_by_id(user_id)
+            .map(|value| value.map(|user| to_public_user(&user)))
     }
 
     fn create_refresh_token(&self, user_id: &str) -> Result<String, String> {

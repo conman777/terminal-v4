@@ -1,6 +1,6 @@
-use sysinfo::System;
 use std::path::PathBuf;
 use std::sync::Arc;
+use sysinfo::System;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, serde::Serialize)]

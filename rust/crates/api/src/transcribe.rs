@@ -26,13 +26,21 @@ pub async fn health_check(provider: Option<&str>) -> Result<TranscribeHealth, St
             Ok(TranscribeHealth {
                 available: reachable,
                 provider: "local".to_string(),
-                message: if reachable { "OK".to_string() } else { "Unreachable".to_string() },
+                message: if reachable {
+                    "OK".to_string()
+                } else {
+                    "Unreachable".to_string()
+                },
             })
         }
         Some("groq") | None => Ok(TranscribeHealth {
             available: groq_available,
             provider: "groq".to_string(),
-            message: if groq_available { "OK".to_string() } else { "GROQ_API_KEY not set".to_string() },
+            message: if groq_available {
+                "OK".to_string()
+            } else {
+                "GROQ_API_KEY not set".to_string()
+            },
         }),
         Some(other) => Err(format!("Unknown provider: {other}")),
     }
@@ -144,7 +152,9 @@ async fn transcribe_groq(
 }
 
 fn local_whisper_url() -> Option<String> {
-    std::env::var("WHISPER_SERVER_URL").ok().filter(|v| !v.is_empty())
+    std::env::var("WHISPER_SERVER_URL")
+        .ok()
+        .filter(|v| !v.is_empty())
 }
 
 #[derive(Debug, serde::Serialize)]

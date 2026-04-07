@@ -56,10 +56,7 @@ async fn scan_ports() -> Vec<ActivePort> {
         scan_unix().await
     };
 
-    let mut ports: Vec<ActivePort> = raw
-        .into_iter()
-        .filter(|p| p.port >= 3000)
-        .collect();
+    let mut ports: Vec<ActivePort> = raw.into_iter().filter(|p| p.port >= 3000).collect();
 
     ports.sort_by_key(|p| p.port);
     ports.dedup_by_key(|p| p.port);
@@ -106,10 +103,7 @@ async fn scan_windows() -> Vec<ActivePort> {
 
 async fn scan_unix() -> Vec<ActivePort> {
     // Try `ss` first, fall back to `lsof`
-    let output = Command::new("ss")
-        .args(["-tlnp"])
-        .output()
-        .await;
+    let output = Command::new("ss").args(["-tlnp"]).output().await;
 
     let output = match output {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),

@@ -1,13 +1,101 @@
 /// Inject the preview debug script into an HTML response body.
 /// The script captures console logs, errors, and posts them back to the API.
 pub fn inject_debug_script(html: &str, port: u16, api_origin: &str) -> String {
+    inject_debug_script_with_options(html, port, api_origin, None)
+}
+
+pub fn inject_debug_script_with_options(
+    html: &str,
+    port: u16,
+    api_origin: &str,
+    preview_base_path: Option<&str>,
+) -> String {
+    let preview_base_path = preview_base_path.unwrap_or("");
+    let base_tag = if !preview_base_path.is_empty() && !html.to_ascii_lowercase().contains("<base")
+    {
+        let mut href = preview_base_path.to_string();
+        if !href.ends_with('/') {
+            href.push('/');
+        }
+        format!(r#"<base href="{href}">"#)
+    } else {
+        String::new()
+    };
     let script = format!(
         r#"<script data-preview-debug="true">
 (function() {{
   var port = {port};
   var apiOrigin = "{api_origin}";
+  var previewBasePath = "{preview_base_path}";
   var batch = [];
   var flushTimer = null;
+  var storageSyncTimer = null;
+
+  function postToParent(payload) {{
+    try {{
+      window.parent.postMessage(payload, "*");
+    }} catch (e) {{}}
+  }}
+
+  function stripPreviewBase(pathname) {{
+    if (!previewBasePath) return pathname || "/";
+    if (pathname.indexOf(previewBasePath) === 0) {{
+      var stripped = pathname.slice(previewBasePath.length);
+      if (!stripped) return "/";
+      return stripped.charAt(0) === "/" ? stripped : "/" + stripped;
+    }}
+    return pathname || "/";
+  }}
+
+  function withPreviewBase(pathname) {{
+    var path = pathname || "/";
+    if (!previewBasePath) return path;
+    if (path === previewBasePath || path.indexOf(previewBasePath + "/") === 0) {{
+      return path;
+    }}
+    return path.charAt(0) === "/" ? previewBasePath + path : previewBasePath + "/" + path;
+  }}
+
+  function isLocalPreviewHost(hostname, targetPort) {{
+    if (!hostname) return false;
+    var normalized = String(hostname).toLowerCase();
+    if (normalized !== "localhost" && normalized !== "127.0.0.1" && normalized !== "0.0.0.0" && normalized !== "::1") {{
+      return false;
+    }}
+    return !targetPort || String(targetPort) === String(port);
+  }}
+
+  function rewriteWebSocketUrl(rawUrl) {{
+    if (!previewBasePath || rawUrl == null) return rawUrl;
+    try {{
+      var parsed = new URL(String(rawUrl), window.location.href);
+      var sameOrigin = parsed.origin === window.location.origin;
+      var localTarget = isLocalPreviewHost(parsed.hostname, parsed.port);
+      if (!sameOrigin && !localTarget) {{
+        return rawUrl;
+      }}
+      if (parsed.pathname.indexOf("/api/") === 0 && parsed.pathname.indexOf(previewBasePath) !== 0) {{
+        return rawUrl;
+      }}
+      var protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return protocol + "//" + window.location.host + withPreviewBase(parsed.pathname || "/") + parsed.search + parsed.hash;
+    }} catch (e) {{
+      return rawUrl;
+    }}
+  }}
+
+  function serializeValue(value) {{
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (value instanceof Error) return value.stack || value.message || String(value);
+    try {{
+      return JSON.stringify(value, null, 2);
+    }} catch (e) {{
+      return String(value);
+    }}
+  }}
 
   function flush() {{
     if (batch.length === 0) return;
@@ -22,12 +110,19 @@ pub fn inject_debug_script(html: &str, port: u16, api_origin: &str) -> String {
   }}
 
   function log(type, level, msg) {{
-    batch.push({{
+    var entry = {{
       id: Math.random().toString(36).slice(2),
       type: type,
       level: level,
-      message: typeof msg === "string" ? msg : JSON.stringify(msg),
+      message: serializeValue(msg),
       timestamp: Date.now()
+    }};
+    batch.push(entry);
+    postToParent({{
+      type: "preview-" + type,
+      level: level,
+      message: entry.message,
+      timestamp: entry.timestamp
     }});
     if (!flushTimer) flushTimer = setTimeout(function() {{ flushTimer = null; flush(); }}, 100);
   }}
@@ -40,21 +135,198 @@ pub fn inject_debug_script(html: &str, port: u16, api_origin: &str) -> String {
 
   window.addEventListener("error", function(e) {{ log("error","error",e.message + " at " + e.filename + ":" + e.lineno); }});
   window.addEventListener("unhandledrejection", function(e) {{ log("error","error","Unhandled: " + (e.reason || e)); }});
+
+  function reportLocation() {{
+    postToParent({{
+      type: "preview-location",
+      url: "http://localhost:" + port + stripPreviewBase(location.pathname) + location.search + location.hash
+    }});
+  }}
+
+  function wrapHistoryMethod(name) {{
+    var original = history[name];
+    if (typeof original !== "function") return;
+    history[name] = function() {{
+      var result = original.apply(this, arguments);
+      reportLocation();
+      return result;
+    }};
+  }}
+
+  wrapHistoryMethod("pushState");
+  wrapHistoryMethod("replaceState");
+  window.addEventListener("popstate", reportLocation);
+  window.addEventListener("hashchange", reportLocation);
+  window.addEventListener("load", reportLocation);
+
+  if (previewBasePath && typeof window.WebSocket === "function") {{
+    var OriginalWebSocket = window.WebSocket;
+    window.WebSocket = function(url, protocols) {{
+      var rewrittenUrl = rewriteWebSocketUrl(url);
+      if (protocols !== undefined) {{
+        return new OriginalWebSocket(rewrittenUrl, protocols);
+      }}
+      return new OriginalWebSocket(rewrittenUrl);
+    }};
+    for (var key in OriginalWebSocket) {{
+      try {{
+        window.WebSocket[key] = OriginalWebSocket[key];
+      }} catch (e) {{}}
+    }}
+    window.WebSocket.prototype = OriginalWebSocket.prototype;
+  }}
+
+  function snapshotStorage(storage) {{
+    var out = {{}};
+    try {{
+      for (var i = 0; i < storage.length; i++) {{
+        var key = storage.key(i);
+        if (key) {{
+          out[key] = storage.getItem(key);
+        }}
+      }}
+    }} catch (e) {{}}
+    return out;
+  }}
+
+  function sendStorageSync() {{
+    postToParent({{
+      type: "preview-storage-sync",
+      port: port,
+      local: typeof localStorage !== "undefined" ? snapshotStorage(localStorage) : {{}},
+      session: typeof sessionStorage !== "undefined" ? snapshotStorage(sessionStorage) : {{}}
+    }});
+  }}
+
+  function scheduleStorageSync() {{
+    if (storageSyncTimer) clearTimeout(storageSyncTimer);
+    storageSyncTimer = setTimeout(function() {{
+      storageSyncTimer = null;
+      sendStorageSync();
+    }}, 100);
+  }}
+
+  function instrumentStorage(storage) {{
+    if (!storage) return;
+    try {{
+      var originalSet = storage.setItem;
+      var originalRemove = storage.removeItem;
+      var originalClear = storage.clear;
+      storage.setItem = function() {{
+        var result = originalSet.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      }};
+      storage.removeItem = function() {{
+        var result = originalRemove.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      }};
+      storage.clear = function() {{
+        var result = originalClear.apply(this, arguments);
+        scheduleStorageSync();
+        return result;
+      }};
+    }} catch (e) {{}}
+  }}
+
+  function applyStorageSnapshot(storage, snapshot) {{
+    if (!storage || !snapshot || typeof snapshot !== "object") return;
+    try {{
+      Object.keys(snapshot).forEach(function(key) {{
+        storage.setItem(key, snapshot[key]);
+      }});
+    }} catch (e) {{}}
+  }}
+
+  function applyStorageOperation(payload) {{
+    var storage = payload.storageType === "sessionStorage" ? sessionStorage : localStorage;
+    if (payload.storageType === "cookies") {{
+      try {{
+        if (payload.operation === "set" && payload.key) {{
+          document.cookie = payload.key + "=" + encodeURIComponent(payload.value || "") + "; path=/";
+        }} else if (payload.operation === "remove" && payload.key) {{
+          document.cookie = payload.key + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+        }} else if (payload.operation === "clear") {{
+          document.cookie.split(";").forEach(function(item) {{
+            var name = item.split("=")[0];
+            if (name) {{
+              document.cookie = name.trim() + "=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+            }}
+          }});
+        }}
+      }} catch (e) {{}}
+      scheduleStorageSync();
+      return;
+    }}
+
+    if (!storage) return;
+    try {{
+      if (payload.operation === "set" && payload.key) {{
+        storage.setItem(payload.key, payload.value || "");
+      }} else if (payload.operation === "remove" && payload.key) {{
+        storage.removeItem(payload.key);
+      }} else if (payload.operation === "clear") {{
+        storage.clear();
+      }} else if (payload.operation === "import" && payload.entries) {{
+        Object.keys(payload.entries).forEach(function(key) {{
+          storage.setItem(key, payload.entries[key]);
+        }});
+      }}
+    }} catch (e) {{}}
+    scheduleStorageSync();
+  }}
+
+  window.addEventListener("message", function(event) {{
+    var payload = event.data || {{}};
+    if (payload.type === "preview-storage-restore" && String(payload.port) === String(port)) {{
+      applyStorageSnapshot(typeof localStorage !== "undefined" ? localStorage : null, payload.local);
+      applyStorageSnapshot(typeof sessionStorage !== "undefined" ? sessionStorage : null, payload.session);
+      scheduleStorageSync();
+      return;
+    }}
+    if (payload.type === "preview-storage-operation") {{
+      applyStorageOperation(payload);
+      return;
+    }}
+    if (payload.type === "preview-clear-storage") {{
+      try {{ if (typeof localStorage !== "undefined") localStorage.clear(); }} catch (e) {{}}
+      try {{ if (typeof sessionStorage !== "undefined") sessionStorage.clear(); }} catch (e) {{}}
+      scheduleStorageSync();
+      return;
+    }}
+    if (payload.type === "preview-evaluate" && typeof payload.expression === "string") {{
+      try {{
+        var result = (0, eval)(payload.expression);
+        log("console", "log", result);
+      }} catch (e) {{
+        log("error", "error", e && e.stack ? e.stack : String(e));
+      }}
+    }}
+  }});
+
+  instrumentStorage(typeof localStorage !== "undefined" ? localStorage : null);
+  instrumentStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
+  postToParent({{ type: "preview-storage-request", port: port }});
+  sendStorageSync();
 }})();
 </script>"#
     );
 
+    let mut payload = format!("{base_tag}{script}");
+
     // Insert before </head> if present, otherwise before </body>, otherwise at end
     if let Some(pos) = html.to_lowercase().find("</head>") {
         let mut result = html.to_string();
-        result.insert_str(pos, &script);
+        result.insert_str(pos, &payload);
         result
     } else if let Some(pos) = html.to_lowercase().find("</body>") {
         let mut result = html.to_string();
-        result.insert_str(pos, &script);
+        result.insert_str(pos, &payload);
         result
     } else {
-        format!("{html}{script}")
+        payload.insert_str(0, html);
+        payload
     }
 }
 
@@ -81,6 +353,20 @@ mod tests {
         let html = "<html><body><p>Hi</p></body></html>";
         let result = inject_debug_script(html, 3000, "http://localhost:3020");
         assert!(result.contains("data-preview-debug"));
+    }
+
+    #[test]
+    fn injects_websocket_rewrite_support_for_path_preview() {
+        let html = "<html><head></head><body></body></html>";
+        let result = inject_debug_script_with_options(
+            html,
+            5173,
+            "http://localhost:3020",
+            Some("/preview/5173"),
+        );
+        assert!(result.contains("rewriteWebSocketUrl"));
+        assert!(result.contains("window.WebSocket = function(url, protocols)"));
+        assert!(result.contains(r#"var previewBasePath = "/preview/5173";"#));
     }
 
     #[test]

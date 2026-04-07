@@ -57,6 +57,14 @@ pub struct ThreadUpdate {
 #[serde(rename_all = "camelCase")]
 pub struct SessionProjectInfo {
     pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_path: Option<String>,
     pub git_branch: Option<String>,
 }
 
@@ -171,6 +179,8 @@ struct StoredTerminalSession {
     created_at: String,
     updated_at: String,
     history: Vec<TerminalStreamEvent>,
+    #[serde(default)]
+    uses_tmux: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     sandbox: Option<TerminalSandboxInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,6 +281,8 @@ impl TerminalManager {
         &self,
         user_id: &str,
     ) -> Result<Vec<TerminalSessionSummary>, String> {
+        self.restore_surviving_tmux_sessions(user_id).await?;
+
         let active_sessions = {
             let sessions = self.inner.sessions.lock().await;
             let mut summaries = Vec::new();
@@ -347,7 +359,7 @@ impl TerminalManager {
             created_at: persisted.created_at,
             updated_at: persisted.updated_at,
             history,
-            uses_tmux: false,
+            uses_tmux: persisted.uses_tmux,
             current_cols: None,
             current_rows: None,
             sandbox: persisted.sandbox,
@@ -368,6 +380,7 @@ impl TerminalManager {
                 let next = self.inner.counter.fetch_add(1, Ordering::SeqCst) + 1;
                 format!("Terminal {next}")
             });
+        let uses_tmux = should_use_tmux().await;
         self.spawn_session(
             user_id,
             id,
@@ -378,6 +391,8 @@ impl TerminalManager {
             options.rows,
             Vec::new(),
             options.initial_command,
+            uses_tmux,
+            false,
         )
         .await
     }
@@ -417,6 +432,14 @@ impl TerminalManager {
             return Ok(None);
         };
         ensure_history_sequences(&mut persisted.history);
+        let uses_tmux = should_use_tmux().await;
+        let has_existing_tmux = uses_tmux && crate::tmux::session_exists(session_id).await;
+        if has_existing_tmux {
+            if let Some(cwd) = crate::tmux::get_session_cwd(session_id).await {
+                persisted.cwd = cwd;
+            }
+            persisted.history.clear();
+        }
         let restored_sandbox = persisted.sandbox.clone();
         let restored_thread = persisted.thread.clone();
         let snapshot = self
@@ -430,6 +453,8 @@ impl TerminalManager {
                 rows,
                 persisted.history,
                 None,
+                uses_tmux,
+                has_existing_tmux,
             )
             .await?;
         let maybe_session = {
@@ -525,6 +550,15 @@ impl TerminalManager {
 
         drop(state);
         session.io.resize(target_cols, target_rows).await?;
+        let uses_tmux = {
+            let state = session.state.lock().await;
+            state.uses_tmux
+        };
+        if uses_tmux {
+            if let (Ok(cols), Ok(rows)) = (u16::try_from(target_cols), u16::try_from(target_rows)) {
+                let _ = crate::tmux::resize_session(session_id, cols, rows).await;
+            }
+        }
 
         let mut state = session.state.lock().await;
         state.current_cols = target_cols;
@@ -576,6 +610,13 @@ impl TerminalManager {
         if let Some(session) = session {
             deleted = true;
             let _ = session.broadcaster.send(TerminalSubscriptionEvent::Closed);
+            let uses_tmux = {
+                let state = session.state.lock().await;
+                state.uses_tmux
+            };
+            if uses_tmux {
+                let _ = crate::tmux::kill_session(session_id).await;
+            }
             let _ = session.io.kill().await;
         }
         Ok(deleted)
@@ -797,10 +838,10 @@ impl TerminalManager {
                 .as_ref()
                 .and_then(|thread| thread.project_path.clone())
                 .or_else(|| detect_git_root(&state.cwd));
-            return Ok(Some(SessionProjectInfo {
-                cwd: state.cwd.clone(),
-                git_branch: project_path.as_deref().and_then(detect_git_branch),
-            }));
+            return Ok(Some(build_project_info(
+                &state.cwd,
+                project_path.as_deref().and_then(detect_git_branch),
+            )));
         }
 
         let Some(persisted) = load_persisted_session(&self.inner.config, user_id, session_id)?
@@ -812,10 +853,10 @@ impl TerminalManager {
             .as_ref()
             .and_then(|thread| thread.project_path.clone())
             .or_else(|| detect_git_root(&persisted.cwd));
-        Ok(Some(SessionProjectInfo {
-            cwd: persisted.cwd,
-            git_branch: project_path.as_deref().and_then(detect_git_branch),
-        }))
+        Ok(Some(build_project_info(
+            &persisted.cwd,
+            project_path.as_deref().and_then(detect_git_branch),
+        )))
     }
 
     async fn spawn_session(
@@ -829,6 +870,8 @@ impl TerminalManager {
         rows: Option<i64>,
         history: Vec<TerminalStreamEvent>,
         initial_command: Option<String>,
+        uses_tmux: bool,
+        existing_tmux: bool,
     ) -> Result<TerminalSessionSnapshot, String> {
         let created_at = iso_timestamp();
         let cwd = resolve_cwd(cwd.as_deref());
@@ -839,8 +882,23 @@ impl TerminalManager {
         let next_seq = ensure_history_sequences(&mut history);
         let current_cols = cols.unwrap_or(DEFAULT_COLS);
         let current_rows = rows.unwrap_or(DEFAULT_ROWS);
-        let (io, reader, child) =
-            spawn_pty_process(&shell_path, &shell_args, &cwd, current_cols, current_rows)?;
+        let (io, reader, child) = if uses_tmux {
+            let cols = u16::try_from(current_cols)
+                .map_err(|_| format!("Terminal columns {current_cols} are outside tmux range"))?;
+            let rows = u16::try_from(current_rows)
+                .map_err(|_| format!("Terminal rows {current_rows} are outside tmux range"))?;
+            if !existing_tmux {
+                crate::tmux::create_detached_session(&id, &shell_path, &cwd, cols, rows).await?;
+            }
+            let tmux_args = vec![
+                "attach-session".to_string(),
+                "-t".to_string(),
+                crate::tmux::session_name(&id),
+            ];
+            spawn_pty_process("tmux", &tmux_args, &cwd, current_cols, current_rows)?
+        } else {
+            spawn_pty_process(&shell_path, &shell_args, &cwd, current_cols, current_rows)?
+        };
         let (broadcaster, _) = broadcast::channel(256);
 
         let session = Arc::new(LiveSession {
@@ -862,7 +920,7 @@ impl TerminalManager {
                 thread: None,
                 is_busy: false,
                 last_activity_at: now_millis(),
-                uses_tmux: false,
+                uses_tmux,
             }),
             io,
             broadcaster,
@@ -897,7 +955,7 @@ impl TerminalManager {
             created_at,
             updated_at: iso_timestamp(),
             history: Vec::new(),
-            uses_tmux: false,
+            uses_tmux,
             current_cols: Some(current_cols),
             current_rows: Some(current_rows),
             sandbox: None,
@@ -987,6 +1045,29 @@ impl TerminalManager {
         let _ = session.broadcaster.send(TerminalSubscriptionEvent::Closed);
         Ok(())
     }
+
+    async fn restore_surviving_tmux_sessions(&self, user_id: &str) -> Result<(), String> {
+        if !should_use_tmux().await {
+            return Ok(());
+        }
+
+        let persisted = load_persisted_sessions(&self.inner.config, user_id)?;
+        for session in persisted {
+            if !session.uses_tmux {
+                continue;
+            }
+            if self.is_active(&session.id).await {
+                continue;
+            }
+            if crate::tmux::session_exists(&session.id).await {
+                let _ = self
+                    .restore_session(user_id, &session.id, None, None)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn summary_from_live_state(state: &LiveSessionState) -> TerminalSessionSummary {
@@ -1031,7 +1112,7 @@ fn summary_from_stored(session: &StoredTerminalSession) -> TerminalSessionSummar
         message_count: session.history.len(),
         is_active: false,
         is_busy: false,
-        uses_tmux: false,
+        uses_tmux: session.uses_tmux,
         sandbox: session.sandbox.clone(),
         thread: session.thread.clone(),
     }
@@ -1120,6 +1201,63 @@ fn detect_git_branch(project_path: &str) -> Option<String> {
     }
 }
 
+fn build_project_info(cwd: &str, git_branch: Option<String>) -> SessionProjectInfo {
+    let cwd_path = Path::new(cwd);
+    let project_type;
+    let mut project_name = None;
+    let mut start_command = None;
+    let mut index_path = None;
+
+    if let Some(package_json) = read_json_file(&cwd_path.join("package.json")) {
+        project_type = Some("node".to_string());
+        project_name = package_json
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        start_command = package_json
+            .get("scripts")
+            .and_then(|value| value.get("dev"))
+            .and_then(|_| Some("npm run dev".to_string()))
+            .or_else(|| {
+                package_json
+                    .get("scripts")
+                    .and_then(|value| value.get("start"))
+                    .and_then(|_| Some("npm start".to_string()))
+            });
+    } else if cwd_path.join("requirements.txt").is_file() && cwd_path.join("app.py").is_file() {
+        project_type = Some("python-flask".to_string());
+        start_command = Some("python app.py".to_string());
+    } else if cwd_path.join("manage.py").is_file() {
+        project_type = Some("django".to_string());
+        start_command = Some("python manage.py runserver".to_string());
+    } else if cwd_path.join("Cargo.toml").is_file() {
+        project_type = Some("rust".to_string());
+        start_command = Some("cargo run".to_string());
+    } else if cwd_path.join("go.mod").is_file() {
+        project_type = Some("go".to_string());
+        start_command = Some("go run .".to_string());
+    } else if cwd_path.join("index.html").is_file() && !cwd_path.join("package.json").is_file() {
+        project_type = Some("static".to_string());
+        index_path = Some(path_to_string(&cwd_path.join("index.html")));
+    } else {
+        project_type = Some("unknown".to_string());
+    }
+
+    SessionProjectInfo {
+        cwd: cwd.to_string(),
+        project_type,
+        project_name,
+        start_command,
+        index_path,
+        git_branch,
+    }
+}
+
+fn read_json_file(path: &Path) -> Option<serde_json::Value> {
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
 fn resolve_git_dir(project_path: &Path) -> Option<PathBuf> {
     let git_path = project_path.join(".git");
     if git_path.is_dir() {
@@ -1147,6 +1285,11 @@ fn path_to_string(path: &Path) -> String {
     if cfg!(windows) {
         rendered
             .strip_prefix(r"\\?\")
+            .unwrap_or(rendered.as_str())
+            .to_string()
+    } else if cfg!(target_os = "macos") {
+        rendered
+            .strip_prefix("/private")
             .unwrap_or(rendered.as_str())
             .to_string()
     } else {
@@ -1285,6 +1428,7 @@ async fn persist_session_state(
                 created_at: state.created_at.clone(),
                 updated_at: state.updated_at.clone(),
                 history: state.history.clone(),
+                uses_tmux: state.uses_tmux,
                 sandbox: state.sandbox.clone(),
                 thread: state.thread.clone(),
             },
@@ -1388,6 +1532,24 @@ fn detect_shell() -> String {
         env::var("ComSpec").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_string())
     } else {
         env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+
+async fn should_use_tmux() -> bool {
+    match tmux_mode_from_env() {
+        Some(false) => false,
+        Some(true) => crate::tmux::is_tmux_available().await,
+        None if cfg!(test) => false,
+        None => crate::tmux::is_tmux_available().await,
+    }
+}
+
+fn tmux_mode_from_env() -> Option<bool> {
+    let value = std::env::var("TERMINAL_USE_TMUX").ok()?;
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
     }
 }
 
@@ -1646,10 +1808,13 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 #[cfg(test)]
 mod tests {
     use super::{
-        intercept_terminal_queries, normalize_newlines, shell_command, AppConfig,
+        intercept_terminal_queries, normalize_newlines, tmux_mode_from_env, AppConfig,
         TerminalCreateOptions, TerminalManager,
     };
+    use std::sync::{LazyLock, Mutex as StdMutex};
     use tempfile::tempdir;
+
+    static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
     #[test]
     fn normalize_newlines_matches_platform_terminal_conventions() {
@@ -1745,6 +1910,26 @@ mod tests {
         assert_eq!(resized_size.cols, 132);
         assert_eq!(resized_size.rows, 41);
         let _ = manager.close(user_id, &session.id).await;
+    }
+
+    #[test]
+    fn tmux_mode_parses_boolean_overrides() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock should acquire");
+        let previous = std::env::var("TERMINAL_USE_TMUX").ok();
+
+        unsafe { std::env::set_var("TERMINAL_USE_TMUX", "true") };
+        assert_eq!(tmux_mode_from_env(), Some(true));
+
+        unsafe { std::env::set_var("TERMINAL_USE_TMUX", "false") };
+        assert_eq!(tmux_mode_from_env(), Some(false));
+
+        unsafe { std::env::set_var("TERMINAL_USE_TMUX", "auto") };
+        assert_eq!(tmux_mode_from_env(), None);
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TERMINAL_USE_TMUX", value) },
+            None => unsafe { std::env::remove_var("TERMINAL_USE_TMUX") },
+        }
     }
 
     #[cfg(windows)]

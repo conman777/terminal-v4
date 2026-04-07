@@ -118,10 +118,7 @@ pub struct GitBranchInfo {
 }
 
 async fn run_git_command(cwd: &str, args: &[&str], timeout_secs: u64) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output();
+    let output = Command::new("git").args(args).current_dir(cwd).output();
 
     let result = tokio::time::timeout(Duration::from_secs(timeout_secs), output)
         .await

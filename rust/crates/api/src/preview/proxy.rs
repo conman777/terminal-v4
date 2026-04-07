@@ -31,8 +31,7 @@ pub async fn proxy_request(
 
     for host in hosts {
         let url = format!("http://{host}:{port}{path}");
-        let method = reqwest::Method::from_bytes(method.as_bytes())
-            .unwrap_or(reqwest::Method::GET);
+        let method = reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET);
 
         let mut req = client.request(method, &url);
 

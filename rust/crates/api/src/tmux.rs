@@ -70,13 +70,7 @@ pub async fn kill_session(session_id: &str) -> Result<(), String> {
 pub async fn get_session_cwd(session_id: &str) -> Option<String> {
     let name = session_name(session_id);
     let output = run_tmux(
-        &[
-            "display-message",
-            "-t",
-            &name,
-            "-p",
-            "#{pane_current_path}",
-        ],
+        &["display-message", "-t", &name, "-p", "#{pane_current_path}"],
         5,
     )
     .await?;

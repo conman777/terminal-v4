@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn mask_key_long_values() {
-        assert_eq!(mask_key("sk-abc123xyz"), "****cxyz");
+        assert_eq!(mask_key("sk-abc123xyz"), "****3xyz");
     }
 
     #[test]

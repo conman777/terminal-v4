@@ -166,7 +166,11 @@ pub fn is_ui_chrome(line: &str) -> bool {
     }
 
     // Pane separators
-    if trimmed.chars().all(|c| c == '─' || c == '━' || c == '=' || c == '-') && trimmed.len() > 3 {
+    if trimmed
+        .chars()
+        .all(|c| c == '─' || c == '━' || c == '=' || c == '-')
+        && trimmed.len() > 3
+    {
         return true;
     }
 

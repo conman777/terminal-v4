@@ -48,7 +48,10 @@ impl CookieStore {
         if jar.is_empty() {
             return None;
         }
-        let pairs: Vec<String> = jar.iter().map(|c| format!("{}={}", c.name, c.value)).collect();
+        let pairs: Vec<String> = jar
+            .iter()
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect();
         Some(pairs.join("; "))
     }
 
