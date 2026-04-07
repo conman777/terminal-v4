@@ -1,7 +1,8 @@
+import { resolveApiUrl } from './apiBase';
+
 const ACCESS_TOKEN_KEY = 'terminal_access_token';
 const REFRESH_TOKEN_KEY = 'terminal_refresh_token';
 const USER_KEY = 'terminal_user';
-const API_BASE = import.meta.env.VITE_API_URL || '';
 
 // Centralized auth state to prevent race conditions
 // Start as true - AuthContext will set to false when validation completes
@@ -95,7 +96,7 @@ export async function refreshTokens() {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+      const response = await fetch(resolveApiUrl('/api/auth/refresh'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken })

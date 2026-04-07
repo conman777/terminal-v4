@@ -1,4 +1,5 @@
-import { useCallback, useState, useRef, useEffect, memo } from 'react';
+import { useCallback, useState, useRef, useEffect, useMemo, memo } from 'react';
+import { getAiDisplayLabel, inferSessionAiType } from '../utils/aiProviders';
 
 /**
  * Individual session tab with drag support and right-click menu.
@@ -26,6 +27,16 @@ export const SessionTab = memo(function SessionTab({
   const [isDragOver, setIsDragOver] = useState(false);
   const inputRef = useRef(null);
   const tabRef = useRef(null);
+  const resolvedAiType = useMemo(
+    () => aiType ?? inferSessionAiType(session),
+    [aiType, session]
+  );
+  const providerLabel = useMemo(
+    () => (resolvedAiType ? getAiDisplayLabel(resolvedAiType) ?? resolvedAiType : null),
+    [resolvedAiType]
+  );
+  const statusLabel = isBusy ? 'Busy' : 'Idle';
+  const showUnreadDot = hasUnread && !isActive;
 
   // Focus input when renaming starts
   useEffect(() => {
@@ -147,7 +158,30 @@ export const SessionTab = memo(function SessionTab({
           maxLength={60}
         />
       ) : (
-        <span className="tab-title">{session.title}</span>
+        <div className="tab-copy">
+          <div className="tab-title-row">
+            <span className="tab-title">{session.title}</span>
+            {showUnreadDot ? (
+              <span
+                className="tab-unread-dot-modern"
+                aria-label="Unread activity"
+                title="Unread activity"
+              />
+            ) : null}
+          </div>
+          <div className="tab-meta-row">
+            <span
+              className={`tab-status-dot-modern ${isBusy ? 'busy' : 'idle'}`}
+              aria-hidden="true"
+            />
+            {showStatusLabels ? (
+              <span className="tab-status-label-modern">{statusLabel}</span>
+            ) : null}
+            {providerLabel ? (
+              <span className="tab-provider-label-modern">{providerLabel}</span>
+            ) : null}
+          </div>
+        </div>
       )}
 
       <button
@@ -216,6 +250,64 @@ export const SessionTab = memo(function SessionTab({
           font-size: inherit;
           font-weight: inherit;
           color: inherit;
+        }
+
+        .tab-copy {
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          min-width: 0;
+          gap: 2px;
+        }
+
+        .tab-title-row {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .tab-meta-row {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+          color: var(--text-muted, #71717a);
+          font-size: 10px;
+          line-height: 1;
+        }
+
+        .tab-unread-dot-modern,
+        .tab-status-dot-modern {
+          width: 6px;
+          height: 6px;
+          border-radius: 999px;
+          flex-shrink: 0;
+        }
+
+        .tab-unread-dot-modern {
+          background: var(--accent-primary, #38bdf8);
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary, #38bdf8) 26%, transparent);
+        }
+
+        .tab-status-dot-modern.busy {
+          background: var(--warning, #f59e0b);
+        }
+
+        .tab-status-dot-modern.idle {
+          background: color-mix(in srgb, var(--text-muted, #71717a) 88%, transparent);
+        }
+
+        .tab-status-label-modern,
+        .tab-provider-label-modern {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .tab-provider-label-modern {
+          color: color-mix(in srgb, var(--text-secondary, #a1a1aa) 92%, transparent);
         }
 
         .tab-close-btn {

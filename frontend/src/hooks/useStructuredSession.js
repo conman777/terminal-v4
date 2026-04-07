@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../utils/api';
+import { getAccessToken } from '../utils/auth';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 /**
@@ -167,6 +168,7 @@ export function useStructuredSession({ sessionId, active = true }) {
   // WebSocket connection
   useEffect(() => {
     if (!sessionId || !active) return;
+    let disposed = false;
 
     // Reset state on session change
     setMessages([]);
@@ -176,20 +178,30 @@ export function useStructuredSession({ sessionId, active = true }) {
     setConnectionState('connecting');
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
+    const accessToken = getAccessToken();
+    const wsBaseUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
+    const wsUrl = accessToken
+      ? `${wsBaseUrl}?token=${encodeURIComponent(accessToken)}`
+      : wsBaseUrl;
 
     function connect() {
-      if (!windowActiveRef.current) {
+      if (disposed || !windowActiveRef.current) {
         return;
       }
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) {
+          return;
+        }
         setConnectionState('online');
       };
 
       ws.onmessage = (event) => {
+        if (disposed || wsRef.current !== ws) {
+          return;
+        }
         try {
           const data = JSON.parse(event.data);
           if (data.__terminal_meta && data.type === 'structured_event' && data.event) {
@@ -201,13 +213,24 @@ export function useStructuredSession({ sessionId, active = true }) {
       };
 
       ws.onclose = () => {
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+        }
+        if (disposed || wsRef.current !== null) {
+          return;
+        }
         setConnectionState('offline');
-        wsRef.current = null;
         if (!windowActiveRef.current) {
           return;
         }
         // Auto-reconnect after 3s
-        reconnectTimerRef.current = setTimeout(connect, 3000);
+        const reconnectTimer = setTimeout(() => {
+          if (reconnectTimerRef.current === reconnectTimer) {
+            reconnectTimerRef.current = null;
+          }
+          connect();
+        }, 3000);
+        reconnectTimerRef.current = reconnectTimer;
       };
 
       ws.onerror = () => {
@@ -219,14 +242,16 @@ export function useStructuredSession({ sessionId, active = true }) {
     connect();
 
     return () => {
+      disposed = true;
       connectRef.current = null;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
       if (wsRef.current) {
-        wsRef.current.close();
+        const currentSocket = wsRef.current;
         wsRef.current = null;
+        currentSocket.close();
       }
     };
   }, [sessionId, active, processEvent]);

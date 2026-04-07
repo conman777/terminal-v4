@@ -1,10 +1,26 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { apiFetch, apiGet } from '../utils/api';
+import { apiFetch } from '../utils/api';
 import { areEquivalentTerminalStates } from '../utils/terminalStateEquality';
+import {
+  buildStructuredSession,
+  isStructuredSessionId,
+  mergeSessionCollections,
+  normalizeStructuredMessageInput,
+} from '../utils/structuredSessions';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 import { useFolders } from './FolderContext';
 
 const TerminalSessionContext = createContext(null);
+const STRUCTURED_SESSION_METADATA_STORAGE_KEY = 'structuredSessionMetadata';
+
+function readStructuredSessionMetadata() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 export function TerminalSessionProvider({ children }) {
   const [sessions, setSessions] = useState([]);
@@ -19,6 +35,7 @@ export function TerminalSessionProvider({ children }) {
   const [sessionLoadError, setSessionLoadError] = useState(null);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
+  const [structuredSessionMetadata, setStructuredSessionMetadata] = useState(() => readStructuredSessionMetadata());
 
   // Get folder state from FolderContext
   const { recentFolders, addRecentFolder } = useFolders();
@@ -28,6 +45,7 @@ export function TerminalSessionProvider({ children }) {
   const restoreInFlightRef = useRef(new Set());
   const lastActivityRef = useRef(Date.now());
   const activeSessionIdRef = useRef(activeSessionId);
+  const structuredSessionMetadataRef = useRef(structuredSessionMetadata);
   const lastCwdRef = useRef(null);
   const terminalSendersRef = useRef(new Map());
   const liveTerminalCountRef = useRef(0);
@@ -126,6 +144,79 @@ export function TerminalSessionProvider({ children }) {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
 
+  useEffect(() => {
+    structuredSessionMetadataRef.current = structuredSessionMetadata;
+  }, [structuredSessionMetadata]);
+
+  const persistStructuredSessionMetadata = useCallback((nextMetadata) => {
+    structuredSessionMetadataRef.current = nextMetadata;
+    setStructuredSessionMetadata(nextMetadata);
+    try {
+      localStorage.setItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY, JSON.stringify(nextMetadata));
+    } catch (error) {
+      console.error('Failed to persist structured session metadata', error);
+    }
+  }, []);
+
+  const patchStructuredSessionMetadata = useCallback((sessionId, patch) => {
+    if (!sessionId || !patch || typeof patch !== 'object') {
+      return structuredSessionMetadataRef.current[sessionId] || {};
+    }
+
+    const currentMetadata = structuredSessionMetadataRef.current;
+    const currentSessionMetadata = currentMetadata[sessionId] || {};
+    const nextSessionMetadata = {
+      ...currentSessionMetadata,
+      ...patch,
+      thread: patch.thread
+        ? { ...(currentSessionMetadata.thread || {}), ...patch.thread }
+        : currentSessionMetadata.thread
+    };
+    const nextMetadata = {
+      ...currentMetadata,
+      [sessionId]: nextSessionMetadata
+    };
+
+    persistStructuredSessionMetadata(nextMetadata);
+    return nextSessionMetadata;
+  }, [persistStructuredSessionMetadata]);
+
+  const removeStructuredSessionMetadata = useCallback((sessionId) => {
+    if (!sessionId || !structuredSessionMetadataRef.current[sessionId]) {
+      return;
+    }
+
+    const nextMetadata = { ...structuredSessionMetadataRef.current };
+    delete nextMetadata[sessionId];
+    persistStructuredSessionMetadata(nextMetadata);
+  }, [persistStructuredSessionMetadata]);
+
+  const loadStructuredSessionSnapshots = useCallback(async () => {
+    try {
+      const response = await apiFetch('/api/structured/sessions');
+      if (response.status === 404) {
+        return [];
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to load structured sessions (${response.status})`);
+      }
+
+      const data = await response.json();
+      return Array.isArray(data) ? data : [];
+    } catch (error) {
+      console.error('Failed to load structured sessions', error);
+      return [];
+    }
+  }, []);
+
+  const mergeLoadedSessions = useCallback((terminalSessions, structuredSnapshots) => (
+    mergeSessionCollections(
+      terminalSessions,
+      structuredSnapshots,
+      structuredSessionMetadataRef.current
+    )
+  ), []);
+
   // Load sessions
   const hasLoadedOnceRef = useRef(false);
   const loadSessions = useCallback(async () => {
@@ -141,7 +232,9 @@ export function TerminalSessionProvider({ children }) {
         throw new Error(`Failed to load sessions (${response.status})`);
       }
       const data = await response.json();
-      const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+      const nextTerminalSessions = Array.isArray(data.sessions) ? data.sessions : [];
+      const structuredSnapshots = await loadStructuredSessionSnapshots();
+      const nextSessions = mergeLoadedSessions(nextTerminalSessions, structuredSnapshots);
       if (isMountedRef.current) {
         setSessions((prevSessions) => (
           areEquivalentTerminalStates(prevSessions, nextSessions)
@@ -162,7 +255,7 @@ export function TerminalSessionProvider({ children }) {
         setLoadingSessions(false);
       }
     }
-  }, []);
+  }, [loadStructuredSessionSnapshots, mergeLoadedSessions]);
 
   // Consolidated state fetcher
   const fetchAppState = useCallback(async () => {
@@ -171,10 +264,14 @@ export function TerminalSessionProvider({ children }) {
     try {
       const selectedSessionId = activeSessionIdRef.current;
       const url = selectedSessionId
+        && !isStructuredSessionId(selectedSessionId)
         ? `/api/state?sessionId=${selectedSessionId}`
         : '/api/state';
 
-      const response = await apiFetch(url);
+      const [response, structuredSnapshots] = await Promise.all([
+        apiFetch(url),
+        loadStructuredSessionSnapshots()
+      ]);
       if (!response.ok) {
         throw new Error(`Failed to fetch app state (${response.status})`);
       }
@@ -182,7 +279,10 @@ export function TerminalSessionProvider({ children }) {
       const data = await response.json();
 
       if (data.sessions && isMountedRef.current) {
-        const nextSessions = Array.isArray(data.sessions) ? data.sessions : [];
+        const nextSessions = mergeLoadedSessions(
+          Array.isArray(data.sessions) ? data.sessions : [],
+          structuredSnapshots
+        );
         setSessions((prevSessions) => (
           areEquivalentTerminalStates(prevSessions, nextSessions)
             ? prevSessions
@@ -207,7 +307,7 @@ export function TerminalSessionProvider({ children }) {
     } catch (error) {
       console.error('Failed to fetch app state:', error);
     }
-  }, [addRecentFolder]);
+  }, [addRecentFolder, loadStructuredSessionSnapshots, mergeLoadedSessions]);
 
   // Session CRUD operations
   const createSession = useCallback(async (options = {}) => {
@@ -251,6 +351,42 @@ export function TerminalSessionProvider({ children }) {
     }
   }, [loadSessions, recentFolders]);
 
+  const createStructuredSession = useCallback(async (options = {}) => {
+    try {
+      const cwd = options.cwd || recentFolders[0];
+      if (!cwd) {
+        throw new Error('Structured sessions require a working directory');
+      }
+
+      const response = await apiFetch('/api/structured/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd,
+          provider: options.provider,
+          model: options.model,
+          ...(options.title ? { title: options.title } : {})
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to create structured session (${response.status})`);
+      }
+
+      const snapshot = await response.json();
+      const session = buildStructuredSession(
+        snapshot,
+        structuredSessionMetadataRef.current[snapshot.id]
+      );
+      setActiveSessionId(session.id);
+      await loadSessions();
+      return session;
+    } catch (error) {
+      console.error('Failed to create structured session', error);
+      throw error;
+    }
+  }, [loadSessions, recentFolders]);
+
   const selectSession = useCallback((sessionId) => {
     setActiveSessionId(sessionId);
     try {
@@ -261,6 +397,16 @@ export function TerminalSessionProvider({ children }) {
   }, []);
 
   const restoreSession = useCallback(async (sessionId) => {
+    if (isStructuredSessionId(sessionId)) {
+      setActiveSessionId(sessionId);
+      try {
+        localStorage.setItem('lastActiveSession', sessionId);
+      } catch (error) {
+        console.error('Failed to save last active session', error);
+      }
+      return;
+    }
+
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/restore`, {
         method: 'POST',
@@ -301,6 +447,39 @@ export function TerminalSessionProvider({ children }) {
     const currentTitle = sessions.find((session) => session.id === sessionId)?.title;
     if (currentTitle === trimmed) return;
 
+    if (isStructuredSessionId(sessionId)) {
+      try {
+        const response = await apiFetch(`/api/structured/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: trimmed })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to rename structured session (${response.status})`);
+        }
+
+        const snapshot = await response.json();
+        const updatedSession = buildStructuredSession(
+          snapshot,
+          structuredSessionMetadataRef.current[sessionId]
+        );
+
+        patchStructuredSessionMetadata(sessionId, {
+          title: updatedSession.title,
+          thread: updatedSession.thread
+        });
+        setSessions((currentSessions) =>
+          currentSessions.map((session) =>
+            session.id === sessionId ? updatedSession : session
+          )
+        );
+      } catch (error) {
+        console.error('Failed to rename session', error);
+      }
+      return;
+    }
+
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}`, {
         method: 'PATCH',
@@ -322,9 +501,37 @@ export function TerminalSessionProvider({ children }) {
     } catch (error) {
       console.error('Failed to rename session', error);
     }
-  }, [sessions]);
+  }, [patchStructuredSessionMetadata, sessions]);
 
   const closeSession = useCallback(async (sessionId) => {
+    if (isStructuredSessionId(sessionId)) {
+      try {
+        const response = await apiFetch(`/api/structured/sessions/${sessionId}`, {
+          method: 'DELETE'
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to close structured session (${response.status})`);
+        }
+
+        removeStructuredSessionMetadata(sessionId);
+        setSessions((currentSessions) => {
+          const remainingSessions = currentSessions.filter((session) => session.id !== sessionId);
+          setActiveSessionId((currentActiveId) => {
+            if (sessionId === currentActiveId) {
+              const nextActive = remainingSessions.find((session) => session.isActive);
+              return nextActive ? nextActive.id : null;
+            }
+            return currentActiveId;
+          });
+          return remainingSessions;
+        });
+      } catch (error) {
+        console.error('Failed to close structured session', error);
+        await loadSessions();
+      }
+      return;
+    }
+
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}`, {
         method: 'DELETE'
@@ -350,11 +557,15 @@ export function TerminalSessionProvider({ children }) {
       console.error('Failed to close session', error);
       await loadSessions();
     }
-  }, [loadSessions]);
+  }, [loadSessions, removeStructuredSessionMetadata]);
 
   // Navigate session to path
   const navigateSession = useCallback(async (sessionId, path) => {
     if (!sessionId || !path) return;
+    if (isStructuredSessionId(sessionId)) {
+      addRecentFolder(path);
+      return;
+    }
 
     try {
       const cdCommand = `cd "${path}"\r`;
@@ -377,6 +588,44 @@ export function TerminalSessionProvider({ children }) {
   // Thread metadata actions
   const updateThreadMetadata = useCallback(async (sessionId, updates) => {
     if (!sessionId) return;
+
+    if (isStructuredSessionId(sessionId)) {
+      try {
+        const response = await apiFetch(`/api/structured/sessions/${sessionId}/thread`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updates)
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to update structured thread metadata (${response.status})`);
+        }
+
+        const data = await response.json();
+        const nextThread = data.thread;
+
+        patchStructuredSessionMetadata(sessionId, { thread: nextThread });
+        setSessions((currentSessions) =>
+          currentSessions.map((session) =>
+            session.id === sessionId
+              ? {
+                  ...session,
+                  updatedAt: nextThread?.lastActivityAt ?? session.updatedAt,
+                  thread: {
+                    ...(session.thread || {}),
+                    ...(nextThread || {})
+                  }
+                }
+              : session
+          )
+        );
+
+        return nextThread;
+      } catch (error) {
+        console.error('Failed to update thread metadata', error);
+        throw error;
+      }
+    }
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/thread`, {
@@ -405,7 +654,7 @@ export function TerminalSessionProvider({ children }) {
       console.error('Failed to update thread metadata', error);
       throw error;
     }
-  }, []);
+  }, [patchStructuredSessionMetadata]);
 
   const pinSession = useCallback(async (sessionId) => {
     return updateThreadMetadata(sessionId, { pinned: true });
@@ -444,6 +693,9 @@ export function TerminalSessionProvider({ children }) {
 
   const generateSessionTopic = useCallback(async (sessionId) => {
     if (!sessionId) return;
+    if (isStructuredSessionId(sessionId)) {
+      return false;
+    }
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/generate-topic`, {
         method: 'POST'
@@ -469,6 +721,32 @@ export function TerminalSessionProvider({ children }) {
 
   const detectSessionProject = useCallback(async (sessionId) => {
     if (!sessionId) return null;
+
+    if (isStructuredSessionId(sessionId)) {
+      const currentSession = sessions.find((session) => session.id === sessionId);
+      const projectPath = currentSession?.thread?.projectPath || currentSession?.cwd || null;
+      if (!projectPath) {
+        return null;
+      }
+
+      setSessions((currentSessions) =>
+        currentSessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                thread: {
+                  ...(session.thread || {}),
+                  projectPath
+                }
+              }
+            : session
+        )
+      );
+      patchStructuredSessionMetadata(sessionId, {
+        thread: { projectPath }
+      });
+      return projectPath;
+    }
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/detect-project`, {
@@ -501,10 +779,11 @@ export function TerminalSessionProvider({ children }) {
       console.error('Failed to detect project', error);
       return null;
     }
-  }, []);
+  }, [patchStructuredSessionMetadata, sessions]);
 
   const refreshSessionGitStats = useCallback(async (sessionId) => {
     if (!sessionId) return null;
+    if (isStructuredSessionId(sessionId)) return null;
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/git-stats`);
@@ -540,6 +819,7 @@ export function TerminalSessionProvider({ children }) {
 
   const listSessionGitBranches = useCallback(async (sessionId) => {
     if (!sessionId) return null;
+    if (isStructuredSessionId(sessionId)) return null;
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/git-branches`);
@@ -558,6 +838,7 @@ export function TerminalSessionProvider({ children }) {
 
   const checkoutSessionGitBranch = useCallback(async (sessionId, branch) => {
     if (!sessionId || !branch) return null;
+    if (isStructuredSessionId(sessionId)) return null;
 
     try {
       const response = await apiFetch(`/api/terminal/${sessionId}/git-checkout`, {
@@ -621,6 +902,22 @@ export function TerminalSessionProvider({ children }) {
   const sendToSession = useCallback(async (sessionId, data) => {
     if (!sessionId || data === undefined || data === null) return;
     const payload = typeof data === 'string' ? data : String(data);
+
+    if (isStructuredSessionId(sessionId)) {
+      const text = normalizeStructuredMessageInput(payload);
+      if (!text) return;
+
+      try {
+        await apiFetch(`/api/structured/sessions/${sessionId}/message`, {
+          method: 'POST',
+          body: { text }
+        });
+      } catch (error) {
+        console.error('Failed to send structured session input', error);
+      }
+      return;
+    }
+
     const sender = terminalSendersRef.current.get(sessionId);
     if (sender) {
       sender(payload);
@@ -801,6 +1098,7 @@ export function TerminalSessionProvider({ children }) {
 
     // Session actions
     createSession,
+    createStructuredSession,
     selectSession,
     restoreSession,
     renameSession,

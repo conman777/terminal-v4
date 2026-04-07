@@ -37,6 +37,7 @@ vi.mock('./DesktopStatusBar', () => ({
     return (
       <div
         data-testid="desktop-status-bar"
+        data-connection-state={props.connectionState}
         data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
         data-show-terminal-toggle={props.showTerminalToggle ? 'true' : 'false'}
       >
@@ -208,9 +209,11 @@ describe('MobileShell', () => {
 
     expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'ss-structured', chatMode: false });
     expect(mockUseStructuredSession).toHaveBeenCalledWith({ sessionId: 'ss-structured', active: true });
+    expect(mockListSessionGitBranches).not.toHaveBeenCalled();
     expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-toggle', 'true');
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-connection-state', 'online');
+    expect(screen.queryByTestId('terminal-chat')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open terminal view' }));
 

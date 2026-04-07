@@ -4,8 +4,9 @@ import { DesktopConversationView } from './DesktopConversationView';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
-import { getAiInitialCommand, getAiTypeOptions } from '../utils/aiProviders';
+import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
+import { isStructuredSessionId } from '../utils/structuredSessions';
 import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
@@ -62,9 +63,10 @@ export function MobileShell({
     () => sessions.find((session) => session.id === activeSessionId) || sessions[0] || null,
     [activeSessionId, sessions]
   );
-  const isStructuredSession = Boolean(currentSession?.id?.startsWith('ss-'));
+  const isStructuredSession = isStructuredSessionId(currentSession?.id);
   const useTerminalFirstLayout = !isStructuredSession;
-  const currentAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? null) : null;
+  const shouldRenderTerminalRuntime = useTerminalFirstLayout || isTerminalPanelOpen;
+  const currentAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
   const aiOptions = useMemo(
     () => getAiTypeOptions(customAiProviders),
     [customAiProviders]
@@ -105,6 +107,7 @@ export function MobileShell({
     sessionId: isStructuredSession ? currentSession?.id ?? null : null,
     active: isStructuredSession,
   });
+  const resolvedConnectionState = isStructuredSession ? structuredConnectionState : connectionState;
 
   useEffect(() => {
     onViewChange?.('terminal');
@@ -128,6 +131,11 @@ export function MobileShell({
 
   useEffect(() => {
     if (!currentSession?.id) return undefined;
+    if (isStructuredSession) {
+      setGitBranchInfo(null);
+      setIsLoadingGitBranches(false);
+      return undefined;
+    }
 
     let cancelled = false;
     setIsLoadingGitBranches(true);
@@ -147,7 +155,7 @@ export function MobileShell({
     return () => {
       cancelled = true;
     };
-  }, [currentSession?.id, listSessionGitBranches, projectInfo?.gitBranch]);
+  }, [currentSession?.id, isStructuredSession, listSessionGitBranches, projectInfo?.gitBranch]);
 
   const handleSelectGitBranch = useCallback(async (nextBranch) => {
     if (!currentSession?.id || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
@@ -288,7 +296,7 @@ export function MobileShell({
                     onImageUpload={handleImageUpload}
                     sessionId={currentSession.id}
                     aiType={currentAiType}
-                    connectionState={structuredConnectionState}
+                    connectionState={resolvedConnectionState}
                     isSendReady={structuredConnectionState === 'online'}
                     terminalPreview=""
                     terminalScreenSnapshot={terminalScreenSnapshot}
@@ -312,28 +320,30 @@ export function MobileShell({
                 className={`desktop-terminal-runtime mobile-terminal-runtime${useTerminalFirstLayout || isTerminalPanelOpen ? ' inline-panel-open' : ' is-hidden'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
                 aria-hidden={!useTerminalFirstLayout && !isTerminalPanelOpen ? 'true' : undefined}
               >
-                <TerminalChat
-                  key={`${currentSession.id}-${refreshToken}`}
-                  surface="mobile"
-                  sessionId={currentSession.id}
-                  keybarOpen={accessoryOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={onUrlDetected}
-                  fontSize={fontSize}
-                  webglEnabled={webglEnabled}
-                  inputEnabled={useTerminalFirstLayout || isTerminalPanelOpen}
-                  usesTmux={currentSession?.usesTmux}
-                  onRegisterImageUpload={(trigger) => {
-                    imageInputRef.current = { click: trigger };
-                  }}
-                  onRegisterFocusTerminal={onRegisterFocusTerminal}
-                  onConnectionChange={handleConnectionChange}
-                  onCwdChange={setCurrentCwd}
-                  onActivityChange={handleActivityChange}
-                  onScreenSnapshot={handleScreenSnapshot}
-                  onRegisterSendText={handleRegisterSendText}
-                  onTurn={handleTurn}
-                />
+                {shouldRenderTerminalRuntime ? (
+                  <TerminalChat
+                    key={`${currentSession.id}-${refreshToken}`}
+                    surface="mobile"
+                    sessionId={currentSession.id}
+                    keybarOpen={accessoryOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={onUrlDetected}
+                    fontSize={fontSize}
+                    webglEnabled={webglEnabled}
+                    inputEnabled={useTerminalFirstLayout || isTerminalPanelOpen}
+                    usesTmux={currentSession?.usesTmux}
+                    onRegisterImageUpload={(trigger) => {
+                      imageInputRef.current = { click: trigger };
+                    }}
+                    onRegisterFocusTerminal={onRegisterFocusTerminal}
+                    onConnectionChange={handleConnectionChange}
+                    onCwdChange={setCurrentCwd}
+                    onActivityChange={handleActivityChange}
+                    onScreenSnapshot={handleScreenSnapshot}
+                    onRegisterSendText={handleRegisterSendText}
+                    onTurn={handleTurn}
+                  />
+                ) : null}
               </div>
 
               <DesktopStatusBar
@@ -346,7 +356,7 @@ export function MobileShell({
                 isTerminalPanelOpen={isTerminalPanelOpen}
                 showTerminalToggle={!useTerminalFirstLayout}
                 onToggleTerminalPanel={!useTerminalFirstLayout ? handleToggleTerminalPanel : undefined}
-                connectionState={connectionState}
+                connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}
                 onSelectAiType={handleSelectAiType}

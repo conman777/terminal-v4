@@ -1,6 +1,5 @@
 import { getAccessToken, clearTokens, refreshTokens, getAuthInitializing } from './auth';
-
-const API_BASE = import.meta.env.VITE_API_URL || '';
+import { resolveApiUrl } from './apiBase';
 
 export async function apiFetch(url, options = {}) {
   const accessToken = getAccessToken();
@@ -22,7 +21,7 @@ export async function apiFetch(url, options = {}) {
     requestOptions.body = JSON.stringify(requestOptions.body);
   }
 
-  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
+  const fullUrl = resolveApiUrl(url);
   let response = await fetch(fullUrl, requestOptions);
 
   // Handle 401 - try to refresh token

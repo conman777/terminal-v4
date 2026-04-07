@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens } from '../utils/auth';
-
-const API_BASE = import.meta.env.VITE_API_URL || '';
+import { resolveApiUrl } from '../utils/apiBase';
 
 const AuthContext = createContext(null);
 
@@ -30,7 +29,7 @@ export function AuthProvider({ children }) {
         // Try to validate the access token with the backend
         if (accessToken) {
           try {
-            const response = await fetch(`${API_BASE}/api/auth/me`, {
+            const response = await fetch(resolveApiUrl('/api/auth/me'), {
               headers: { 'Authorization': `Bearer ${accessToken}` }
             });
 
@@ -63,7 +62,7 @@ export function AuthProvider({ children }) {
               setUserState(result.user);
             } else {
               // Fetch user data if not returned from refresh
-              const meResponse = await fetch(`${API_BASE}/api/auth/me`, {
+              const meResponse = await fetch(resolveApiUrl('/api/auth/me'), {
                 headers: { 'Authorization': `Bearer ${result.accessToken}` }
               });
               if (meResponse.ok) {
@@ -104,7 +103,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (username, password) => {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/auth/login`, {
+      const response = await fetch(resolveApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -129,7 +128,7 @@ export function AuthProvider({ children }) {
   const register = useCallback(async (username, password) => {
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/api/auth/register`, {
+      const response = await fetch(resolveApiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -161,7 +160,7 @@ export function AuthProvider({ children }) {
     try {
       const token = getAccessToken();
       if (token) {
-        await fetch(`${API_BASE}/api/auth/logout`, {
+        await fetch(resolveApiUrl('/api/auth/logout'), {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` }
         });

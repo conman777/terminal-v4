@@ -22,6 +22,15 @@ vi.mock('../contexts/AutocorrectContext', () => ({
   })
 }));
 
+vi.mock('../utils/autocorrect', () => ({
+  getSpellChecker: vi.fn(async () => ({
+    correct: () => true,
+    suggest: () => []
+  })),
+  getTerminalAutocorrectEdit: vi.fn(() => null),
+  shouldResetTerminalAutocorrectState: vi.fn(() => false)
+}));
+
 vi.mock('./TerminalChat', () => ({
   TerminalChat: (props) => {
     lastTerminalChatProps = props;
@@ -31,6 +40,32 @@ vi.mock('./TerminalChat', () => ({
 
 vi.mock('./DesktopConversationView', () => ({
   DesktopConversationView: () => <div data-testid="desktop-conversation-view" />
+}));
+
+vi.mock('./DesktopStatusBar', () => ({
+  DesktopStatusBar: (props) => (
+    <div
+      data-testid="desktop-status-bar"
+      data-connection-state={props.connectionState}
+      data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
+    >
+      <textarea
+        aria-label="Command composer"
+        placeholder={props.composerPlaceholder}
+        value={props.composerValue}
+        onChange={(event) => props.onComposerChange?.(event.target.value)}
+      />
+      {props.showTerminalToggle ? (
+        <button
+          type="button"
+          aria-label={props.isTerminalPanelOpen ? 'Hide inline terminal panel' : 'Show inline terminal panel'}
+          onClick={() => props.onToggleTerminalPanel?.()}
+        >
+          {props.isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
+        </button>
+      ) : null}
+    </div>
+  )
 }));
 
 vi.mock('../hooks/useMobileChatTurns', () => ({
@@ -112,6 +147,53 @@ describe('TerminalPane', () => {
     });
   });
 
+  it('skips git branch loading for structured sessions', async () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-structured' },
+      sessions: [{
+        id: 'ss-structured',
+        title: 'Structured session',
+        shell: 'claude',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { topic: 'Review code', projectPath: 'C:\\repo' }
+      }],
+      sessionAiTypes: {}
+    })} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    expect(listSessionGitBranches).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('terminal-chat')).not.toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-connection-state', 'online');
+  });
+
+  it('mounts the structured terminal runtime only after opening the inline terminal panel', async () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-structured' },
+      sessions: [{
+        id: 'ss-structured',
+        title: 'Structured session',
+        shell: 'claude',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { topic: 'Review code', projectPath: 'C:\\repo' }
+      }],
+      sessionAiTypes: {}
+    })} />);
+
+    expect(screen.queryByTestId('terminal-chat')).not.toBeInTheDocument();
+
+    screen.getByRole('button', { name: 'Show inline terminal panel' }).click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    });
+    expect(lastTerminalChatProps?.sessionId).toBe('ss-structured');
+  });
+
   it('keeps the existing terminal-first desktop layout while disabling direct terminal input by default', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
 
@@ -139,9 +221,7 @@ describe('TerminalPane', () => {
     const composer = screen.getByPlaceholderText('Ask V4 anything');
     expect(composer).toBeInTheDocument();
 
-    const statusBar = composer.closest('.desktop-status-bar-shell');
-    expect(statusBar).not.toBeNull();
-    expect(statusBar.closest('.desktop-terminal-stack')).not.toBeNull();
+    expect(screen.getByTestId('desktop-status-bar')).toBeInTheDocument();
   });
 
   it('hides the fullscreen button when there is only one selectable session', () => {

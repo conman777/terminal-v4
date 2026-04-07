@@ -21,6 +21,22 @@ Phase 1 also includes a Windows desktop wrapper (`desktop/tauri`) that launches
 the existing backend as a local child process and hosts the same UI in a native
 window. In this phase, desktop mode is local-only (`127.0.0.1:3020`).
 
+A parallel Rust backend workspace now lives under `rust/` as the starting point
+for an incremental rewrite. The Rust workspace is not the production runtime
+yet; the current app still runs on the TypeScript/Fastify backend until feature
+parity is reached. The current Rust slice covers health checks, JWT auth with
+local SQLite plus external Postgres login fallback, a PTY-backed live terminal
+manager with create/restore/input/resize/delete/WebSocket support, Windows
+`cmd.exe` startup-query handling, session history, turns, topic, git-branch,
+and thread metadata routes, a file-backed structured session manager with
+create/list/get/delete/message/approve/interrupt/WebSocket support, basic
+state/project-scan/preview-config/filesystem boot routes, and the settings,
+bookmarks, and notes APIs. This slice is now sufficient to manually exercise
+the existing Vite frontend through login, folder selection, terminal creation,
+structured `ss-*` session creation/discovery, and the terminal surface, and it
+now has browser-level regression coverage for structured create/rename/pin/reload
+flows, but it is still short of full Node parity.
+
 ## High-Level Architecture
 
 ```
@@ -81,6 +97,8 @@ Key files:
 ### Auth (JWT)
 - Access tokens are JWTs; refresh tokens are stored hashed in SQLite.
 - Registration is disabled (`/api/auth/register` returns 403).
+- Login uses the external Postgres user database referenced by
+  `STORAGE_DATABASE_URL`, while refresh tokens and mirror-user rows stay local.
 - `ALLOWED_USERNAME` can restrict logins to a single username.
 - Auth hook applies to all `/api/*` routes except explicit public routes.
 - SSE and WebSocket clients can pass `?token=` when headers are unavailable.
@@ -125,6 +143,25 @@ Key files:
 - `backend/src/claude-code/claude-code-manager.ts`
 - `backend/src/claude-code/claude-code-routes.ts`
 - `backend/src/claude-code/claude-code-store.ts`
+
+### Structured Session Manager
+- Persists per-user structured sessions under `users/<id>/structured`.
+- Exposes `POST/GET /api/structured/sessions`, `PATCH /api/structured/sessions/:id`,
+  `GET/PATCH /api/structured/sessions/:id/thread`, per-session message/control
+  routes, and `/api/structured/sessions/:id/ws` for canonical event streaming.
+- The Rust rewrite now mirrors this route family with a first Claude provider
+  implementation that consumes `claude -p --output-format stream-json`.
+- Browser clients authenticate the structured WebSocket with the access token in
+  the `token` query parameter.
+- In local browser development, loopback API URLs are normalized back to the
+  current page origin so Vite can proxy structured/session traffic to the live
+  Rust backend even when `VITE_API_URL` still points at an older loopback port.
+- The existing React shell now merges structured sessions into the shared
+  session inventory so new-tab AI launches can create conversation-first `ss-*`
+  tabs without changing the tab bar or thread/sidebar model.
+- Structured `ss-*` titles and sidebar thread metadata now round-trip through
+  the Rust backend so rename, topic, pin, archive, and project-path state are
+  no longer frontend-local only.
 
 ### Preview + Proxy
 Supports preview modes:

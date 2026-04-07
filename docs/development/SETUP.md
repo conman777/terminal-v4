@@ -40,6 +40,7 @@ Backend configuration (set in `backend/.env` or your shell):
 | `JWT_SECRET` | JWT signing secret | *(dev default if unset)* |
 | `REFRESH_SECRET` | Refresh token signing secret | *(dev default if unset)* |
 | `ALLOWED_USERNAME` | Restrict logins to a single username | *(unset)* |
+| `STORAGE_DATABASE_URL` | External Postgres users database for login | *(required for live login)* |
 
 Notes:
 - `TERMINAL_DATA_DIR` (or `DATA_DIR`) sets the base data directory for SQLite,
@@ -79,14 +80,19 @@ Frontend configuration (set in `frontend/.env` or your shell):
 | --- | --- | --- |
 | `VITE_API_URL` | API base URL for the frontend | *(empty = same origin)* |
 
+Notes:
+- In local browser development, loopback `VITE_API_URL` values are normalized to the current page origin so Vite can proxy `/api/*` and `/preview/*` to the backend even if the configured loopback port is stale.
+
 ## Authentication Setup
 
-Login is required. `/api/auth/register` is enabled by default.
+Login is required. `/api/auth/register` is disabled and returns `403`.
 
-If `ALLOWED_USERNAME` is set in the backend environment, registration/login is restricted
-to that username. For local development you can either:
-- Register that exact username via `/api/auth/register`, or
-- Unset `ALLOWED_USERNAME` to allow any username.
+The live TypeScript backend authenticates users against the external Postgres
+database referenced by `STORAGE_DATABASE_URL`, then stores refresh tokens and
+user settings locally in SQLite/JSON.
+
+If `ALLOWED_USERNAME` is set in the backend environment, login is restricted to
+that username after the external user lookup succeeds.
 
 ## Running the App
 
@@ -130,6 +136,44 @@ Notes:
 - Phase 1 desktop mode forces local-only backend binding (`127.0.0.1:3020`).
 - Network share mode is intentionally not enabled yet.
 - Desktop shell source lives in `desktop/tauri/src-tauri`.
+
+## Rust Backend Rewrite Workspace
+
+A parallel Rust workspace lives in `rust/`. It is the foundation for the
+incremental backend rewrite and currently does not replace the Node backend used
+by the desktop or web app.
+
+Commands:
+
+```bash
+cd rust
+cargo check
+cargo test
+cargo run -p terminal-v4-api
+```
+
+Current scope:
+- shared config/domain crate (`terminal-v4-core`)
+- Axum API crate (`terminal-v4-api`)
+- initial `/api/health` parity endpoint
+- local SQLite and external Postgres `/api/auth/login` and `/api/auth/refresh`
+- JWT-authenticated `/api/auth/me` and `/api/auth/logout`
+- live and persisted `/api/terminal` listing, create, restore, rename, and delete
+- `/api/terminal/:id/input`, `/api/terminal/:id/resize`, and `/api/terminal/:id/ws`
+- `/api/terminal/:id/history`, `/api/terminal/:id/turns`, `/api/terminal/:id/git-branches`, and `/api/terminal/:id/generate-topic`
+- `/api/terminal/:id/thread` and `/api/terminal/:id/detect-project`
+- `/api/structured/sessions`, `/api/structured/sessions/:id`, `/api/structured/sessions/:id/thread`, and the message/approve/interrupt/delete routes
+- `/api/structured/sessions/:id/ws` with access-token query auth for browser clients
+- `/api/state`
+- `/api/projects/scan`, `/api/projects/scan-dirs`, `/api/system/preview-config`, `/api/preview/active-ports`, and `/api/fs/list`
+- SQLite-backed `/api/settings`
+- JSON-backed `/api/bookmarks` and `/api/notes`
+
+Current limitation:
+- The Rust workspace can now back a manually testable login plus terminal flow in the existing Vite frontend, including folder browsing, terminal creation, and structured `ss-*` session creation/discovery plus backend-backed rename/thread metadata through the shared session inventory. It still does not replace Node for preview/proxy services, richer file/process APIs, passkeys, vault, voice, or the desktop runtime.
+- The current Rust terminal manager is PTY-backed and now handles the Windows `cmd.exe` startup cursor-status query in-process so default-shell input works in direct API flows as well as browser-driven sessions, but it still does not provide tmux parity or the full Node terminal feature set.
+- When testing the structured-session UI against Rust, restart the API from `rust/` with `cargo run -p terminal-v4-api` so the running binary includes the latest `/api/structured/sessions` routes before pointing Vite at `http://127.0.0.1:3020`.
+- The current browser verification path is `BASE_URL=http://127.0.0.1:5175 npx playwright test e2e/structured-sessions.spec.ts --project=chromium` from `frontend/`. It covers structured create, rename, pin, and reload persistence against the live Rust backend.
 
 ## Preview Troubleshooting (Local Dev Servers)
 

@@ -39,6 +39,7 @@ import {
 } from '../utils/terminalExternalInput';
 import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
+import { resolveApiBase } from '../utils/apiBase';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
@@ -2734,7 +2735,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       window.addEventListener('offline', handleOffline);
 
       const buildSocketUrl = () => {
-        const base = import.meta.env.VITE_API_URL || window.location.origin;
+        const base = resolveApiBase(import.meta.env.VITE_API_URL || window.location.origin) || window.location.origin;
         const url = new URL(`/api/terminal/${sessionId}/ws`, base);
         url.searchParams.set('history', '0');
         if (USE_FRAMED_PROTOCOL) url.searchParams.set('framed', '1');

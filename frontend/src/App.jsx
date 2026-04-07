@@ -29,7 +29,11 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { apiFetch } from './utils/api';
-import { createCustomAiProvider, getNewTabAiOptions } from './utils/aiProviders';
+import {
+  createCustomAiProvider,
+  getNewTabAiOptions,
+  shouldCreateStructuredSession
+} from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
@@ -183,6 +187,7 @@ function AppContent() {
     restoringSessionId,
     projectInfo,
     createSession,
+    createStructuredSession,
     selectSession,
     restoreSession,
     renameSession,
@@ -960,15 +965,24 @@ function AppContent() {
     if (!path) return;
     const newTabAiOptions = getNewTabAiOptions(customAiProviders);
     const selectedAi = newTabAiOptions.find((option) => option.id === aiOptionId) || newTabAiOptions[0];
+    const title = tabName || selectedAi.title || undefined;
+    const useStructuredCreation = aiOptionId !== 'cli'
+      && shouldCreateStructuredSession(aiOptionId, customAiProviders);
     const request = { cwd: path };
     if (selectedAi.command) {
       request.initialCommand = selectedAi.command;
     }
-    // Custom name > AI default name > backend default
-    request.title = tabName || selectedAi.title || undefined;
+    request.title = title;
 
     try {
-      const session = await createSession(request);
+      const session = useStructuredCreation
+        ? await createStructuredSession({
+            cwd: path,
+            provider: aiOptionId,
+            title
+          })
+        : await createSession(request);
+
       if (session?.id) {
         persistSidebarProject(addSidebarProject, path, session);
         addSessionToDesktop(session.id);
@@ -981,7 +995,7 @@ function AppContent() {
         }
       }
     } catch { /* createSession already logs */ }
-  }, [addSessionToDesktop, addSidebarProject, createSession, customAiProviders]);
+  }, [addSessionToDesktop, addSidebarProject, createSession, createStructuredSession, customAiProviders]);
 
   const handleSetSessionAiType = useCallback((sessionId, aiType) => {
     setSessionAiTypes(prev => {
@@ -1055,15 +1069,11 @@ function AppContent() {
     if (!activeSessionId || !text) return;
 
     try {
-      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: text })
-      });
+      await sendToSession(activeSessionId, text);
     } catch (error) {
       console.error('Failed to send to terminal', error);
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, sendToSession]);
 
   // Send text to Claude Code (prefers an active Claude session, falls back to current terminal)
   const handleSendToClaudeCode = useCallback(async (text) => {

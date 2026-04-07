@@ -1,10 +1,9 @@
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 import { apiFetch } from './api';
-
-const API_BASE = import.meta.env.VITE_API_URL || '';
+import { resolveApiUrl } from './apiBase';
 
 async function publicPost(url, body) {
-  const response = await fetch(`${API_BASE}${url}`, {
+  const response = await fetch(resolveApiUrl(url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)

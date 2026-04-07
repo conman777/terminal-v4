@@ -213,6 +213,10 @@ export function getAiCapabilities(aiType, customProviders = []) {
   };
 }
 
+export function shouldCreateStructuredSession(aiType, customProviders = []) {
+  return getAiCapabilities(aiType, customProviders).prefersStructuredUi;
+}
+
 function inferAiTypeFromText(value) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase();

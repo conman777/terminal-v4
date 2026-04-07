@@ -5,8 +5,9 @@ import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
 import { DesktopConversationView } from './DesktopConversationView';
 import { shouldFallbackToTerminalView } from '../utils/conversationMode';
-import { getAiCapabilities, getAiInitialCommand, getAiTypeOptions } from '../utils/aiProviders';
+import { getAiCapabilities, getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
+import { isStructuredSessionId } from '../utils/structuredSessions';
 import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
@@ -126,7 +127,7 @@ export const TerminalPane = memo(function TerminalPane({
   );
   const currentSession = selectableSessions.find(s => s.id === pane.sessionId);
   const shouldHighlightActiveChrome = isActive && selectableSessions.length > 1;
-  const currentAiType = sessionAiTypes?.[pane.sessionId] ?? null;
+  const currentAiType = sessionAiTypes?.[pane.sessionId] ?? inferSessionAiType(currentSession);
   const currentAiCapabilities = getAiCapabilities(currentAiType, customAiProviders);
   const launchCommand = getAiInitialCommand(currentAiType, customAiProviders);
   const aiOptions = getAiTypeOptions(customAiProviders);
@@ -140,8 +141,9 @@ export const TerminalPane = memo(function TerminalPane({
   );
   const showSessionSelector = canClose && selectableSessions.length > 0;
   // Detect if session uses structured mode (ss- prefix)
-  const isStructuredSession = Boolean(pane.sessionId && pane.sessionId.startsWith('ss-'));
+  const isStructuredSession = isStructuredSessionId(pane.sessionId);
   const useTerminalFirstLayout = !isStructuredSession;
+  const shouldRenderTerminalRuntime = useTerminalFirstLayout || isTerminalPanelOpen;
 
   const {
     turns,
@@ -170,6 +172,7 @@ export const TerminalPane = memo(function TerminalPane({
     sessionId: isStructuredSession ? pane.sessionId : null,
     active: isStructuredSession,
   });
+  const resolvedConnectionState = isStructuredSession ? structuredConnectionState : connectionState;
 
   useEffect(() => {
     if (!viewModeNotice || isNoticePersistent) return;
@@ -219,6 +222,11 @@ export const TerminalPane = memo(function TerminalPane({
 
   useEffect(() => {
     if (!pane.sessionId) return;
+    if (isStructuredSession) {
+      setGitBranchInfo(null);
+      setIsLoadingGitBranches(false);
+      return;
+    }
 
     let cancelled = false;
     setIsLoadingGitBranches(true);
@@ -237,7 +245,7 @@ export const TerminalPane = memo(function TerminalPane({
     return () => {
       cancelled = true;
     };
-  }, [listSessionGitBranches, pane.sessionId, projectInfo?.gitBranch]);
+  }, [isStructuredSession, listSessionGitBranches, pane.sessionId, projectInfo?.gitBranch]);
 
   const handleSelectGitBranch = useCallback(async (nextBranch) => {
     if (!pane.sessionId || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
@@ -672,7 +680,7 @@ export const TerminalPane = memo(function TerminalPane({
                     onImageUpload={handleImageUpload}
                     sessionId={pane.sessionId}
                     aiType={currentAiType}
-                    connectionState={isStructuredSession ? structuredConnectionState : connectionState}
+                    connectionState={resolvedConnectionState}
                     isSendReady={isStructuredSession ? structuredConnectionState === 'online' : isSendReady}
                     terminalPreview={terminalPreview}
                     terminalScreenSnapshot={terminalScreenSnapshot}
@@ -696,30 +704,32 @@ export const TerminalPane = memo(function TerminalPane({
                 className={`desktop-terminal-runtime${useTerminalFirstLayout || isTerminalPanelOpen ? ' inline-panel-open' : ' is-hidden'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
                 aria-hidden={!useTerminalFirstLayout && !isTerminalPanelOpen ? 'true' : undefined}
               >
-                <TerminalChat
-                  key={`${pane.sessionId}-${refreshToken}`}
-                  surface="desktop"
-                  sessionId={pane.sessionId}
-                  keybarOpen={keybarOpen}
-                  viewportHeight={viewportHeight}
-                  onUrlDetected={onUrlDetected}
-                  fontSize={fontSize}
-                  webglEnabled={webglEnabled}
-                  inputEnabled={isStructuredSession || desktopAllowTerminalInput || isTerminalPanelOpen}
-                  usesTmux={currentSession?.usesTmux}
-                  viewMode="terminal"
-                  isPrimary={isActive}
-                  fitSignal={fitSignal}
-                  onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
-                  onConnectionChange={handleConnectionChange}
-                  onCwdChange={handleCwdChange}
-                  onActivityChange={handleActivityChange}
-                  onOutputChunk={handleOutputChunk}
-                  onScreenSnapshot={handleScreenSnapshot}
-                  onCliEvent={handleCliEvent}
-                  onRegisterSendText={handleRegisterSendText}
-                  onTurn={handleTurn}
-                />
+                {shouldRenderTerminalRuntime ? (
+                  <TerminalChat
+                    key={`${pane.sessionId}-${refreshToken}`}
+                    surface="desktop"
+                    sessionId={pane.sessionId}
+                    keybarOpen={keybarOpen}
+                    viewportHeight={viewportHeight}
+                    onUrlDetected={onUrlDetected}
+                    fontSize={fontSize}
+                    webglEnabled={webglEnabled}
+                    inputEnabled={isStructuredSession || desktopAllowTerminalInput || isTerminalPanelOpen}
+                    usesTmux={currentSession?.usesTmux}
+                    viewMode="terminal"
+                    isPrimary={isActive}
+                    fitSignal={fitSignal}
+                    onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
+                    onConnectionChange={handleConnectionChange}
+                    onCwdChange={handleCwdChange}
+                    onActivityChange={handleActivityChange}
+                    onOutputChunk={handleOutputChunk}
+                    onScreenSnapshot={handleScreenSnapshot}
+                    onCliEvent={handleCliEvent}
+                    onRegisterSendText={handleRegisterSendText}
+                    onTurn={handleTurn}
+                  />
+                ) : null}
               </div>
               <DesktopStatusBar
                 sessionId={pane.sessionId}
@@ -732,7 +742,7 @@ export const TerminalPane = memo(function TerminalPane({
                 isTerminalPanelOpen={isTerminalPanelOpen}
                 showTerminalToggle={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput)}
                 onToggleTerminalPanel={!useTerminalFirstLayout && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
-                connectionState={connectionState}
+                connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}
                 onSelectAiType={handleSelectAiType}

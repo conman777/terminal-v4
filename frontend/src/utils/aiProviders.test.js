@@ -10,6 +10,7 @@ import {
   getAiLaunchCommand,
   getAiTypeOptions,
   inferSessionAiType,
+  shouldCreateStructuredSession,
   rewriteTerminalAgentInput,
   resolveSlashAgentCommand
 } from './aiProviders';
@@ -60,6 +61,8 @@ describe('aiProviders', () => {
   it('exposes capability matrix for supported providers', () => {
     expect(getAiCapabilities('claude').supportsPromptEvents).toBe(true);
     expect(getAiCapabilities('codex').prefersStructuredUi).toBe(true);
+    expect(shouldCreateStructuredSession('gemini')).toBe(true);
+    expect(shouldCreateStructuredSession('cli')).toBe(false);
   });
 
   it('infers a provider from session shell or title when explicit aiType is missing', () => {
