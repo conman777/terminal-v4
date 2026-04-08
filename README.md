@@ -22,6 +22,8 @@ See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 ## Requirements
 
 - Node.js 18+ (Node.js 22 recommended for node-pty prebuilt compatibility)
+- Rust stable toolchain (`cargo`, `rustfmt`)
+- On Windows, Strawberry Perl on `PATH` for the passkey/OpenSSL Rust build
 - Windows (PowerShell/cmd), macOS, or Linux
 
 ## Quick Start
@@ -31,7 +33,7 @@ See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 **TL;DR:**
 1. Install dependencies: `cd backend && npm install && cd ../frontend && npm install`
 2. Create `.env` with JWT secrets and optional API keys
-3. Start backend: `cd backend && npm run dev`
+3. Start Rust API: `npm run api:dev`
 4. Start frontend: `cd frontend && npm run dev`
 5. Open `http://localhost:5173` and create your first terminal!
 
@@ -46,8 +48,8 @@ npm run desktop:dev
 
 What this does:
 - Stops any stale Windows desktop wrapper process before rebuild so the app binary is not locked
-- Builds `frontend/dist` and `backend/dist`
-- Starts the backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
+- Builds `frontend/dist` and the Rust API binary
+- Starts the Rust backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
 - Launches a native Tauri window pointed at `http://127.0.0.1:3020`
 
 Build command:
@@ -76,6 +78,9 @@ terminal-v4/
 │   │   └── components/
 │   │       └── TerminalChat.jsx  # xterm.js integration
 │   └── package.json
+├── rust/                 # Axum API rewrite and shared Rust crates
+│   ├── crates/api/       # Rust backend routes, preview tooling, auth, PTY orchestration
+│   └── crates/core/      # Shared config/domain types
 └── docs/
     ├── architecture/     # System architecture docs
     └── development/      # Setup and testing guides
@@ -99,10 +104,10 @@ terminal-v4/
 ### Backend Environment Variables
 
 - `PORT` - Backend server port (default: `3020`)
-- `HOST` - Server host (default: `0.0.0.0`)
+- `HOST` - Backend server host (default: `127.0.0.1`)
 - `LOG_LEVEL` - Logging level (default: `info`)
-- `TERMINAL_DATA_DIR` - Override backend data directory (default: `backend/data`)
-- `JWT_SECRET` - JWT signing secret (required in production)
+- `TERMINAL_DATA_DIR` - Override backend data directory (default: platform app data, e.g. `%LOCALAPPDATA%/terminal-v4` on Windows)
+- `JWT_SECRET` - JWT signing secret (required for non-loopback binds; loopback-only dev can use the built-in default)
 - `REFRESH_SECRET` - Refresh token signing secret (required in production)
 - `ALLOWED_USERNAME` - Only this username is allowed to authenticate
 - `UNRESTRICTED_PREVIEW` - When set to `true`, removes preview port limits (use with care on exposed deployments)
@@ -139,7 +144,7 @@ git status            # Git operations
 
 ## Architecture Highlights
 
-- **Backend**: Fastify + TypeScript for high-performance async I/O
+- **Backend**: Rust Axum API for the primary desktop/runtime path, with the legacy Fastify backend still available during migration
 - **PTY**: `@homebridge/node-pty-prebuilt-multiarch` for true terminal emulation
 - **Frontend**: React + xterm.js for professional terminal UI
 - **Communication**: WebSocket for real-time streaming

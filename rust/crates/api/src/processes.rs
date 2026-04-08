@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 const MAX_LOGS_PER_PROCESS: usize = 1000;
 const MAX_LOG_ENTRY_BYTES: usize = 50 * 1024;
+const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,16 +116,38 @@ impl ProcessManager {
         }
 
         tokio::spawn(async move {
-            // Wait a bit then check for early exit
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let mut procs = processes_exit.lock().await;
-            if let Some(proc) = procs.get_mut(&pid) {
-                if let Some(ref mut child) = proc.child {
-                    if let Ok(Some(status)) = child.try_wait() {
-                        proc.info.running = false;
-                        proc.info.exit_code = status.code();
-                        proc.info.exited_at = Some(iso_timestamp());
+            loop {
+                tokio::time::sleep(EXIT_POLL_INTERVAL).await;
+
+                let mut done = false;
+                let mut procs = processes_exit.lock().await;
+                if let Some(proc) = procs.get_mut(&pid) {
+                    if !proc.info.running {
+                        done = true;
+                    } else if let Some(ref mut child) = proc.child {
+                        match child.try_wait() {
+                            Ok(Some(status)) => {
+                                proc.info.running = false;
+                                proc.info.exit_code = status.code();
+                                proc.info.exited_at = Some(iso_timestamp());
+                                done = true;
+                            }
+                            Ok(None) => {}
+                            Err(_) => {
+                                proc.info.running = false;
+                                proc.info.exited_at = Some(iso_timestamp());
+                                done = true;
+                            }
+                        }
+                    } else {
+                        done = true;
                     }
+                } else {
+                    done = true;
+                }
+
+                if done {
+                    break;
                 }
             }
         });
@@ -351,6 +374,7 @@ fn now_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn detect_port_from_localhost() {
@@ -378,5 +402,35 @@ mod tests {
     #[test]
     fn detect_port_no_match() {
         assert_eq!(detect_port("no port here"), None);
+    }
+
+    #[tokio::test]
+    async fn start_updates_process_state_after_late_exit() {
+        let manager = ProcessManager::new();
+        let cwd = std::env::temp_dir();
+        let cwd = cwd.to_string_lossy().to_string();
+
+        let (command, args): (&str, Vec<&str>) = if cfg!(windows) {
+            ("cmd", vec!["/C", "ping 127.0.0.1 -n 4 > NUL"])
+        } else {
+            ("sh", vec!["-c", "sleep 3"])
+        };
+
+        let started = manager
+            .start(&cwd, command, &args)
+            .await
+            .expect("process should start");
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        let process = manager
+            .list_all()
+            .await
+            .into_iter()
+            .find(|proc| proc.pid == started.pid)
+            .expect("started process should be tracked");
+
+        assert!(!process.running);
+        assert!(process.exited_at.is_some());
     }
 }

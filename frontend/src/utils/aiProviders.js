@@ -7,7 +7,7 @@ const KNOWN_AI_PROVIDERS = [
     initialCommand: 'claude --dangerously-skip-permissions',
     color: '#ff6b2b',
     capabilities: {
-      prefersStructuredUi: true,
+      prefersStructuredUi: false,
       supportsStructuredEvents: true,
       supportsPromptEvents: true
     }

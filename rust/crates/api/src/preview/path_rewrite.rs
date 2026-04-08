@@ -197,4 +197,36 @@ mod tests {
         assert!(rewritten.contains(r#"src="/preview/5173/logo.png""#));
         assert!(rewritten.contains(r#"src="https://example.com/logo.png""#));
     }
+
+    #[test]
+    fn preserves_data_and_blob_urls() {
+        let html = r#"<img src="data:image/png;base64,abc"><img src="blob:http://localhost/uuid">"#;
+        let rewritten = rewrite_html_for_path_preview(html, 5173, "http://localhost:3020");
+
+        assert!(rewritten.contains(r#"src="data:image/png;base64,abc""#));
+        assert!(rewritten.contains(r#"src="blob:http://localhost/uuid""#));
+    }
+
+    #[test]
+    fn rewrites_root_relative_paths() {
+        let html = r#"<img src="/assets/logo.png">"#;
+        let rewritten = rewrite_html_for_path_preview(html, 8080, "http://localhost:3020");
+
+        assert!(rewritten.contains(r#"src="/preview/8080/assets/logo.png""#));
+    }
+
+    #[test]
+    fn preserves_already_rewritten_paths() {
+        let html = r#"<link href="/preview/5173/styles.css">"#;
+        let rewritten = rewrite_html_for_path_preview(html, 5173, "http://localhost:3020");
+
+        // Should not double-prefix
+        assert!(!rewritten.contains("/preview/5173/preview/5173/"));
+    }
+
+    #[test]
+    fn preview_base_format() {
+        assert_eq!(preview_base(3000), "/preview/3000");
+        assert_eq!(preview_base(8080), "/preview/8080");
+    }
 }

@@ -14,6 +14,7 @@ This guide covers the Phase 1 Windows desktop wrapper for Terminal v4.
 
 - Node.js 18+
 - Rust toolchain (`cargo --version`)
+- Strawberry Perl on `PATH` for the passkey/OpenSSL Rust build
 - WebView2 runtime on Windows
 
 ## File Layout
@@ -35,9 +36,9 @@ This command performs:
 1. Install desktop wrapper dependencies
 2. Stop any stale `terminal_v4_desktop.exe` process so Windows does not lock the binary during rebuild
 3. Build frontend (`frontend/dist`)
-4. Build backend (`backend/dist`)
+4. Build the Rust API binary (`rust/target/.../terminal-v4-api.exe`)
 5. Launch Tauri app
-6. Tauri app starts backend with desktop-safe env:
+6. Tauri app starts the Rust backend with desktop-safe env:
    - `HOST=127.0.0.1`
    - `PORT=3020`
    - `TERMINAL_V4_DESKTOP=true`
@@ -64,11 +65,18 @@ Run:
 npm run desktop:predev
 ```
 
+If the Rust backend still does not build, confirm `perl` is available:
+
+```bash
+perl -v
+```
+
 ### Tauri opens but page is blank
 Check:
 1. Backend logs for startup errors
 2. Port conflicts on `3020`
 3. Auth environment variables in `backend/.env`
+4. The Rust API binary exists under `rust/target/debug` or `rust/target/release`
 
 ### `cargo` not found
 Install Rust toolchain via [https://rustup.rs](https://rustup.rs)

@@ -119,7 +119,7 @@ export const TerminalPane = memo(function TerminalPane({
     });
   }, []);
 
-  const { listSessionGitBranches, checkoutSessionGitBranch } = useTerminalSession();
+  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession } = useTerminalSession();
 
   const selectableSessions = useMemo(
     () => sessions.filter((session) => !session.thread?.archived),
@@ -429,6 +429,13 @@ export const TerminalPane = memo(function TerminalPane({
     const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
     if (!payload) return;
 
+    if (isStructuredSession) {
+      structuredSendMessage(payload);
+      setComposerValue('');
+      setComposerAttachments([]);
+      return;
+    }
+
     const result = handleChatSend(payload);
     setComposerValue('');
     setComposerAttachments([]);
@@ -440,7 +447,12 @@ export const TerminalPane = memo(function TerminalPane({
       setIsNoticePersistent(false);
       setViewModeNotice('');
     }
-  }, [composerAttachments, handleChatSend, pane.sessionId, viewModeNotice]);
+  }, [composerAttachments, handleChatSend, isStructuredSession, pane.sessionId, structuredSendMessage, viewModeNotice]);
+
+  const handleStructuredRawSend = useCallback((data) => {
+    if (!pane.sessionId) return undefined;
+    return sendToSession(pane.sessionId, data);
+  }, [pane.sessionId, sendToSession]);
 
   const handleComposerAttachmentAdd = useCallback((attachment) => {
     if (!attachment?.path) return;
@@ -675,7 +687,7 @@ export const TerminalPane = memo(function TerminalPane({
                     isStreaming={isStructuredSession ? structuredIsStreaming : isSessionBusy}
                     isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
                     onSend={isStructuredSession ? structuredSendMessage : handleChatSend}
-                    onSendRaw={handleRawSend}
+                    onSendRaw={isStructuredSession ? handleStructuredRawSend : handleRawSend}
                     onInterrupt={isStructuredSession ? structuredInterrupt : handleInterrupt}
                     onImageUpload={handleImageUpload}
                     sessionId={pane.sessionId}

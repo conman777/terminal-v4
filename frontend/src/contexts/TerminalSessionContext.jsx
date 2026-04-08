@@ -5,7 +5,6 @@ import {
   buildStructuredSession,
   isStructuredSessionId,
   mergeSessionCollections,
-  normalizeStructuredMessageInput,
 } from '../utils/structuredSessions';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 import { useFolders } from './FolderContext';
@@ -904,13 +903,12 @@ export function TerminalSessionProvider({ children }) {
     const payload = typeof data === 'string' ? data : String(data);
 
     if (isStructuredSessionId(sessionId)) {
-      const text = normalizeStructuredMessageInput(payload);
-      if (!text) return;
+      if (payload.length === 0) return;
 
       try {
-        await apiFetch(`/api/structured/sessions/${sessionId}/message`, {
+        await apiFetch(`/api/structured/sessions/${sessionId}/input`, {
           method: 'POST',
-          body: { text }
+          body: { text: payload }
         });
       } catch (error) {
         console.error('Failed to send structured session input', error);

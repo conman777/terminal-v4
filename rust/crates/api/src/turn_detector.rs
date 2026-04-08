@@ -145,6 +145,28 @@ pub fn is_ui_chrome(line: &str) -> bool {
         }
     }
 
+    if trimmed.contains('%')
+        && trimmed.chars().any(|c| {
+            matches!(
+                c,
+                '\u{2588}'
+                    | '\u{2593}'
+                    | '\u{2592}'
+                    | '\u{2591}'
+                    | '\u{2581}'
+                    | '\u{2582}'
+                    | '\u{2583}'
+                    | '\u{2584}'
+                    | '\u{2585}'
+                    | '\u{2586}'
+                    | '\u{2587}'
+                    | '\u{2589}'
+            )
+        })
+    {
+        return true;
+    }
+
     // Progress/spinner patterns
     if trimmed.starts_with("⠋")
         || trimmed.starts_with("⠙")
@@ -384,5 +406,49 @@ mod tests {
     fn build_turns_empty_input() {
         let turns = build_turns_from_history(&[]);
         assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn build_turns_user_then_assistant() {
+        let events = vec![
+            TerminalStreamEvent {
+                text: ">\nhello".to_string(),
+                ts: 1000,
+                seq: None,
+            },
+            TerminalStreamEvent {
+                text: "Hi there! How can I help?".to_string(),
+                ts: 2000,
+                seq: None,
+            },
+        ];
+        let turns = build_turns_from_history(&events);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, "user");
+        assert!(turns[0].content.contains("hello"));
+        assert_eq!(turns[1].role, "assistant");
+        assert!(turns[1].content.contains("Hi there"));
+    }
+
+    #[test]
+    fn strip_ansi_handles_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn strip_ansi_handles_utf8() {
+        let input = "Hello 世界 🌍";
+        assert_eq!(strip_ansi(input), input);
+    }
+
+    #[test]
+    fn is_ui_chrome_detects_progress_bars() {
+        assert!(is_ui_chrome("████████░░░░ 67%"));
+        assert!(is_ui_chrome("[████████░░░░] 67%"));
+    }
+
+    #[test]
+    fn idle_prompt_handles_trailing_whitespace() {
+        assert!(output_indicates_idle_prompt("C:\\Users\\conor>  \n"));
     }
 }

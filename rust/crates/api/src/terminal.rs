@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 
+#[cfg(not(windows))]
 use portable_pty::{
     native_pty_system, Child as PtyChild, ChildKiller, CommandBuilder, MasterPty, PtySize,
 };
@@ -93,10 +94,18 @@ struct LiveSession {
 }
 
 #[derive(Clone)]
+#[cfg(not(windows))]
 struct PtySessionIo {
     master: Arc<StdMutex<Box<dyn MasterPty + Send>>>,
     writer: Arc<StdMutex<Box<dyn Write + Send>>>,
     killer: Arc<StdMutex<Box<dyn ChildKiller + Send + Sync>>>,
+}
+
+#[derive(Clone)]
+#[cfg(windows)]
+struct PtySessionIo {
+    process: Arc<StdMutex<conpty::Process>>,
+    writer: Arc<StdMutex<Box<dyn Write + Send>>>,
 }
 
 struct LiveSessionState {
@@ -187,6 +196,7 @@ struct StoredTerminalSession {
     thread: Option<ThreadMetadata>,
 }
 
+#[cfg(not(windows))]
 impl PtySessionIo {
     fn new(
         master: Box<dyn MasterPty + Send>,
@@ -237,6 +247,45 @@ impl PtySessionIo {
         spawn_blocking_io(move || {
             let master = lock_blocking(master.as_ref(), "terminal master")?;
             master.get_size().map_err(|error| error.to_string())
+        })
+        .await
+    }
+}
+
+#[cfg(windows)]
+impl PtySessionIo {
+    async fn write(&self, data: String) -> Result<(), String> {
+        let writer = self.writer.clone();
+        let data_len = data.len();
+        tracing::debug!("PtySessionIo::write: {} bytes", data_len);
+        spawn_blocking_io(move || {
+            let mut writer = lock_blocking(writer.as_ref(), "terminal writer")?;
+            writer
+                .write_all(data.as_bytes())
+                .map_err(|error| error.to_string())?;
+            writer.flush().map_err(|error| error.to_string())?;
+            tracing::debug!("PtySessionIo::write: flushed {} bytes OK", data_len);
+            Ok(())
+        })
+        .await
+    }
+
+    async fn resize(&self, cols: i64, rows: i64) -> Result<(), String> {
+        let process = self.process.clone();
+        spawn_blocking_io(move || {
+            let mut process = lock_blocking(process.as_ref(), "terminal process")?;
+            process
+                .resize(cols as i16, rows as i16)
+                .map_err(|error| error.to_string())
+        })
+        .await
+    }
+
+    async fn kill(&self) -> Result<(), String> {
+        let process = self.process.clone();
+        spawn_blocking_io(move || {
+            let mut process = lock_blocking(process.as_ref(), "terminal process")?;
+            process.exit(1).map_err(|error| error.to_string())
         })
         .await
     }
@@ -470,6 +519,7 @@ impl TerminalManager {
     }
 
     pub async fn write(&self, user_id: &str, session_id: &str, input: &str) -> Result<(), String> {
+        tracing::debug!("TerminalManager::write session={session_id} input_len={}", input.len());
         let session = {
             let sessions = self.inner.sessions.lock().await;
             sessions.get(session_id).cloned()
@@ -483,17 +533,17 @@ impl TerminalManager {
             }
         }
 
-        // Flush batcher before writing input for responsiveness
-        {
-            let mut batcher = session.batcher.lock().await;
+        // Try to flush batcher for responsiveness, but don't block if it's busy
+        if let Ok(mut batcher) = session.batcher.try_lock() {
             batcher.cancel_timer();
             if !batcher.is_empty() {
                 let text = batcher.take();
                 drop(batcher);
-                self.record_output(session.clone(), text).await?;
+                let _ = self.record_output(session.clone(), text).await;
             }
         }
 
+        tracing::debug!("TerminalManager::write calling io.write");
         session.io.write(normalize_newlines(input)).await?;
 
         update_cwd_from_input(&session, input).await;
@@ -675,6 +725,7 @@ impl TerminalManager {
         if state.user_id != user_id {
             return Err(format!("Terminal session {session_id} not found"));
         }
+        tracing::info!("subscribe: session={session_id}, receiver_count={}", session.broadcaster.receiver_count());
         Ok(session.broadcaster.subscribe())
     }
 
@@ -980,9 +1031,15 @@ impl TerminalManager {
             event
         };
 
-        let _ = session
+        let receivers = session.broadcaster.receiver_count();
+        let send_result = session
             .broadcaster
             .send(TerminalSubscriptionEvent::Output(event));
+        tracing::debug!(
+            "record_output: broadcast to {} receivers, result={}",
+            receivers,
+            send_result.is_ok()
+        );
         persist_session_state(&self.inner.config, &session).await
     }
 
@@ -1008,7 +1065,7 @@ impl TerminalManager {
             let mut batcher = session.batcher.lock().await;
             batcher.cancel_timer();
             if let Some(flushed) = batcher.append(&sanitized_text) {
-                flushed
+                Some(flushed)
             } else {
                 // Schedule a timer flush
                 let manager = self.clone();
@@ -1024,9 +1081,14 @@ impl TerminalManager {
                     };
                     let _ = manager.record_output(session_clone, text).await;
                 });
-                session.batcher.lock().await.flush_handle = Some(handle);
-                return Ok(());
+                // Store flush handle — batcher lock is still held from above
+                batcher.flush_handle = Some(handle);
+                None
             }
+        };
+
+        let Some(flush_text) = flush_text else {
+            return Ok(());
         };
 
         self.record_output(session, flush_text).await
@@ -1297,6 +1359,7 @@ fn path_to_string(path: &Path) -> String {
     }
 }
 
+#[cfg(not(windows))]
 fn spawn_pty_process(
     shell_path: &str,
     shell_args: &[String],
@@ -1319,9 +1382,7 @@ fn spawn_pty_process(
     let mut command = CommandBuilder::new(shell_path);
     command.args(shell_args.iter());
     command.cwd(cwd);
-    if !cfg!(windows) {
-        command.env("TERM", "xterm-256color");
-    }
+    command.env("TERM", "xterm-256color");
 
     let child = pair
         .slave
@@ -1341,27 +1402,107 @@ fn spawn_pty_process(
     Ok((io, reader, child))
 }
 
+#[cfg(windows)]
+fn spawn_pty_process(
+    shell_path: &str,
+    shell_args: &[String],
+    cwd: &str,
+    cols: i64,
+    rows: i64,
+) -> Result<
+    (
+        PtySessionIo,
+        Box<dyn Read + Send>,
+        Arc<StdMutex<conpty::Process>>,
+    ),
+    String,
+> {
+    let mut cmd = shell_path.to_string();
+    for arg in shell_args {
+        cmd.push(' ');
+        cmd.push_str(arg);
+    }
+    // Set cwd by prefixing the command
+    let full_cmd = format!("cd /d {cwd} && {cmd}");
+
+    tracing::info!("conpty: spawning command: {full_cmd}");
+    let mut process = conpty::spawn(&full_cmd).map_err(|error| {
+        tracing::error!("conpty spawn failed: {error}");
+        error.to_string()
+    })?;
+    tracing::info!("conpty: spawn succeeded, is_alive={}", process.is_alive());
+
+    tracing::info!("conpty: getting output reader");
+    let reader = process.output().map_err(|error| {
+        tracing::error!("conpty output failed: {error}");
+        error.to_string()
+    })?;
+    tracing::info!("conpty: getting input writer");
+    let input = process.input().map_err(|error| {
+        tracing::error!("conpty input failed: {error}");
+        error.to_string()
+    })?;
+
+    let cols_i16 = i16::try_from(cols).unwrap_or(120);
+    let rows_i16 = i16::try_from(rows).unwrap_or(32);
+    process
+        .resize(cols_i16, rows_i16)
+        .map_err(|error| error.to_string())?;
+    tracing::info!("conpty: setup complete");
+    let process_arc = Arc::new(StdMutex::new(process));
+
+    let io = PtySessionIo {
+        process: process_arc.clone(),
+        writer: Arc::new(StdMutex::new(Box::new(input))),
+    };
+
+    Ok((io, Box::new(reader), process_arc))
+}
+
 fn spawn_terminal_reader(
     manager: TerminalManager,
     session: Arc<LiveSession>,
     mut reader: Box<dyn Read + Send>,
 ) {
-    let runtime = tokio::runtime::Handle::current();
+    // Use a channel to decouple the blocking PTY read thread from the async
+    // runtime.  block_on() from a plain OS thread can deadlock on Windows
+    // ConPTY when the async handler contends on tokio Mutex locks held by
+    // timer tasks spawned inside handle_terminal_output.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
     thread::spawn(move || {
+        tracing::info!("PTY reader thread started");
         let mut buffer = [0_u8; OUTPUT_BUFFER_SIZE];
         loop {
             match reader.read(&mut buffer) {
-                Ok(0) => return,
-                Ok(count) => {
-                    let text = String::from_utf8_lossy(&buffer[..count]).to_string();
-                    let _ = runtime.block_on(manager.handle_terminal_output(session.clone(), text));
+                Ok(0) => {
+                    tracing::info!("PTY reader: EOF (0 bytes)");
+                    return;
                 }
-                Err(_) => return,
+                Ok(count) => {
+                    tracing::debug!("PTY reader: got {} bytes", count);
+                    let text = String::from_utf8_lossy(&buffer[..count]).to_string();
+                    if tx.send(text).is_err() {
+                        tracing::info!("PTY reader: channel closed");
+                        return;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("PTY reader error: {err}");
+                    return;
+                }
             }
+        }
+    });
+
+    tokio::spawn(async move {
+        while let Some(text) = rx.recv().await {
+            let _ = manager.handle_terminal_output(session.clone(), text).await;
         }
     });
 }
 
+#[cfg(not(windows))]
 fn spawn_terminal_exit_watcher(
     manager: TerminalManager,
     session_id: String,
@@ -1369,6 +1510,30 @@ fn spawn_terminal_exit_watcher(
 ) {
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+        let _ = manager.mark_session_inactive(&session_id).await;
+    });
+}
+
+#[cfg(windows)]
+fn spawn_terminal_exit_watcher(
+    manager: TerminalManager,
+    session_id: String,
+    process: Arc<StdMutex<conpty::Process>>,
+) {
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            loop {
+                let alive = {
+                    let proc = process.lock().unwrap();
+                    proc.is_alive()
+                };
+                if !alive {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        })
+        .await;
         let _ = manager.mark_session_inactive(&session_id).await;
     });
 }
@@ -1609,6 +1774,7 @@ fn normalize_newlines(input: &str) -> String {
     }
 }
 
+#[cfg(not(windows))]
 fn pty_size(cols: i64, rows: i64) -> Result<PtySize, String> {
     let cols = u16::try_from(cols)
         .map_err(|_| format!("Terminal columns {cols} are outside the supported PTY range"))?;
@@ -1808,8 +1974,8 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 #[cfg(test)]
 mod tests {
     use super::{
-        intercept_terminal_queries, normalize_newlines, tmux_mode_from_env, AppConfig,
-        TerminalCreateOptions, TerminalManager,
+        intercept_terminal_queries, normalize_newlines, shell_command, tmux_mode_from_env,
+        AppConfig, TerminalCreateOptions, TerminalManager,
     };
     use std::sync::{LazyLock, Mutex as StdMutex};
     use tempfile::tempdir;
@@ -1840,6 +2006,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(windows))]
     async fn resize_updates_the_underlying_pty_dimensions() {
         let working_dir = tempdir().expect("temp dir should create");
         let data_dir = tempdir().expect("data dir should create");
@@ -1952,5 +2119,43 @@ mod tests {
             "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         );
         assert_eq!(args, vec!["-NoLogo".to_string(), "-NoExit".to_string()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conpty_smoke_test_reads_output() {
+        use std::io::{Read, Write};
+
+        let mut proc = conpty::spawn("cmd.exe").expect("conpty spawn");
+        let mut reader = proc.output().expect("conpty output");
+        let mut writer = proc.input().expect("conpty input");
+
+        // Write a command
+        writer.write_all(b"echo CONPTY_OK\r\n").unwrap();
+        writer.flush().unwrap();
+
+        let mut buf = [0u8; 4096];
+        let mut all_output = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    all_output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if all_output.contains("CONPTY_OK") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        proc.exit(0).ok();
+        assert!(
+            all_output.contains("CONPTY_OK"),
+            "Expected CONPTY_OK in output, got: {all_output:?}"
+        );
     }
 }

@@ -1,11 +1,11 @@
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, RunEvent};
+use tauri::{AppHandle, Manager, RunEvent};
 
 const DESKTOP_HOST: &str = "127.0.0.1";
 const DESKTOP_PORT: u16 = 3020;
@@ -15,176 +15,203 @@ const BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(250);
 struct BackendProcess(Mutex<Option<Child>>);
 
 fn io_error(message: impl Into<String>) -> Error {
-  Error::new(ErrorKind::Other, message.into())
+    Error::new(ErrorKind::Other, message.into())
 }
 
 fn resolve_repo_root() -> Result<PathBuf> {
-  let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  manifest_dir
-    .parent()
-    .and_then(|path| path.parent())
-    .and_then(|path| path.parent())
-    .map(|path| path.to_path_buf())
-    .ok_or_else(|| io_error("Failed to resolve repository root from CARGO_MANIFEST_DIR"))
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.parent())
+        .map(|path| path.to_path_buf())
+        .ok_or_else(|| io_error("Failed to resolve repository root from CARGO_MANIFEST_DIR"))
 }
 
-fn build_desktop_backend_path() -> Option<String> {
-  let current_path = std::env::var("PATH").ok()?;
-  let app_data = std::env::var("APPDATA").ok()?;
-  let npm_bin = PathBuf::from(app_data).join("npm");
-  let npm_bin_str = npm_bin.to_string_lossy().to_string();
-  if npm_bin_str.is_empty() {
-    return Some(current_path);
-  }
+fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> {
+    assert_backend_port_available()?;
 
-  let separator = if cfg!(windows) { ';' } else { ':' };
-  let mut parts: Vec<String> = current_path
-    .split(separator)
-    .filter(|part| !part.trim().is_empty())
-    .map(|part| part.to_string())
-    .collect();
+    let repo_root = resolve_repo_root()?;
+    let rust_bin = find_rust_binary(app_handle, &repo_root).ok_or_else(|| {
+    io_error(
+      "Rust backend binary not found. Build it with `cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml` before launching the desktop app.",
+    )
+  })?;
+    let data_dir = resolve_data_dir(app_handle)?;
 
-  let is_match = |candidate: &str| -> bool {
-    if cfg!(windows) {
-      candidate.eq_ignore_ascii_case(&npm_bin_str)
-    } else {
-      candidate == npm_bin_str
-    }
-  };
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|err| io_error(format!("Failed to create desktop data directory: {err}")))?;
 
-  parts.retain(|part| !is_match(part));
-  parts.insert(0, npm_bin_str);
-  Some(parts.join(&separator.to_string()))
-}
-
-fn spawn_backend() -> Result<Child> {
-  let repo_root = resolve_repo_root()?;
-
-  // Prefer Rust backend if binary exists
-  let rust_binary = find_rust_binary(&repo_root);
-  if let Some(rust_bin) = rust_binary {
     eprintln!("[tauri] Starting Rust backend: {}", rust_bin.display());
-    return Command::new(&rust_bin)
-      .env("HOST", DESKTOP_HOST)
-      .env("PORT", DESKTOP_PORT.to_string())
-      .env("TERMINAL_V4_DESKTOP", "true")
-      .env("TERMINAL_V4_SHARE_MODE", "off")
-      .stdout(Stdio::inherit())
-      .stderr(Stdio::inherit())
-      .stdin(Stdio::null())
-      .spawn()
-      .map_err(|err| io_error(format!("Failed to launch Rust backend: {err}")));
-  }
-
-  // Fallback to Node backend
-  let backend_dir = repo_root.join("backend");
-  let backend_entry = backend_dir.join("dist").join("index.js");
-
-  if !backend_entry.exists() {
-    return Err(io_error(
-      "No backend found. Either build the Rust backend (cargo build -p terminal-v4-api) \
-       or the Node backend (cd backend && npm run build)."
-    ));
-  }
-
-  eprintln!("[tauri] Starting Node backend: {}", backend_entry.display());
-  let mut command = Command::new("node");
-  command
-    .arg("--enable-source-maps")
-    .arg(&backend_entry)
-    .current_dir(backend_dir)
-    .env("HOST", DESKTOP_HOST)
-    .env("PORT", DESKTOP_PORT.to_string())
-    .env("TERMINAL_V4_DESKTOP", "true")
-    .env("TERMINAL_V4_SHARE_MODE", "off")
-    .stdout(Stdio::inherit())
-    .stderr(Stdio::inherit())
-    .stdin(Stdio::null());
-
-  if let Some(path_override) = build_desktop_backend_path() {
-    command.env("PATH", path_override);
-  }
-
-  command
-    .spawn()
-    .map_err(|err| io_error(format!("Failed to launch Node backend: {err}")))
+    Command::new(&rust_bin)
+        .env("HOST", DESKTOP_HOST)
+        .env("PORT", DESKTOP_PORT.to_string())
+        .env("TERMINAL_DATA_DIR", &data_dir)
+        .env("TERMINAL_V4_DESKTOP", "true")
+        .env("TERMINAL_V4_SHARE_MODE", "off")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|err| io_error(format!("Failed to launch Rust backend: {err}")))
 }
 
-fn find_rust_binary(repo_root: &PathBuf) -> Option<PathBuf> {
-  let binary_name = if cfg!(windows) {
-    "terminal-v4-api.exe"
-  } else {
-    "terminal-v4-api"
-  };
+fn resolve_data_dir<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("TERMINAL_DATA_DIR") {
+        return Ok(PathBuf::from(path));
+    }
 
-  // Check release first, then debug
-  let candidates = [
-    repo_root.join("rust").join("target").join("release").join(binary_name),
-    repo_root.join("rust").join("target").join("debug").join(binary_name),
-  ];
+    app_handle
+        .path()
+        .app_local_data_dir()
+        .map_err(|_| io_error("Failed to resolve the desktop app data directory"))
+}
 
-  candidates.into_iter().find(|path| path.exists())
+fn find_rust_binary<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    repo_root: &Path,
+) -> Option<PathBuf> {
+    let binary_name = if cfg!(windows) {
+        "terminal-v4-api.exe"
+    } else {
+        "terminal-v4-api"
+    };
+
+    let mut candidates = Vec::new();
+
+    if let Some(path) = std::env::var_os("TERMINAL_V4_API_BINARY") {
+        candidates.push(PathBuf::from(path));
+    }
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        candidates.push(resource_dir.join(binary_name));
+        candidates.push(resource_dir.join("bin").join(binary_name));
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join(binary_name));
+            candidates.push(exe_dir.join("bin").join(binary_name));
+        }
+    }
+
+    candidates.push(
+        repo_root
+            .join("rust")
+            .join("target")
+            .join("release")
+            .join(binary_name),
+    );
+    candidates.push(
+        repo_root
+            .join("rust")
+            .join("target")
+            .join("debug")
+            .join(binary_name),
+    );
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+fn backend_is_healthy() -> bool {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DESKTOP_PORT);
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
+        return false;
+    };
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+
+    if stream
+    .write_all(
+      format!(
+        "GET /api/health HTTP/1.1\r\nHost: {DESKTOP_HOST}:{DESKTOP_PORT}\r\nConnection: close\r\n\r\n"
+      )
+      .as_bytes(),
+    )
+    .is_err()
+  {
+    return false;
+  }
+
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return false;
+    }
+
+    response.starts_with("HTTP/1.1 200") && response.contains("\"status\":\"ok\"")
+}
+
+fn assert_backend_port_available() -> Result<()> {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DESKTOP_PORT);
+    if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+        return Err(io_error(format!(
+      "Desktop backend port {DESKTOP_PORT} is already in use on {DESKTOP_HOST}. Stop the existing service before launching the desktop app."
+    )));
+    }
+
+    Ok(())
 }
 
 fn wait_for_backend() -> Result<()> {
-  let start = Instant::now();
-  let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DESKTOP_PORT);
+    let start = Instant::now();
 
-  loop {
-    if TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_ok() {
-      return Ok(());
-    }
+    loop {
+        if backend_is_healthy() {
+            return Ok(());
+        }
 
-    if start.elapsed() >= BACKEND_WAIT_TIMEOUT {
-      return Err(io_error(format!(
+        if start.elapsed() >= BACKEND_WAIT_TIMEOUT {
+            return Err(io_error(format!(
         "Backend did not become ready at http://{DESKTOP_HOST}:{DESKTOP_PORT} within {} seconds",
         BACKEND_WAIT_TIMEOUT.as_secs()
       )));
-    }
+        }
 
-    std::thread::sleep(BACKEND_POLL_INTERVAL);
-  }
+        std::thread::sleep(BACKEND_POLL_INTERVAL);
+    }
 }
 
 fn stop_backend(state: &BackendProcess) {
-  let mut guard = match state.0.lock() {
-    Ok(guard) => guard,
-    Err(_) => return,
-  };
+    let mut guard = match state.0.lock() {
+        Ok(guard) => guard,
+        Err(_) => return,
+    };
 
-  if let Some(mut child) = guard.take() {
-    let _ = child.kill();
-    let _ = child.wait();
-  }
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
 fn main() {
-  tauri::Builder::default()
-    .manage(BackendProcess(Mutex::new(None)))
-    .setup(|app| {
-      let mut child = spawn_backend()?;
+    tauri::Builder::default()
+        .manage(BackendProcess(Mutex::new(None)))
+        .setup(|app| {
+            let app_handle = app.handle().clone();
+            let mut child = spawn_backend(&app_handle)?;
 
-      if let Err(err) = wait_for_backend() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(err.into());
-      }
+            if let Err(err) = wait_for_backend() {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(err.into());
+            }
 
-      let state = app.state::<BackendProcess>();
-      let mut guard = state
-        .0
-        .lock()
-        .map_err(|_| io_error("Failed to lock backend process state"))?;
-      *guard = Some(child);
+            let state = app.state::<BackendProcess>();
+            let mut guard = state
+                .0
+                .lock()
+                .map_err(|_| io_error("Failed to lock backend process state"))?;
+            *guard = Some(child);
 
-      Ok(())
-    })
-    .build(tauri::generate_context!())
-    .expect("error while running tauri application")
-    .run(|app_handle, event| {
-      if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
-        let state = app_handle.state::<BackendProcess>();
-        stop_backend(&state);
-      }
-    });
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app_handle, event| {
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
+                let state = app_handle.state::<BackendProcess>();
+                stop_backend(&state);
+            }
+        });
 }

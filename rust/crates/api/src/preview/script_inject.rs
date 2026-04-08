@@ -31,6 +31,28 @@ pub fn inject_debug_script_with_options(
   var flushTimer = null;
   var storageSyncTimer = null;
 
+  function getAccessToken() {{
+    try {{
+      if (typeof window.localStorage === "undefined") return null;
+      return window.localStorage.getItem("terminal_access_token");
+    }} catch (e) {{
+      return null;
+    }}
+  }}
+
+  function apiUrl(path) {{
+    var target = apiOrigin + path;
+    var token = getAccessToken();
+    if (!token) return target;
+    try {{
+      var url = new URL(target, window.location.href);
+      url.searchParams.set("token", token);
+      return url.toString();
+    }} catch (e) {{
+      return target + (target.indexOf("?") === -1 ? "?" : "&") + "token=" + encodeURIComponent(token);
+    }}
+  }}
+
   function postToParent(payload) {{
     try {{
       window.parent.postMessage(payload, "*");
@@ -101,7 +123,7 @@ pub fn inject_debug_script_with_options(
     if (batch.length === 0) return;
     var items = batch.splice(0, batch.length);
     try {{
-      fetch(apiOrigin + "/api/preview/" + port + "/logs", {{
+      fetch(apiUrl("/api/preview/" + port + "/logs"), {{
         method: "POST",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify(items)
@@ -277,6 +299,151 @@ pub fn inject_debug_script_with_options(
     scheduleStorageSync();
   }}
 
+  var metricsBuffer = [];
+  var metricsFlushTimer = null;
+
+  function sendMetrics(metrics) {{
+    if (!metrics || metrics.length === 0) return;
+    try {{
+      fetch(apiUrl("/api/preview/" + port + "/performance"), {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify({{ metrics: metrics }})
+      }}).catch(function() {{}});
+    }} catch (e) {{}}
+  }}
+
+  function flushMetrics() {{
+    if (metricsBuffer.length === 0) return;
+    var items = metricsBuffer.splice(0, metricsBuffer.length);
+    sendMetrics(items);
+  }}
+
+  function scheduleMetricsFlush() {{
+    if (metricsFlushTimer) return;
+    metricsFlushTimer = setTimeout(function() {{
+      metricsFlushTimer = null;
+      flushMetrics();
+    }}, 2000);
+  }}
+
+  function trackMetric(type, data) {{
+    metricsBuffer.push({{
+      type: type,
+      timestamp: Date.now(),
+      data: data
+    }});
+    scheduleMetricsFlush();
+  }}
+
+  try {{
+    var lcpObserver = new PerformanceObserver(function(list) {{
+      var entries = list.getEntries();
+      var lastEntry = entries[entries.length - 1];
+      if (!lastEntry) return;
+      trackMetric("coreWebVitals", {{
+        lcp: lastEntry.renderTime || lastEntry.loadTime || null,
+        fid: null,
+        cls: null
+      }});
+    }});
+    lcpObserver.observe({{ type: "largest-contentful-paint", buffered: true }});
+  }} catch (e) {{}}
+
+  try {{
+    var fidObserver = new PerformanceObserver(function(list) {{
+      list.getEntries().forEach(function(entry) {{
+        trackMetric("coreWebVitals", {{
+          lcp: null,
+          fid: entry.processingStart - entry.startTime,
+          cls: null
+        }});
+      }});
+    }});
+    fidObserver.observe({{ type: "first-input", buffered: true }});
+  }} catch (e) {{}}
+
+  try {{
+    var clsValue = 0;
+    var clsObserver = new PerformanceObserver(function(list) {{
+      list.getEntries().forEach(function(entry) {{
+        if (!entry.hadRecentInput) {{
+          clsValue += entry.value;
+        }}
+      }});
+      trackMetric("coreWebVitals", {{
+        lcp: null,
+        fid: null,
+        cls: clsValue
+      }});
+    }});
+    clsObserver.observe({{ type: "layout-shift", buffered: true }});
+  }} catch (e) {{}}
+
+  window.addEventListener("load", function() {{
+    setTimeout(function() {{
+      try {{
+        var navTiming = performance.getEntriesByType("navigation")[0];
+        if (!navTiming) return;
+        trackMetric("loadMetrics", {{
+          domContentLoaded: navTiming.domContentLoadedEventEnd - navTiming.domContentLoadedEventStart,
+          fullPageLoad: navTiming.loadEventEnd - navTiming.loadEventStart,
+          timeToInteractive: navTiming.domInteractive - navTiming.fetchStart
+        }});
+      }} catch (e) {{}}
+    }}, 0);
+  }});
+
+  var frameCount = 0;
+  var lastFpsReport = performance.now();
+
+  function measureRuntimeMetrics() {{
+    var now = performance.now();
+    frameCount += 1;
+
+    if (now - lastFpsReport >= 1000) {{
+      var runtimeData = {{
+        fps: frameCount * 1000 / (now - lastFpsReport),
+        memory: null,
+        longTasks: []
+      }};
+
+      if (performance.memory) {{
+        runtimeData.memory = {{
+          usedJSHeapSize: performance.memory.usedJSHeapSize,
+          totalJSHeapSize: performance.memory.totalJSHeapSize,
+          jsHeapSizeLimit: performance.memory.jsHeapSizeLimit
+        }};
+      }}
+
+      trackMetric("runtimeMetrics", runtimeData);
+      frameCount = 0;
+      lastFpsReport = now;
+    }}
+
+    requestAnimationFrame(measureRuntimeMetrics);
+  }}
+
+  requestAnimationFrame(measureRuntimeMetrics);
+
+  try {{
+    var longTaskObserver = new PerformanceObserver(function(list) {{
+      var longTasks = list.getEntries().map(function(entry) {{
+        return {{
+          startTime: entry.startTime,
+          duration: entry.duration
+        }};
+      }});
+      if (longTasks.length === 0) return;
+      trackMetric("runtimeMetrics", {{
+        fps: null,
+        memory: null,
+        longTasks: longTasks
+      }});
+    }});
+    longTaskObserver.observe({{ type: "longtask", buffered: true }});
+  }} catch (e) {{}}
+
   window.addEventListener("message", function(event) {{
     var payload = event.data || {{}};
     if (payload.type === "preview-storage-restore" && String(payload.port) === String(port)) {{
@@ -309,6 +476,8 @@ pub fn inject_debug_script_with_options(
   instrumentStorage(typeof sessionStorage !== "undefined" ? sessionStorage : null);
   postToParent({{ type: "preview-storage-request", port: port }});
   sendStorageSync();
+  window.addEventListener("beforeunload", flushMetrics);
+  window.addEventListener("pagehide", flushMetrics);
 }})();
 </script>"#
     );
@@ -367,6 +536,17 @@ mod tests {
         assert!(result.contains("rewriteWebSocketUrl"));
         assert!(result.contains("window.WebSocket = function(url, protocols)"));
         assert!(result.contains(r#"var previewBasePath = "/preview/5173";"#));
+    }
+
+    #[test]
+    fn injects_authenticated_log_and_performance_reporting() {
+        let html = "<html><head></head><body></body></html>";
+        let result = inject_debug_script(html, 5173, "http://localhost:3020");
+
+        assert!(result.contains("terminal_access_token"));
+        assert!(result.contains(r#"fetch(apiUrl("/api/preview/" + port + "/logs")"#));
+        assert!(result.contains(r#"fetch(apiUrl("/api/preview/" + port + "/performance")"#));
+        assert!(result.contains(r#"trackMetric("runtimeMetrics""#));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { authenticateWithPasskey } from '../utils/passkey';
+import './LoginPage.css';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -32,7 +33,7 @@ export default function LoginPage() {
 
   const handlePasskeyLogin = async () => {
     if (!username.trim()) {
-      setLocalError('Enter your username first');
+      setLocalError('Enter your username first to use Passkey');
       return;
     }
     setLocalError('');
@@ -54,91 +55,117 @@ export default function LoginPage() {
   const error = localError || authError;
 
   return (
-    <div className="login-page">
-      <div className="login-container">
-        <section className="login-brand-panel" aria-label="V4 introduction">
-          <div className="login-brand-chip">
-            <span className="login-brand-chip-dot" aria-hidden="true" />
-            V4 Terminal
-          </div>
-          <div className="login-header">
-            <svg className="login-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75">
-              <rect x="2" y="4" width="20" height="16" rx="2" />
-              <path d="M6 8l4 4-4 4" />
-              <line x1="12" y1="16" x2="18" y2="16" />
-            </svg>
-            <h1>V4</h1>
-            <p className="login-brand-subtitle">Terminal orchestration with live preview, threads, and agent-native flow in one surface.</p>
+    <div className="pro-login-wrapper">
+      <div className="pro-login-container">
+        
+        {/* Left Panel: Brand / Marketing */}
+        <section className="pro-login-brand" aria-label="V4 introduction">
+          <div className="pro-brand-header">
+            <div className="pro-logo-container">
+              <svg className="pro-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="M6 8l4 4-4 4" />
+                <line x1="12" y1="16" x2="18" y2="16" />
+              </svg>
+              <span className="pro-logo-text">V4 Terminal</span>
+            </div>
+            <h1 className="pro-brand-title">Terminal orchestration evolved.</h1>
+            <p className="pro-brand-subtitle">
+              Live preview, threaded memory, and agent-native workflows fused into a single unified workspace.
+            </p>
           </div>
 
-          <div className="login-brand-grid" aria-hidden="true">
-            <div className="login-brand-metric">
-              <strong>Live terminals</strong>
-              <span>Command, review, and preview without changing surface.</span>
+          <div className="pro-features" aria-hidden="true">
+            <div className="pro-feature-item">
+              <span className="pro-feature-title">Live Terminals</span>
+              <span className="pro-feature-desc">Command, review, and preview without changing surface.</span>
             </div>
-            <div className="login-brand-metric">
-              <strong>Project memory</strong>
-              <span>Threads stay attached to repos instead of getting buried in tabs.</span>
+            <div className="pro-feature-item">
+              <span className="pro-feature-title">Project Memory</span>
+              <span className="pro-feature-desc">Threads stay attached to repos instead of getting buried in tabs.</span>
             </div>
-            <div className="login-brand-metric">
-              <strong>Mobile ready</strong>
-              <span>Keyboard-safe composer and preview flow built for touch devices.</span>
+            <div className="pro-feature-item">
+              <span className="pro-feature-title">Mobile Ready</span>
+              <span className="pro-feature-desc">Keyboard-safe composer and preview flow built for touch devices.</span>
             </div>
           </div>
         </section>
 
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="login-form-head">
-            <span className="login-form-kicker">Secure access</span>
-            <h2>Sign in to continue</h2>
-            <p>Use your account or passkey to enter the workspace.</p>
+        {/* Right Panel: Auth Form */}
+        <section className="pro-login-form-wrapper">
+          <div className="pro-form-header">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <div className="pro-status-dot" />
+              <span style={{ fontSize: '0.8125rem', color: 'var(--pro-accent)', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>System Secure</span>
+            </div>
+            <h2 className="pro-form-title">Access Workspace</h2>
+            <p className="pro-form-subtitle">Authenticate via credentials or secure passkey.</p>
           </div>
 
-          {error && <div className="login-error">{error}</div>}
+          {error && (
+            <div className="pro-error">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+              {error}
+            </div>
+          )}
 
-          <div className="login-field">
-            <label htmlFor="username">Username</label>
-            <input
-              id="username"
-              name="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Enter username"
-              autoComplete="username"
-              disabled={isSubmitting}
-            />
-          </div>
+          <form onSubmit={handleSubmit} className="pro-form">
+            <div className="pro-input-group">
+              <label htmlFor="username">Username</label>
+              <input
+                id="username"
+                name="username"
+                type="text"
+                className="pro-input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="developer@v4.local"
+                autoComplete="username"
+                disabled={isSubmitting}
+                spellCheck="false"
+              />
+            </div>
 
-          <div className="login-field">
-            <label htmlFor="password">Password</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              autoComplete="current-password"
-              disabled={isSubmitting}
-            />
-          </div>
+            <div className="pro-input-group">
+              <label htmlFor="password">Password</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                className="pro-input"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                autoComplete="current-password"
+                disabled={isSubmitting}
+              />
+            </div>
 
-          <button type="submit" className="login-submit" disabled={isSubmitting || isPasskeySubmitting}>
-            {isSubmitting ? 'Please wait...' : 'Sign In'}
-          </button>
+            <button type="submit" className="pro-submit-btn" disabled={isSubmitting || isPasskeySubmitting}>
+              {isSubmitting ? 'Authenticating...' : 'Initialize Session'}
+            </button>
 
-          <div className="login-divider"><span>or</span></div>
+            <div className="pro-divider"><span>or</span></div>
 
-          <button
-            type="button"
-            className="login-passkey-btn"
-            onClick={handlePasskeyLogin}
-            disabled={isPasskeySubmitting || isSubmitting}
-          >
-            {isPasskeySubmitting ? 'Waiting for passkey...' : 'Sign in with Passkey'}
-          </button>
-        </form>
+            <button
+              type="button"
+              className="pro-passkey-btn"
+              onClick={handlePasskeyLogin}
+              disabled={isPasskeySubmitting || isSubmitting}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+              {isPasskeySubmitting ? 'Awaiting Device...' : 'Authenticate with Passkey'}
+            </button>
+          </form>
+        </section>
+
       </div>
     </div>
   );

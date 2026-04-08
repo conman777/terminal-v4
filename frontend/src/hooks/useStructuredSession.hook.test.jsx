@@ -22,6 +22,7 @@ vi.mock('../utils/windowActivity', () => ({
   })
 }));
 
+import { apiFetch } from '../utils/api';
 import { useStructuredSession } from './useStructuredSession';
 
 class MockWebSocket {
@@ -56,6 +57,7 @@ describe('useStructuredSession websocket lifecycle', () => {
     MockWebSocket.instances = [];
     windowActivityState.active = true;
     windowActivityState.listeners = new Set();
+    apiFetch.mockReset();
     globalThis.WebSocket = MockWebSocket;
   });
 
@@ -141,5 +143,24 @@ describe('useStructuredSession websocket lifecycle', () => {
 
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(MockWebSocket.instances[1].url).toContain('/api/structured/sessions/ss-focus/ws');
+  });
+
+  it('sends structured composer text through the live input endpoint with fallback enabled', async () => {
+    apiFetch.mockResolvedValue({ ok: true });
+    const { result } = renderHook(() =>
+      useStructuredSession({ sessionId: 'ss-send', active: false })
+    );
+
+    await act(async () => {
+      await result.current.sendMessage('Hello from composer');
+    });
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/structured/sessions/ss-send/input', {
+      method: 'POST',
+      body: {
+        text: 'Hello from composer\n',
+        fallbackToMessage: true,
+      },
+    });
   });
 });

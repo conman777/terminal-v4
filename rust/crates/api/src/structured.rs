@@ -352,6 +352,46 @@ impl StructuredSessionManager {
         Ok(())
     }
 
+    pub async fn send_input(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        text: &str,
+        fallback_to_message: bool,
+    ) -> Result<(), String> {
+        self.load_user_sessions(user_id).await?;
+        let session = {
+            let sessions = self.inner.sessions.lock().await;
+            sessions.get(session_id).cloned()
+        }
+        .ok_or_else(|| format!("Session not found: {session_id}"))?;
+
+        let existing_process = {
+            let state = session.state.lock().await;
+            if state.user_id != user_id {
+                return Err(format!("Session not found: {session_id}"));
+            }
+            state.process.clone()
+        };
+
+        if let Some(process) = existing_process {
+            if process.send_input(text).await.is_ok() {
+                return Ok(());
+            }
+        }
+
+        if !fallback_to_message {
+            return Ok(());
+        }
+
+        let message = normalize_structured_input_message(text);
+        if message.is_empty() {
+            return Ok(());
+        }
+
+        self.send_message(user_id, session_id, &message).await
+    }
+
     pub async fn interrupt(&self, user_id: &str, session_id: &str) -> Result<(), String> {
         let Some(process) = self.current_process(user_id, session_id).await? else {
             return Ok(());
@@ -611,6 +651,13 @@ fn snapshot_from_state(state: &StructuredSessionState) -> StructuredSessionSnaps
         thread: state.thread.clone(),
         events: state.events.clone(),
     }
+}
+
+fn normalize_structured_input_message(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .trim_end_matches(['\r', '\n'])
+        .trim()
+        .to_string()
 }
 
 fn last_cli_session_id(events: &[StructuredSessionEvent]) -> Option<String> {
@@ -926,7 +973,7 @@ async fn read_claude_events(
     });
 }
 
-fn map_claude_message(
+pub(crate) fn map_claude_message(
     message: &Value,
     seq: &AtomicUsize,
     accumulated_text: &mut String,
@@ -1059,4 +1106,444 @@ fn map_claude_message(
         data: message.clone(),
     });
     events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn sanitize_identifier_strips_special_chars() {
+        assert_eq!(sanitize_identifier("hello-world"), "hello-world");
+        assert_eq!(sanitize_identifier("a/b\\c..d"), "abcd");
+        assert_eq!(sanitize_identifier("ss-abc123"), "ss-abc123");
+        assert_eq!(sanitize_identifier(""), "");
+    }
+
+    #[test]
+    fn default_structured_title_known_providers() {
+        assert_eq!(default_structured_title("claude"), "Claude Code");
+        assert_eq!(default_structured_title("codex"), "Codex");
+        assert_eq!(default_structured_title("gemini"), "Gemini CLI");
+        assert_eq!(default_structured_title("custom"), "Custom");
+        assert_eq!(default_structured_title(""), "Structured session");
+    }
+
+    #[test]
+    fn normalize_structured_title_uses_provided_or_default() {
+        assert_eq!(
+            normalize_structured_title(Some("My Session"), "claude"),
+            "My Session"
+        );
+        assert_eq!(
+            normalize_structured_title(Some("  "), "claude"),
+            "Claude Code"
+        );
+        assert_eq!(normalize_structured_title(None, "gemini"), "Gemini CLI");
+    }
+
+    #[test]
+    fn normalize_structured_cwd_rejects_nonexistent() {
+        let result = normalize_structured_cwd("/nonexistent/path/that/should/not/exist");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_structured_cwd_accepts_temp_dir() {
+        let dir = std::env::temp_dir();
+        let result = normalize_structured_cwd(dir.to_str().unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn apply_structured_thread_update_selective() {
+        let mut thread =
+            default_structured_thread(Some("/home/user".to_string()), "2026-01-01T00:00:00Z");
+        assert!(!thread.pinned);
+        assert!(thread.topic.is_none());
+
+        apply_structured_thread_update(
+            &mut thread,
+            StructuredThreadUpdate {
+                pinned: Some(true),
+                topic: Some(Some("My Topic".to_string())),
+                ..Default::default()
+            },
+        );
+
+        assert!(thread.pinned);
+        assert_eq!(thread.topic, Some("My Topic".to_string()));
+        assert!(!thread.archived);
+        assert_eq!(thread.project_path, Some("/home/user".to_string()));
+    }
+
+    #[test]
+    fn apply_structured_thread_update_clears_topic() {
+        let mut thread = default_structured_thread(None, "2026-01-01T00:00:00Z");
+        thread.topic = Some("Old".to_string());
+
+        apply_structured_thread_update(
+            &mut thread,
+            StructuredThreadUpdate {
+                topic: Some(None),
+                ..Default::default()
+            },
+        );
+
+        assert!(thread.topic.is_none());
+    }
+
+    #[test]
+    fn map_claude_message_init() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = None;
+        let msg = json!({"type": "system", "subtype": "init", "session_id": "sess-123"});
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::SessionStarted {
+                session_id,
+                provider,
+                ..
+            } => {
+                assert_eq!(session_id, "sess-123");
+                assert_eq!(provider, "claude");
+            }
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn map_claude_message_assistant_text() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = None;
+        let msg = json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "text", "text": "Hello world"}
+                ]
+            }
+        });
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::MessageDelta { content, role, .. } => {
+                assert_eq!(content, "Hello world");
+                assert_eq!(role, "assistant");
+            }
+            other => panic!("Expected MessageDelta, got {:?}", other),
+        }
+        assert_eq!(text, "Hello world");
+    }
+
+    #[test]
+    fn map_claude_message_tool_use() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = None;
+        let msg = json!({
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "read_file", "input": {"path": "/tmp/test"}, "id": "call-1"}
+                ]
+            }
+        });
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::ToolStarted {
+                tool_name,
+                tool_call_id,
+                ..
+            } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(tool_call_id.as_deref(), Some("call-1"));
+            }
+            other => panic!("Expected ToolStarted, got {:?}", other),
+        }
+        assert_eq!(tool.as_deref(), Some("read_file"));
+    }
+
+    #[test]
+    fn map_claude_message_tool_result() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = Some("read_file".to_string());
+        let msg = json!({"type": "user", "tool_use_result": "file contents here"});
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::ToolCompleted {
+                tool_name,
+                result,
+                is_error,
+                ..
+            } => {
+                assert_eq!(tool_name, "read_file");
+                assert_eq!(result, "file contents here");
+                assert!(!is_error);
+            }
+            other => panic!("Expected ToolCompleted, got {:?}", other),
+        }
+        assert!(tool.is_none());
+    }
+
+    #[test]
+    fn map_claude_message_result_success() {
+        let seq = AtomicUsize::new(0);
+        let mut text = "accumulated".to_string();
+        let mut tool = None;
+        let msg = json!({"type": "result", "subtype": "success"});
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::MessageCompleted { content, .. } => {
+                assert_eq!(content, "accumulated");
+            }
+            other => panic!("Expected MessageCompleted, got {:?}", other),
+        }
+        assert!(text.is_empty());
+    }
+
+    #[test]
+    fn map_claude_message_result_error() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = None;
+        let msg = json!({"type": "result", "subtype": "error"});
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::Error { message, .. } => {
+                assert!(message.contains("error"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn map_claude_message_unknown_falls_to_raw() {
+        let seq = AtomicUsize::new(0);
+        let mut text = String::new();
+        let mut tool = None;
+        let msg = json!({"type": "unknown_type", "data": 42});
+
+        let events = map_claude_message(&msg, &seq, &mut text, &mut tool);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            StructuredSessionEvent::RawProviderEvent { provider, .. } => {
+                assert_eq!(provider, "claude");
+            }
+            other => panic!("Expected RawProviderEvent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn last_cli_session_id_finds_latest() {
+        let events = vec![
+            StructuredSessionEvent::SessionStarted {
+                ts: 1,
+                seq: 1,
+                session_id: "first".to_string(),
+                provider: "claude".to_string(),
+            },
+            StructuredSessionEvent::MessageDelta {
+                ts: 2,
+                seq: 2,
+                role: "assistant".to_string(),
+                content: "hello".to_string(),
+            },
+            StructuredSessionEvent::SessionStarted {
+                ts: 3,
+                seq: 3,
+                session_id: "second".to_string(),
+                provider: "claude".to_string(),
+            },
+        ];
+        assert_eq!(last_cli_session_id(&events), Some("second".to_string()));
+    }
+
+    #[test]
+    fn last_cli_session_id_skips_unknown() {
+        let events = vec![StructuredSessionEvent::SessionStarted {
+            ts: 1,
+            seq: 1,
+            session_id: "unknown".to_string(),
+            provider: "claude".to_string(),
+        }];
+        assert_eq!(last_cli_session_id(&events), None);
+    }
+
+    #[test]
+    fn normalize_structured_input_message_trims_transport_newlines() {
+        assert_eq!(
+            normalize_structured_input_message("hello world\r\n"),
+            "hello world"
+        );
+        assert_eq!(
+            normalize_structured_input_message("  hello world\n\n"),
+            "hello world"
+        );
+        assert_eq!(normalize_structured_input_message("\r\n"), "");
+    }
+
+    #[test]
+    fn event_seq_returns_correct_value() {
+        let event = StructuredSessionEvent::MessageDelta {
+            ts: 100,
+            seq: 42,
+            role: "assistant".to_string(),
+            content: "test".to_string(),
+        };
+        assert_eq!(event.seq(), 42);
+    }
+
+    #[tokio::test]
+    async fn manager_create_and_list_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config);
+
+        let cwd = std::env::temp_dir();
+        let snapshot = manager
+            .create_session(
+                "user1",
+                cwd.to_str().unwrap(),
+                Some("claude"),
+                None,
+                Some("Test"),
+            )
+            .await
+            .unwrap();
+
+        assert!(snapshot.id.starts_with("ss-"));
+        assert_eq!(snapshot.title, "Test");
+
+        let sessions = manager.list_sessions("user1").await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, snapshot.id);
+
+        // Other user sees nothing
+        let other = manager.list_sessions("user2").await.unwrap();
+        assert!(other.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manager_rename_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config);
+
+        let cwd = std::env::temp_dir();
+        let snapshot = manager
+            .create_session("user1", cwd.to_str().unwrap(), Some("claude"), None, None)
+            .await
+            .unwrap();
+
+        let renamed = manager
+            .rename_session("user1", &snapshot.id, "New Title")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(renamed.title, "New Title");
+
+        // Empty title rejected
+        let err = manager.rename_session("user1", &snapshot.id, "  ").await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn manager_delete_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config);
+
+        let cwd = std::env::temp_dir();
+        let snapshot = manager
+            .create_session("user1", cwd.to_str().unwrap(), Some("claude"), None, None)
+            .await
+            .unwrap();
+
+        manager.delete_session("user1", &snapshot.id).await.unwrap();
+
+        let sessions = manager.list_sessions("user1").await.unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manager_subscribe_returns_history_and_receiver() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config);
+
+        let cwd = std::env::temp_dir();
+        let snapshot = manager
+            .create_session("user1", cwd.to_str().unwrap(), Some("claude"), None, None)
+            .await
+            .unwrap();
+
+        let (history, _rx) = manager.subscribe("user1", &snapshot.id).await.unwrap();
+        assert!(history.is_empty());
+
+        // Wrong user cannot subscribe
+        let err = manager.subscribe("other", &snapshot.id).await;
+        assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn manager_thread_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            data_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let manager = StructuredSessionManager::new(config);
+
+        let cwd = std::env::temp_dir();
+        let snapshot = manager
+            .create_session("user1", cwd.to_str().unwrap(), Some("claude"), None, None)
+            .await
+            .unwrap();
+
+        let thread = manager
+            .update_thread(
+                "user1",
+                &snapshot.id,
+                StructuredThreadUpdate {
+                    pinned: Some(true),
+                    topic: Some(Some("Test Topic".to_string())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(thread.pinned);
+        assert_eq!(thread.topic, Some("Test Topic".to_string()));
+    }
 }

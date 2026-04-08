@@ -5,13 +5,16 @@ import { TerminalPane } from './TerminalPane';
 const refreshSessionGitStats = vi.fn();
 const listSessionGitBranches = vi.fn();
 const checkoutSessionGitBranch = vi.fn();
+const sendToSession = vi.fn();
 let lastTerminalChatProps = null;
+let lastConversationViewProps = null;
 
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession: () => ({
     refreshSessionGitStats,
     listSessionGitBranches,
-    checkoutSessionGitBranch
+    checkoutSessionGitBranch,
+    sendToSession
   })
 }));
 
@@ -39,7 +42,10 @@ vi.mock('./TerminalChat', () => ({
 }));
 
 vi.mock('./DesktopConversationView', () => ({
-  DesktopConversationView: () => <div data-testid="desktop-conversation-view" />
+  DesktopConversationView: (props) => {
+    lastConversationViewProps = props;
+    return <div data-testid="desktop-conversation-view" />;
+  }
 }));
 
 vi.mock('./DesktopStatusBar', () => ({
@@ -135,7 +141,9 @@ describe('TerminalPane', () => {
     refreshSessionGitStats.mockReset();
     listSessionGitBranches.mockReset();
     checkoutSessionGitBranch.mockReset();
+    sendToSession.mockReset();
     lastTerminalChatProps = null;
+    lastConversationViewProps = null;
     listSessionGitBranches.mockResolvedValue({ currentBranch: 'main', branches: ['main', 'feature/ui'] });
   });
 
@@ -192,6 +200,28 @@ describe('TerminalPane', () => {
       expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
     });
     expect(lastTerminalChatProps?.sessionId).toBe('ss-structured');
+  });
+
+  it('routes structured raw input through the session transport instead of the terminal chat sender', async () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-structured' },
+      sessions: [{
+        id: 'ss-structured',
+        title: 'Structured session',
+        shell: 'claude',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { topic: 'Review code', projectPath: 'C:\\repo' }
+      }],
+      sessionAiTypes: {}
+    })} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    lastConversationViewProps?.onSendRaw?.('\r');
+    expect(sendToSession).toHaveBeenCalledWith('ss-structured', '\r');
   });
 
   it('keeps the existing terminal-first desktop layout while disabling direct terminal input by default', () => {

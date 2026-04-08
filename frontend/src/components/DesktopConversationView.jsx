@@ -1,7 +1,5 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import ToolCallBlock from './ToolCallBlock';
-import { apiFetch, uploadScreenshot } from '../utils/api';
-import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
 import { useConversationScroll } from '../hooks/useConversationScroll';
 import { parseInteractivePromptSnapshot, parseInteractivePromptEvent } from '../utils/interactivePrompt';
@@ -392,8 +390,6 @@ export function DesktopConversationView({
   pendingApproval = null,
   onApprove = null,
 }) {
-  const [inputValue, setInputValue] = useState('');
-  const textareaRef = useRef(null);
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const isStructured = mode === 'structured';
   const visibleTurns = isStructured ? [] : buildVisibleTurns(turns, aiType);
@@ -472,12 +468,7 @@ export function DesktopConversationView({
       const isInput = target instanceof HTMLInputElement;
       const isTextarea = target instanceof HTMLTextAreaElement;
       const isEditable = isInput || isTextarea || Boolean(target?.isContentEditable);
-      if (isEditable) {
-        const isComposer = target === textareaRef.current;
-        if (!isComposer) return;
-        const hasText = Boolean(textareaRef.current?.value?.length);
-        if (hasText && event.key !== 'Enter') return;
-      }
+      if (isEditable) return;
 
       const payload = mapKeyboardEventToTerminalInput(event);
       if (!payload) return;
@@ -492,58 +483,6 @@ export function DesktopConversationView({
       window.removeEventListener('keydown', handleGlobalKeyDown, true);
     };
   }, [onSendRaw, shouldCaptureRawKeyboard]);
-
-  const handleInputChange = useCallback((event) => {
-    setInputValue(event.target.value);
-    const element = event.target;
-    element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, 180)}px`;
-  }, []);
-
-  const handleSend = useCallback(() => {
-    const text = inputValue.trim();
-    onSend?.(text);
-    setInputValue('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-    markShouldStickToBottom();
-  }, [inputValue, markShouldStickToBottom, onSend]);
-
-  const handleKeyDown = useCallback((event) => {
-    if (shouldCaptureRawKeyboard) {
-      const payload = mapKeyboardEventToTerminalInput(event);
-      if (payload) {
-        event.preventDefault();
-        event.stopPropagation();
-        onSendRaw?.(payload);
-        return;
-      }
-    }
-
-    if (event.key !== 'Enter' || event.shiftKey) return;
-    event.preventDefault();
-    handleSend();
-  }, [handleSend, onSendRaw, shouldCaptureRawKeyboard]);
-
-  const handlePaste = useCallback(async (event) => {
-    if (!sessionId || !event.clipboardData) return;
-    const imageFile = await getImageFileFromDataTransfer(event.clipboardData);
-    if (!imageFile) return;
-    event.preventDefault();
-    event.stopPropagation();
-    try {
-      const path = await uploadScreenshot(imageFile);
-      if (path) {
-        await apiFetch(`/api/terminal/${sessionId}/input`, {
-          method: 'POST',
-          body: { command: `${path} ` }
-        });
-      }
-    } catch (error) {
-      console.error('Failed to paste image in conversation view:', error);
-    }
-  }, [sessionId]);
 
   return (
     <div className="desktop-conversation-view mode-conversation">
@@ -771,65 +710,7 @@ export function DesktopConversationView({
         </button>
       )}
 
-      <div className="desktop-conversation-composer">
-        <span className="dcv-prompt-char" aria-hidden="true">›</span>
-        <textarea
-          ref={textareaRef}
-          className="desktop-conversation-input"
-          value={inputValue}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onPaste={handlePaste}
-          placeholder={`Message ${assistantLabel}...`}
-          rows={1}
-        />
-
-        <div className="desktop-conversation-actions">
-          {onImageUpload && (
-            <button
-              type="button"
-              className="desktop-conversation-btn"
-              onClick={onImageUpload}
-              title="Upload image"
-              aria-label="Upload image"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <polyline points="21 15 16 10 5 21" />
-              </svg>
-            </button>
-          )}
-
-          {onInterrupt && (
-            <button
-              type="button"
-              className="desktop-conversation-btn stop"
-              onClick={onInterrupt}
-              title="Ctrl+C"
-              aria-label="Interrupt"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <rect x="4" y="4" width="16" height="16" rx="1" />
-              </svg>
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="desktop-conversation-send-btn"
-            onClick={handleSend}
-            disabled={!inputValue.trim()}
-            aria-label="Send"
-            title="Send"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="5" y1="12" x2="19" y2="12" />
-              <polyline points="12 5 19 12 12 19" />
-            </svg>
-          </button>
-        </div>
-      </div>
+      {/* Composer removed — the V4 status bar composer is the single input */}
     </div>
   );
 }

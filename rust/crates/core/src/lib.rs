@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_JWT_SECRET: &str = "dev-jwt-secret-change-in-production";
 pub const SANDBOX_MODES: [&str; 3] = ["off", "read-only", "workspace-write"];
+const DEFAULT_APP_DATA_DIR_NAME: &str = "terminal-v4";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
@@ -55,12 +56,23 @@ impl AppConfig {
     pub fn bind_addr(&self) -> SocketAddr {
         SocketAddr::from((self.host, self.port))
     }
+
+    pub fn validate_runtime(&self) -> Result<(), String> {
+        if !self.host.is_loopback() && self.jwt_secret == DEFAULT_JWT_SECRET {
+            return Err(
+                "Refusing to start with the default JWT secret on a non-loopback host. Set JWT_SECRET to a strong random value."
+                    .to_string(),
+            );
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            host: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 3020,
             data_dir: default_data_dir(),
             jwt_secret: DEFAULT_JWT_SECRET.to_string(),
@@ -71,12 +83,32 @@ impl Default for AppConfig {
 }
 
 fn default_data_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("core crate should be nested under rust/crates/core")
-        .join("backend")
-        .join("data")
+    platform_data_root()
+        .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join(DEFAULT_APP_DATA_DIR_NAME)
+}
+
+#[cfg(target_os = "windows")]
+fn platform_data_root() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA")
+        .or_else(|| env::var_os("APPDATA"))
+        .map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_data_root() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|path| path.join("Library").join("Application Support"))
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn platform_data_root() -> Option<PathBuf> {
+    env::var_os("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
+        env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|path| path.join(".local").join("share"))
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -342,6 +374,70 @@ pub enum StructuredSessionEvent {
         provider: String,
         data: Value,
     },
+}
+
+impl StructuredSessionEvent {
+    /// Return the sequence number common to every event variant.
+    pub fn seq(&self) -> i64 {
+        match self {
+            Self::SessionStarted { seq, .. }
+            | Self::SessionEnded { seq, .. }
+            | Self::MessageStarted { seq, .. }
+            | Self::MessageDelta { seq, .. }
+            | Self::MessageCompleted { seq, .. }
+            | Self::ToolStarted { seq, .. }
+            | Self::ToolOutput { seq, .. }
+            | Self::ToolCompleted { seq, .. }
+            | Self::ApprovalRequired { seq, .. }
+            | Self::InputRequired { seq, .. }
+            | Self::Status { seq, .. }
+            | Self::Error { seq, .. }
+            | Self::RawProviderEvent { seq, .. } => *seq,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_uses_loopback_host() {
+        assert_eq!(AppConfig::default().host, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn default_data_dir_uses_app_specific_directory_name() {
+        assert!(AppConfig::default()
+            .data_dir
+            .ends_with(DEFAULT_APP_DATA_DIR_NAME));
+    }
+
+    #[test]
+    fn validate_runtime_rejects_default_secret_for_non_loopback_hosts() {
+        let config = AppConfig {
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            ..AppConfig::default()
+        };
+
+        assert!(config.validate_runtime().is_err());
+    }
+
+    #[test]
+    fn validate_runtime_allows_default_secret_on_loopback() {
+        assert!(AppConfig::default().validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn validate_runtime_allows_custom_secret_for_non_loopback_hosts() {
+        let config = AppConfig {
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            jwt_secret: "custom-secret".to_string(),
+            ..AppConfig::default()
+        };
+
+        assert!(config.validate_runtime().is_ok());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

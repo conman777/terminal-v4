@@ -18,6 +18,8 @@ export function useStructuredSession({ sessionId, active = true }) {
   const reconnectTimerRef = useRef(null);
   const connectRef = useRef(null);
   const windowActiveRef = useRef(windowActive);
+  const lastSeqRef = useRef(0);
+  const isReconnectRef = useRef(false);
 
   useEffect(() => subscribeWindowActivity(setWindowActive), []);
   useEffect(() => {
@@ -26,6 +28,9 @@ export function useStructuredSession({ sessionId, active = true }) {
 
   // Process a single canonical event into our rendering model
   const processEvent = useCallback((event) => {
+    if (event.seq != null) {
+      lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
+    }
     switch (event.type) {
       case 'session_started':
         setIsStreaming(true);
@@ -170,7 +175,9 @@ export function useStructuredSession({ sessionId, active = true }) {
     if (!sessionId || !active) return;
     let disposed = false;
 
-    // Reset state on session change
+    // Reset state on session change (fresh connect, not reconnect)
+    lastSeqRef.current = 0;
+    isReconnectRef.current = false;
     setMessages([]);
     setCurrentToolCalls([]);
     setPendingApproval(null);
@@ -178,16 +185,19 @@ export function useStructuredSession({ sessionId, active = true }) {
     setConnectionState('connecting');
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const accessToken = getAccessToken();
-    const wsBaseUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
-    const wsUrl = accessToken
-      ? `${wsBaseUrl}?token=${encodeURIComponent(accessToken)}`
-      : wsBaseUrl;
 
     function connect() {
       if (disposed || !windowActiveRef.current) {
         return;
       }
+      const accessToken = getAccessToken();
+      const wsBaseUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
+      const params = new URLSearchParams();
+      if (accessToken) params.set('token', accessToken);
+      if (isReconnectRef.current && lastSeqRef.current > 0) {
+        params.set('last_seq', String(lastSeqRef.current));
+      }
+      const wsUrl = `${wsBaseUrl}?${params.toString()}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -204,6 +214,17 @@ export function useStructuredSession({ sessionId, active = true }) {
         }
         try {
           const data = JSON.parse(event.data);
+          if (data.__terminal_meta && data.type === 'events_lost') {
+            // Broadcast buffer overflow — trigger full resync
+            lastSeqRef.current = 0;
+            isReconnectRef.current = false;
+            setMessages([]);
+            setCurrentToolCalls([]);
+            setPendingApproval(null);
+            setIsStreaming(false);
+            ws.close();
+            return;
+          }
           if (data.__terminal_meta && data.type === 'structured_event' && data.event) {
             processEvent(data.event);
           }
@@ -220,6 +241,7 @@ export function useStructuredSession({ sessionId, active = true }) {
           return;
         }
         setConnectionState('offline');
+        isReconnectRef.current = true;
         if (!windowActiveRef.current) {
           return;
         }
@@ -269,18 +291,18 @@ export function useStructuredSession({ sessionId, active = true }) {
   const sendMessage = useCallback(
     async (text) => {
       if (!sessionId || !text?.trim()) return;
+      const message = text.trim();
 
       // Add user message to local state immediately
       setMessages((prev) => [
         ...prev,
-        { role: 'user', content: text.trim(), ts: Date.now() },
+        { role: 'user', content: message, ts: Date.now() },
       ]);
 
-      // Send via REST (not WS) so we get a proper HTTP response
       try {
-        await apiFetch(`/api/structured/sessions/${sessionId}/message`, {
+        await apiFetch(`/api/structured/sessions/${sessionId}/input`, {
           method: 'POST',
-          body: { text: text.trim() },
+          body: { text: `${message}\n`, fallbackToMessage: true },
         });
       } catch (error) {
         console.error('Failed to send structured message:', error);

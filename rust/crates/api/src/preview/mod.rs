@@ -4,6 +4,7 @@ pub mod external_proxy;
 pub mod host_rewrite;
 pub mod logs;
 pub mod path_rewrite;
+pub mod performance;
 pub mod port_scan;
 pub mod proxy;
 pub mod request_logs;

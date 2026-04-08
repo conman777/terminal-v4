@@ -437,7 +437,7 @@ pub struct RecordingStopResult {
     pub duration: i64,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

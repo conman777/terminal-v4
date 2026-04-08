@@ -28,7 +28,9 @@ use axum::routing::{any, delete, get, post, put};
 use axum::{Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use state::{AppState, BookmarkUpdate, HistoryQuery, NoteUpdate, SettingsPatch};
+use state::{
+    AppState, BookmarkUpdate, ChangePasswordResult, HistoryQuery, NoteUpdate, SettingsPatch,
+};
 use std::convert::Infallible;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
@@ -96,6 +98,7 @@ pub fn app(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(logout))
+        .route("/api/auth/change-password", post(change_password))
         .route(
             "/api/structured/sessions",
             get(list_structured_sessions).post(create_structured_session),
@@ -113,6 +116,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/structured/sessions/{id}/message",
             post(send_structured_message),
+        )
+        .route(
+            "/api/structured/sessions/{id}/input",
+            post(send_structured_input),
         )
         .route(
             "/api/structured/sessions/{id}/interrupt",
@@ -232,6 +239,12 @@ pub fn app(state: AppState) -> Router {
             get(get_preview_storage).post(update_preview_storage),
         )
         .route("/api/preview/{port}/evaluate", post(evaluate_preview))
+        .route(
+            "/api/preview/{port}/performance",
+            get(get_preview_performance)
+                .post(ingest_preview_performance)
+                .delete(clear_preview_performance),
+        )
         .route("/api/preview/logs", get(list_preview_log_ports))
         .route(
             "/api/preview/active-ports",
@@ -309,6 +322,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh))
+        .route("/api/latency/ws", get(connect_latency_ws))
         .route("/preview/{port}", any(preview_proxy_root))
         .route("/preview/{port}/", any(preview_proxy_root))
         .route("/preview/{port}/{*rest}", any(preview_proxy_path))
@@ -323,6 +337,10 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/auth/passkey/authenticate/complete",
             post(passkey_auth_complete),
+        )
+        .route(
+            "/api/preview/{port}/performance/stream",
+            get(stream_preview_performance),
         )
         .route("/api/terminal/{id}/ws", get(connect_terminal_ws))
         .route("/api/terminal/{id}/stream", get(stream_terminal_session))
@@ -386,27 +404,31 @@ pub fn app(state: AppState) -> Router {
                 }
             }
         });
-        let serve_dir = tower_http::services::ServeDir::new(&frontend_dir)
-            .not_found_service(spa_fallback);
+        let serve_dir =
+            tower_http::services::ServeDir::new(&frontend_dir).not_found_service(spa_fallback);
         // Wrap the static file service with cache-control middleware
-        let static_handler = get(
-            |request: axum::extract::Request| async move {
-                let path = request.uri().path().to_string();
-                let mut response = serve_dir.oneshot(request).await.into_response();
-                // Set cache headers based on file type
-                if path.ends_with(".html") || path == "/" {
-                    let headers = response.headers_mut();
-                    headers.insert("cache-control", "no-cache, no-store, must-revalidate".parse().unwrap());
-                    headers.insert("pragma", "no-cache".parse().unwrap());
-                    headers.insert("expires", "0".parse().unwrap());
-                } else if response.status().is_success() {
-                    // JS/CSS/assets with hashes: cache for 1 year
-                    let headers = response.headers_mut();
-                    headers.insert("cache-control", "public, max-age=31536000, immutable".parse().unwrap());
-                }
-                response
-            },
-        );
+        let static_handler = get(|request: axum::extract::Request| async move {
+            let path = request.uri().path().to_string();
+            let mut response = serve_dir.oneshot(request).await.into_response();
+            // Set cache headers based on file type
+            if path.ends_with(".html") || path == "/" {
+                let headers = response.headers_mut();
+                headers.insert(
+                    "cache-control",
+                    "no-cache, no-store, must-revalidate".parse().unwrap(),
+                );
+                headers.insert("pragma", "no-cache".parse().unwrap());
+                headers.insert("expires", "0".parse().unwrap());
+            } else if response.status().is_success() {
+                // JS/CSS/assets with hashes: cache for 1 year
+                let headers = response.headers_mut();
+                headers.insert(
+                    "cache-control",
+                    "public, max-age=31536000, immutable".parse().unwrap(),
+                );
+            }
+            response
+        });
         router.fallback(static_handler)
     } else {
         router
@@ -536,6 +558,37 @@ async fn logout(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangePasswordInput {
+    current_password: String,
+    new_password: String,
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<ChangePasswordInput>,
+) -> Result<Json<Value>, ApiError> {
+    validate_string(&input.current_password, 1, 4_096, "currentPassword")?;
+    validate_string(&input.new_password, 6, 4_096, "newPassword")?;
+
+    match state
+        .change_password(&user, &input.current_password, &input.new_password)
+        .map_err(ApiError::internal)?
+    {
+        ChangePasswordResult::Changed => Ok(Json(json!({ "success": true }))),
+        ChangePasswordResult::InvalidCurrentPassword => Err(ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Current password is incorrect".to_string(),
+        }),
+        ChangePasswordResult::ExternallyManaged => Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Password changes are managed by the external auth provider".to_string(),
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct StructuredSessionCreateInput {
     cwd: String,
     provider: Option<String>,
@@ -546,6 +599,13 @@ struct StructuredSessionCreateInput {
 #[derive(Debug, Deserialize)]
 struct StructuredMessageInput {
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StructuredInputWrite {
+    text: String,
+    fallback_to_message: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -702,6 +762,26 @@ async fn send_structured_message(
     state
         .structured_session_manager()
         .send_message(&user.user_id, &session_id, &input.text)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "status": "accepted" }))))
+}
+
+async fn send_structured_input(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<String>,
+    Json(input): Json<StructuredInputWrite>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    validate_string(&input.text, 1, 100_000, "text")?;
+    state
+        .structured_session_manager()
+        .send_input(
+            &user.user_id,
+            &session_id,
+            &input.text,
+            input.fallback_to_message.unwrap_or(false),
+        )
         .await
         .map_err(ApiError::internal)?;
     Ok((StatusCode::ACCEPTED, Json(json!({ "status": "accepted" }))))
@@ -3014,6 +3094,57 @@ async fn evaluate_preview(
     })))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewPerformanceInput {
+    metrics: Vec<preview::performance::PerformanceMetricEntry>,
+}
+
+async fn get_preview_performance(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> Result<Json<Value>, ApiError> {
+    let metrics = state
+        .preview_performance_store()
+        .get_metrics(&user.user_id, port)
+        .await;
+    Ok(Json(json!({ "port": port, "metrics": metrics })))
+}
+
+async fn ingest_preview_performance(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Json(input): Json<PreviewPerformanceInput>,
+) -> Result<Json<Value>, ApiError> {
+    if input.metrics.len() > 500 {
+        return Err(ApiError::bad_request(
+            "Too many performance metrics in one request",
+        ));
+    }
+
+    state
+        .preview_performance_store()
+        .add_metrics(&user.user_id, port, input.metrics)
+        .await
+        .map_err(ApiError::bad_request)?;
+
+    Ok(Json(json!({ "success": true, "port": port })))
+}
+
+async fn clear_preview_performance(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> Json<Value> {
+    state
+        .preview_performance_store()
+        .clear_metrics(&user.user_id, port)
+        .await;
+    Json(json!({ "success": true, "port": port }))
+}
+
 // --- WebContainer handler ---
 
 #[derive(Debug, Deserialize)]
@@ -3503,8 +3634,150 @@ fn push_unique_path(paths: &mut Vec<String>, candidate: String) {
 }
 
 #[derive(Debug, Deserialize, Default)]
+struct LatencyWsQuery {
+    token: Option<String>,
+}
+
+async fn connect_latency_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(query): Query<LatencyWsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let token = query
+        .token
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Missing latency websocket token".to_string(),
+        })?;
+    authenticate_token(
+        &state.config().jwt_secret,
+        state.config().allowed_username.as_deref(),
+        &token,
+    )
+    .map_err(|_| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "Invalid or expired token".to_string(),
+    })?;
+
+    Ok(ws.on_upgrade(handle_latency_ws))
+}
+
+async fn handle_latency_ws(mut socket: WebSocket) {
+    while let Some(message) = socket.recv().await {
+        let Ok(message) = message else {
+            break;
+        };
+
+        match message {
+            Message::Text(text) => {
+                let payload = text.to_string();
+                if payload == "ping" {
+                    if socket.send(Message::Text("pong".into())).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+
+                let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+                    continue;
+                };
+                if value.get("type") != Some(&Value::String("ping".to_string())) {
+                    continue;
+                }
+
+                let response = json!({
+                    "type": "pong",
+                    "id": value.get("id").cloned().unwrap_or(Value::Null),
+                    "sentAt": value.get("sentAt").cloned().unwrap_or(Value::Null),
+                    "serverAt": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000,
+                });
+                if socket
+                    .send(Message::Text(response.to_string().into()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct PreviewPerformanceStreamQuery {
+    token: Option<String>,
+}
+
+async fn stream_preview_performance(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(port): Path<u16>,
+    Query(query): Query<PreviewPerformanceStreamQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let token = query
+        .token
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Missing preview performance token".to_string(),
+        })?;
+    let user = authenticate_token(
+        &state.config().jwt_secret,
+        state.config().allowed_username.as_deref(),
+        &token,
+    )
+    .map_err(|_| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "Invalid or expired token".to_string(),
+    })?;
+    let subscription = state
+        .preview_performance_store()
+        .subscribe(&user.user_id, port)
+        .await;
+
+    Ok(ws.on_upgrade(move |socket| handle_preview_performance_ws(socket, subscription)))
+}
+
+async fn handle_preview_performance_ws(
+    mut socket: WebSocket,
+    mut subscription: tokio::sync::broadcast::Receiver<
+        preview::performance::PerformanceMetricsSnapshot,
+    >,
+) {
+    loop {
+        tokio::select! {
+            message = socket.recv() => {
+                match message {
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                }
+            }
+            result = subscription.recv() => {
+                match result {
+                    Ok(metrics) => {
+                        let payload = json!({
+                            "type": "performance-update",
+                            "metrics": metrics,
+                        });
+                        if socket.send(Message::Text(payload.to_string().into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
 struct StructuredWsQuery {
     token: Option<String>,
+    last_seq: Option<i64>,
 }
 
 async fn connect_structured_ws(
@@ -3539,6 +3812,7 @@ async fn connect_structured_ws(
             message: error,
         })?;
 
+    let last_seq = query.last_seq;
     Ok(ws.on_upgrade(move |socket| {
         handle_structured_ws(
             socket,
@@ -3547,6 +3821,7 @@ async fn connect_structured_ws(
             session_id,
             history,
             subscription,
+            last_seq,
         )
     }))
 }
@@ -3558,9 +3833,15 @@ async fn handle_structured_ws(
     session_id: String,
     history: Vec<terminal_v4_core::StructuredSessionEvent>,
     mut subscription: tokio::sync::broadcast::Receiver<terminal_v4_core::StructuredSessionEvent>,
+    last_seq: Option<i64>,
 ) {
-    // Send full event history on connect so client can rebuild state
+    // Send event history on connect — filtered by last_seq if provided (resume)
     for event in history {
+        if let Some(cursor) = last_seq {
+            if event.seq() <= cursor {
+                continue;
+            }
+        }
         if socket
             .send(Message::Text(
                 json!({
@@ -3606,7 +3887,19 @@ async fn handle_structured_ws(
                             break;
                         }
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                        // Notify client that events were lost so it can trigger a full resync
+                        let _ = socket.send(Message::Text(
+                            json!({
+                                "__terminal_meta": true,
+                                "type": "events_lost",
+                                "count": count
+                            })
+                            .to_string()
+                            .into(),
+                        )).await;
+                        continue;
+                    }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         // Channel closed (no active process) — keep WS alive for client messages
                         broadcast_closed = true;
@@ -4283,7 +4576,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+    use std::sync::Arc;
+    #[cfg(unix)]
+    use std::sync::{LazyLock, Mutex as StdMutex};
     use tempfile::tempdir;
     use terminal_v4_core::{AppConfig, HealthResponse, StructuredSessionEvent, UserSettings};
     use tokio::sync::{mpsc, Mutex};
@@ -4292,6 +4587,7 @@ mod tests {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     use tower::ServiceExt;
 
+    #[cfg(unix)]
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
     #[tokio::test]
@@ -4839,6 +5135,7 @@ mod tests {
         assert_eq!(payload["nextSeq"], 3);
     }
 
+    #[cfg(not(windows))]
     #[tokio::test]
     async fn terminal_create_state_input_and_delete_routes_work_for_live_sessions() {
         let state = test_state();
@@ -4905,8 +5202,10 @@ mod tests {
                     .header("Authorization", format!("Bearer {token}"))
                     .header("Content-Type", "application/json")
                     .body(Body::from(
-                        json!({ "command": if cfg!(windows) { "echo hi\r" } else { "echo hi\n" } })
-                            .to_string(),
+                        json!({
+                            "command": if cfg!(windows) { "exit\r" } else { "echo hi\n" }
+                        })
+                        .to_string(),
                     ))
                     .expect("request should build"),
             )
@@ -5400,6 +5699,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn change_password_route_updates_local_credentials() {
+        let state = test_state();
+        let user = state
+            .create_local_user_for_test("conor", "old-password")
+            .expect("local user should be created");
+        let token = issue_access_token(&state.config().jwt_secret, &user.id, &user.username);
+        let app = app(state);
+
+        let change_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/change-password")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "currentPassword": "old-password",
+                            "newPassword": "new-password"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(change_response.status(), StatusCode::OK);
+
+        let old_login_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "conor",
+                            "password": "old-password"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(old_login_response.status(), StatusCode::UNAUTHORIZED);
+
+        let new_login_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "username": "conor",
+                            "password": "new-password"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(new_login_response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn bookmarks_and_notes_routes_support_crud() {
         let state = test_state();
         let token = issue_access_token(&state.config().jwt_secret, "user-3", "conor");
@@ -5581,11 +5950,15 @@ mod tests {
         let app = app(state);
 
         let preview_path = preview_dir.path().to_string_lossy().replace('\\', "/");
+        let preview_query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("path", &preview_path)
+            .append_pair("file", "index.html")
+            .finish();
         let preview_response = app
             .clone()
             .oneshot(
                 Request::builder()
-                    .uri(format!("/api/preview?path={preview_path}&file=index.html"))
+                    .uri(format!("/api/preview?{preview_query}"))
                     .header("Authorization", format!("Bearer {token}"))
                     .body(Body::empty())
                     .expect("request should build"),
@@ -5657,6 +6030,118 @@ mod tests {
             .await
             .expect("router should respond");
         assert_eq!(invalid_storage_response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn preview_performance_routes_store_clear_and_stream_metrics() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-performance", "conor");
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+        let client = reqwest::Client::new();
+        let base_url = format!("http://127.0.0.1:{app_port}");
+
+        let post_response = client
+            .post(format!("{base_url}/api/preview/5173/performance"))
+            .bearer_auth(&token)
+            .json(&json!({
+                "metrics": [{
+                    "type": "coreWebVitals",
+                    "timestamp": 10,
+                    "data": { "lcp": 1234 }
+                }]
+            }))
+            .send()
+            .await
+            .expect("performance post should succeed");
+        assert_eq!(post_response.status(), reqwest::StatusCode::OK);
+
+        let get_response = client
+            .get(format!("{base_url}/api/preview/5173/performance"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("performance get should succeed");
+        assert_eq!(get_response.status(), reqwest::StatusCode::OK);
+        let get_payload: Value = get_response
+            .json()
+            .await
+            .expect("performance payload should deserialize");
+        assert_eq!(
+            get_payload["metrics"]["coreWebVitals"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let stream_url =
+            format!("ws://127.0.0.1:{app_port}/api/preview/5173/performance/stream?token={token}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(&stream_url)
+            .await
+            .expect("performance websocket should connect");
+
+        let second_post_response = client
+            .post(format!("{base_url}/api/preview/5173/performance"))
+            .bearer_auth(&token)
+            .json(&json!({
+                "metrics": [{
+                    "type": "runtimeMetrics",
+                    "timestamp": 20,
+                    "data": { "fps": 60 }
+                }]
+            }))
+            .send()
+            .await
+            .expect("second performance post should succeed");
+        assert_eq!(second_post_response.status(), reqwest::StatusCode::OK);
+
+        let stream_message = socket
+            .next()
+            .await
+            .expect("stream update should arrive")
+            .expect("stream update should be valid");
+        let stream_payload: Value = serde_json::from_str(
+            &stream_message
+                .into_text()
+                .expect("performance websocket payload should be text"),
+        )
+        .expect("performance websocket payload should parse");
+        assert_eq!(stream_payload["type"], "performance-update");
+        assert_eq!(
+            stream_payload["metrics"]["runtimeMetrics"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let delete_response = client
+            .delete(format!("{base_url}/api/preview/5173/performance"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("performance delete should succeed");
+        assert_eq!(delete_response.status(), reqwest::StatusCode::OK);
+
+        let empty_response = client
+            .get(format!("{base_url}/api/preview/5173/performance"))
+            .bearer_auth(&token)
+            .send()
+            .await
+            .expect("performance get after delete should succeed");
+        let empty_payload: Value = empty_response
+            .json()
+            .await
+            .expect("empty performance payload should deserialize");
+        assert_eq!(
+            empty_payload["metrics"],
+            json!({
+                "coreWebVitals": [],
+                "loadMetrics": [],
+                "runtimeMetrics": []
+            })
+        );
+
+        let _ = socket.close(None).await;
+        app_handle.abort();
     }
 
     #[cfg(unix)]
@@ -5903,6 +6388,33 @@ done
 
         app_handle.abort();
         upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn latency_websocket_replies_to_authenticated_ping_messages() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-latency", "conor");
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+
+        let url = format!("ws://127.0.0.1:{app_port}/api/latency/ws?token={token}");
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("latency websocket should connect");
+
+        socket
+            .send(tungstenite::Message::Text("ping".into()))
+            .await
+            .expect("ping should send");
+
+        let pong = socket
+            .next()
+            .await
+            .expect("pong should arrive")
+            .expect("pong frame should be valid");
+        assert_eq!(pong.into_text().expect("pong should be text"), "pong");
+
+        let _ = socket.close(None).await;
+        app_handle.abort();
     }
 
     #[tokio::test]
@@ -6356,6 +6868,101 @@ done
     }
 
     #[tokio::test]
+    async fn structured_input_route_can_start_a_message_when_idle() {
+        let provider = Arc::new(FakeStructuredProvider::new(false));
+        let state = test_state_with_structured_provider(provider.clone());
+        let token =
+            issue_access_token(&state.config().jwt_secret, "user-structured-input", "conor");
+        let app = app(state.clone());
+        let workspace = state.config().data_dir.join("structured-input-idle");
+        fs::create_dir_all(&workspace).expect("structured workspace should exist");
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/structured/sessions")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "cwd": workspace.to_string_lossy().to_string(),
+                            "provider": "claude"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let create_body = create_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let create_payload: Value =
+            serde_json::from_slice(&create_body).expect("create payload should deserialize");
+        let session_id = create_payload["id"]
+            .as_str()
+            .expect("structured session id should be a string")
+            .to_string();
+
+        let input_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/structured/sessions/{session_id}/input"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "text": "hello from input\n",
+                            "fallbackToMessage": true
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(input_response.status(), StatusCode::ACCEPTED);
+
+        sleep(Duration::from_millis(40)).await;
+
+        let get_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/structured/sessions/{session_id}"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(get_response.status(), StatusCode::OK);
+
+        let get_body = get_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: Value =
+            serde_json::from_slice(&get_body).expect("session payload should deserialize");
+        let events = payload["events"]
+            .as_array()
+            .expect("events should be an array");
+        assert!(events.iter().any(|event| {
+            event["type"] == "status" && event["status"] == "prompt:hello from input"
+        }));
+        assert_eq!(provider.spawn_hits(), 1);
+        assert_eq!(provider.input_hits(), 0);
+    }
+
+    #[tokio::test]
     async fn structured_message_routes_record_events_and_delegate_controls() {
         let provider = Arc::new(FakeStructuredProvider::new(true));
         let state = test_state_with_structured_provider(provider.clone());
@@ -6410,6 +7017,23 @@ done
             .await
             .expect("router should respond");
         assert_eq!(message_response.status(), StatusCode::ACCEPTED);
+
+        sleep(Duration::from_millis(40)).await;
+
+        let input_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/structured/sessions/{session_id}/input"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({ "text": "follow-up\n" }).to_string()))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        assert_eq!(input_response.status(), StatusCode::ACCEPTED);
 
         sleep(Duration::from_millis(40)).await;
 
@@ -6475,10 +7099,15 @@ done
         }));
         assert!(events
             .iter()
+            .any(|event| { event["type"] == "status" && event["status"] == "input:follow-up\\n" }));
+        assert!(events
+            .iter()
             .any(|event| { event["type"] == "status" && event["status"] == "approved" }));
         assert!(events
             .iter()
             .any(|event| { event["type"] == "session_ended" && event["reason"] == "interrupted" }));
+        assert_eq!(provider.spawn_hits(), 1);
+        assert_eq!(provider.input_hits(), 1);
         assert_eq!(provider.approval_hits(), 1);
         assert_eq!(provider.interrupt_hits(), 1);
     }
@@ -6660,6 +7289,8 @@ done
 
     struct FakeStructuredProvider {
         keep_running: bool,
+        spawn_hits: Arc<AtomicUsize>,
+        input_hits: Arc<AtomicUsize>,
         approval_hits: Arc<AtomicUsize>,
         interrupt_hits: Arc<AtomicUsize>,
     }
@@ -6668,9 +7299,19 @@ done
         fn new(keep_running: bool) -> Self {
             Self {
                 keep_running,
+                spawn_hits: Arc::new(AtomicUsize::new(0)),
+                input_hits: Arc::new(AtomicUsize::new(0)),
                 approval_hits: Arc::new(AtomicUsize::new(0)),
                 interrupt_hits: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn spawn_hits(&self) -> usize {
+            self.spawn_hits.load(Ordering::SeqCst)
+        }
+
+        fn input_hits(&self) -> usize {
+            self.input_hits.load(Ordering::SeqCst)
         }
 
         fn approval_hits(&self) -> usize {
@@ -6691,6 +7332,7 @@ done
             &self,
             options: StructuredSpawnOptions,
         ) -> Result<SpawnedStructuredProcess, String> {
+            self.spawn_hits.fetch_add(1, Ordering::SeqCst);
             let (tx, rx) = mpsc::unbounded_channel();
             let sequence = Arc::new(AtomicUsize::new(0));
             let fake_session_id = format!("fake-{}", options.prompt.replace(' ', "-"));
@@ -6721,6 +7363,7 @@ done
 
             Ok(SpawnedStructuredProcess {
                 controller: Arc::new(FakeStructuredProcessController {
+                    input_hits: self.input_hits.clone(),
                     approval_hits: self.approval_hits.clone(),
                     interrupt_hits: self.interrupt_hits.clone(),
                     session_id: fake_session_id,
@@ -6733,6 +7376,7 @@ done
     }
 
     struct FakeStructuredProcessController {
+        input_hits: Arc<AtomicUsize>,
         approval_hits: Arc<AtomicUsize>,
         interrupt_hits: Arc<AtomicUsize>,
         session_id: String,
@@ -6742,7 +7386,15 @@ done
 
     #[async_trait]
     impl StructuredProcessController for FakeStructuredProcessController {
-        async fn send_input(&self, _text: &str) -> Result<(), String> {
+        async fn send_input(&self, text: &str) -> Result<(), String> {
+            self.input_hits.fetch_add(1, Ordering::SeqCst);
+            if let Some(tx) = self.tx.lock().await.as_ref() {
+                let _ = tx.send(StructuredSessionEvent::Status {
+                    ts: 4,
+                    seq: next_fake_seq(&self.sequence),
+                    status: format!("input:{}", text.replace('\r', "\\r").replace('\n', "\\n")),
+                });
+            }
             Ok(())
         }
 

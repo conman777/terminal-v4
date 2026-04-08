@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MetricCard } from './shared/MetricCard';
+import { apiFetch } from '../../utils/api';
+import { getAccessToken } from '../../utils/auth';
 
 const MAX_METRICS = 1000;
 
@@ -36,7 +38,10 @@ export function PerformanceTab({ port }) {
     if (!isLive || notAvailable) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream`;
+    const token = getAccessToken();
+    if (!token) return;
+    const params = new URLSearchParams({ token });
+    const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream?${params.toString()}`;
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -72,7 +77,7 @@ export function PerformanceTab({ port }) {
 
   const fetchMetrics = async () => {
     try {
-      const response = await fetch(`/api/preview/${port}/performance`);
+      const response = await apiFetch(`/api/preview/${port}/performance`);
       if (response.status === 404) {
         setNotAvailable(true);
         return;
@@ -88,7 +93,7 @@ export function PerformanceTab({ port }) {
 
   const clearMetrics = async () => {
     try {
-      await fetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
+      await apiFetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
       setMetrics({
         coreWebVitals: [],
         loadMetrics: [],

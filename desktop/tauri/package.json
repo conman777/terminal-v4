@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "cargo build -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
+    "prebuild": "cargo build --release -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "tauri": "tauri"
   },
   "devDependencies": {

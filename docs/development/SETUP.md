@@ -26,10 +26,10 @@ Backend configuration (set in `backend/.env` or your shell):
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PORT` | Backend HTTP port | `3020` |
-| `HOST` | Host binding | `0.0.0.0` |
-| `LOG_LEVEL` | Fastify logger level | `info` |
-| `TERMINAL_DATA_DIR` | SQLite data directory | `backend/data` |
-| `DATA_DIR` | Preview cookie store dir | `backend/data` |
+| `HOST` | Host binding | `127.0.0.1` |
+| `LOG_LEVEL` | Backend logger level | `info` |
+| `TERMINAL_DATA_DIR` | SQLite/data directory override | platform app data dir + `/terminal-v4` |
+| `DATA_DIR` | Preview cookie store dir override | same as `TERMINAL_DATA_DIR` |
 | `CLAUDE_BIN` | Path/alias for Claude CLI | `claude` (or `claude.cmd` on Windows) |
 | `CLAUDE_ALLOWED_TOOLS` | Comma-separated list for `--allowedTools` | *(unset)* |
 | `CLAUDE_ASSUME_YES` | If `true`, uses `--dangerously-skip-permissions` | `false` |
@@ -37,7 +37,7 @@ Backend configuration (set in `backend/.env` or your shell):
 | `ANTHROPIC_API_KEY` | Passed to Claude CLI as env | *(unset)* |
 | `OPENAI_API_KEY` | Fallback API key for OpenAI routes | *(unset)* |
 | `GROQ_API_KEY` | Fallback API key for voice transcription | *(unset)* |
-| `JWT_SECRET` | JWT signing secret | *(dev default if unset)* |
+| `JWT_SECRET` | JWT signing secret | *(dev default only allowed on loopback binds)* |
 | `REFRESH_SECRET` | Refresh token signing secret | *(dev default if unset)* |
 | `ALLOWED_USERNAME` | Restrict logins to a single username | *(unset)* |
 | `STORAGE_DATABASE_URL` | External Postgres users database for login | *(required for live login)* |
@@ -45,10 +45,13 @@ Backend configuration (set in `backend/.env` or your shell):
 Notes:
 - `TERMINAL_DATA_DIR` (or `DATA_DIR`) sets the base data directory for SQLite,
   terminal/Claude Code sessions, bookmarks, notes, and preview cookies.
-  Default is `backend/data` (repo-relative) in dev; set it explicitly in prod.
-- For systemd/production, set `TERMINAL_DATA_DIR` explicitly so rebuilds keep
-  using the same data directory (otherwise a bundled build may resolve `data`
-  at the repo root).
+  Default is the platform app data directory plus `terminal-v4`
+  (for example `%LOCALAPPDATA%\terminal-v4` on Windows).
+- The Rust API refuses to start with the built-in development `JWT_SECRET`
+  unless `HOST` stays on a loopback address. Set `JWT_SECRET` explicitly before
+  binding to `0.0.0.0` or any other non-loopback interface.
+- Set `TERMINAL_DATA_DIR` explicitly if you want repo-local data during dev or
+  a custom persistent location in production.
 
 ## Production Service (systemd)
 
@@ -96,11 +99,10 @@ that username after the external user lookup succeeds.
 
 ## Running the App
 
-Backend (Fastify + TypeScript):
+Rust API backend:
 
 ```bash
-cd backend
-npm run dev
+npm run api:dev
 ```
 
 Frontend (React + Vite):
@@ -113,6 +115,10 @@ npm run dev
 Defaults:
 - Backend: http://localhost:3020
 - Frontend: http://localhost:5173 (proxying `/api/*` to backend)
+
+If login fails with a network error or "Failed to fetch", first verify the Rust
+API is running on `127.0.0.1:3020`. The Vite dev server proxies auth and API
+requests there.
 
 ## Running the Windows Desktop App (Tauri)
 
@@ -128,7 +134,7 @@ npm run desktop:dev
 
 Desktop scripts:
 - `npm run desktop:install` - install desktop wrapper dependencies
-- `npm run desktop:predev` - build frontend/backend bundles consumed by desktop shell
+- `npm run desktop:predev` - build the frontend bundle consumed by the desktop shell
 - `npm run desktop:dev` - launch native desktop app in development mode
 - `npm run desktop:build` - create desktop build artifacts (bundle disabled in current phase)
 
@@ -140,40 +146,47 @@ Notes:
 ## Rust Backend Rewrite Workspace
 
 A parallel Rust workspace lives in `rust/`. It is the foundation for the
-incremental backend rewrite and currently does not replace the Node backend used
-by the desktop or web app.
+incremental backend rewrite and now covers the primary desktop/runtime path.
 
 Commands:
 
 ```bash
 cd rust
 cargo check
+cargo fmt --all --check
 cargo test
 cargo run -p terminal-v4-api
 ```
 
+Windows note:
+- The passkey-enabled Rust build pulls OpenSSL through `webauthn-rs`.
+- Install Strawberry Perl and ensure `C:\Strawberry\perl\bin` is on `PATH` before running `cargo test` or desktop Rust builds on Windows.
+
 Current scope:
 - shared config/domain crate (`terminal-v4-core`)
 - Axum API crate (`terminal-v4-api`)
-- initial `/api/health` parity endpoint
-- local SQLite and external Postgres `/api/auth/login` and `/api/auth/refresh`
-- JWT-authenticated `/api/auth/me` and `/api/auth/logout`
+- `/api/health`
+- local SQLite and external Postgres `/api/auth/login`, `/api/auth/refresh`, `/api/auth/me`, `/api/auth/logout`, and `/api/auth/change-password`
+- passkey registration/authentication plus credential management
 - live and persisted `/api/terminal` listing, create, restore, rename, and delete
-- `/api/terminal/:id/input`, `/api/terminal/:id/resize`, and `/api/terminal/:id/ws`
-- `/api/terminal/:id/history`, `/api/terminal/:id/turns`, `/api/terminal/:id/git-branches`, and `/api/terminal/:id/generate-topic`
+- `/api/terminal/:id/input`, `/api/terminal/:id/resize`, `/api/terminal/:id/ws`, and `/api/terminal/:id/stream`
+- `/api/terminal/:id/history`, `/api/terminal/:id/turns`, `/api/terminal/:id/git-branches`, `/api/terminal/:id/git-stats`, `/api/terminal/:id/git-checkout`, `/api/terminal/:id/project-info`, and `/api/terminal/:id/generate-topic`
 - `/api/terminal/:id/thread` and `/api/terminal/:id/detect-project`
 - `/api/structured/sessions`, `/api/structured/sessions/:id`, `/api/structured/sessions/:id/thread`, and the message/approve/interrupt/delete routes
 - `/api/structured/sessions/:id/ws` with access-token query auth for browser clients
 - `/api/state`
-- `/api/projects/scan`, `/api/projects/scan-dirs`, `/api/system/preview-config`, `/api/preview/active-ports`, and `/api/fs/list`
+- `/api/projects/scan`, `/api/projects/scan-dirs`, `/api/system/preview-config`, `/api/preview/active-ports`, `/api/fs/list`, and `/api/fs/download`
 - SQLite-backed `/api/settings`
 - JSON-backed `/api/bookmarks` and `/api/notes`
+- `/api/files/*` CRUD, screenshots upload, unzip, and preview file serving
+- preview/proxy routes, preview cookies/storage/eval/logs/performance, and dev-proxy websocket bridging
+- process manager routes, preview recording/screenshots, system stats/history/rebuild, vault routes, transcription, and WebContainer file tree routes
+- desktop Tauri runtime now builds and launches the Rust backend directly
 
 Current limitation:
-- The Rust workspace can now back a manually testable login plus terminal flow in the existing Vite frontend, including folder browsing, terminal creation, and structured `ss-*` session creation/discovery plus backend-backed rename/thread metadata through the shared session inventory. It still does not replace Node for preview/proxy services, richer file/process APIs, passkeys, vault, voice, or the desktop runtime.
-- The current Rust terminal manager is PTY-backed and now handles the Windows `cmd.exe` startup cursor-status query in-process so default-shell input works in direct API flows as well as browser-driven sessions, but it still does not provide tmux parity or the full Node terminal feature set.
-- When testing the structured-session UI against Rust, restart the API from `rust/` with `cargo run -p terminal-v4-api` so the running binary includes the latest `/api/structured/sessions` routes before pointing Vite at `http://127.0.0.1:3020`.
-- The current browser verification path is `BASE_URL=http://127.0.0.1:5175 npx playwright test e2e/structured-sessions.spec.ts --project=chromium` from `frontend/`. It covers structured create, rename, pin, and reload persistence against the live Rust backend.
+- The legacy Node backend still exists in `backend/` as a migration reference, but the desktop runtime no longer falls back to it.
+- Rust verification on Windows still depends on the local Perl/OpenSSL toolchain being available in the shell environment that launches Cargo.
+- Frontend/browser coverage is still thinner than the Rust route surface. Keep expanding Playwright coverage as preview/devtools and auth flows stabilize.
 
 ## Preview Troubleshooting (Local Dev Servers)
 

@@ -1,18 +1,23 @@
 #!/bin/bash
 # Restart the terminal-v4 backend with minimal downtime
+#
+# ROLLBACK: To revert to Node backend:
+#   cd ~/terminal-v4/backend && npm run build
+#   Update systemd ExecStart to: node /home/<user>/terminal-v4/backend/dist/index.js
+#   sudo systemctl restart terminal-v4.service
 
 set -e
 
-cd ~/terminal-v4/backend
+cd ~/terminal-v4/rust
 
-echo "Building backend..."
-npm run build
+echo "Building Rust backend..."
+cargo build --release -p terminal-v4-api
 
 echo "Restarting service via systemd..."
 sudo systemctl restart terminal-v4.service
 
 # Wait for server to be ready with retries
-MAX_HEALTH_WAIT=15
+MAX_HEALTH_WAIT=30
 HEALTH_WAITED=0
 echo "Waiting for server to be ready..."
 while [ $HEALTH_WAITED -lt $MAX_HEALTH_WAIT ]; do

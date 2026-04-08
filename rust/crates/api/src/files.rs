@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
 /// A file/directory entry returned by the list endpoint.
@@ -193,30 +193,7 @@ pub async fn extract_zip(zip_path: &str, target_dir: &str) -> Result<usize, Stri
                 .map_err(|e| format!("Failed to read ZIP entry: {e}"))?;
 
             let name = entry.name().to_string();
-
-            // Zip Slip protection: reject paths with ..
-            if name.contains("..") {
-                return Err(format!("Zip Slip detected: path contains '..': {name}"));
-            }
-
-            let out_path = target_resolved.join(&name);
-
-            // Verify the resolved path is within target
-            let canonical_target = target_resolved
-                .canonicalize()
-                .unwrap_or_else(|_| target_resolved.clone());
-            let canonical_out = out_path.parent().map(|p| {
-                std::fs::create_dir_all(p).ok();
-                p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-            });
-
-            if let Some(canonical_out) = canonical_out {
-                if !canonical_out.starts_with(&canonical_target) {
-                    return Err(format!(
-                        "Zip Slip detected: {name} escapes target directory"
-                    ));
-                }
-            }
+            let out_path = safe_zip_output_path(&target_resolved, &name)?;
 
             if entry.is_dir() {
                 std::fs::create_dir_all(&out_path)
@@ -240,6 +217,28 @@ pub async fn extract_zip(zip_path: &str, target_dir: &str) -> Result<usize, Stri
     .map_err(|e| format!("ZIP extraction task failed: {e}"))??;
 
     Ok(count)
+}
+
+fn safe_zip_output_path(target_dir: &Path, entry_name: &str) -> Result<PathBuf, String> {
+    let mut relative_path = PathBuf::new();
+
+    for component in Path::new(entry_name).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => relative_path.push(part),
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(format!(
+                    "Zip Slip detected: {entry_name} escapes target directory"
+                ));
+            }
+        }
+    }
+
+    if relative_path.as_os_str().is_empty() {
+        return Err(format!("Invalid ZIP entry path: {entry_name}"));
+    }
+
+    Ok(target_dir.join(relative_path))
 }
 
 /// Detect image MIME type from file magic bytes.
@@ -296,6 +295,8 @@ fn resolve_safe_path(path: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn resolve_safe_path_rejects_traversal() {
@@ -333,5 +334,48 @@ mod tests {
         data[..4].copy_from_slice(b"RIFF");
         data[8..12].copy_from_slice(b"WEBP");
         assert_eq!(detect_image_mime(&data), Some("image/webp"));
+    }
+
+    #[test]
+    fn safe_zip_output_path_rejects_escape_paths() {
+        let target = Path::new("/tmp/target");
+
+        assert!(safe_zip_output_path(target, "../escape.txt").is_err());
+        assert!(safe_zip_output_path(target, "/escape.txt").is_err());
+    }
+
+    #[test]
+    fn safe_zip_output_path_allows_nested_relative_paths() {
+        let target = Path::new("/tmp/target");
+        let out_path =
+            safe_zip_output_path(target, "nested/file.txt").expect("path should be valid");
+
+        assert_eq!(out_path, target.join("nested").join("file.txt"));
+    }
+
+    #[tokio::test]
+    async fn extract_zip_rejects_escape_entries_without_side_effects() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let zip_path = temp_dir.path().join("archive.zip");
+        let target_dir = temp_dir.path().join("target");
+        std::fs::create_dir_all(&target_dir).expect("target dir should exist");
+
+        let zip_file = std::fs::File::create(&zip_path).expect("zip should create");
+        let mut writer = zip::ZipWriter::new(zip_file);
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .start_file("../outside/escape.txt", options)
+            .expect("zip entry should create");
+        writer.write_all(b"bad").expect("zip entry should write");
+        writer.finish().expect("zip should finish");
+
+        let result = extract_zip(
+            zip_path.to_str().expect("zip path should be utf-8"),
+            target_dir.to_str().expect("target path should be utf-8"),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!temp_dir.path().join("outside").exists());
     }
 }

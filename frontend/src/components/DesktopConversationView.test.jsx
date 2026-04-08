@@ -38,9 +38,9 @@ function buildProps(overrides = {}) {
 }
 
 describe('DesktopConversationView', () => {
-  it('renders AI-specific placeholder text', () => {
+  it('renders AI-specific provider label in header', () => {
     render(<DesktopConversationView {...buildProps()} />);
-    expect(screen.getByPlaceholderText('Message Codex...')).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
   });
 
   it('renders turns with user and assistant entries', () => {
@@ -59,15 +59,9 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText('assistant reply')).toBeInTheDocument();
   });
 
-  it('sends message when pressing Enter without Shift', () => {
-    const onSend = vi.fn();
-    render(<DesktopConversationView {...buildProps({ onSend })} />);
-
-    const input = screen.getByPlaceholderText('Message Codex...');
-    fireEvent.change(input, { target: { value: 'hello world' } });
-    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
-
-    expect(onSend).toHaveBeenCalledWith('hello world');
+  it('does not render an inline composer (V4 status bar composer is the single input)', () => {
+    render(<DesktopConversationView {...buildProps()} />);
+    expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();
   });
 
   it('shows launch action and calls handler', () => {
@@ -433,7 +427,7 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByPlaceholderText('Message Deepseek...')).toBeInTheDocument();
+    expect(screen.getByText('Deepseek')).toBeInTheDocument();
     expect(screen.queryByText(/deepseek --model r1/i)).not.toBeInTheDocument();
     expect(screen.getByText('Ready.')).toBeInTheDocument();
   });

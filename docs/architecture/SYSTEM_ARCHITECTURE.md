@@ -14,28 +14,22 @@ Terminal v4 is a comprehensive web-based terminal and development cockpit. It co
 - Notes and bookmarks for command management
 - Split-pane terminal layouts with fullscreen mode
 
-The system is split into a React SPA frontend and a Fastify backend. The backend
-also serves the built frontend in production.
+The system is split into a React SPA frontend and a backend runtime. The legacy
+backend is Fastify/TypeScript, and the active rewrite/runtime path is now the
+Rust Axum workspace under `rust/`. The backend serves the built frontend in
+production.
 
 Phase 1 also includes a Windows desktop wrapper (`desktop/tauri`) that launches
-the existing backend as a local child process and hosts the same UI in a native
+the Rust backend as a local child process and hosts the same UI in a native
 window. In this phase, desktop mode is local-only (`127.0.0.1:3020`).
 
-A parallel Rust backend workspace now lives under `rust/` as the starting point
-for an incremental rewrite. The Rust workspace is not the production runtime
-yet; the current app still runs on the TypeScript/Fastify backend until feature
-parity is reached. The current Rust slice covers health checks, JWT auth with
-local SQLite plus external Postgres login fallback, a PTY-backed live terminal
-manager with create/restore/input/resize/delete/WebSocket support, Windows
-`cmd.exe` startup-query handling, session history, turns, topic, git-branch,
-and thread metadata routes, a file-backed structured session manager with
-create/list/get/delete/message/approve/interrupt/WebSocket support, basic
-state/project-scan/preview-config/filesystem boot routes, and the settings,
-bookmarks, and notes APIs. This slice is now sufficient to manually exercise
-the existing Vite frontend through login, folder selection, terminal creation,
-structured `ss-*` session creation/discovery, and the terminal surface, and it
-now has browser-level regression coverage for structured create/rename/pin/reload
-flows, but it is still short of full Node parity.
+The Rust backend workspace now covers the primary API surface used by the
+desktop runtime: health, JWT auth, password changes, passkeys, PTY-backed
+terminal sessions with tmux recovery/git helpers, structured sessions, preview
+and dev-proxy tooling, files/processes/system stats, screenshots/recording,
+vault, transcription, WebContainer file trees, settings, bookmarks, and notes.
+The legacy Fastify backend still exists in `backend/` during migration, but it
+is now a compatibility/reference implementation rather than the desktop runtime.
 
 ## High-Level Architecture
 
@@ -85,7 +79,7 @@ flows, but it is still short of full Node parity.
 
 ### Desktop Shell (Windows, Phase 1)
 - Built with Tauri (`desktop/tauri/src-tauri`).
-- Starts backend process on app setup (`node backend/dist/index.js`).
+- Starts the Rust backend process on app setup (`terminal-v4-api`).
 - Waits for backend readiness before continuing.
 - Stops backend process when the desktop app exits.
 - Uses local-only bind (`HOST=127.0.0.1`, `PORT=3020`) for safety in this phase.
@@ -184,7 +178,7 @@ Subdomain previews should use a resolvable base when the UI is accessed over
 the network.
 
 Debug tooling:
-- Injected scripts capture console, errors, and network activity.
+- Injected scripts capture console, errors, storage sync, and performance activity.
 - Logs are stored in-memory for Claude Code and the preview UI.
 - Cookie jar is persisted to disk.
 

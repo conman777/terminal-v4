@@ -12,6 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let config = AppConfig::from_env();
+    config.validate_runtime()?;
     let state = ApiState::new(config.clone())?;
     state
         .terminal_manager()

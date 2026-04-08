@@ -4,12 +4,13 @@
   "description": "Browser-based terminal workspace with a React frontend and Fastify backend, providing PTY sessions, preview tooling, and Claude Code integration.",
   "main": "index.js",
   "scripts": {
+    "api:dev": "cargo run -p terminal-v4-api --manifest-path rust/Cargo.toml",
     "test": "npm --prefix backend test",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "desktop:install": "npm --prefix desktop/tauri install",
     "desktop:prepare": "node scripts/prepare-desktop-dev.cjs",
-    "desktop:predev": "npm --prefix frontend run build && npm --prefix backend run build",
+    "desktop:predev": "npm --prefix frontend run build",
     "desktop:dev": "npm run desktop:install && npm run desktop:prepare && npm run desktop:predev && npm --prefix desktop/tauri run tauri dev -- --no-dev-server-wait",
     "desktop:build": "npm run desktop:install && npm run desktop:prepare && npm run desktop:predev && npm --prefix desktop/tauri run tauri build"
   },

@@ -1,4 +1,4 @@
-use bcrypt::verify;
+use bcrypt::{hash, verify, DEFAULT_COST};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -39,6 +39,7 @@ struct AppStateInner {
     cookie_store: crate::preview::cookie_jar::CookieStore,
     port_scanner: crate::preview::port_scan::PortScanner,
     preview_log_store: crate::preview::logs::PreviewLogStore,
+    preview_performance_store: crate::preview::performance::PerformanceStore,
     request_log_store: crate::preview::request_logs::RequestLogStore,
 }
 
@@ -113,6 +114,13 @@ struct StoredRefreshToken {
     expires_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangePasswordResult {
+    Changed,
+    InvalidCurrentPassword,
+    ExternallyManaged,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct PersistedTerminalSession {
     id: String,
@@ -177,6 +185,7 @@ impl AppState {
                 cookie_store: crate::preview::cookie_jar::CookieStore::new(),
                 port_scanner: crate::preview::port_scan::PortScanner::new(),
                 preview_log_store: crate::preview::logs::PreviewLogStore::new(),
+                preview_performance_store: crate::preview::performance::PerformanceStore::new(),
                 request_log_store: crate::preview::request_logs::RequestLogStore::new(),
                 config,
                 db: Mutex::new(connection),
@@ -206,6 +215,10 @@ impl AppState {
 
     pub fn preview_log_store(&self) -> &crate::preview::logs::PreviewLogStore {
         &self.inner.preview_log_store
+    }
+
+    pub fn preview_performance_store(&self) -> &crate::preview::performance::PerformanceStore {
+        &self.inner.preview_performance_store
     }
 
     pub fn request_log_store(&self) -> &crate::preview::request_logs::RequestLogStore {
@@ -291,14 +304,49 @@ impl AppState {
             .map_err(|error| error.to_string())
     }
 
+    pub fn change_password(
+        &self,
+        user: &AuthenticatedUser,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<ChangePasswordResult, String> {
+        let Some(stored_user) = self.get_user_by_id(&user.user_id)? else {
+            return Ok(ChangePasswordResult::InvalidCurrentPassword);
+        };
+        if is_external_auth_mirror_user(&stored_user) {
+            return Ok(ChangePasswordResult::ExternallyManaged);
+        }
+
+        let is_valid = verify(current_password, &stored_user.password_hash)
+            .map_err(|error| error.to_string())?;
+        if !is_valid {
+            return Ok(ChangePasswordResult::InvalidCurrentPassword);
+        }
+
+        let password_hash = hash(new_password, DEFAULT_COST).map_err(|error| error.to_string())?;
+        let connection = self.lock_db()?;
+        connection
+            .execute(
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                params![password_hash, iso_timestamp(), user.user_id],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM refresh_tokens WHERE user_id = ?",
+                params![user.user_id],
+            )
+            .map_err(|error| error.to_string())?;
+
+        Ok(ChangePasswordResult::Changed)
+    }
+
     #[cfg(test)]
     pub fn create_local_user_for_test(
         &self,
         username: &str,
         password: &str,
     ) -> Result<UserPublic, String> {
-        use bcrypt::{hash, DEFAULT_COST};
-
         let password_hash = hash(password, DEFAULT_COST).map_err(|error| error.to_string())?;
         let user = StoredUser {
             id: Uuid::new_v4().to_string(),

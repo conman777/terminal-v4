@@ -5,7 +5,9 @@
   "identifier": "com.conor.terminalv4",
   "build": {
     "frontendDist": "../../frontend/dist",
-    "devUrl": "http://127.0.0.1:3020"
+    "devUrl": "http://127.0.0.1:3020",
+    "beforeBuildCommand": "cargo build --release -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
+    "beforeDevCommand": "cargo build -p terminal-v4-api --manifest-path ../../rust/Cargo.toml"
   },
   "app": {
     "windows": [

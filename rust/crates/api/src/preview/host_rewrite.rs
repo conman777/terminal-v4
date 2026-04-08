@@ -137,4 +137,50 @@ mod tests {
             r#"const socket = new WebSocket("wss://preview-5173.localhost/hmr");"#
         );
     }
+
+    #[test]
+    fn derive_websocket_origin_http_to_ws() {
+        assert_eq!(
+            derive_websocket_origin("http://example.com:3020"),
+            Some("ws://example.com:3020".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_websocket_origin_https_to_wss() {
+        assert_eq!(
+            derive_websocket_origin("https://example.com"),
+            Some("wss://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_websocket_origin_unknown_protocol() {
+        assert_eq!(derive_websocket_origin("ftp://example.com"), None);
+    }
+
+    #[test]
+    fn rewrites_all_localhost_variants() {
+        let html = r#"<a href="http://0.0.0.0:8080/path">link</a>"#;
+        let rewritten = rewrite_html_for_subdomain_preview(
+            html,
+            8080,
+            "http://localhost:3020",
+            "http://preview-8080.localhost:3020",
+            None,
+        );
+        assert!(rewritten.contains("http://preview-8080.localhost:3020/path"));
+    }
+
+    #[test]
+    fn explicit_websocket_origin_overrides_derived() {
+        let script = r#"new WebSocket("ws://localhost:5173/ws")"#;
+        let rewritten = rewrite_script_for_subdomain_preview(
+            script,
+            5173,
+            "https://preview-5173.example.com",
+            Some("wss://custom-ws.example.com"),
+        );
+        assert!(rewritten.contains("wss://custom-ws.example.com/ws"));
+    }
 }

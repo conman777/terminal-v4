@@ -4,6 +4,18 @@ import { resolveApiUrl } from '../utils/apiBase';
 
 const AuthContext = createContext(null);
 
+function normalizeAuthError(err) {
+  if (err instanceof TypeError) {
+    return new Error('Cannot reach the Rust API on http://127.0.0.1:3020. Start `cargo run -p terminal-v4-api --manifest-path rust/Cargo.toml` or `npm run desktop:dev`.');
+  }
+
+  if (err instanceof Error) {
+    return err;
+  }
+
+  return new Error('Authentication failed');
+}
+
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(() => getUser());
   const [loading, setLoading] = useState(true);
@@ -120,8 +132,9 @@ export function AuthProvider({ children }) {
       setUserState(data.user);
       return data.user;
     } catch (err) {
-      setError(err.message);
-      throw err;
+      const normalized = normalizeAuthError(err);
+      setError(normalized.message);
+      throw normalized;
     }
   }, []);
 
@@ -145,8 +158,9 @@ export function AuthProvider({ children }) {
       setUserState(data.user);
       return data.user;
     } catch (err) {
-      setError(err.message);
-      throw err;
+      const normalized = normalizeAuthError(err);
+      setError(normalized.message);
+      throw normalized;
     }
   }, []);
 

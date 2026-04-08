@@ -108,6 +108,19 @@ function TestThreadStateConsumer() {
   );
 }
 
+function TestStructuredInputConsumer() {
+  const { sendToSession } = useTerminalSession();
+
+  return (
+    <button
+      type="button"
+      onClick={() => sendToSession('ss-structured', '\r')}
+    >
+      send structured input
+    </button>
+  );
+}
+
 function structuredSnapshot(overrides = {}) {
   return {
     id: 'ss-structured',
@@ -734,6 +747,58 @@ describe('TerminalSessionContext', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('session-ids')).toHaveTextContent('');
+    });
+  });
+
+  it('routes structured raw input through the structured input endpoint without fallback messaging', async () => {
+    apiFetch.mockImplementation(async (url, options = {}) => {
+      if (url === '/api/terminal') {
+        return {
+          ok: true,
+          json: async () => ({ sessions: [] })
+        };
+      }
+
+      if (url === '/api/structured/sessions') {
+        return {
+          ok: true,
+          json: async () => ([structuredSnapshot()])
+        };
+      }
+
+      if (url === '/api/structured/sessions/ss-structured/input') {
+        expect(options.method).toBe('POST');
+        expect(options.body).toEqual({ text: '\r' });
+        return {
+          ok: true,
+          status: 202,
+          json: async () => ({ status: 'accepted' })
+        };
+      }
+
+      if (String(url).startsWith('/api/state')) {
+        return {
+          ok: true,
+          json: async () => ({ sessions: [] })
+        };
+      }
+
+      throw new Error(`Unexpected apiFetch call: ${url}`);
+    });
+
+    render(
+      <TerminalSessionProvider>
+        <TestStructuredInputConsumer />
+      </TerminalSessionProvider>
+    );
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'send structured input' }).click();
+    });
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/structured/sessions/ss-structured/input', {
+      method: 'POST',
+      body: { text: '\r' }
     });
   });
 

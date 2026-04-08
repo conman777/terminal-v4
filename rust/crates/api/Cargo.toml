@@ -46,6 +46,9 @@ uuid.workspace = true
 webauthn-rs = { version = "0.5.4", features = ["danger-credential-internals"] }
 zip = "2"
 
+[target.'cfg(windows)'.dependencies]
+conpty = "0.7"
+
 [dev-dependencies]
 http-body-util.workspace = true
 serde_json.workspace = true
