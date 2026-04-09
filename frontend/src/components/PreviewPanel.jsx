@@ -32,6 +32,13 @@ const PREVIEW_DESKTOP_MOBILE_VIEW_KEY = 'preview_desktop_mobile_view_v1';
 const DESKTOP_BROWSER_SPLIT_DEFAULT = 68;
 const GENERIC_RUNTIME_PROCESSES = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'python', 'python3', 'deno']);
 
+function getPathLeafLabel(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+  if (!normalized) return '';
+  return normalized.split('/').filter(Boolean).pop() || normalized;
+}
+
 function isFrontendCandidatePort(portInfo, previewPort) {
   if (!portInfo?.listening) return false;
   if (portInfo.port === previewPort) return true;
@@ -2383,6 +2390,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const mobileSplitMaxHeight = Math.max(180, mobileViewportHeight * 0.75);
   const mobileTerminalVisible = Boolean(mobileViewMode === 'split' && activeSessions && activeSessions.length > 0);
   const mobileOverlayHeight = Math.min(mobileSplitHeight, mobileSplitMaxHeight);
+  const activePreviewSession = useMemo(() => {
+    if (!activeSessions || activeSessions.length === 0) return null;
+    return activeSessions.find((session) => session.id === activeSessionId) || activeSessions[0] || null;
+  }, [activeSessionId, activeSessions]);
+  const activePreviewScope = useMemo(() => {
+    const sessionPath = activePreviewSession?.thread?.projectPath || activePreviewSession?.groupPath || activePreviewSession?.cwd || '';
+    const sessionLabel = activePreviewSession
+      ? getPreferredSessionTopic(
+        activePreviewSession.thread?.topic,
+        activePreviewSession.title || `Session ${activePreviewSession.id?.slice(0, 8) || ''}`,
+      )
+      : '';
+    const cwd = projectInfo?.cwd || sessionPath || '';
+    const configuredProjectName = typeof projectInfo?.projectName === 'string'
+      ? projectInfo.projectName.trim()
+      : '';
+    const appLabel = configuredProjectName || getPathLeafLabel(cwd) || sessionLabel || '';
+
+    if (!appLabel && !cwd && !sessionLabel) {
+      return null;
+    }
+
+    return {
+      appLabel,
+      sessionLabel: sessionLabel && sessionLabel !== appLabel ? sessionLabel : '',
+      cwd,
+    };
+  }, [activePreviewSession, projectInfo?.cwd, projectInfo?.projectName]);
   const projectFolderScope = useMemo(() => {
     const cwd = projectInfo?.cwd;
     if (!cwd || typeof cwd !== 'string') return '';
@@ -2599,6 +2634,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 <>
                   <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
                   <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
+                  {activePreviewScope?.appLabel && (
+                    <p className="preview-empty-scope">
+                      Active app: <strong>{activePreviewScope.appLabel}</strong>
+                    </p>
+                  )}
+                  {activePreviewScope?.sessionLabel && (
+                    <p className="preview-empty-scope-detail">
+                      Following session: {activePreviewScope.sessionLabel}
+                    </p>
+                  )}
                   {projectInfo.projectType === 'static' ? (
                     <>
                       <p>Static site detected.</p>
@@ -3424,6 +3469,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         inputUrl={inputUrl}
         onInputUrlChange={setInputUrl}
         activePorts={desktopVisiblePorts}
+        activePreviewScope={activePreviewScope}
         previewPort={previewPort}
         showPortDropdown={showPortDropdown}
         onTogglePortDropdown={() => setShowPortDropdown(!showPortDropdown)}
@@ -3491,6 +3537,16 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   <>
                     <div className="preview-empty-icon">{projectInfo.projectType === 'static' ? '\u{1F4C4}' : '\u{1F4E6}'}</div>
                     <h3>{projectInfo.projectName || projectInfo.projectType.charAt(0).toUpperCase() + projectInfo.projectType.slice(1)} Project</h3>
+                    {activePreviewScope?.appLabel && (
+                      <p className="preview-empty-scope">
+                        Active app: <strong>{activePreviewScope.appLabel}</strong>
+                      </p>
+                    )}
+                    {activePreviewScope?.sessionLabel && (
+                      <p className="preview-empty-scope-detail">
+                        Following session: {activePreviewScope.sessionLabel}
+                      </p>
+                    )}
                     {projectInfo.projectType === 'static' ? (
                       <>
                         <p>Static site detected in this directory.</p>

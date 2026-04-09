@@ -4066,6 +4066,47 @@ button {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
 }
 
+.preview-active-app-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(280px, 32vw);
+  height: var(--preview-header-btn-size, 28px);
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  background: rgba(34, 197, 94, 0.08);
+  color: #dcfce7;
+  flex-shrink: 1;
+}
+
+.preview-active-app-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #22c55e;
+  flex-shrink: 0;
+}
+
+.preview-active-app-prefix {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(220, 252, 231, 0.8);
+  flex-shrink: 0;
+}
+
+.preview-active-app-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .preview-mode-badge {
   display: inline-flex;
   align-items: center;
@@ -4478,6 +4519,21 @@ button {
   margin: 0 0 10px 0;
   font-size: 14px;
   line-height: 1.6;
+}
+
+.preview-empty-scope {
+  margin: 0 0 6px 0;
+  color: var(--text-primary);
+}
+
+.preview-empty-scope strong {
+  font-weight: 700;
+}
+
+.preview-empty-scope-detail {
+  margin: 0 0 12px 0;
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .preview-empty-actions {

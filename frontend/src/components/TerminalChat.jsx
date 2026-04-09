@@ -2193,16 +2193,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           term.loadAddon(webglAddon);
           webglAddonRef.current = webglAddon;
 
-          // Verify WebGL renderer is active
-          setTimeout(() => {
-            const renderer = term._core?._renderService?._renderer;
-            const rendererName = renderer?.constructor?.name;
-            if (rendererName === 'WebglRenderer') {
-              console.log('[WebGL] GPU acceleration active');
-            } else {
-              console.warn('[WebGL] Fallback to canvas renderer:', rendererName);
-            }
-          }, 100);
+          // constructor.name is minified in production bundles, so only use
+          // this internal xterm check during local development.
+          if (import.meta.env.DEV) {
+            setTimeout(() => {
+              const renderer = term._core?._renderService?._renderer;
+              const rendererName = renderer?.constructor?.name;
+              if (rendererName === 'WebglRenderer') {
+                console.log('[WebGL] GPU acceleration active');
+              } else {
+                console.warn('[WebGL] Fallback to canvas renderer:', rendererName);
+              }
+            }, 100);
+          }
         } catch (error) {
           console.warn('[WebGL] Failed to initialize, using canvas fallback:', error);
         }

@@ -202,6 +202,61 @@ describe('PreviewPanel', () => {
     });
   });
 
+  it('passes the active app scope to the preview header', async () => {
+    render(
+      <PreviewPanel
+        {...buildProps({
+          projectInfo: {
+            cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4',
+            projectType: 'node',
+            projectName: 'terminal v4',
+            startCommand: 'npm run dev',
+          },
+          activeSessions: [{
+            id: 'session-1',
+            title: 'Terminal 1',
+            cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4',
+            usesTmux: false,
+          }],
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = previewUrlBarSpy.mock.lastCall?.[0];
+      expect(props).toBeTruthy();
+      expect(props.activePreviewScope).toEqual(expect.objectContaining({
+        appLabel: 'terminal v4',
+        sessionLabel: 'Terminal 1',
+        cwd: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects\\terminal v4',
+      }));
+    });
+  });
+
+  it('shows the active app in the empty preview state', async () => {
+    render(
+      <PreviewPanel
+        {...buildProps({
+          projectInfo: {
+            cwd: 'C:\\Users\\conor',
+            projectType: 'static',
+            indexPath: 'C:\\Users\\conor\\index.html',
+          },
+          activeSessions: [{
+            id: 'session-1',
+            title: 'Terminal 1',
+            cwd: 'C:\\Users\\conor',
+            usesTmux: false,
+          }],
+        })}
+      />,
+    );
+
+    expect(await screen.findByText(/Active app:/)).toBeInTheDocument();
+    expect(screen.getByText('conor', { selector: '.preview-empty-scope strong' })).toBeInTheDocument();
+    expect(screen.getByText('Following session: Terminal 1')).toBeInTheDocument();
+  });
+
   it('keeps the mobile preview clean until terminal mode is explicitly selected', async () => {
     isMobile = true;
 

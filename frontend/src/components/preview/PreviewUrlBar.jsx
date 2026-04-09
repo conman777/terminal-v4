@@ -61,6 +61,7 @@ export function PreviewUrlBar({
   inputUrl,
   onInputUrlChange,
   activePorts,
+  activePreviewScope,
   previewPort,
   showPortDropdown,
   onTogglePortDropdown,
@@ -102,6 +103,17 @@ export function PreviewUrlBar({
   onClose,
 }) {
   const [portSearch, setPortSearch] = useState('');
+  const activePreviewScopeTitle = useMemo(() => {
+    if (!activePreviewScope?.appLabel) return '';
+    const parts = [`Active app: ${activePreviewScope.appLabel}`];
+    if (activePreviewScope.sessionLabel) {
+      parts.push(`Session: ${activePreviewScope.sessionLabel}`);
+    }
+    if (activePreviewScope.cwd) {
+      parts.push(activePreviewScope.cwd);
+    }
+    return parts.join(' | ');
+  }, [activePreviewScope]);
 
   const selectablePorts = useMemo(() => {
     const bestByApp = new Map();
@@ -252,6 +264,17 @@ export function PreviewUrlBar({
             aria-label="Preview URL"
           />
         </form>
+        {activePreviewScope?.appLabel && (
+          <div
+            className="preview-active-app-badge"
+            title={activePreviewScopeTitle}
+            aria-label={`Active app: ${activePreviewScope.appLabel}`}
+          >
+            <span className="preview-active-app-dot" />
+            <span className="preview-active-app-prefix">Active app</span>
+            <span className="preview-active-app-value">{activePreviewScope.appLabel}</span>
+          </div>
+        )}
         {previewModeInfo && previewModeInfo.id !== 'none' && (
           <div
             className={`preview-mode-badge${previewModeInfo.limited ? ' limited' : ''}${previewModeInfo.id === 'subdomain' ? ' interactive' : ''}`}
