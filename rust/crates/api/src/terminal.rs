@@ -519,7 +519,10 @@ impl TerminalManager {
     }
 
     pub async fn write(&self, user_id: &str, session_id: &str, input: &str) -> Result<(), String> {
-        tracing::debug!("TerminalManager::write session={session_id} input_len={}", input.len());
+        tracing::debug!(
+            "TerminalManager::write session={session_id} input_len={}",
+            input.len()
+        );
         let session = {
             let sessions = self.inner.sessions.lock().await;
             sessions.get(session_id).cloned()
@@ -725,7 +728,10 @@ impl TerminalManager {
         if state.user_id != user_id {
             return Err(format!("Terminal session {session_id} not found"));
         }
-        tracing::info!("subscribe: session={session_id}, receiver_count={}", session.broadcaster.receiver_count());
+        tracing::info!(
+            "subscribe: session={session_id}, receiver_count={}",
+            session.broadcaster.receiver_count()
+        );
         Ok(session.broadcaster.subscribe())
     }
 
@@ -1521,17 +1527,15 @@ fn spawn_terminal_exit_watcher(
     process: Arc<StdMutex<conpty::Process>>,
 ) {
     tokio::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || {
-            loop {
-                let alive = {
-                    let proc = process.lock().unwrap();
-                    proc.is_alive()
-                };
-                if !alive {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(500));
+        let _ = tokio::task::spawn_blocking(move || loop {
+            let alive = {
+                let proc = process.lock().unwrap();
+                proc.is_alive()
+            };
+            if !alive {
+                break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(500));
         })
         .await;
         let _ = manager.mark_session_inactive(&session_id).await;

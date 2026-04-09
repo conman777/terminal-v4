@@ -1838,7 +1838,7 @@ function rewriteSrcset(
     .join(', ');
 }
 
-function rewriteJsImports(
+export function rewriteJsImports(
   js: string,
   cacheBuster: string,
   rewriteUrlValue?: (urlValue: string) => { url: string; skip: boolean },
@@ -2737,9 +2737,6 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
             /<script([^>]*type=(["'])module\2[^>]*)>([\s\S]*?)<\/script>/gi,
             (match, attrs, quote, scriptText) => {
               if (/\bsrc=/.test(attrs)) {
-                return match;
-              }
-              if (!shouldBustScripts) {
                 return match;
               }
               const rewritten = rewriteJsImports(scriptText, cacheBuster, rewriteUrlValue, shouldBustScripts);

@@ -14,6 +14,10 @@ static SINGLE_QUOTED_ATTR_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static STYLE_BLOCK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<style([^>]*)>(.*?)</style>"#).expect("style regex"));
+static INLINE_MODULE_SCRIPT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<script([^>]*\btype\s*=\s*["']module["'][^>]*)>(.*?)</script>"#)
+        .expect("inline module script regex")
+});
 static CSS_URL_DOUBLE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(url\(\s*")(/[^")]+)("?\s*\))"#).expect("css double quote regex")
 });
@@ -26,6 +30,15 @@ static CSS_IMPORT_DOUBLE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(@import\s+")(/[^"]+)(")"#).expect("css import regex"));
 static CSS_IMPORT_SINGLE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(@import\s+')(/[^']+)(')"#).expect("css import regex"));
+static JS_IMPORT_FROM_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\b(import|export)\s+[^'"]*?\sfrom\s+(["'])([^"']+)(["'])"#)
+        .expect("js import-from regex")
+});
+static JS_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\bimport\s+(["'])([^"']+)(["'])"#).expect("js import regex"));
+static JS_DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"\bimport\s*\(\s*(["'])([^"']+)(["'])\s*\)"#).expect("js dynamic import regex")
+});
 
 pub fn rewrite_html_for_path_preview(html: &str, port: u16, api_origin: &str) -> String {
     let preview_base = preview_base(port);
@@ -34,6 +47,17 @@ pub fn rewrite_html_for_path_preview(html: &str, port: u16, api_origin: &str) ->
         .replace_all(&rewritten, |captures: &Captures| {
             let rewritten_css = rewrite_css_for_path_preview(&captures[2], port);
             format!("<style{}>{}</style>", &captures[1], rewritten_css)
+        })
+        .to_string();
+    let rewritten = INLINE_MODULE_SCRIPT_RE
+        .replace_all(&rewritten, |captures: &Captures| {
+            let attrs = &captures[1];
+            if attrs.to_ascii_lowercase().contains("src=") {
+                return captures[0].to_string();
+            }
+
+            let rewritten_script = rewrite_script_for_path_preview(&captures[2], port);
+            format!("<script{}>{}</script>", attrs, rewritten_script)
         })
         .to_string();
     script_inject::inject_debug_script_with_options(
@@ -53,6 +77,23 @@ pub fn rewrite_css_for_path_preview(css: &str, port: u16) -> String {
     rewrite_with_regex(&rewritten, &CSS_IMPORT_SINGLE_RE, &preview_base, port)
 }
 
+pub fn rewrite_script_for_path_preview(script: &str, port: u16) -> String {
+    let preview_base = preview_base(port);
+    let rewritten =
+        rewrite_script_with_regex(script, &JS_IMPORT_FROM_RE, &preview_base, port, 2, 3, 4);
+    let rewritten =
+        rewrite_script_with_regex(&rewritten, &JS_IMPORT_RE, &preview_base, port, 1, 2, 3);
+    rewrite_script_with_regex(
+        &rewritten,
+        &JS_DYNAMIC_IMPORT_RE,
+        &preview_base,
+        port,
+        1,
+        2,
+        3,
+    )
+}
+
 fn rewrite_html_attribute_urls(html: &str, preview_base: &str, port: u16) -> String {
     let rewritten = rewrite_with_regex(html, &DOUBLE_QUOTED_ATTR_RE, preview_base, port);
     rewrite_with_regex(&rewritten, &SINGLE_QUOTED_ATTR_RE, preview_base, port)
@@ -66,6 +107,42 @@ fn rewrite_with_regex(input: &str, regex: &Regex, preview_base: &str, port: u16)
             } else {
                 captures[0].to_string()
             }
+        })
+        .to_string()
+}
+
+fn rewrite_script_with_regex(
+    input: &str,
+    regex: &Regex,
+    preview_base: &str,
+    port: u16,
+    open_quote_index: usize,
+    specifier_index: usize,
+    close_quote_index: usize,
+) -> String {
+    regex
+        .replace_all(input, |captures: &Captures| {
+            let open_quote = captures
+                .get(open_quote_index)
+                .map(|value| value.as_str())
+                .unwrap_or_default();
+            let close_quote = captures
+                .get(close_quote_index)
+                .map(|value| value.as_str())
+                .unwrap_or_default();
+            if open_quote != close_quote {
+                return captures[0].to_string();
+            }
+
+            let specifier = captures
+                .get(specifier_index)
+                .map(|value| value.as_str())
+                .unwrap_or_default();
+            let Some(rewritten) = rewrite_url_value(specifier, preview_base, port) else {
+                return captures[0].to_string();
+            };
+
+            captures[0].replacen(specifier, &rewritten, 1)
         })
         .to_string()
 }
@@ -222,6 +299,23 @@ mod tests {
 
         // Should not double-prefix
         assert!(!rewritten.contains("/preview/5173/preview/5173/"));
+    }
+
+    #[test]
+    fn rewrites_inline_module_script_imports_for_vite_preamble() {
+        let html = r#"
+            <script type="module">
+              import RefreshRuntime from "/@react-refresh";
+              import "/src/main.jsx";
+              import("/src/bootstrap.jsx");
+            </script>
+        "#;
+
+        let rewritten = rewrite_html_for_path_preview(html, 5173, "http://localhost:3020");
+
+        assert!(rewritten.contains(r#"from "/preview/5173/@react-refresh""#));
+        assert!(rewritten.contains(r#"import "/preview/5173/src/main.jsx""#));
+        assert!(rewritten.contains(r#"import("/preview/5173/src/bootstrap.jsx")"#));
     }
 
     #[test]

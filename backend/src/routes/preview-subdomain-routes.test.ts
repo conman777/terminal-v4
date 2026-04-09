@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isPrivateHostname, registerPreviewSubdomainRoutes } from './preview-subdomain-routes';
+import { isPrivateHostname, registerPreviewSubdomainRoutes, rewriteJsImports } from './preview-subdomain-routes';
 
 async function createTestApp() {
   const app = Fastify();
@@ -59,5 +59,17 @@ describe('preview-subdomain routes', () => {
     expect(isPrivateHostname('fd00::1')).toBe(true);
     expect(isPrivateHostname('fe80::1')).toBe(true);
     expect(isPrivateHostname('8.8.8.8')).toBe(false);
+  });
+
+  it('rewrites inline Vite module imports even when script cache-busting is disabled', () => {
+    const source = 'import { injectIntoGlobalHook } from "/@react-refresh";';
+    const rewritten = rewriteJsImports(
+      source,
+      'cache-buster',
+      (urlValue) => ({ url: `/preview/5173${urlValue}`, skip: false }),
+      false,
+    );
+
+    expect(rewritten).toContain('from "/preview/5173/@react-refresh"');
   });
 });

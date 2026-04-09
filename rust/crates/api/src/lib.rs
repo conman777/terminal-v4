@@ -315,7 +315,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/system/stats", get(get_system_stats))
         .route("/api/system/stats/history", get(get_stats_history))
         .route("/api/system/rebuild", post(trigger_rebuild))
-        .layer(middleware::from_fn_with_state(state.clone(), require_auth));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let router = Router::new()
         .route("/api/health", get(health))
@@ -348,13 +348,7 @@ pub fn app(state: AppState) -> Router {
         .with_state(state.clone());
 
     // Serve frontend static files with SPA fallback
-    let frontend_dir = state
-        .config()
-        .data_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("frontend").join("dist"))
-        .unwrap_or_else(|| PathBuf::from("frontend/dist"));
+    let frontend_dir = resolve_frontend_dir(&state.config().data_dir);
 
     let router = if frontend_dir.exists() {
         let fd = frontend_dir.clone();
@@ -440,6 +434,28 @@ pub fn app(state: AppState) -> Router {
             preview_host_middleware,
         ))
         .layer(cors)
+}
+
+fn resolve_frontend_dir(data_dir: &FsPath) -> PathBuf {
+    resolve_frontend_dir_with_current_dir(data_dir, std::env::current_dir().ok().as_deref())
+}
+
+fn resolve_frontend_dir_with_current_dir(
+    data_dir: &FsPath,
+    current_dir: Option<&FsPath>,
+) -> PathBuf {
+    let repo_frontend_dir = current_dir.map(|dir| dir.join("frontend").join("dist"));
+    let data_relative_frontend_dir = data_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("frontend").join("dist"));
+    let fallback_frontend_dir = PathBuf::from("frontend").join("dist");
+
+    [repo_frontend_dir, data_relative_frontend_dir]
+        .into_iter()
+        .flatten()
+        .find(|path| path.exists())
+        .unwrap_or(fallback_frontend_dir)
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -4396,6 +4412,32 @@ async fn handle_terminal_ws(
         return;
     }
 
+    // Replay recent history so the terminal isn't blank on connect
+    if let Ok(Some(snapshot)) = terminal_manager
+        .get_session_history(
+            &user.user_id,
+            &session_id,
+            &crate::state::HistoryQuery {
+                max_history_events: Some(200),
+                max_history_chars: Some(200_000),
+                before_ts: None,
+                after_ts: None,
+                before_seq: None,
+                after_seq: None,
+            },
+        )
+        .await
+    {
+        for event in &snapshot.history {
+            if send_ws_output(&mut socket, framed, &event.text)
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+
     let mut ping_interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
     let max_buffered = terminal_ws_max_buffered_bytes();
     let mut buffered_bytes: usize = 0;
@@ -4552,7 +4594,7 @@ async fn send_ws_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{app, normalize_filesystem_path, ApiState};
+    use super::{app, normalize_filesystem_path, resolve_frontend_dir_with_current_dir, ApiState};
     use crate::auth::issue_access_token;
     use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser};
     use crate::preview;
@@ -4614,6 +4656,61 @@ mod tests {
             serde_json::from_slice(&body).expect("payload should deserialize");
 
         assert_eq!(payload, HealthResponse::ok());
+    }
+
+    #[test]
+    fn resolve_frontend_dir_prefers_repo_relative_bundle_when_present() {
+        let temp_root = tempdir().expect("temp dir should create");
+        let repo_root = temp_root.path().join("repo");
+        let repo_frontend_dist = repo_root.join("frontend").join("dist");
+        fs::create_dir_all(&repo_frontend_dist).expect("frontend dist should create");
+
+        let resolved = resolve_frontend_dir_with_current_dir(
+            std::path::Path::new("unused/data-dir"),
+            Some(&repo_root),
+        );
+
+        assert_eq!(resolved, repo_frontend_dist);
+    }
+
+    #[tokio::test]
+    async fn root_path_serves_public_frontend_html_when_bundle_exists() {
+        let temp_root = tempdir().expect("temp dir should create");
+        let frontend_dist = temp_root.path().join("frontend").join("dist");
+        fs::create_dir_all(&frontend_dist).expect("frontend dist should create");
+        fs::write(
+            frontend_dist.join("index.html"),
+            "<!doctype html><title>terminal-v4</title>",
+        )
+        .expect("index html should write");
+
+        let state = test_state_with_data_dir(temp_root.path().join("app").join("data"));
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/html")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let html = String::from_utf8(body.to_vec()).expect("html should decode");
+        assert!(html.contains("<title>terminal-v4</title>"));
     }
 
     #[tokio::test]
@@ -6280,6 +6377,8 @@ done
         assert!(preview_html.contains(&format!(r#"<base href="/preview/{port}/">"#)));
         assert!(preview_html.contains(&format!(r#"href="/preview/{port}/styles.css""#)));
         assert!(preview_html.contains(&format!(r#"src="/preview/{port}/main.js""#)));
+        assert!(preview_html.contains(&format!(r#"from "/preview/{port}/@react-refresh""#)));
+        assert!(preview_html.contains(&format!(r#"import("/preview/{port}/src/main.jsx")"#)));
 
         let css_response = app
             .clone()
@@ -7116,12 +7215,22 @@ done
         test_state_with_external_auth(None)
     }
 
+    fn test_state_with_data_dir(data_dir: PathBuf) -> ApiState {
+        let config = AppConfig {
+            data_dir,
+            jwt_secret: "test-secret".to_string(),
+            ..AppConfig::default()
+        };
+        ApiState::new_with_external_auth(config, None).expect("state should initialize")
+    }
+
     fn test_state_with_external_auth(
         external_auth: Option<Arc<dyn ExternalAuthProvider>>,
     ) -> ApiState {
         let temp_dir = tempdir().expect("temp dir should create");
+        let temp_root = PathBuf::from(temp_dir.keep());
         let config = AppConfig {
-            data_dir: PathBuf::from(temp_dir.keep()),
+            data_dir: temp_root.join("data").join("state"),
             jwt_secret: "test-secret".to_string(),
             ..AppConfig::default()
         };
@@ -7161,6 +7270,11 @@ done
                                 <link rel="stylesheet" href="/styles.css">
                               </head>
                               <body>
+                                <script type="module">
+                                  import RefreshRuntime from "/@react-refresh";
+                                  window.__refreshRuntime = RefreshRuntime;
+                                  import("/src/main.jsx");
+                                </script>
                                 <script src="/main.js"></script>
                               </body>
                             </html>
