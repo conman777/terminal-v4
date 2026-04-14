@@ -28,8 +28,7 @@ interface ScanDirectoryOptions {
 
 function getDefaultScanDirectories(homeDir: string = os.homedir()): string[] {
   return [
-    homeDir,
-    path.join(homeDir, 'Documents'),
+    path.join(homeDir, 'OneDrive', 'Personal', 'Documents', 'coding projects'),
     path.join(homeDir, 'code'),
     path.join(homeDir, 'Code'),
     path.join(homeDir, 'projects'),
@@ -40,12 +39,7 @@ function getDefaultScanDirectories(homeDir: string = os.homedir()): string[] {
     path.join(homeDir, 'repos'),
     path.join(homeDir, 'src'),
     path.join(homeDir, 'GitHub'),
-    // OneDrive paths
-    path.join(homeDir, 'OneDrive', 'Documents'),
-    path.join(homeDir, 'OneDrive', 'Personal', 'Documents'),
-    path.join(homeDir, 'OneDrive', 'Personal', 'Documents', 'coding projects'),
     // Windows common paths
-    'C:\\Users',
     'C:\\code',
     'C:\\projects',
     'C:\\dev',

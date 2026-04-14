@@ -379,12 +379,18 @@ export function MobileShell({
             </div>
           </div>
         ) : (
-          <div className="mobile-shell-empty-state">
-            <p className="mobile-shell-empty-kicker">Workspace</p>
-            <h2>Create a session to start working.</h2>
-            <p>The mobile shell now stays focused on the same terminal and composer flow as desktop.</p>
-            <button type="button" className="mobile-shell-primary-button" onClick={() => onCreateSession?.()}>
-              Create session
+          <div className="pro-terminal-empty" style={{ margin: '16px' }}>
+            <div className="pro-empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+            </div>
+            <h2 className="pro-empty-title">No Active Terminals</h2>
+            <p className="pro-empty-desc">Initialize a new secure workspace session to begin commanding.</p>
+            <button className="pro-empty-btn" onClick={() => onCreateSession?.()}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+              Initialize Session
             </button>
           </div>
         )}

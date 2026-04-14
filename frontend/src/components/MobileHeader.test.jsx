@@ -395,6 +395,44 @@ describe('MobileHeader', () => {
     expect(onViewChange).toHaveBeenCalledWith('preview');
   });
 
+  it('collapses to the top row while a terminal text field is focused', () => {
+    const { container } = render(
+      <MobileHeader
+        {...buildProps({
+          compactForTextEntry: true,
+          mobileView: 'terminal',
+          previewUrl: 'https://example.com'
+        })}
+      />
+    );
+
+    expect(container.querySelector('.mobile-header')).toHaveClass('keyboard-compact');
+    expect(screen.queryByRole('button', { name: /open session picker/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByText('V4 Terminal')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /menu/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new terminal/i })).toBeInTheDocument();
+  });
+
+  it('can stay in a single-row layout even when no text field is focused', () => {
+    const { container } = render(
+      <MobileHeader
+        {...buildProps({
+          singleRow: true,
+          mobileView: 'terminal',
+          previewUrl: 'https://example.com'
+        })}
+      />
+    );
+
+    expect(container.querySelector('.mobile-header')).toHaveClass('single-row');
+    expect(screen.queryByRole('button', { name: /open session picker/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByText('V4 Terminal')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /menu/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new terminal/i })).toBeInTheDocument();
+  });
+
   it('can hide preview and conversation-only navigation from the header', () => {
     render(
       <MobileHeader

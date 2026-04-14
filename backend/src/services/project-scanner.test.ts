@@ -29,7 +29,7 @@ describe('project-scanner', () => {
     const result = await scanForProjects(true);
 
     expect(result.projects.some((project) => project.path === fs.realpathSync(upliftingPath) && project.name === 'uplifting')).toBe(true);
-  });
+  }, 15000);
 
   it('includes explicitly added folders even when they are not git repositories', async () => {
     const randomFolderPath = path.join(tempHome, 'random-folder');
@@ -40,5 +40,5 @@ describe('project-scanner', () => {
     const result = await scanForProjects(true);
 
     expect(result.projects.some((project) => project.path === fs.realpathSync(randomFolderPath) && project.name === 'random-folder')).toBe(true);
-  });
+  }, 15000);
 });

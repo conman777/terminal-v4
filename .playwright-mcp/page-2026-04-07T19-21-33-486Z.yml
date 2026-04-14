@@ -1,0 +1,37 @@
+- generic [ref=e4]:
+  - region "V4 introduction" [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - img [ref=e8]
+        - generic [ref=e11]: V4 Terminal
+      - heading "Terminal orchestration evolved." [level=1] [ref=e12]
+      - paragraph [ref=e13]: Live preview, threaded memory, and agent-native workflows fused into a single unified workspace.
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]: Live Terminals
+        - generic [ref=e17]: Command, review, and preview without changing surface.
+      - generic [ref=e18]:
+        - generic [ref=e19]: Project Memory
+        - generic [ref=e20]: Threads stay attached to repos instead of getting buried in tabs.
+      - generic [ref=e21]:
+        - generic [ref=e22]: Mobile Ready
+        - generic [ref=e23]: Keyboard-safe composer and preview flow built for touch devices.
+  - generic [ref=e24]:
+    - generic [ref=e25]:
+      - generic [ref=e28]: System Secure
+      - heading "Access Workspace" [level=2] [ref=e29]
+      - paragraph [ref=e30]: Authenticate via credentials or secure passkey.
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - generic [ref=e33]: Username
+        - textbox "Username" [ref=e34]:
+          - /placeholder: developer@v4.local
+      - generic [ref=e35]:
+        - generic [ref=e36]: Password
+        - textbox "Password" [ref=e37]:
+          - /placeholder: ••••••••••••
+      - button "Initialize Session" [ref=e38] [cursor=pointer]
+      - generic [ref=e40]: or
+      - button "Authenticate with Passkey" [ref=e41] [cursor=pointer]:
+        - img [ref=e42]
+        - text: Authenticate with Passkey

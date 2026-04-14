@@ -7942,10 +7942,11 @@ button {
   display: none;
   flex-direction: column;
   position: fixed;
-  /* Keep header visually pinned during mobile keyboard viewport shifts */
-  top: 0;
-  left: 0;
-  right: 0;
+  /* Keep header in the same visual viewport coordinate space as the mobile shell */
+  top: var(--mobile-viewport-offset, 0px);
+  left: var(--mobile-viewport-offset-left, 0px);
+  right: auto;
+  width: var(--mobile-viewport-width, 100%);
   background:
     radial-gradient(circle at top left, rgba(244, 114, 182, 0.14), transparent 28%),
     radial-gradient(circle at 84% 18%, rgba(251, 191, 36, 0.14), transparent 20%),
@@ -7975,6 +7976,13 @@ button {
   min-height: 56px;
   gap: 10px;
   padding: calc(env(safe-area-inset-top, 0px) + 8px) calc(12px + env(safe-area-inset-right, 0px)) 6px calc(12px + env(safe-area-inset-left, 0px));
+}
+
+.mobile-header.keyboard-compact .mobile-header-top-row,
+.mobile-header.single-row .mobile-header-top-row {
+  min-height: 40px;
+  gap: 6px;
+  padding: calc(env(safe-area-inset-top, 0px) + 2px) calc(8px + env(safe-area-inset-right, 0px)) 2px calc(8px + env(safe-area-inset-left, 0px));
 }
 
 .mobile-header.preview-mode .mobile-header-btn-modern {
@@ -8042,6 +8050,13 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+.mobile-header.keyboard-compact .mobile-header-btn-modern,
+.mobile-header.single-row .mobile-header-btn-modern {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
 .mobile-header-btn-modern.active {
   color: #fff4de;
   background: rgba(251, 191, 36, 0.14);
@@ -8103,6 +8118,12 @@ button {
   gap: 4px;
 }
 
+.mobile-header.keyboard-compact .mobile-header-title-block,
+.mobile-header.single-row .mobile-header-title-block {
+  gap: 0;
+  justify-content: center;
+}
+
 .mobile-header-kicker {
   color: rgba(255, 241, 219, 0.68);
   font-size: 10px;
@@ -8120,6 +8141,12 @@ button {
   letter-spacing: -0.08em;
 }
 
+.mobile-header.keyboard-compact .mobile-header-brand,
+.mobile-header.single-row .mobile-header-brand {
+  font-size: 24px;
+  line-height: 1;
+}
+
 .mobile-header-caption {
   color: rgba(255, 241, 219, 0.58);
   font-size: 11px;
@@ -8131,6 +8158,13 @@ button {
 
 .mobile-header-session-row {
   padding: 0 calc(12px + env(safe-area-inset-right, 0px)) 8px calc(12px + env(safe-area-inset-left, 0px));
+}
+
+.mobile-header.keyboard-compact .mobile-header-session-row,
+.mobile-header.keyboard-compact .mobile-header-surface-tabs,
+.mobile-header.single-row .mobile-header-session-row,
+.mobile-header.single-row .mobile-header-surface-tabs {
+  display: none;
 }
 
 .mobile-header-session-rail {
@@ -8810,7 +8844,7 @@ button {
 /* Mobile Keybar */
 .mobile-keybar {
   position: fixed;
-  top: var(--mobile-header-height, 48px);
+  top: calc(var(--mobile-viewport-offset, 0px) + var(--mobile-header-height, 48px));
   left: 0;
   right: 0;
   background: var(--bg-surface);
@@ -9039,11 +9073,11 @@ button {
     /* Use fixed positioning for reliable iOS keyboard handling */
     position: fixed;
     /* Keep app chrome pinned while keyboard animates */
-    top: 0;
-    left: 0;
-    right: 0;
+    top: var(--mobile-viewport-offset, 0px);
+    left: var(--mobile-viewport-offset-left, 0px);
+    right: auto;
     /* Bottom is set dynamically: viewport height from top */
-    width: 100%;
+    width: var(--mobile-viewport-width, 100%);
     height: var(--mobile-viewport-height, 100dvh);
     padding-top: var(--mobile-header-height, 0px);
     overflow: hidden;
@@ -9253,13 +9287,6 @@ button {
 
   .preview-mobile-footer {
     padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  }
-}
-
-/* Safe area support - additional specificity for browsers that support it */
-@supports (padding: env(safe-area-inset-top)) {
-  .mobile-header {
-    padding-top: env(safe-area-inset-top);
   }
 }
 
@@ -10908,7 +10935,7 @@ textarea:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: 18px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 16px;
   outline: none;
   appearance: none;
   -webkit-appearance: none;
@@ -16004,7 +16031,7 @@ textarea:focus-visible {
 
 .mobile-shell-parity .desktop-conversation-input {
   min-height: 42px;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .mobile-shell-parity .desktop-status-bar-shell {
@@ -16027,7 +16054,7 @@ textarea:focus-visible {
 
 .mobile-shell-parity .status-composer-input {
   min-height: 52px;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .mobile-shell-parity .status-bar-right {

@@ -52,6 +52,15 @@ What this does:
 - Starts the Rust backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
 - Launches a native Tauri window pointed at `http://127.0.0.1:3020`
 
+To expose the desktop backend on your LAN during development, start it with:
+
+```bash
+TERMINAL_V4_SHARE_MODE=lan npm run desktop:dev
+```
+
+This switches the backend bind to `0.0.0.0:3020`. Set `JWT_SECRET` explicitly if you
+want a stable secret across restarts.
+
 Build command:
 
 ```bash

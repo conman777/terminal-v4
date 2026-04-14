@@ -20,6 +20,7 @@ use crate::terminal::TerminalManager;
 
 const EXTERNAL_AUTH_MIRROR_PASSWORD_HASH: &str = "!external-auth-mirror!";
 const REFRESH_TOKEN_TTL_DAYS: i64 = 30;
+const MOBILE_KEYBOARD_DEBUG_ENTRY_LIMIT: usize = 200;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -741,6 +742,65 @@ impl AppState {
         Ok(true)
     }
 
+    pub fn list_mobile_keyboard_debug_entries(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<Vec<Value>, String> {
+        let _file_lock = self.lock_files()?;
+        let path = self.mobile_keyboard_debug_path(&user.user_id)?;
+        if !path.exists() {
+            write_json_file(&path, &Vec::<Value>::new())?;
+            return Ok(Vec::new());
+        }
+        Ok(read_json_file::<Vec<Value>>(&path).unwrap_or_default())
+    }
+
+    pub fn append_mobile_keyboard_debug_entry(
+        &self,
+        user: &AuthenticatedUser,
+        mut entry: Value,
+        request_user_agent: Option<&str>,
+    ) -> Result<Value, String> {
+        let _file_lock = self.lock_files()?;
+        let path = self.mobile_keyboard_debug_path(&user.user_id)?;
+        let Value::Object(ref mut map) = entry else {
+            return Err("Mobile keyboard debug payload must be a JSON object".to_string());
+        };
+
+        map.insert(
+            "serverRecordedAt".to_string(),
+            Value::String(iso_timestamp()),
+        );
+        if let Some(user_agent) = request_user_agent {
+            map.insert(
+                "requestUserAgent".to_string(),
+                Value::String(user_agent.to_string()),
+            );
+        }
+
+        let mut entries = if path.exists() {
+            read_json_file::<Vec<Value>>(&path).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        entries.push(entry.clone());
+        if entries.len() > MOBILE_KEYBOARD_DEBUG_ENTRY_LIMIT {
+            let overflow = entries.len() - MOBILE_KEYBOARD_DEBUG_ENTRY_LIMIT;
+            entries.drain(0..overflow);
+        }
+        write_json_file(&path, &entries)?;
+        Ok(entry)
+    }
+
+    pub fn clear_mobile_keyboard_debug_entries(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<(), String> {
+        let _file_lock = self.lock_files()?;
+        let path = self.mobile_keyboard_debug_path(&user.user_id)?;
+        write_json_file(&path, &Vec::<Value>::new())
+    }
+
     // --- Vault ---
 
     pub fn list_vault_keys(
@@ -1047,6 +1107,12 @@ impl AppState {
 
     fn notes_path(&self, user_id: &str) -> Result<PathBuf, String> {
         Ok(self.user_data_dir(user_id)?.join("notes.json"))
+    }
+
+    fn mobile_keyboard_debug_path(&self, user_id: &str) -> Result<PathBuf, String> {
+        Ok(self
+            .user_data_dir(user_id)?
+            .join("mobile-keyboard-debug.json"))
     }
 
     fn issue_auth_result(&self, user: &StoredUser) -> Result<AuthResult, String> {

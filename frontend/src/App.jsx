@@ -21,13 +21,15 @@ import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AutocorrectProvider } from './contexts/AutocorrectContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
-import { useMobileHeaderInputLock } from './hooks/useMobileHeaderInputLock';
+import { useMobileInputZoomLock } from './hooks/useMobileInputZoomLock';
 import { useViewportMetrics } from './hooks/useViewportHeight';
 import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import './ProTerminalEmpty.css';
+import './ProUI.css';
 import { apiFetch } from './utils/api';
 import {
   createCustomAiProvider,
@@ -311,8 +313,13 @@ function AppContent() {
   const previousActiveSessionRef = useRef(null);
   const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
   const isMobile = useMobileDetect();
-  const { height: viewportHeight } = useViewportMetrics();
-  const mobileHeaderInputLock = useMobileHeaderInputLock(isMobile);
+  const {
+    height: viewportHeight,
+    width: viewportWidth,
+    offsetTop: viewportOffsetTop,
+    offsetLeft: viewportOffsetLeft
+  } = useViewportMetrics();
+  useMobileInputZoomLock(isMobile && isMobileTextEntryFocused);
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
 
@@ -627,10 +634,10 @@ function AppContent() {
   }, [chatMode, keybarOpen]);
 
   useEffect(() => {
-    if (!mobileHeaderInputLock) return;
+    if (!isMobileTextEntryFocused) return;
     mobileViewportAtBottomRef.current = true;
     resetScrollDirection();
-  }, [mobileHeaderInputLock, resetScrollDirection]);
+  }, [isMobileTextEntryFocused, resetScrollDirection]);
 
   // Track focused session for recency ordering and unread state
   useEffect(() => {
@@ -1257,7 +1264,15 @@ function AppContent() {
         '--mobile-viewport-height': viewportHeight
           ? `${Math.round(viewportHeight)}px`
           : '100dvh',
-        '--mobile-viewport-offset': '0px'
+        '--mobile-viewport-width': viewportWidth
+          ? `${Math.round(viewportWidth)}px`
+          : '100vw',
+        '--mobile-viewport-offset': viewportOffsetTop
+          ? `${Math.round(viewportOffsetTop)}px`
+          : '0px',
+        '--mobile-viewport-offset-left': viewportOffsetLeft
+          ? `${Math.round(viewportOffsetLeft)}px`
+          : '0px'
       }
     : undefined;
 
@@ -1461,11 +1476,18 @@ function AppContent() {
                       <p>Loading sessions…</p>
                     </div>
                   ) : activeSessions.length === 0 ? (
-                    <div className="empty-state">
-                      <h2>Welcome to Terminal</h2>
-                      <p>Create a new terminal session to get started.</p>
-                      <button className="btn-primary" onClick={() => handleRequestNewSession()}>
-                        + New Terminal
+                    <div className="pro-terminal-empty">
+                      <div className="pro-empty-icon">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="4 17 10 11 4 5"></polyline>
+                          <line x1="12" y1="19" x2="20" y2="19"></line>
+                        </svg>
+                      </div>
+                      <h2 className="pro-empty-title">No Active Terminals</h2>
+                      <p className="pro-empty-desc">Initialize a new secure workspace session to begin commanding.</p>
+                      <button className="pro-empty-btn" onClick={() => handleRequestNewSession()}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                        Initialize Session
                       </button>
                     </div>
                   ) : (
@@ -1593,6 +1615,7 @@ function AppContent() {
             showPreviewNavigation={false}
             showConversationToggle={false}
             showDrawerViewTabs={false}
+            singleRow={true}
           />
           <main
             className="terminal-main"

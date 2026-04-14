@@ -20,7 +20,7 @@ use auth::{authenticate_token, require_auth, AuthenticatedUser};
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
@@ -183,6 +183,12 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/bookmarks/{id}",
             put(update_bookmark).delete(delete_bookmark),
+        )
+        .route(
+            "/api/mobile-keyboard-debug",
+            get(list_mobile_keyboard_debug_entries)
+                .post(ingest_mobile_keyboard_debug_entry)
+                .delete(clear_mobile_keyboard_debug_entries),
         )
         .route("/api/notes", get(list_notes).post(create_note))
         .route("/api/notes/{id}", put(update_note).delete(delete_note))
@@ -1687,6 +1693,50 @@ async fn delete_bookmark(
             message: "Bookmark not found".to_string(),
         })
     }
+}
+
+async fn list_mobile_keyboard_debug_entries(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let entries = state
+        .list_mobile_keyboard_debug_entries(&user)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "count": entries.len(),
+        "entries": entries
+    })))
+}
+
+async fn ingest_mobile_keyboard_debug_entry(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
+    Json(entry): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let request_user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+    let saved_entry = state
+        .append_mobile_keyboard_debug_entry(&user, entry, request_user_agent)
+        .map_err(|error| {
+            if error.contains("must be a JSON object") {
+                ApiError::bad_request(error)
+            } else {
+                ApiError::internal(error)
+            }
+        })?;
+    Ok(Json(json!({ "entry": saved_entry })))
+}
+
+async fn clear_mobile_keyboard_debug_entries(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .clear_mobile_keyboard_debug_entries(&user)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn list_notes(
@@ -5930,6 +5980,115 @@ mod tests {
             .await
             .expect("router should respond");
         assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn mobile_keyboard_debug_routes_store_and_clear_entries() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-mobile", "conor");
+        let logs_path = state
+            .config()
+            .data_dir
+            .join("users")
+            .join("user-mobile")
+            .join("mobile-keyboard-debug.json");
+        let app = app(state);
+
+        let ingest_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/mobile-keyboard-debug")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("User-Agent", "Mobile Safari Test")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "visualViewportHeight": 402,
+                            "visualViewportOffsetTop": 248,
+                            "layout": {
+                                "top": 248,
+                                "height": 402
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(ingest_response.status(), StatusCode::OK);
+        assert!(logs_path.exists());
+
+        let list_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/mobile-keyboard-debug")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = list_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let list_payload: Value =
+            serde_json::from_slice(&list_body).expect("list payload should deserialize");
+        assert_eq!(list_payload["count"], 1);
+        assert_eq!(list_payload["entries"][0]["visualViewportHeight"], 402);
+        assert_eq!(
+            list_payload["entries"][0]["requestUserAgent"],
+            "Mobile Safari Test"
+        );
+        assert!(list_payload["entries"][0]["serverRecordedAt"]
+            .as_str()
+            .is_some());
+
+        let clear_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/mobile-keyboard-debug")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(clear_response.status(), StatusCode::OK);
+
+        let cleared_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/mobile-keyboard-debug")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        let cleared_body = cleared_response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let cleared_payload: Value =
+            serde_json::from_slice(&cleared_body).expect("cleared payload should deserialize");
+        assert_eq!(cleared_payload["count"], 0);
+        assert_eq!(cleared_payload["entries"], json!([]));
     }
 
     #[tokio::test]

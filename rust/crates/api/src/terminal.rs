@@ -1979,9 +1979,11 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 mod tests {
     use super::{
         intercept_terminal_queries, normalize_newlines, shell_command, tmux_mode_from_env,
-        AppConfig, TerminalCreateOptions, TerminalManager,
     };
+    #[cfg(not(windows))]
+    use super::{AppConfig, TerminalCreateOptions, TerminalManager};
     use std::sync::{LazyLock, Mutex as StdMutex};
+    #[cfg(not(windows))]
     use tempfile::tempdir;
 
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));

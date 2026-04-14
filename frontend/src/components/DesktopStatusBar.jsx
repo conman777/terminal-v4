@@ -608,7 +608,7 @@ export function DesktopStatusBar({
           background: transparent;
           color: var(--text-primary);
           font-family: var(--font-ui);
-          font-size: 15px;
+          font-size: 16px;
           font-weight: 500;
           letter-spacing: -0.015em;
           line-height: 1.35;

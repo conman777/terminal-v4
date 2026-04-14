@@ -41,6 +41,7 @@ import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
 import { resolveApiBase } from '../utils/apiBase';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
+import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite } from '../utils/terminalHistoryReplay';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 import { shouldCheckHistoryAtTopOnWheel } from '../utils/terminalWheelHistory';
@@ -2361,6 +2362,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           resolve();
           return;
         }
+        if (shouldUseSingleHistoryWrite(historyText.length, platformConfig.history.writeChunkChars)) {
+          writeTerminal(historyText, resolve);
+          return;
+        }
         const chunkSize = platformConfig.history.writeChunkChars;
         let offset = 0;
         const writeNext = () => {
@@ -2452,9 +2457,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           applyServerPtySize(historyPage.currentCols, historyPage.currentRows);
           clearReader();
           const historyText = historyTextRef.current;
-          if (historyText) {
-            reflectIdlePromptState(historyText);
-            onOutputChunkRef.current?.(historyText);
+          const historyObserverText = getHistoryReplayObserverText(historyText);
+          if (historyObserverText) {
+            reflectIdlePromptState(historyObserverText);
+            onOutputChunkRef.current?.(historyObserverText);
           }
           await writeHistoryChunks(historyText);
           if (disposed) return;
@@ -2528,10 +2534,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const historyText = historyTextRef.current;
           term.reset();
           clearReader();
-          if (historyText) {
-            reflectIdlePromptState(historyText);
-            onOutputChunkRef.current?.(historyText);
-          }
           await writeHistoryChunks(historyText);
           if (disposed) return;
           if (viewModeRef.current === 'reader') {

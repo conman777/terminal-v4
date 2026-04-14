@@ -326,7 +326,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   if (!isOpen) return null;
 
   return (
-    <div className="file-manager">
+    <div className="pro-file-manager">
       <div className="file-manager-header">
         <h3 style={{ color: 'white', margin: 0 }}>Files</h3>
         <button className="file-manager-close" onClick={onClose}>×</button>

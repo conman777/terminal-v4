@@ -54,6 +54,8 @@ export function MobileHeader({
   showPreviewNavigation = true,
   showConversationToggle = true,
   showDrawerViewTabs = true,
+  compactForTextEntry = false,
+  singleRow = false,
 }) {
   const { theme, toggleTheme } = useTheme();
   const visibleActiveSessions = activeSessions.filter((session) => !session.thread?.archived);
@@ -72,6 +74,9 @@ export function MobileHeader({
   const headerRef = useRef(null);
   const sessionActionsButtonRef = useRef(null);
   const topRowGestureRef = useRef(null);
+  const isPreviewView = mobileView === 'preview';
+  const isKeyboardCompact = compactForTextEntry && !isPreviewView;
+  const isCondensedHeader = singleRow || isKeyboardCompact;
 
   useLayoutEffect(() => {
     if (!headerRef.current) return;
@@ -105,7 +110,7 @@ export function MobileHeader({
       document.documentElement.style.setProperty('--mobile-header-height', `${height}px`);
     });
     return () => cancelAnimationFrame(raf);
-  }, [mobileView, previewOpened, previewUrl, visibleActiveSessions.length, isNavCollapsed, chatMode]);
+  }, [mobileView, previewOpened, previewUrl, visibleActiveSessions.length, isNavCollapsed, chatMode, isKeyboardCompact]);
 
   const handleStartRename = useCallback((sessionId) => {
     const session = visibleActiveSessions.find((item) => item.id === sessionId);
@@ -212,7 +217,6 @@ export function MobileHeader({
     }
   }, [previewUrl]);
 
-  const isPreviewView = mobileView === 'preview';
   const hasPreviewSurface = Boolean(previewUrl);
   const overflowItems = [
     showConversationToggle && !isPreviewView ? {
@@ -320,7 +324,7 @@ export function MobileHeader({
     <>
       <header
         ref={headerRef}
-        className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}${previewOpened ? ' preview-mode' : ''}`}
+        className={`mobile-header${isNavCollapsed ? ' nav-collapsed' : ''}${previewOpened ? ' preview-mode' : ''}${isKeyboardCompact ? ' keyboard-compact' : ''}${singleRow ? ' single-row' : ''}`}
       >
         <div
           className="mobile-header-top-row"
@@ -342,7 +346,9 @@ export function MobileHeader({
           </button>
 
           <div className="mobile-header-title-block">
-            <span className="mobile-header-kicker">V4 Terminal</span>
+            {!isCondensedHeader && (
+              <span className="mobile-header-kicker">V4 Terminal</span>
+            )}
             {isPreviewView ? (
               <span className="mobile-header-title">Preview</span>
             ) : (
@@ -394,7 +400,7 @@ export function MobileHeader({
             )}
           </div>
         </div>
-        {!isPreviewView && (
+        {!isPreviewView && !isCondensedHeader && (
           <div className="mobile-header-session-row">
             <button
               type="button"
@@ -423,28 +429,30 @@ export function MobileHeader({
             </button>
           </div>
         )}
-        <div className="mobile-header-surface-tabs" role="tablist" aria-label="Mobile surfaces">
-          <button
-            type="button"
-            role="tab"
-            className={`mobile-header-surface-tab${mobileView === 'terminal' ? ' active' : ''}`}
-            aria-selected={mobileView === 'terminal' ? 'true' : 'false'}
-            onClick={() => onViewChange?.('terminal')}
-          >
-            Terminal
-          </button>
-          <button
-            type="button"
-            role="tab"
-            className={`mobile-header-surface-tab${mobileView === 'preview' ? ' active' : ''}`}
-            aria-selected={mobileView === 'preview' ? 'true' : 'false'}
-            onClick={() => onViewChange?.('preview')}
-            disabled={!hasPreviewSurface}
-            title={hasPreviewSurface ? 'Open preview' : 'Preview unavailable'}
-          >
-            Preview
-          </button>
-        </div>
+        {!isCondensedHeader && (
+          <div className="mobile-header-surface-tabs" role="tablist" aria-label="Mobile surfaces">
+            <button
+              type="button"
+              role="tab"
+              className={`mobile-header-surface-tab${mobileView === 'terminal' ? ' active' : ''}`}
+              aria-selected={mobileView === 'terminal' ? 'true' : 'false'}
+              onClick={() => onViewChange?.('terminal')}
+            >
+              Terminal
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={`mobile-header-surface-tab${mobileView === 'preview' ? ' active' : ''}`}
+              aria-selected={mobileView === 'preview' ? 'true' : 'false'}
+              onClick={() => onViewChange?.('preview')}
+              disabled={!hasPreviewSurface}
+              title={hasPreviewSurface ? 'Open preview' : 'Preview unavailable'}
+            >
+              Preview
+            </button>
+          </div>
+        )}
       </header>
 
       <MobileDrawer

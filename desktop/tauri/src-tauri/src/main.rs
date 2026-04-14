@@ -1,3 +1,4 @@
+use std::env;
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -7,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager, RunEvent};
 
-const DESKTOP_HOST: &str = "127.0.0.1";
+const DESKTOP_LOOPBACK_HOST: &str = "127.0.0.1";
+const DESKTOP_LAN_HOST: &str = "0.0.0.0";
 const DESKTOP_PORT: u16 = 3020;
 const BACKEND_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 const BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -28,6 +30,47 @@ fn resolve_repo_root() -> Result<PathBuf> {
         .ok_or_else(|| io_error("Failed to resolve repository root from CARGO_MANIFEST_DIR"))
 }
 
+fn desktop_share_mode() -> String {
+    env::var("TERMINAL_V4_SHARE_MODE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "off".to_string())
+}
+
+fn desktop_backend_host(share_mode: &str) -> &'static str {
+    if share_mode == "lan" {
+        DESKTOP_LAN_HOST
+    } else {
+        DESKTOP_LOOPBACK_HOST
+    }
+}
+
+fn desktop_health_host() -> &'static str {
+    DESKTOP_LOOPBACK_HOST
+}
+
+fn desktop_jwt_secret(share_mode: &str) -> Option<String> {
+    let configured = env::var("JWT_SECRET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    if configured.is_some() || share_mode != "lan" {
+        return configured;
+    }
+
+    let seed = format!(
+        "desktop-lan-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or_default()
+    );
+    Some(seed)
+}
+
 fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> {
     assert_backend_port_available()?;
 
@@ -38,20 +81,30 @@ fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> 
     )
   })?;
     let data_dir = resolve_data_dir(app_handle)?;
+    let share_mode = desktop_share_mode();
+    let backend_host = desktop_backend_host(&share_mode);
+    let jwt_secret = desktop_jwt_secret(&share_mode);
 
     std::fs::create_dir_all(&data_dir)
         .map_err(|err| io_error(format!("Failed to create desktop data directory: {err}")))?;
 
     eprintln!("[tauri] Starting Rust backend: {}", rust_bin.display());
-    Command::new(&rust_bin)
-        .env("HOST", DESKTOP_HOST)
+    let mut command = Command::new(&rust_bin);
+    command
+        .env("HOST", backend_host)
         .env("PORT", DESKTOP_PORT.to_string())
         .env("TERMINAL_DATA_DIR", &data_dir)
         .env("TERMINAL_V4_DESKTOP", "true")
-        .env("TERMINAL_V4_SHARE_MODE", "off")
+        .env("TERMINAL_V4_SHARE_MODE", &share_mode)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+
+    if let Some(secret) = jwt_secret {
+        command.env("JWT_SECRET", secret);
+    }
+
+    command
         .spawn()
         .map_err(|err| io_error(format!("Failed to launch Rust backend: {err}")))
 }
@@ -123,16 +176,17 @@ fn backend_is_healthy() -> bool {
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
 
     if stream
-    .write_all(
-      format!(
-        "GET /api/health HTTP/1.1\r\nHost: {DESKTOP_HOST}:{DESKTOP_PORT}\r\nConnection: close\r\n\r\n"
-      )
-      .as_bytes(),
-    )
-    .is_err()
-  {
-    return false;
-  }
+        .write_all(
+            format!(
+                "GET /api/health HTTP/1.1\r\nHost: {}:{DESKTOP_PORT}\r\nConnection: close\r\n\r\n",
+                desktop_health_host()
+            )
+            .as_bytes(),
+        )
+        .is_err()
+    {
+        return false;
+    }
 
     let mut response = String::new();
     if stream.read_to_string(&mut response).is_err() {
@@ -146,7 +200,8 @@ fn assert_backend_port_available() -> Result<()> {
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DESKTOP_PORT);
     if TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
         return Err(io_error(format!(
-      "Desktop backend port {DESKTOP_PORT} is already in use on {DESKTOP_HOST}. Stop the existing service before launching the desktop app."
+      "Desktop backend port {DESKTOP_PORT} is already in use on {}. Stop the existing service before launching the desktop app.",
+      desktop_health_host()
     )));
     }
 
@@ -163,9 +218,10 @@ fn wait_for_backend() -> Result<()> {
 
         if start.elapsed() >= BACKEND_WAIT_TIMEOUT {
             return Err(io_error(format!(
-        "Backend did not become ready at http://{DESKTOP_HOST}:{DESKTOP_PORT} within {} seconds",
-        BACKEND_WAIT_TIMEOUT.as_secs()
-      )));
+                "Backend did not become ready at http://{}:{DESKTOP_PORT} within {} seconds",
+                desktop_health_host(),
+                BACKEND_WAIT_TIMEOUT.as_secs()
+            )));
         }
 
         std::thread::sleep(BACKEND_POLL_INTERVAL);

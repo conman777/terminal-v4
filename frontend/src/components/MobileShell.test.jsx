@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileShell } from './MobileShell';
@@ -229,5 +231,13 @@ describe('MobileShell', () => {
     fireEvent.click(screen.getByRole('tab', { name: /review release checklist/i }));
 
     expect(onSelectSession).toHaveBeenCalledWith('session-b');
+  });
+
+  it('keeps mobile text inputs at 16px to prevent Safari keyboard zoom', () => {
+    const css = fs.readFileSync(path.resolve(process.cwd(), 'src/styles.css'), 'utf8');
+
+    expect(css).toMatch(/\.mobile-terminal-input\s*\{[\s\S]*font-size:\s*16px;/);
+    expect(css).toMatch(/\.mobile-shell-parity \.desktop-conversation-input\s*\{[\s\S]*font-size:\s*16px;/);
+    expect(css).toMatch(/\.mobile-shell-parity \.status-composer-input\s*\{[\s\S]*font-size:\s*16px;/);
   });
 });

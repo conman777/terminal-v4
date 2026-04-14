@@ -1,0 +1,116 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - img [ref=e7]
+        - generic [ref=e10]: V4 WORKSPACE
+      - button "Collapse" [ref=e11] [cursor=pointer]:
+        - img [ref=e12]
+    - generic [ref=e14]:
+      - button "New" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - text: New
+      - button "Files" [ref=e18] [cursor=pointer]:
+        - img [ref=e19]
+      - button "Preview" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+      - button "Notes" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+      - button "Bookmarks" [ref=e28] [cursor=pointer]:
+        - img [ref=e29]
+    - generic [ref=e32]:
+      - generic [ref=e33]:
+        - text: PROJECTS
+        - button "Add Project" [ref=e34] [cursor=pointer]:
+          - img [ref=e35]
+      - button "terminal v4 New terminal in this project Zip and download terminal v4 Close project" [ref=e37] [cursor=pointer]:
+        - img [ref=e39]
+        - img [ref=e42]
+        - generic [ref=e44]: terminal v4
+        - generic [ref=e78]: "1"
+        - button "New terminal in this project" [ref=e45]:
+          - img [ref=e46]
+        - button "Zip and download terminal v4" [ref=e47]:
+          - img [ref=e48]
+        - button "Close project" [ref=e51]:
+          - img [ref=e52]
+      - generic [ref=e79]:
+        - button "terminal v4 New terminal in this project Zip and download terminal v4 Close project" [ref=e80] [cursor=pointer]:
+          - img [ref=e82]
+          - img [ref=e85]
+          - generic [ref=e87]: terminal v4
+          - generic [ref=e88]: "5"
+          - button "New terminal in this project" [ref=e89]:
+            - img [ref=e90]
+          - button "Zip and download terminal v4" [ref=e91]:
+            - img [ref=e92]
+          - button "Close project" [ref=e95]:
+            - img [ref=e96]
+        - generic [ref=e99]:
+          - generic [ref=e100] [cursor=pointer]:
+            - generic [ref=e102]: Structured Warning Check 1775418410080
+            - generic [ref=e104]: 1d
+          - generic [ref=e105] [cursor=pointer]:
+            - generic [ref=e107]: Structured Summary 1775418048634
+            - generic [ref=e109]: 1d
+          - generic [ref=e110] [cursor=pointer]:
+            - generic [ref=e112]: Structured Label 1775418005904
+            - generic [ref=e114]: 1d
+          - generic [ref=e115] [cursor=pointer]:
+            - generic [ref=e117]: Structured Inspect 1775417957826
+            - generic [ref=e119]: 1d
+          - generic [ref=e120] [cursor=pointer]:
+            - generic [ref=e122]: Structured Debug 1775417798400
+            - generic [ref=e124]: 1d
+    - generic [ref=e55]:
+      - button "Settings" [ref=e56] [cursor=pointer]:
+        - img [ref=e57]
+        - generic [ref=e60]: Settings
+      - generic [ref=e61]:
+        - button "Toggle Theme" [ref=e62] [cursor=pointer]:
+          - img [ref=e63]
+        - button "Logout" [ref=e69] [cursor=pointer]:
+          - img [ref=e70]
+  - main [ref=e74]:
+    - generic [ref=e126]:
+      - generic [ref=e128]:
+        - button "Reconnect terminal" [ref=e129] [cursor=pointer]:
+          - img [ref=e130]
+        - button "Split horizontally" [ref=e133] [cursor=pointer]:
+          - img [ref=e134]
+        - button "Split vertically" [ref=e136] [cursor=pointer]:
+          - img [ref=e137]
+        - button "Fullscreen" [ref=e139] [cursor=pointer]:
+          - img [ref=e140]
+      - generic [ref=e147]:
+        - generic [ref=e153]:
+          - generic:
+            - textbox "Terminal input"
+        - generic [ref=e156]:
+          - generic [ref=e157]:
+            - textbox "Command composer" [ref=e158]:
+              - /placeholder: Ask V4 anything
+            - generic [ref=e159]:
+              - button "Add image" [ref=e160] [cursor=pointer]:
+                - img [ref=e161]
+              - button "Choose AI coder" [ref=e163] [cursor=pointer]:
+                - generic [ref=e165]: CLI (default)
+                - img [ref=e166]
+              - button "Disable autocorrect" [ref=e168] [cursor=pointer]:
+                - generic [ref=e169]: ABC
+              - button "Voice input (local Whisper)" [ref=e171] [cursor=pointer]:
+                - img [ref=e172]
+              - button "Voice input (Groq cloud)" [ref=e176] [cursor=pointer]:
+                - img [ref=e177]
+              - button "Send to terminal" [disabled] [ref=e179]:
+                - img [ref=e180]
+          - generic "Git context" [ref=e182]:
+            - generic [ref=e183]:
+              - generic "echo hello from composer" [ref=e184]:
+                - img [ref=e185]
+                - generic [ref=e187]: echo hello from composer
+              - 'generic "Branch: rushdoover" [ref=e188]':
+                - img [ref=e190]
+                - button "Select git branch" [ref=e195] [cursor=pointer]:
+                  - generic [ref=e196]: rushdoover
+                  - img [ref=e197]

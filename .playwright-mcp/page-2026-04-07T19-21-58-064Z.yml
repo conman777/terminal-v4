@@ -1,0 +1,111 @@
+- generic [ref=e45]:
+  - complementary [ref=e46]:
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - img [ref=e49]
+        - generic [ref=e52]: V4 WORKSPACE
+      - button "Collapse" [ref=e53] [cursor=pointer]:
+        - img [ref=e54]
+    - generic [ref=e56]:
+      - button "New" [ref=e57] [cursor=pointer]:
+        - img [ref=e58]
+        - text: New
+      - button "Files" [ref=e60] [cursor=pointer]:
+        - img [ref=e61]
+      - button "Preview" [ref=e63] [cursor=pointer]:
+        - img [ref=e64]
+      - button "Notes" [ref=e66] [cursor=pointer]:
+        - img [ref=e67]
+      - button "Bookmarks" [ref=e70] [cursor=pointer]:
+        - img [ref=e71]
+    - generic [ref=e74]:
+      - generic [ref=e75]:
+        - text: PROJECTS
+        - button "Add Project" [ref=e76] [cursor=pointer]:
+          - img [ref=e77]
+      - button "terminal v4 New terminal in this project Zip and download terminal v4 Close project" [ref=e79] [cursor=pointer]:
+        - img [ref=e81]
+        - img [ref=e84]
+        - generic [ref=e86]: terminal v4
+        - button "New terminal in this project" [ref=e87]:
+          - img [ref=e88]
+        - button "Zip and download terminal v4" [ref=e89]:
+          - img [ref=e90]
+        - button "Close project" [ref=e93]:
+          - img [ref=e94]
+      - generic [ref=e97]:
+        - button "terminal v4 New terminal in this project Zip and download terminal v4 Close project" [ref=e98] [cursor=pointer]:
+          - img [ref=e100]
+          - img [ref=e103]
+          - generic [ref=e105]: terminal v4
+          - generic [ref=e106]: "5"
+          - button "New terminal in this project" [ref=e107]:
+            - img [ref=e108]
+          - button "Zip and download terminal v4" [ref=e109]:
+            - img [ref=e110]
+          - button "Close project" [ref=e113]:
+            - img [ref=e114]
+        - generic [ref=e117]:
+          - generic [ref=e118] [cursor=pointer]:
+            - generic [ref=e120]: Structured Warning Check 1775418410080
+            - generic [ref=e122]: 1d
+          - generic [ref=e123] [cursor=pointer]:
+            - generic [ref=e125]: Structured Summary 1775418048634
+            - generic [ref=e127]: 1d
+          - generic [ref=e128] [cursor=pointer]:
+            - generic [ref=e130]: Structured Label 1775418005904
+            - generic [ref=e132]: 1d
+          - generic [ref=e133] [cursor=pointer]:
+            - generic [ref=e135]: Structured Inspect 1775417957826
+            - generic [ref=e137]: 1d
+          - generic [ref=e138] [cursor=pointer]:
+            - generic [ref=e140]: Structured Debug 1775417798400
+            - generic [ref=e142]: 1d
+    - generic [ref=e143]:
+      - button "Settings" [ref=e144] [cursor=pointer]:
+        - img [ref=e145]
+        - generic [ref=e148]: Settings
+      - generic [ref=e149]:
+        - button "Toggle Theme" [ref=e150] [cursor=pointer]:
+          - img [ref=e151]
+        - button "Logout" [ref=e157] [cursor=pointer]:
+          - img [ref=e158]
+  - main [ref=e162]:
+    - generic [ref=e165]:
+      - generic [ref=e167]:
+        - button "Reconnect terminal" [ref=e168] [cursor=pointer]:
+          - img [ref=e169]
+        - button "Split horizontally" [ref=e172] [cursor=pointer]:
+          - img [ref=e173]
+        - button "Split vertically" [ref=e175] [cursor=pointer]:
+          - img [ref=e176]
+        - button "Fullscreen" [ref=e178] [cursor=pointer]:
+          - img [ref=e179]
+      - generic [ref=e186]:
+        - generic [ref=e188]:
+          - generic [ref=e189]:
+            - generic [ref=e190]:
+              - generic "ready"
+              - generic [ref=e191]: Claude Code
+            - generic [ref=e192]: ready
+          - status [ref=e195]:
+            - generic [ref=e196]: Send a message to start this Claude Code session.▍
+        - generic [ref=e197]:
+          - button "Show inline terminal panel" [ref=e200] [cursor=pointer]: Open Terminal
+          - generic [ref=e201]:
+            - textbox "Command composer" [ref=e202]:
+              - /placeholder: Ask V4 anything
+            - generic [ref=e203]:
+              - button "Add image" [ref=e204] [cursor=pointer]:
+                - img [ref=e205]
+              - button "Choose AI coder" [ref=e207] [cursor=pointer]:
+                - generic [ref=e209]: Claude Code
+                - img [ref=e210]
+              - button "Disable autocorrect" [ref=e212] [cursor=pointer]:
+                - generic [ref=e213]: ABC
+              - button "Voice input (local Whisper)" [ref=e215] [cursor=pointer]:
+                - img [ref=e216]
+              - button "Voice input (Groq cloud)" [ref=e220] [cursor=pointer]:
+                - img [ref=e221]
+              - button "Send to terminal" [disabled] [ref=e223]:
+                - img [ref=e224]

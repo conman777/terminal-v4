@@ -43,6 +43,17 @@ describe('windowActivity', () => {
     expect(isWindowActive()).toBe(false);
   });
 
+  it('treats focused text entry as active even when document.hasFocus() is false', () => {
+    mockWindowState({ hidden: false, hasFocus: false });
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    input.focus();
+
+    expect(isWindowActive()).toBe(true);
+
+    input.remove();
+  });
+
   it('notifies subscribers for blur and focus transitions', () => {
     mockWindowState({ hidden: false, hasFocus: true });
     const listener = vi.fn();
@@ -57,5 +68,22 @@ describe('windowActivity', () => {
     expect(listener).toHaveBeenLastCalledWith(true);
 
     unsubscribe();
+  });
+
+  it('keeps subscribers active when blur happens during focused text entry', () => {
+    mockWindowState({ hidden: false, hasFocus: true });
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    input.focus();
+
+    const listener = vi.fn();
+    const unsubscribe = subscribeWindowActivity(listener);
+
+    document.hasFocus = vi.fn(() => false);
+    window.dispatchEvent(new Event('blur'));
+    expect(listener).toHaveBeenLastCalledWith(true);
+
+    unsubscribe();
+    input.remove();
   });
 });

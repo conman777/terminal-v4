@@ -1,9 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import ThreadsSidebar from './ThreadsSidebar';
 
 const toggleTheme = vi.fn();
 const downloadProjectArchiveMock = vi.fn();
+const sidebarCss = fs.readFileSync(path.resolve(process.cwd(), 'src/components/ThreadsSidebar.css'), 'utf8');
 
 vi.mock('../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -75,15 +78,15 @@ describe('ThreadsSidebar', () => {
     downloadProjectArchiveMock.mockReset();
   });
 
-  it('renders new thread button and threads section', () => {
+  it('renders the utility toolbar and projects section', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('Bookmarks')).toBeInTheDocument();
-    expect(screen.getByText('Notes')).toBeInTheDocument();
-    expect(screen.getByText('Show files')).toBeInTheDocument();
-    expect(screen.getByText('Preview window')).toBeInTheDocument();
-    expect(screen.getByText('New thread')).toBeInTheDocument();
-    expect(screen.getByText('Threads')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bookmarks' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Notes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Files' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New' })).toBeInTheDocument();
+    expect(screen.getByText('PROJECTS')).toBeInTheDocument();
   });
 
   it('opens sidebar utility actions above new thread', () => {
@@ -96,8 +99,8 @@ describe('ThreadsSidebar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Bookmarks' }));
     fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Show files' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Preview window' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
 
     expect(onOpenBookmarks).toHaveBeenCalledTimes(1);
     expect(onOpenNotes).toHaveBeenCalledTimes(1);
@@ -108,14 +111,14 @@ describe('ThreadsSidebar', () => {
   it('renders add project button', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('Add project')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Project' })).toBeInTheDocument();
   });
 
   it('renders settings button', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('Settings')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Switch to light mode' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Toggle Theme' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Logout' })).toBeInTheDocument();
   });
 
@@ -127,7 +130,7 @@ describe('ThreadsSidebar', () => {
       archivedSessions: []
     })} />);
 
-    expect(screen.getByText('No projects yet')).toBeInTheDocument();
+    expect(screen.getByText('No active projects')).toBeInTheDocument();
   });
 
   it('renders manually added projects without sessions', () => {
@@ -139,7 +142,7 @@ describe('ThreadsSidebar', () => {
     })} />);
 
     expect(screen.getByText('manual-project')).toBeInTheDocument();
-    expect(screen.queryByText('No projects yet')).not.toBeInTheDocument();
+    expect(screen.queryByText('No active projects')).not.toBeInTheDocument();
   });
 
   it('does not duplicate a manual project when a session group uses forward slashes', () => {
@@ -163,7 +166,7 @@ describe('ThreadsSidebar', () => {
   it('renders pinned section when pinned sessions exist', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(screen.getByText('Pinned')).toBeInTheDocument();
+    expect(screen.getByText('PINNED')).toBeInTheDocument();
   });
 
   it('calls onCloseProject with the project path and session ids', async () => {
@@ -184,14 +187,11 @@ describe('ThreadsSidebar', () => {
     expect(downloadProjectArchiveMock).toHaveBeenCalledWith('C:\\repo');
   });
 
-  it('uses theme-aware sidebar palette tokens', () => {
-    const { container } = render(<ThreadsSidebar {...buildProps()} />);
-    const styles = Array.from(container.querySelectorAll('style'))
-      .map((styleNode) => styleNode.textContent || '')
-      .join('\n');
+  it('uses the sidebar palette tokens defined in the stylesheet', () => {
+    render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(styles).toContain('var(--bg-primary)');
-    expect(styles).toContain('var(--text-primary)');
-    expect(styles).toContain('var(--text-muted)');
+    expect(sidebarCss).toContain('var(--pro-sidebar-bg)');
+    expect(sidebarCss).toContain('var(--pro-sidebar-text)');
+    expect(sidebarCss).toContain('var(--pro-sidebar-muted)');
   });
 });

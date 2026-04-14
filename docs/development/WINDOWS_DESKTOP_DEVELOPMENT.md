@@ -44,6 +44,20 @@ This command performs:
    - `TERMINAL_V4_DESKTOP=true`
    - `TERMINAL_V4_SHARE_MODE=off`
 
+## Run Desktop App With LAN Access
+
+From repo root:
+
+```bash
+$env:TERMINAL_V4_SHARE_MODE='lan'
+npm run desktop:dev
+```
+
+LAN mode binds the backend to `0.0.0.0:3020` while the desktop app still health-checks it
+through `127.0.0.1`. If `JWT_SECRET` is not set, the launcher generates a non-default
+secret automatically so the Rust API can start on a non-loopback host. Set `JWT_SECRET`
+yourself if you need sessions to survive restarts.
+
 ## Build Desktop Artifacts
 
 From repo root:
@@ -77,6 +91,13 @@ Check:
 2. Port conflicts on `3020`
 3. Auth environment variables in `backend/.env`
 4. The Rust API binary exists under `rust/target/debug` or `rust/target/release`
+
+### Can't access the app from another device
+Check:
+1. Start the desktop app with `TERMINAL_V4_SHARE_MODE=lan`
+2. Confirm the backend is listening on `0.0.0.0:3020`
+3. Use the machine's current LAN IP, not an older address
+4. Allow inbound TCP `3020` through Windows Firewall if needed
 
 ### `cargo` not found
 Install Rust toolchain via [https://rustup.rs](https://rustup.rs)

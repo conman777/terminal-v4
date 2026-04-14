@@ -14,6 +14,7 @@
 
 .pro-login-wrapper {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -23,8 +24,14 @@
     radial-gradient(circle at 85% 30%, rgba(0, 229, 255, 0.03), transparent 25%);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color: var(--pro-text);
-  padding: 2rem;
+  padding:
+    calc(2rem + env(safe-area-inset-top, 0px))
+    calc(2rem + env(safe-area-inset-right, 0px))
+    calc(2rem + env(safe-area-inset-bottom, 0px))
+    calc(2rem + env(safe-area-inset-left, 0px));
   box-sizing: border-box;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .pro-login-wrapper *, .pro-login-wrapper *::before, .pro-login-wrapper *::after {
@@ -184,7 +191,7 @@
   border-radius: 8px;
   padding: 0.75rem 1rem;
   color: #fff;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
   outline: none;
   font-family: inherit;
@@ -302,18 +309,39 @@
 }
 
 @media (max-width: 768px) {
+  .pro-login-wrapper {
+    min-height: 100dvh;
+    padding:
+      calc(0.75rem + env(safe-area-inset-top, 0px))
+      calc(1rem + env(safe-area-inset-right, 0px))
+      calc(1rem + env(safe-area-inset-bottom, 0px))
+      calc(1rem + env(safe-area-inset-left, 0px));
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
   .pro-login-container {
     flex-direction: column;
+    margin: 0 auto;
+    width: min(100%, 640px);
   }
+
   .pro-login-brand {
-    padding: 2rem;
+    padding: 1.5rem;
     border-right: none;
     border-bottom: 1px solid var(--pro-border);
   }
+
   .pro-brand-title {
-    font-size: 1.75rem;
+    font-size: 1.5rem;
   }
+
+  .pro-features {
+    display: none;
+  }
+
   .pro-login-form-wrapper {
-    padding: 2rem;
+    padding: 1.5rem;
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px));
   }
 }

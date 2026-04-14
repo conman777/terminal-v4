@@ -1,9 +1,26 @@
+function hasFocusedEditableElement() {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const activeElement = document.activeElement;
+  if (!(activeElement instanceof HTMLElement) || activeElement === document.body) {
+    return false;
+  }
+
+  return activeElement.matches('input, textarea, [contenteditable], [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]')
+    || activeElement.isContentEditable;
+}
+
 export function isWindowActive() {
   if (typeof document === 'undefined') {
     return true;
   }
   if (document.hidden || document.visibilityState === 'hidden') {
     return false;
+  }
+  if (hasFocusedEditableElement()) {
+    return true;
   }
   if (typeof document.hasFocus === 'function') {
     return document.hasFocus();
