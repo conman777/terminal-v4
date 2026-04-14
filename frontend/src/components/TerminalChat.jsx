@@ -1834,19 +1834,31 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       return true;
     };
 
-    const writeTerminal = (text, callback) => {
-      if (typeof callback === 'function') {
-        term.write(text, () => {
-          callback();
-          scheduleIOSRefresh();
+      const writeTerminal = (text, callback) => {
+        if (typeof callback === 'function') {
+          term.write(text, () => {
+            callback();
+            scheduleIOSRefresh();
           scheduleScreenSnapshot();
         });
         return;
       }
-      term.write(text);
-      scheduleIOSRefresh();
-      scheduleScreenSnapshot();
-    };
+        term.write(text);
+        scheduleIOSRefresh();
+        scheduleScreenSnapshot();
+      };
+
+      const writeVisibleTerminalNotice = (text) => {
+        if (!text) return;
+        if (viewModeRef.current === 'reader') {
+          writeTerminal(text, scheduleReaderSync);
+          return;
+        }
+        writeTerminal(text);
+        if (!isMobile) {
+          appendToReader(text);
+        }
+      };
 
     const capturePreviewFromInput = (text) => {
       if (!sessionId || !text) return;
@@ -2863,7 +2875,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           onConnectionChange?.(false);
           if (!hadConnectionError) {
             hadConnectionError = true;
-            writeTerminal(`\r\n[${message || 'Session expired - please refresh'}]\r\n`);
+            writeVisibleTerminalNotice(`\r\n[${message || 'Session expired - please refresh'}]\r\n`);
           }
         };
 
@@ -2887,7 +2899,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             markDisconnected();
             if (!hadConnectionError) {
               hadConnectionError = true;
-              writeTerminal('\r\n[Connection timed out – retrying…]\r\n');
+              writeVisibleTerminalNotice('\r\n[Connection timed out - retrying...]\r\n');
             }
             try {
               socket.close(4408, 'Connection timeout');
@@ -3004,11 +3016,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               term.reset();
               clearReader();
               const recoveryNotice = '\r\n[Terminal display resynced after high output]\r\n';
-              writeTerminal(recoveryNotice);
+              writeVisibleTerminalNotice(recoveryNotice);
               appendHistoryEntry({ text: recoveryNotice, ts: Date.now() });
-              if (!isMobile) {
-                appendToReader(recoveryNotice);
-              }
             }
             if (!pendingWrite) return;
 
@@ -3074,11 +3083,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 if (droppedChars > 0) parts.push(`${droppedChars} chars`);
                 if (droppedEvents > 0) parts.push(`${droppedEvents} events`);
                 const notice = `\r\n[Output skipped: ${parts.join(', ')} due to backlog]\r\n`;
-                writeTerminal(notice);
+                writeVisibleTerminalNotice(notice);
                 appendHistoryEntry({ text: notice, ts: Date.now() });
-                if (!isMobile) {
-                  appendToReader(notice);
-                }
               }
             }
           };
@@ -3252,7 +3258,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             markDisconnected();
             if (!hadConnectionError) {
               hadConnectionError = true;
-              writeTerminal('\r\n[Connection lost – attempting to reconnect…]\r\n');
+              writeVisibleTerminalNotice('\r\n[Connection lost - attempting to reconnect...]\r\n');
             }
           };
 
@@ -3284,7 +3290,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
               if (shouldTryRestore) {
                 restoreRetryAttemptedRef.current = true;
-                writeTerminal('\r\n[Session inactive - restoring...]\r\n');
+                writeVisibleTerminalNotice('\r\n[Session inactive - restoring...]\r\n');
                 void restoreSessionRef.current(sessionId)
                   .then(() => {
                     if (disposed || pausedForOfflineRef.current) return;
@@ -3302,7 +3308,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                           })
                           .catch(() => {
                             setIsLoadingHistory(false);
-                            writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+                            writeVisibleTerminalNotice('\r\n[Session restore failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                             const nextDelay = restoreRetryDelay;
                             restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                             scheduleSocketReconnect(nextDelay, { reason: 'Restore failed retry' });
@@ -3310,7 +3316,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                       }, 2000);
                     } else {
                       setIsLoadingHistory(false);
-                      writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+                      writeVisibleTerminalNotice('\r\n[Session restore failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                       const nextDelay = restoreRetryDelay;
                       restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                       scheduleSocketReconnect(nextDelay, { reason: 'Restore failed retry' });
@@ -3319,7 +3325,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 return;
               }
               setIsLoadingHistory(false);
-              writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+              writeVisibleTerminalNotice('\r\n[Session restore failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
               const nextDelayA = restoreRetryDelay;
               restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
               scheduleSocketReconnect(nextDelayA, { reason: 'Session ended retry' });
@@ -3328,7 +3334,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (event.reason === 'Terminal session not found' || event.code === 4404) {
               if (!restoreRetryAttemptedRef.current && typeof restoreSessionRef.current === 'function') {
                 restoreRetryAttemptedRef.current = true;
-                writeTerminal('\r\n[Session inactive - restoring...]\r\n');
+                writeVisibleTerminalNotice('\r\n[Session inactive - restoring...]\r\n');
                 void restoreSessionRef.current(sessionId)
                   .then(() => {
                     if (disposed || pausedForOfflineRef.current) return;
@@ -3336,14 +3342,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                   })
                   .catch(() => {
                     setIsLoadingHistory(false);
-                    writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+                    writeVisibleTerminalNotice('\r\n[Session restore failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayB = restoreRetryDelay;
                     restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                     scheduleSocketReconnect(nextDelayB, { reason: 'Session restore failed retry' });
                   });
               } else {
                 setIsLoadingHistory(false);
-                writeTerminal('\r\n[Session restore failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+                writeVisibleTerminalNotice('\r\n[Session restore failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                 const nextDelayC = restoreRetryDelay;
                 restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                 scheduleSocketReconnect(nextDelayC, { reason: 'Session not found retry' });
@@ -3365,7 +3371,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                   } else {
                     authRetryCount++;
                     setIsLoadingHistory(false);
-                    writeTerminal('\r\n[Auth failed – retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
+                    writeVisibleTerminalNotice('\r\n[Auth failed - retrying in ' + Math.round(restoreRetryDelay / 1000) + 's...]\r\n');
                     const nextDelayD = restoreRetryDelay;
                     restoreRetryDelay = Math.min(restoreRetryDelay * 2, 30000);
                     scheduleSocketReconnect(nextDelayD, { reason: 'Auth retry' });

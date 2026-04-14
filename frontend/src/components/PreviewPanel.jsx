@@ -11,6 +11,7 @@ import { DevToolsPanel } from './devtools/DevToolsPanel';
 import { WebContainerPreview } from './WebContainerPreview';
 import { PreviewUrlBar } from './preview/PreviewUrlBar';
 import { PreviewInspector } from './preview/PreviewInspector';
+import { getSessionDisplayInfo } from '../utils/sessionDisplay';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
 
 // Format timestamp for log display
@@ -353,19 +354,24 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handlePreviewComposerSubmit = useCallback(async (text) => {
     const trimmed = typeof text === 'string' ? text.trim() : '';
-    if (!trimmed || !selectedTerminalSession) return;
+    const attachmentPaths = previewComposerAttachments
+      .map((attachment) => attachment?.path)
+      .filter((path) => typeof path === 'string' && path.trim());
+    if ((!trimmed && attachmentPaths.length === 0) || !selectedTerminalSession) return;
+    const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
+    if (!payload) return;
     try {
       await apiFetch(`/api/terminal/${selectedTerminalSession}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: trimmed })
+        body: JSON.stringify({ command: payload })
       });
     } catch {
-      if (onSendToTerminal) onSendToTerminal(trimmed);
+      if (onSendToTerminal) onSendToTerminal(payload);
     }
     setPreviewComposerValue('');
     setPreviewComposerAttachments([]);
-  }, [onSendToTerminal, selectedTerminalSession]);
+  }, [onSendToTerminal, previewComposerAttachments, selectedTerminalSession]);
   const [isDraggingBrowserSplit, setIsDraggingBrowserSplit] = useState(false);
   const [isDraggingDevTools, setIsDraggingDevTools] = useState(false);
   const previewPanelRef = useRef(null);
@@ -378,6 +384,34 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const previewTerminalMeasuredSizeRef = useRef({ width: 0, height: 0 });
   const focusPreviewTerminalRef = useRef(null);
   const mobileChromeTimerRef = useRef(null);
+  const previewSessionLabels = useMemo(() => {
+    const sessionRows = activeSessions.map((session) => {
+      const fallbackTitle = session.title || `Session ${session.id.slice(0, 8)}`;
+      return {
+        id: session.id,
+        ...getSessionDisplayInfo(session, fallbackTitle)
+      };
+    });
+    const primaryCounts = new Map();
+    sessionRows.forEach((row) => {
+      const key = row.primaryLabel.toLowerCase();
+      primaryCounts.set(key, (primaryCounts.get(key) || 0) + 1);
+    });
+    const duplicatePositions = new Map();
+    return sessionRows.reduce((map, row) => {
+      const key = row.primaryLabel.toLowerCase();
+      const position = (duplicatePositions.get(key) || 0) + 1;
+      duplicatePositions.set(key, position);
+      const hasDuplicate = (primaryCounts.get(key) || 0) > 1;
+      const qualifier = hasDuplicate
+        ? ((row.projectName && row.projectName.toLowerCase() !== key) ? row.projectName : String(position))
+        : '';
+      const label = qualifier ? `${row.primaryLabel} (${qualifier})` : row.primaryLabel;
+      const title = row.secondaryLabel ? `${label} [${row.secondaryLabel}]` : label;
+      map.set(row.id, { label, title });
+      return map;
+    }, new Map());
+  }, [activeSessions]);
   const mobileSplitModeRef = useRef(null);
   const mobileToolsMenuRef = useRef(null);
   const mobileFooterRef = useRef(null);
@@ -2748,18 +2782,22 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                     const backendBusy = typeof session?.isBusy === 'boolean'
                       ? session.isBusy
                       : Boolean(activityState?.isBusy);
-                    const isBusy = isActive ? backendBusy : false;
+                    const isBusy = backendBusy;
                     const statusClass = isBusy ? 'busy' : 'idle';
+                    const sessionLabel = previewSessionLabels.get(session.id)?.label
+                      || (session.title || `Session ${session.id.slice(0, 8)}`);
+                    const sessionTitle = previewSessionLabels.get(session.id)?.title || sessionLabel;
                     return (
                   <button
                     key={session.id}
                     className={`preview-mobile-session-chip ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}`}
                     onClick={() => setSelectedTerminalSession(session.id)}
                     type="button"
+                    title={sessionTitle}
                   >
                     <span className={`session-indicator ${statusClass}`} />
                     <span className="session-name">
-                      {session.title || `Session ${session.id.slice(0, 8)}`}
+                      {sessionLabel}
                     </span>
                     {showStatusLabels && (
                       <span className={`session-status-label ${statusClass}`} aria-hidden="true">
@@ -3678,18 +3716,21 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                         const backendBusy = typeof session?.isBusy === 'boolean'
                           ? session.isBusy
                           : Boolean(activityState?.isBusy);
-                        const isBusy = isActive ? backendBusy : false;
+                        const isBusy = backendBusy;
                         const statusClass = isBusy ? 'busy' : 'idle';
+                        const sessionLabel = previewSessionLabels.get(session.id)?.label
+                          || getPreferredSessionTopic(session.thread?.topic, session.title || `Session ${session.id.slice(0, 8)}`);
+                        const sessionTitle = previewSessionLabels.get(session.id)?.title || sessionLabel;
                         return (
                       <button
                         key={session.id}
                         className={`preview-session-btn ${isActive ? 'active' : ''}${isBusy ? ' busy' : ''}`}
                         onClick={() => setSelectedTerminalSession(session.id)}
-                        title={getPreferredSessionTopic(session.thread?.topic, session.title || `Session ${session.id.slice(0, 8)}`)}
+                        title={sessionTitle}
                       >
                         <span className={`session-indicator ${statusClass}`} />
                         <span className="session-name">
-                          {getPreferredSessionTopic(session.thread?.topic, session.title || `Session ${session.id.slice(0, 8)}`)}
+                          {sessionLabel}
                         </span>
                         {showStatusLabels && (
                           <span className={`session-status-label ${statusClass}`} aria-hidden="true">
@@ -3732,7 +3773,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   onClick={handleToggleTerminalSplit}
                   title="Close terminal"
                 >
-                  ×
+                  &times;
                 </button>
               </div>
               <div className="preview-terminal-content">

@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { PreviewPanel } from './PreviewPanel';
 
 const previewUrlBarSpy = vi.fn();
 const terminalChatSpy = vi.fn();
+const apiFetchMock = vi.fn(async () => ({
+  ok: true,
+  json: async () => ({}),
+}));
+const uploadScreenshotMock = vi.fn();
 let activePortsResponse = [];
 let isMobile = false;
 
@@ -16,10 +22,8 @@ vi.mock('../utils/auth', () => ({
 }));
 
 vi.mock('../utils/api', () => ({
-  apiFetch: vi.fn(async () => ({
-    ok: true,
-    json: async () => ({}),
-  })),
+  apiFetch: (...args) => apiFetchMock(...args),
+  uploadScreenshot: (...args) => uploadScreenshotMock(...args),
 }));
 
 vi.mock('../utils/webcontainer', () => ({
@@ -95,6 +99,9 @@ describe('PreviewPanel', () => {
   beforeEach(() => {
     previewUrlBarSpy.mockClear();
     terminalChatSpy.mockClear();
+    apiFetchMock.mockClear();
+    uploadScreenshotMock.mockReset();
+    uploadScreenshotMock.mockResolvedValue('C:/tmp/preview-image.png');
     isMobile = false;
     activePortsResponse = [{
       port: 8081,
@@ -199,6 +206,75 @@ describe('PreviewPanel', () => {
       expect(props.syncPtySize).toBe(false);
       expect(props.viewMode).toBe('reader');
       expect(props.inputEnabled).toBe(false);
+    });
+  });
+
+  it('shows busy state for inactive preview sessions', async () => {
+    render(
+      <PreviewPanel
+        {...buildProps({
+          activeSessions: [
+            { id: 'session-1', title: 'Terminal 1', usesTmux: false },
+            { id: 'session-2', title: 'Terminal 2', usesTmux: false },
+          ],
+          activeSessionId: 'session-1',
+          sessionActivity: {
+            'session-2': { isBusy: true },
+          },
+          showStatusLabels: true,
+        })}
+      />,
+    );
+
+    const inactiveBusyButton = await screen.findByTitle('Terminal 2');
+    expect(inactiveBusyButton.className).toContain('busy');
+    expect(inactiveBusyButton.querySelector('.session-status-label.busy')?.textContent).toBe('Busy');
+  });
+
+  it('disambiguates duplicate preview session labels', async () => {
+    render(
+      <PreviewPanel
+        {...buildProps({
+          activeSessions: [
+            { id: 'session-1', title: 'terminal v4', usesTmux: false },
+            { id: 'session-2', title: 'terminal v4', usesTmux: false },
+          ],
+          activeSessionId: 'session-1',
+        })}
+      />,
+    );
+
+    expect(await screen.findByRole('button', { name: 'terminal v4 (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'terminal v4 (2)' })).toBeInTheDocument();
+  });
+
+  it('includes uploaded attachments when submitting from the preview composer', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<PreviewPanel {...buildProps()} />);
+
+    const fileInput = container.querySelector('.status-composer-image-input');
+    expect(fileInput).toBeTruthy();
+
+    await user.upload(
+      fileInput,
+      new File(['preview-image'], 'preview-image.png', { type: 'image/png' }),
+    );
+
+    await waitFor(() => {
+      expect(uploadScreenshotMock).toHaveBeenCalled();
+    });
+
+    await user.type(screen.getByRole('textbox', { name: 'Command composer' }), 'hello');
+    await user.click(screen.getByRole('button', { name: 'Send to terminal' }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/terminal/session-1/input',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ command: 'C:/tmp/preview-image.png hello' }),
+        }),
+      );
     });
   });
 
