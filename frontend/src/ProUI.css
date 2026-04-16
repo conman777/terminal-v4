@@ -134,17 +134,7 @@
   border-color: var(--accent-primary) !important;
 }
 
-.notes-v2-new-btn {
-  background: var(--accent-primary) !important;
-  color: #000 !important;
-  border: none !important;
-  border-radius: var(--radius-md) !important;
-}
-
-.notes-v2-new-btn:hover {
-  background: var(--accent-primary-hover) !important;
-  transform: translateY(-1px) !important;
-}
+/* .notes-v2-new-btn visual rules unified in styles.css (.btn-primary group) */
 
 .notes-v2-main {
   background: var(--bg-base) !important;
@@ -160,17 +150,7 @@
   box-shadow: none !important;
 }
 
-.notes-v2-create-btn {
-  background: var(--accent-primary) !important;
-  color: #000 !important;
-  border-radius: var(--radius-md) !important;
-  font-weight: 600 !important;
-  border: none !important;
-}
-
-.notes-v2-create-btn:hover {
-  background: var(--accent-primary-hover) !important;
-}
+/* .notes-v2-create-btn visual rules unified in styles.css (.btn-primary group) */
 
 .notes-v2-close {
   color: var(--text-muted) !important;
@@ -278,17 +258,7 @@
   color: #fff !important;
 }
 
-.bookmark-add-btn {
-  background: var(--accent-primary) !important;
-  color: #000 !important;
-  border-radius: var(--radius-md) !important;
-  border: none !important;
-  font-weight: 600 !important;
-}
-
-.bookmark-add-btn:hover {
-  background: var(--accent-primary-hover) !important;
-}
+/* .bookmark-add-btn visual rules unified in styles.css (.btn-primary group) */
 
 .bookmark-item {
   background: var(--bg-surface) !important;
@@ -441,25 +411,7 @@
   color: #fff !important;
 }
 
-.status-send-btn {
-  background: var(--accent-primary) !important;
-  border: none !important;
-  color: #000 !important;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
-}
-
-.status-send-btn:hover:not(:disabled) {
-  background: var(--accent-primary-hover) !important;
-  transform: translateY(-1px) !important;
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
-}
-
-.status-send-btn:disabled {
-  background: var(--border-subtle) !important;
-  color: var(--text-muted) !important;
-  box-shadow: none !important;
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
-}
+/* .status-send-btn visual rules unified in styles.css (.btn-primary group) */
 
 .status-ai-menu {
   background: var(--bg-surface) !important;
@@ -594,12 +546,4 @@
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
-.mobile-composer-send {
-  background: var(--accent-primary) !important;
-  color: #000 !important;
-}
-
-.mobile-composer-send:disabled {
-  background: var(--border-subtle) !important;
-  color: var(--text-muted) !important;
-}
+/* .mobile-composer-send visual rules unified in styles.css (.btn-primary group) */

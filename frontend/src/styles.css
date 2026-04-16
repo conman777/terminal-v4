@@ -1988,6 +1988,10 @@ button {
    Buttons
    =========================================== */
 
+/* Canonical button vocabulary — all legacy button class names below alias
+   into the same visual language. Component-specific padding / sizing stays
+   with the legacy class in its own file. */
+
 .btn-primary,
 .btn-secondary {
   padding: 12px 24px;
@@ -1998,32 +2002,74 @@ button {
   transition: all var(--transition-fast);
 }
 
-.btn-primary {
+.btn-primary,
+.notes-v2-new-btn,
+.notes-v2-create-btn,
+.bookmark-add-btn,
+.pro-empty-btn,
+.pro-submit-btn,
+.pro-fb-btn-select,
+.status-send-btn,
+.mobile-composer-send {
   background: var(--accent-primary);
   border: none;
   color: var(--bg-base);
   box-shadow: var(--amber-glow-subtle);
   transition: all var(--transition-fast);
+  cursor: pointer;
 }
 
-.btn-primary:hover {
+.btn-primary:hover,
+.notes-v2-new-btn:hover,
+.notes-v2-create-btn:hover,
+.bookmark-add-btn:hover,
+.pro-empty-btn:hover,
+.pro-submit-btn:hover:not(:disabled),
+.pro-fb-btn-select:hover,
+.status-send-btn:hover:not(:disabled),
+.mobile-composer-send:hover:not(:disabled) {
   background: var(--accent-primary-light);
   transform: translateY(-1px);
   box-shadow: var(--amber-glow-medium);
 }
 
-.btn-primary:active {
+.btn-primary:active,
+.notes-v2-new-btn:active,
+.notes-v2-create-btn:active,
+.bookmark-add-btn:active,
+.pro-empty-btn:active,
+.pro-submit-btn:active:not(:disabled),
+.pro-fb-btn-select:active,
+.status-send-btn:active,
+.mobile-composer-send:active {
   transform: translateY(0);
   box-shadow: var(--amber-glow-subtle);
 }
 
-.btn-secondary {
+.btn-primary:disabled,
+.pro-submit-btn:disabled,
+.status-send-btn:disabled,
+.mobile-composer-send:disabled {
+  background: var(--border-default);
+  color: var(--text-muted);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-secondary,
+.pro-passkey-btn,
+.pro-fb-btn-cancel {
   background: transparent;
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover,
+.pro-passkey-btn:hover:not(:disabled),
+.pro-fb-btn-cancel:hover {
   background: var(--bg-elevated);
   border-color: var(--border-hover);
   color: var(--text-primary);

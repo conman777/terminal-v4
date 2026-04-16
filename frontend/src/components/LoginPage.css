@@ -202,32 +202,15 @@
   cursor: not-allowed;
 }
 
+/* .pro-submit-btn visual rules unified in styles.css (.btn-primary group).
+   Kept here: full-width login layout. */
 .pro-submit-btn {
-  background: var(--accent-primary);
-  color: #000;
-  border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0.875rem;
   font-size: 0.9375rem;
   font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.2s;
   margin-top: 0.5rem;
   width: 100%;
-}
-
-.pro-submit-btn:hover:not(:disabled) {
-  background: var(--accent-primary-hover);
-  transform: translateY(-1px);
-}
-
-.pro-submit-btn:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.pro-submit-btn:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
 }
 
 .pro-divider {
@@ -254,26 +237,18 @@
   margin-left: 1rem;
 }
 
+/* .pro-passkey-btn visual rules unified in styles.css (.btn-secondary group).
+   Kept here: full-width login layout and icon alignment. */
 .pro-passkey-btn {
-  background: transparent;
-  color: #fff;
-  border: 1px solid var(--surface-glass-border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 0.875rem;
   font-size: 0.9375rem;
   font-weight: 500;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   width: 100%;
-}
-
-.pro-passkey-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.2);
 }
 
 .pro-passkey-btn:disabled {

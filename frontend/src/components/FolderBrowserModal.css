@@ -423,41 +423,17 @@
   flex-shrink: 0;
 }
 
+/* Folder-browser primary/secondary visual rules unified in styles.css.
+   Kept here: compact dialog-footer layout (tighter padding, smaller label). */
 .pro-fb-btn-cancel,
 .pro-fb-btn-select {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.pro-fb-btn-cancel {
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-}
-
-.pro-fb-btn-cancel:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
-}
-
-.pro-fb-btn-select {
-  background: var(--accent-primary);
-  border: none;
-  color: #000;
-  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 20%, transparent);
-}
-
-.pro-fb-btn-select:hover {
-  background: var(--accent-primary-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }
 
 @media (max-width: 560px) {
