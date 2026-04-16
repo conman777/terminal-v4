@@ -96,7 +96,7 @@ export default function LoginPage() {
           <div className="pro-form-header">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
               <div className="pro-status-dot" />
-              <span style={{ fontSize: '0.8125rem', color: 'var(--pro-accent)', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>System Secure</span>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--accent-primary)', letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>System Secure</span>
             </div>
             <h2 className="pro-form-title">Access Workspace</h2>
             <p className="pro-form-subtitle">Authenticate via credentials or secure passkey.</p>

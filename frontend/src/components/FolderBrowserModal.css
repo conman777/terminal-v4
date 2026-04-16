@@ -1,17 +1,17 @@
 /* frontend/src/components/FolderBrowserModal.css */
 
 .pro-folder-browser {
-  background: var(--pro-sidebar-bg, #050505);
+  background: var(--bg-base);
   border-radius: 16px;
   width: 90%;
   max-width: 520px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--pro-sidebar-border, #1a1a1a);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-subtle);
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   animation: pro-fade-slide-up 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -27,7 +27,7 @@
   align-items: center;
   padding: 0 12px;
   background: rgba(255, 255, 255, 0.02);
-  border-bottom: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   gap: 8px;
 }
@@ -40,7 +40,7 @@
   justify-content: center;
   background: transparent;
   border: 1px solid transparent;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -48,9 +48,9 @@
 }
 
 .pro-fb-back-btn:hover:not(:disabled) {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
-  border-color: var(--pro-sidebar-border, #1a1a1a);
+  border-color: var(--border-subtle);
 }
 
 .pro-fb-back-btn:disabled {
@@ -78,16 +78,16 @@
 }
 
 .pro-fb-breadcrumb-sep {
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   margin: 0 4px;
-  font-family: var(--pro-font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
 .pro-fb-breadcrumb-btn {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
   padding: 4px 8px;
@@ -97,13 +97,13 @@
 }
 
 .pro-fb-breadcrumb-btn:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
 .pro-fb-breadcrumb-btn.active {
-  color: var(--pro-sidebar-accent, #00e5ff);
-  background: rgba(0, 229, 255, 0.1);
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 /* ── Content Area ── */
@@ -115,7 +115,7 @@
   flex-direction: column;
   gap: 16px;
   scrollbar-width: thin;
-  scrollbar-color: var(--pro-sidebar-hover, #141414) transparent;
+  scrollbar-color: var(--bg-hover) transparent;
 }
 
 .pro-fb-content::-webkit-scrollbar {
@@ -123,7 +123,7 @@
 }
 
 .pro-fb-content::-webkit-scrollbar-thumb {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   border-radius: 4px;
 }
 
@@ -144,10 +144,10 @@
 }
 
 .pro-fb-field label {
-  font-family: var(--pro-font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -162,14 +162,14 @@
   position: absolute;
   right: 10px;
   pointer-events: none;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
 }
 
 .pro-fb-input,
 .pro-fb-custom-select {
   width: 100%;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   color: #fff;
   font-size: 13px;
@@ -199,8 +199,8 @@
 
 .pro-fb-input:focus,
 .pro-fb-custom-select:focus-within {
-  border-color: var(--pro-sidebar-accent, #00e5ff);
-  box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.1);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .pro-fb-options-list {
@@ -208,8 +208,8 @@
   top: calc(100% + 4px);
   left: 0;
   right: 0;
-  background: var(--pro-sidebar-bg, #050505);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   overflow: hidden;
@@ -229,18 +229,18 @@
 .pro-fb-option {
   padding: 8px 12px;
   font-size: 13px;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   transition: background 0.15s ease;
 }
 
 .pro-fb-option:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
 .pro-fb-option.selected {
-  background: rgba(0, 229, 255, 0.1);
-  color: var(--pro-sidebar-accent, #00e5ff);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--accent-primary);
 }
 
 .pro-fb-search {
@@ -252,13 +252,13 @@
 .pro-fb-search-icon {
   position: absolute;
   left: 12px;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
 }
 
 .pro-fb-search input {
   width: 100%;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   color: #fff;
   font-size: 13px;
@@ -268,8 +268,8 @@
 }
 
 .pro-fb-search input:focus {
-  border-color: var(--pro-sidebar-accent, #00e5ff);
-  box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.1);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 /* ── Folder List ── */
@@ -277,7 +277,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.2);
   padding: 4px;
@@ -290,7 +290,7 @@
   padding: 8px 12px;
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   border-radius: 6px;
   cursor: pointer;
   text-align: left;
@@ -298,12 +298,12 @@
 }
 
 .pro-fb-item:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
 .pro-fb-item-icon {
-  color: var(--pro-sidebar-accent, #00e5ff);
+  color: var(--accent-primary);
   flex-shrink: 0;
 }
 
@@ -317,7 +317,7 @@
 }
 
 .pro-fb-item-arrow {
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   opacity: 0;
   transition: all 0.15s ease;
   transform: translateX(-4px);
@@ -334,7 +334,7 @@
   padding: 32px;
   text-align: center;
   font-size: 13px;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -356,10 +356,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-family: var(--pro-font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 600;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -372,8 +372,8 @@
 
 .pro-fb-recent-chip {
   background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
-  color: var(--pro-sidebar-text, #e0e0e0);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
   padding: 4px 10px;
   border-radius: 12px;
   font-size: 12px;
@@ -382,7 +382,7 @@
 }
 
 .pro-fb-recent-chip:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
   border-color: rgba(255, 255, 255, 0.2);
 }
@@ -393,7 +393,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px;
-  border-top: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border-top: 1px solid var(--border-subtle);
   background: rgba(0, 0, 0, 0.4);
   flex-shrink: 0;
   gap: 16px;
@@ -413,7 +413,7 @@
 }
 
 .pro-fb-footer-path svg {
-  color: var(--pro-sidebar-accent, #00e5ff);
+  color: var(--accent-primary);
   flex-shrink: 0;
 }
 
@@ -438,8 +438,8 @@
 
 .pro-fb-btn-cancel {
   background: transparent;
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
-  color: var(--pro-sidebar-text, #e0e0e0);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
 }
 
 .pro-fb-btn-cancel:hover {
@@ -448,16 +448,16 @@
 }
 
 .pro-fb-btn-select {
-  background: var(--pro-sidebar-accent, #00e5ff);
+  background: var(--accent-primary);
   border: none;
   color: #000;
-  box-shadow: 0 4px 12px rgba(0, 229, 255, 0.2);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .pro-fb-btn-select:hover {
-  background: #00b8cc;
+  background: var(--accent-primary-hover);
   transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(0, 229, 255, 0.3);
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 30%, transparent);
 }
 
 @media (max-width: 560px) {

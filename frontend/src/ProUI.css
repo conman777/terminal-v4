@@ -1,28 +1,14 @@
 /* frontend/src/ProUI.css */
-/* Overrides for PreviewPanel, NotesModal, BookmarkModal, and DesktopStatusBar to match the new Pro UI */
-
-:root {
-  --pro-bg: #050505;
-  --pro-surface: #0a0a0a;
-  --pro-border: #1a1a1a;
-  --pro-hover: #141414;
-  --pro-active: #222222;
-  --pro-accent: #00e5ff;
-  --pro-text: #e0e0e0;
-  --pro-muted: #888888;
-  --pro-radius-lg: 16px;
-  --pro-radius-md: 8px;
-  --pro-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
-}
+/* Overrides for PreviewPanel, NotesModal, BookmarkModal, and DesktopStatusBar — consume canonical tokens from styles.css */
 
 /* ===========================================
    Preview Panel
    =========================================== */
 
 .preview-panel {
-  background: var(--pro-bg) !important;
-  border-radius: var(--pro-radius-lg) !important;
-  border: 1px solid var(--pro-border) !important;
+  background: var(--bg-base) !important;
+  border-radius: var(--radius-xl) !important;
+  border: 1px solid var(--border-subtle) !important;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
   overflow: hidden !important;
   margin: 12px 12px 12px 0 !important;
@@ -30,66 +16,66 @@
 
 .preview-header {
   background: rgba(255, 255, 255, 0.02) !important;
-  border-bottom: 1px solid var(--pro-border) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
   padding: 8px 12px !important;
   height: auto !important;
   min-height: 48px !important;
 }
 
 .preview-port-btn {
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
-  color: var(--pro-text) !important;
-  border-radius: var(--pro-radius-md) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .preview-port-btn:hover {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   border-color: rgba(255, 255, 255, 0.2) !important;
 }
 
 .preview-url-input {
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-border) !important;
+  border: 1px solid var(--border-subtle) !important;
   color: #fff !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
   padding: 6px 12px !important;
 }
 
 .preview-url-input:focus {
-  border-color: var(--pro-accent) !important;
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.2) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .preview-action-btn {
   background: transparent !important;
   border: 1px solid transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border-radius: 6px !important;
   transition: all 0.2s ease !important;
 }
 
 .preview-action-btn:hover:not(:disabled) {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
 }
 
 .preview-action-btn.active {
-  color: var(--pro-accent) !important;
-  background: rgba(0, 229, 255, 0.1) !important;
+  color: var(--accent-primary) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
 }
 
 .preview-layout-presets {
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-md) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
   padding: 2px !important;
 }
 
 .preview-layout-chip {
   background: transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border-radius: 4px !important;
   padding: 4px 10px !important;
   font-weight: 500 !important;
@@ -101,13 +87,13 @@
 }
 
 .preview-layout-chip.active {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
   box-shadow: 0 1px 4px rgba(0,0,0,0.5) !important;
 }
 
 .preview-close-btn {
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
 }
 
 .preview-close-btn:hover {
@@ -120,48 +106,48 @@
    =========================================== */
 
 .notes-v2 {
-  background: var(--pro-bg) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-lg) !important;
-  box-shadow: var(--pro-shadow) !important;
+  background: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-xl) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .notes-v2-sidebar {
-  background: var(--pro-surface) !important;
-  border-right: 1px solid var(--pro-border) !important;
+  background: var(--bg-surface) !important;
+  border-right: 1px solid var(--border-subtle) !important;
 }
 
 .notes-v2-sidebar-header {
-  border-bottom: 1px solid var(--pro-border) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
   padding: 12px !important;
   background: rgba(255, 255, 255, 0.02) !important;
 }
 
 .notes-v2-search {
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-border) !important;
+  border: 1px solid var(--border-subtle) !important;
   color: #fff !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .notes-v2-search:focus {
-  border-color: var(--pro-accent) !important;
+  border-color: var(--accent-primary) !important;
 }
 
 .notes-v2-new-btn {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   color: #000 !important;
   border: none !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .notes-v2-new-btn:hover {
-  background: #00b8cc !important;
+  background: var(--accent-primary-hover) !important;
   transform: translateY(-1px) !important;
 }
 
 .notes-v2-main {
-  background: var(--pro-bg) !important;
+  background: var(--bg-base) !important;
 }
 
 .notes-v2-empty-state {
@@ -175,26 +161,26 @@
 }
 
 .notes-v2-create-btn {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   color: #000 !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
   font-weight: 600 !important;
   border: none !important;
 }
 
 .notes-v2-create-btn:hover {
-  background: #00b8cc !important;
+  background: var(--accent-primary-hover) !important;
 }
 
 .notes-v2-close {
-  color: var(--pro-muted) !important;
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
+  color: var(--text-muted) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
 }
 
 .notes-v2-close:hover {
   color: #fff !important;
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
 }
 
 /* ===========================================
@@ -202,15 +188,15 @@
    =========================================== */
 
 .bookmark-modal {
-  background: var(--pro-bg) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-lg) !important;
-  box-shadow: var(--pro-shadow) !important;
+  background: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-xl) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .bookmark-modal-header {
   background: rgba(255, 255, 255, 0.02) !important;
-  border-bottom: 1px solid var(--pro-border) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
 }
 
 .bookmark-modal-title h2 {
@@ -218,73 +204,73 @@
 }
 
 .bookmark-modal-title svg {
-  color: var(--pro-accent) !important;
+  color: var(--accent-primary) !important;
 }
 
 .modal-close {
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   background: transparent !important;
   border: 1px solid transparent !important;
   border-radius: 6px !important;
 }
 
 .modal-close:hover {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
 }
 
 .bookmark-modal-search {
-  border-bottom: 1px solid var(--pro-border) !important;
-  background: var(--pro-surface) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface) !important;
 }
 
 .bookmark-modal-search input {
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-border) !important;
+  border: 1px solid var(--border-subtle) !important;
   color: #fff !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .bookmark-modal-search input:focus {
-  border-color: var(--pro-accent) !important;
+  border-color: var(--accent-primary) !important;
 }
 
 .bookmark-categories {
-  background: var(--pro-surface) !important;
-  border-right: 1px solid var(--pro-border) !important;
+  background: var(--bg-surface) !important;
+  border-right: 1px solid var(--border-subtle) !important;
 }
 
 .bookmark-category-item {
-  color: var(--pro-text) !important;
+  color: var(--text-primary) !important;
   border-radius: 6px !important;
 }
 
 .bookmark-category-item:hover {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
 }
 
 .bookmark-category-item.active {
-  background: rgba(0, 229, 255, 0.1) !important;
-  color: var(--pro-accent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  color: var(--accent-primary) !important;
 }
 
 .bookmark-count {
   background: rgba(255, 255, 255, 0.1) !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
 }
 
 .bookmark-category-item.active .bookmark-count {
-  background: rgba(0, 229, 255, 0.2) !important;
-  color: var(--pro-accent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  color: var(--accent-primary) !important;
 }
 
 .bookmark-list-pane {
-  background: var(--pro-bg) !important;
+  background: var(--bg-base) !important;
 }
 
 .bookmark-list-header {
-  border-bottom: 1px solid var(--pro-border) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
   background: rgba(255, 255, 255, 0.01) !important;
 }
 
@@ -293,38 +279,38 @@
 }
 
 .bookmark-add-btn {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   color: #000 !important;
-  border-radius: var(--pro-radius-md) !important;
+  border-radius: var(--radius-md) !important;
   border: none !important;
   font-weight: 600 !important;
 }
 
 .bookmark-add-btn:hover {
-  background: #00b8cc !important;
+  background: var(--accent-primary-hover) !important;
 }
 
 .bookmark-item {
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-md) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
   transition: all 0.2s ease !important;
 }
 
 .bookmark-item:hover {
   border-color: rgba(255, 255, 255, 0.2) !important;
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
 }
 
 .bookmark-execute-btn {
-  background: rgba(0, 229, 255, 0.1) !important;
-  color: var(--pro-accent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  color: var(--accent-primary) !important;
   border-radius: 6px !important;
-  border: 1px solid rgba(0, 229, 255, 0.2) !important;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .bookmark-execute-btn:hover {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   color: #000 !important;
 }
 
@@ -333,30 +319,30 @@
 }
 
 .bookmark-command {
-  color: var(--pro-muted) !important;
-  font-family: var(--pro-font-mono, monospace) !important;
+  color: var(--text-muted) !important;
+  font-family: var(--font-mono) !important;
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-border) !important;
+  border: 1px solid var(--border-subtle) !important;
   border-radius: 4px !important;
 }
 
 .bookmark-category-badge {
-  background: var(--pro-border) !important;
-  color: var(--pro-text) !important;
+  background: var(--border-subtle) !important;
+  color: var(--text-primary) !important;
   border-radius: 4px !important;
 }
 
 .bookmark-edit-btn, .bookmark-delete-btn {
   background: transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border: 1px solid transparent !important;
   border-radius: 4px !important;
 }
 
 .bookmark-edit-btn:hover {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
 }
 
 .bookmark-delete-btn:hover {
@@ -376,16 +362,16 @@
 }
 
 .status-composer-shell {
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-lg) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-xl) !important;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.02) !important;
   transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 
 .status-composer-shell:focus-within {
-  border-color: var(--pro-accent) !important;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 229, 255, 0.2) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .status-composer-input {
@@ -398,103 +384,103 @@
 }
 
 .status-bar-right {
-  border-top-color: var(--pro-border) !important;
+  border-top-color: var(--border-subtle) !important;
   padding-top: 8px !important;
 }
 
 .desktop-status-bar-shell.pane-active .status-composer-shell {
-  background: var(--pro-bg) !important;
-  border-color: rgba(0, 229, 255, 0.3) !important;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 229, 255, 0.1) !important;
+  background: var(--bg-base) !important;
+  border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
 }
 
 .desktop-status-bar-shell.pane-active .status-bar-right {
-  background: rgba(0, 229, 255, 0.05) !important;
-  border-top-color: rgba(0, 229, 255, 0.1) !important;
-  border-radius: var(--pro-radius-md) !important;
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent) !important;
+  border-top-color: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .status-bar-btn {
   background: transparent !important;
   border: 1px solid transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border-radius: 6px !important;
 }
 
 .status-bar-btn:hover {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
 }
 
 .status-ai-selector {
-  background: var(--pro-bg) !important;
-  border: 1px solid var(--pro-border) !important;
-  color: var(--pro-text) !important;
-  border-radius: var(--pro-radius-md) !important;
+  background: var(--bg-base) !important;
+  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-primary) !important;
+  border-radius: var(--radius-md) !important;
 }
 
 .status-ai-selector:hover,
 .status-ai-selector.active {
-  border-color: var(--pro-accent) !important;
-  color: var(--pro-accent) !important;
-  background: rgba(0, 229, 255, 0.1) !important;
+  border-color: var(--accent-primary) !important;
+  color: var(--accent-primary) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
 }
 
 .desktop-status-bar-shell.pane-active .status-ai-selector,
 .desktop-status-bar-shell.pane-active .status-bar-btn {
-  border-color: rgba(0, 229, 255, 0.2) !important;
-  background: rgba(0, 229, 255, 0.05) !important;
-  color: var(--pro-text) !important;
+  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent) !important;
+  color: var(--text-primary) !important;
 }
 
 .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
 .desktop-status-bar-shell.pane-active .status-bar-btn:hover {
-  border-color: var(--pro-accent) !important;
-  background: rgba(0, 229, 255, 0.15) !important;
+  border-color: var(--accent-primary) !important;
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
   color: #fff !important;
 }
 
 .status-send-btn {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   border: none !important;
   color: #000 !important;
-  box-shadow: 0 4px 12px rgba(0, 229, 255, 0.2) !important;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .status-send-btn:hover:not(:disabled) {
-  background: #00b8cc !important;
+  background: var(--accent-primary-hover) !important;
   transform: translateY(-1px) !important;
-  box-shadow: 0 6px 16px rgba(0, 229, 255, 0.3) !important;
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
 }
 
 .status-send-btn:disabled {
-  background: var(--pro-border) !important;
-  color: var(--pro-muted) !important;
+  background: var(--border-subtle) !important;
+  color: var(--text-muted) !important;
   box-shadow: none !important;
   border: 1px solid rgba(255, 255, 255, 0.05) !important;
 }
 
 .status-ai-menu {
-  background: var(--pro-surface) !important;
-  border: 1px solid var(--pro-border) !important;
-  border-radius: var(--pro-radius-md) !important;
-  box-shadow: var(--pro-shadow) !important;
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
 }
 
 .status-ai-menu-item {
-  color: var(--pro-text) !important;
+  color: var(--text-primary) !important;
   border-radius: 6px !important;
 }
 
 .status-ai-menu-item:hover,
 .status-ai-menu-item.selected {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
 }
 
 .status-ai-menu-add {
-  border-top-color: var(--pro-border) !important;
+  border-top-color: var(--border-subtle) !important;
 }
 
 /* ===========================================
@@ -503,42 +489,42 @@
 
 /* Header */
 .mobile-shell-header {
-  background: var(--pro-bg) !important;
-  border-bottom: 1px solid var(--pro-border) !important;
+  background: var(--bg-base) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
 }
 
 .mobile-shell-btn {
   background: transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border: 1px solid transparent !important;
 }
 
 .mobile-shell-btn:hover, .mobile-shell-btn.active {
-  background: var(--pro-hover) !important;
+  background: var(--bg-hover) !important;
   color: #fff !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
 }
 
 /* Shell / Stage */
 .mobile-shell-parity {
-  background: var(--pro-bg) !important;
+  background: var(--bg-base) !important;
 }
 
 .mobile-shell-session-strip {
-  background: var(--pro-surface) !important;
-  border-bottom: 1px solid var(--pro-border) !important;
+  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
 }
 
 .mobile-shell-session-card {
   background: transparent !important;
-  color: var(--pro-muted) !important;
+  color: var(--text-muted) !important;
   border: 1px solid transparent !important;
 }
 
 .mobile-shell-session-card.active {
-  background: rgba(0, 229, 255, 0.1) !important;
-  color: var(--pro-accent) !important;
-  border-color: rgba(0, 229, 255, 0.2) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  color: var(--accent-primary) !important;
+  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .mobile-shell-session-title {
@@ -547,16 +533,16 @@
 
 /* Mobile Terminal Runtime */
 .mobile-terminal-runtime {
-  background: var(--pro-bg) !important;
-  border-top: 1px solid var(--pro-border) !important;
+  background: var(--bg-base) !important;
+  border-top: 1px solid var(--border-subtle) !important;
 }
 
 /* Mobile Composer (Overrides DesktopStatusBar on Mobile) */
 .mobile-shell .desktop-status-bar-shell {
   min-height: auto !important;
   padding: 8px 12px 10px !important;
-  border-top: 1px solid var(--pro-border) !important;
-  background: var(--pro-surface) !important;
+  border-top: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface) !important;
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.8) !important;
   gap: 6px !important;
 }
@@ -566,7 +552,7 @@
   gap: 8px !important;
   min-height: auto !important;
   box-shadow: none !important;
-  border-color: var(--pro-border) !important;
+  border-color: var(--border-subtle) !important;
   border-radius: 12px !important;
 }
 
@@ -592,28 +578,28 @@
 
 /* Keybar (Composer attached to keyboard) */
 .mobile-keybar-composer {
-  background: var(--pro-surface) !important;
-  border-top: 1px solid var(--pro-border) !important;
+  background: var(--bg-surface) !important;
+  border-top: 1px solid var(--border-subtle) !important;
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.8) !important;
 }
 
 .mobile-composer-input {
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-border) !important;
+  border: 1px solid var(--border-subtle) !important;
   color: #fff !important;
 }
 
 .mobile-composer-input:focus {
-  border-color: var(--pro-accent) !important;
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.2) !important;
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
 }
 
 .mobile-composer-send {
-  background: var(--pro-accent) !important;
+  background: var(--accent-primary) !important;
   color: #000 !important;
 }
 
 .mobile-composer-send:disabled {
-  background: var(--pro-border) !important;
-  color: var(--pro-muted) !important;
+  background: var(--border-subtle) !important;
+  color: var(--text-muted) !important;
 }

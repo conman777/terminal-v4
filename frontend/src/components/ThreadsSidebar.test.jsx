@@ -187,11 +187,12 @@ describe('ThreadsSidebar', () => {
     expect(downloadProjectArchiveMock).toHaveBeenCalledWith('C:\\repo');
   });
 
-  it('uses the sidebar palette tokens defined in the stylesheet', () => {
+  it('consumes canonical palette tokens from the shared stylesheet', () => {
     render(<ThreadsSidebar {...buildProps()} />);
 
-    expect(sidebarCss).toContain('var(--pro-sidebar-bg)');
-    expect(sidebarCss).toContain('var(--pro-sidebar-text)');
-    expect(sidebarCss).toContain('var(--pro-sidebar-muted)');
+    expect(sidebarCss).toContain('var(--bg-base)');
+    expect(sidebarCss).toContain('var(--text-primary)');
+    expect(sidebarCss).toContain('var(--text-muted)');
+    expect(sidebarCss).not.toContain('--pro-sidebar-');
   });
 });

@@ -1,29 +1,19 @@
 /* frontend/src/components/ThreadsSidebar.css */
-
-:root {
-  --pro-sidebar-bg: #050505;
-  --pro-sidebar-border: #1a1a1a;
-  --pro-sidebar-hover: #141414;
-  --pro-sidebar-active: #222222;
-  --pro-sidebar-accent: #00e5ff;
-  --pro-sidebar-text: #e0e0e0;
-  --pro-sidebar-muted: #888888;
-  --pro-font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-}
+/* Consumes canonical tokens from styles.css (--bg-base, --accent-primary, --text-primary, etc.) */
 
 /* ── Container ── */
 .pro-sidebar {
   width: 280px;
   height: 100%;
-  background: var(--pro-sidebar-bg);
-  border-right: 1px solid var(--pro-sidebar-border);
+  background: var(--bg-base);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   transition: width 0.2s ease;
   flex-shrink: 0;
   z-index: 50;
   overflow: hidden;
-  color: var(--pro-sidebar-text);
+  color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -38,7 +28,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
-  border-bottom: 1px solid var(--pro-sidebar-border);
+  border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
@@ -51,11 +41,11 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--pro-sidebar-accent);
+  color: var(--accent-primary);
 }
 
 .pro-sidebar-brand span {
-  font-family: var(--pro-font-mono);
+  font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -71,7 +61,7 @@
   justify-content: center;
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -79,13 +69,13 @@
 }
 
 .pro-icon-btn:hover {
-  background: var(--pro-sidebar-hover);
+  background: var(--bg-hover);
   color: #fff;
 }
 
 .pro-icon-btn.active {
-  color: var(--pro-sidebar-accent);
-  background: rgba(0, 229, 255, 0.1);
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 /* ── Toolbar ── */
@@ -94,16 +84,16 @@
   align-items: center;
   padding: 8px 12px;
   gap: 4px;
-  border-bottom: 1px solid var(--pro-sidebar-border);
-  background: #0a0a0a;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .pro-toolbar-btn {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--pro-sidebar-hover);
-  border: 1px solid var(--pro-sidebar-border);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
   color: #fff;
   border-radius: 6px;
   padding: 4px 10px;
@@ -114,18 +104,18 @@
 }
 
 .pro-toolbar-btn:hover {
-  background: var(--pro-sidebar-active);
+  background: var(--bg-active);
   border-color: #333;
 }
 
 .pro-toolbar-btn svg {
-  color: var(--pro-sidebar-accent);
+  color: var(--accent-primary);
 }
 
 .pro-toolbar-divider {
   width: 1px;
   height: 16px;
-  background: var(--pro-sidebar-border);
+  background: var(--border-subtle);
   margin: 0 4px;
 }
 
@@ -135,7 +125,7 @@
   overflow-y: auto;
   padding: 8px 0;
   scrollbar-width: thin;
-  scrollbar-color: var(--pro-sidebar-hover) transparent;
+  scrollbar-color: var(--bg-hover) transparent;
 }
 
 .pro-sidebar-tree::-webkit-scrollbar {
@@ -143,7 +133,7 @@
 }
 
 .pro-sidebar-tree::-webkit-scrollbar-thumb {
-  background: var(--pro-sidebar-hover);
+  background: var(--bg-hover);
 }
 
 .pro-tree-section {
@@ -157,7 +147,7 @@
   padding: 4px 16px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   letter-spacing: 0.05em;
   margin-bottom: 4px;
 }
@@ -173,7 +163,7 @@
 .pro-add-project-icon {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 0;
   display: flex;
@@ -187,7 +177,7 @@
 .pro-empty-state {
   padding: 8px 16px;
   font-size: 12px;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   font-style: italic;
 }
 
@@ -201,20 +191,20 @@
   align-items: center;
   padding: 4px 12px;
   cursor: pointer;
-  color: var(--pro-sidebar-text);
+  color: var(--text-primary);
   font-size: 13px;
   font-weight: 500;
 }
 
 .threads-project-header:hover {
-  background: var(--pro-sidebar-hover);
+  background: var(--bg-hover);
 }
 
 .threads-project-chevron {
   display: flex;
   align-items: center;
   margin-right: 4px;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   transition: transform 0.15s ease;
 }
 
@@ -224,7 +214,7 @@
 
 .threads-project-icon {
   margin-right: 6px;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
 }
@@ -237,10 +227,10 @@
 }
 
 .threads-project-count {
-  font-family: var(--pro-font-mono);
+  font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--pro-sidebar-muted);
-  background: var(--pro-sidebar-border);
+  color: var(--text-muted);
+  background: var(--border-subtle);
   padding: 2px 6px;
   border-radius: 10px;
   margin-left: 8px;
@@ -251,7 +241,7 @@
 .threads-project-close-btn {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   cursor: pointer;
   opacity: 0;
   margin-left: 4px;
@@ -281,18 +271,18 @@
   align-items: center;
   padding: 4px 12px 4px 24px;
   cursor: pointer;
-  color: var(--pro-sidebar-text);
+  color: var(--text-primary);
   font-size: 13px;
   border-left: 2px solid transparent;
 }
 
 .threads-session-item:hover {
-  background: var(--pro-sidebar-hover);
+  background: var(--bg-hover);
 }
 
 .threads-session-item.active {
-  background: var(--pro-sidebar-active);
-  border-left-color: var(--pro-sidebar-accent);
+  background: var(--bg-active);
+  border-left-color: var(--accent-primary);
   color: #fff;
 }
 
@@ -322,25 +312,29 @@
   align-items: center;
 }
 
+.threads-session-indicator.busy {
+  color: var(--accent-primary);
+}
+
 .threads-session-ready-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--pro-sidebar-accent);
+  background: var(--accent-primary);
 }
 
 .threads-session-sandbox-badge {
-  font-family: var(--pro-font-mono);
+  font-family: var(--font-mono);
   font-size: 9px;
-  background: rgba(0, 229, 255, 0.1);
-  color: var(--pro-sidebar-accent);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--accent-primary);
   padding: 2px 4px;
   border-radius: 4px;
 }
 
 .threads-session-edit {
   background: #000;
-  border: 1px solid var(--pro-sidebar-accent);
+  border: 1px solid var(--accent-primary);
   color: #fff;
   font-size: 13px;
   padding: 2px 4px;
@@ -354,9 +348,9 @@
 }
 
 .threads-session-time {
-  font-family: var(--pro-font-mono);
+  font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
 }
 
 .threads-session-actions {
@@ -368,7 +362,7 @@
 .threads-action-btn {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted);
+  color: var(--text-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -380,7 +374,7 @@
 }
 
 .threads-action-btn.active {
-  color: var(--pro-sidebar-accent);
+  color: var(--accent-primary);
 }
 
 /* ── Footer ── */
@@ -389,8 +383,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 8px 12px;
-  border-top: 1px solid var(--pro-sidebar-border);
-  background: #0a0a0a;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .pro-footer-item {
@@ -399,7 +393,7 @@
   gap: 8px;
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-text);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;

@@ -1,16 +1,5 @@
 /* frontend/src/components/LoginPage.css */
-:root {
-  --pro-bg: #050505;
-  --pro-surface: rgba(20, 20, 20, 0.7);
-  --pro-border: rgba(255, 255, 255, 0.1);
-  --pro-accent: #00e5ff;
-  --pro-accent-hover: #00b8cc;
-  --pro-text: #e0e0e0;
-  --pro-text-muted: #888888;
-  --pro-error: #ff4d4f;
-  --pro-error-bg: rgba(255, 77, 79, 0.1);
-  --pro-font-mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-}
+/* Consumes canonical tokens from styles.css — login page uses surface-glass for the split card. */
 
 .pro-login-wrapper {
   min-height: 100vh;
@@ -18,12 +7,12 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: var(--pro-bg);
+  background-color: var(--bg-base);
   background-image: 
-    radial-gradient(circle at 15% 50%, rgba(0, 229, 255, 0.05), transparent 25%),
-    radial-gradient(circle at 85% 30%, rgba(0, 229, 255, 0.03), transparent 25%);
+    radial-gradient(circle at 15% 50%, color-mix(in srgb, var(--accent-primary) 5%, transparent), transparent 25%),
+    radial-gradient(circle at 85% 30%, color-mix(in srgb, var(--accent-primary) 3%, transparent), transparent 25%);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--pro-text);
+  color: var(--text-primary);
   padding:
     calc(2rem + env(safe-area-inset-top, 0px))
     calc(2rem + env(safe-area-inset-right, 0px))
@@ -42,8 +31,8 @@
   display: flex;
   width: 100%;
   max-width: 960px;
-  background: var(--pro-surface);
-  border: 1px solid var(--pro-border);
+  background: var(--surface-glass);
+  border: 1px solid var(--surface-glass-border);
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4), 0 0 0 1px inset rgba(255,255,255,0.05);
@@ -54,7 +43,7 @@
   flex: 1;
   padding: 4rem 3rem;
   background: rgba(10, 10, 10, 0.5);
-  border-right: 1px solid var(--pro-border);
+  border-right: 1px solid var(--surface-glass-border);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -72,10 +61,10 @@
 }
 
 .pro-logo {
-  color: var(--pro-accent);
+  color: var(--accent-primary);
   width: 32px;
   height: 32px;
-  filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.4));
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent-primary) 40%, transparent));
 }
 
 .pro-logo-text {
@@ -97,7 +86,7 @@
 
 .pro-brand-subtitle {
   font-size: 1.125rem;
-  color: var(--pro-text-muted);
+  color: var(--text-muted);
   line-height: 1.5;
   margin: 0;
 }
@@ -115,16 +104,16 @@
 }
 
 .pro-feature-title {
-  font-family: var(--pro-font-mono);
+  font-family: var(--font-mono);
   font-size: 0.875rem;
-  color: var(--pro-accent);
+  color: var(--accent-primary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .pro-feature-desc {
   font-size: 0.9375rem;
-  color: var(--pro-text-muted);
+  color: var(--text-muted);
 }
 
 .pro-login-form-wrapper {
@@ -149,14 +138,14 @@
 }
 
 .pro-form-subtitle {
-  color: var(--pro-text-muted);
+  color: var(--text-muted);
   font-size: 0.9375rem;
   margin: 0;
 }
 
 .pro-error {
-  background: var(--pro-error-bg);
-  color: var(--pro-error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error);
   padding: 1rem;
   border-radius: 8px;
   border: 1px solid rgba(255, 77, 79, 0.2);
@@ -187,7 +176,7 @@
 
 .pro-input {
   background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--pro-border);
+  border: 1px solid var(--surface-glass-border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   color: #fff;
@@ -199,8 +188,8 @@
 }
 
 .pro-input:focus {
-  border-color: var(--pro-accent);
-  box-shadow: 0 0 0 2px rgba(0, 229, 255, 0.1);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 10%, transparent);
   background: rgba(0, 0, 0, 0.4);
 }
 
@@ -214,7 +203,7 @@
 }
 
 .pro-submit-btn {
-  background: var(--pro-accent);
+  background: var(--accent-primary);
   color: #000;
   border: none;
   border-radius: 8px;
@@ -228,7 +217,7 @@
 }
 
 .pro-submit-btn:hover:not(:disabled) {
-  background: var(--pro-accent-hover);
+  background: var(--accent-primary-hover);
   transform: translateY(-1px);
 }
 
@@ -245,7 +234,7 @@
   display: flex;
   align-items: center;
   text-align: center;
-  color: var(--pro-text-muted);
+  color: var(--text-muted);
   font-size: 0.875rem;
   margin: 1.5rem 0;
 }
@@ -254,7 +243,7 @@
 .pro-divider::after {
   content: '';
   flex: 1;
-  border-bottom: 1px solid var(--pro-border);
+  border-bottom: 1px solid var(--surface-glass-border);
 }
 
 .pro-divider::before {
@@ -268,7 +257,7 @@
 .pro-passkey-btn {
   background: transparent;
   color: #fff;
-  border: 1px solid var(--pro-border);
+  border: 1px solid var(--surface-glass-border);
   border-radius: 8px;
   padding: 0.875rem;
   font-size: 0.9375rem;
@@ -297,15 +286,15 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--pro-accent);
-  box-shadow: 0 0 8px var(--pro-accent);
+  background: var(--accent-primary);
+  box-shadow: 0 0 8px var(--accent-primary);
   animation: pro-pulse 2s infinite;
 }
 
 @keyframes pro-pulse {
-  0% { opacity: 1; box-shadow: 0 0 8px var(--pro-accent); }
-  50% { opacity: 0.5; box-shadow: 0 0 2px var(--pro-accent); }
-  100% { opacity: 1; box-shadow: 0 0 8px var(--pro-accent); }
+  0% { opacity: 1; box-shadow: 0 0 8px var(--accent-primary); }
+  50% { opacity: 0.5; box-shadow: 0 0 2px var(--accent-primary); }
+  100% { opacity: 1; box-shadow: 0 0 8px var(--accent-primary); }
 }
 
 @media (max-width: 768px) {
@@ -329,7 +318,7 @@
   .pro-login-brand {
     padding: 1.5rem;
     border-right: none;
-    border-bottom: 1px solid var(--pro-border);
+    border-bottom: 1px solid var(--surface-glass-border);
   }
 
   .pro-brand-title {

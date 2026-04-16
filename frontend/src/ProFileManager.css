@@ -6,15 +6,15 @@
   right: 24px;
   width: 360px;
   max-height: calc(100vh - 100px);
-  background: var(--pro-sidebar-bg, #050505);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 16px;
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   display: flex;
   flex-direction: column;
   z-index: 1000;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   overflow: hidden;
   backdrop-filter: blur(24px);
   animation: pro-fm-slide-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -30,7 +30,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border-bottom: 1px solid var(--border-subtle);
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -45,7 +45,7 @@
 .pro-file-manager .file-manager-close {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   font-size: 18px;
   line-height: 1;
   padding: 4px;
@@ -69,7 +69,7 @@
   align-items: center;
   padding: 8px 12px;
   background: rgba(0, 0, 0, 0.2);
-  border-bottom: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border-bottom: 1px solid var(--border-subtle);
   overflow-x: auto;
   scrollbar-width: none;
   gap: 4px;
@@ -82,7 +82,7 @@
 .pro-file-manager .breadcrumb-item {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
   padding: 4px 6px;
@@ -93,12 +93,12 @@
 }
 
 .pro-file-manager .breadcrumb-item:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
 .pro-file-manager .breadcrumb-separator {
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   font-size: 10px;
 }
 
@@ -107,8 +107,8 @@
   align-items: center;
   padding: 8px 12px;
   gap: 4px;
-  border-bottom: 1px solid var(--pro-sidebar-border, #1a1a1a);
-  background: #0a0a0a;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .pro-file-manager .file-manager-toolbar button {
@@ -120,14 +120,14 @@
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   cursor: pointer;
   transition: all 0.2s ease;
   font-size: 14px;
 }
 
 .pro-file-manager .file-manager-toolbar button:hover:not(:disabled) {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
@@ -138,7 +138,7 @@
 
 .pro-file-manager .file-manager-toolbar input[type="text"] {
   background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a) !important;
+  border: 1px solid var(--border-subtle) !important;
   color: #fff !important;
   font-size: 12px;
   border-radius: 6px !important;
@@ -148,8 +148,8 @@
 }
 
 .pro-file-manager .file-manager-toolbar input[type="text"]:focus {
-  border-color: var(--pro-sidebar-accent, #00e5ff) !important;
-  box-shadow: 0 0 0 1px rgba(0, 229, 255, 0.2);
+  border-color: var(--accent-primary) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .pro-file-manager .file-manager-list {
@@ -162,7 +162,7 @@
   position: relative;
   min-height: 200px;
   scrollbar-width: thin;
-  scrollbar-color: var(--pro-sidebar-hover, #141414) transparent;
+  scrollbar-color: var(--bg-hover) transparent;
 }
 
 .pro-file-manager .file-manager-list::-webkit-scrollbar {
@@ -170,7 +170,7 @@
 }
 
 .pro-file-manager .file-manager-list::-webkit-scrollbar-thumb {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   border-radius: 4px;
 }
 
@@ -181,11 +181,11 @@
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.15s ease;
-  color: var(--pro-sidebar-text, #e0e0e0);
+  color: var(--text-primary);
 }
 
 .pro-file-manager .file-item:hover {
-  background: var(--pro-sidebar-hover, #141414);
+  background: var(--bg-hover);
   color: #fff;
 }
 
@@ -208,9 +208,9 @@
 }
 
 .pro-file-manager .file-size {
-  font-family: var(--pro-font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   margin-right: 8px;
 }
 
@@ -228,7 +228,7 @@
 .pro-file-manager .file-actions button {
   background: transparent;
   border: none;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   width: 24px;
   height: 24px;
   border-radius: 4px;
@@ -249,14 +249,14 @@
   padding: 32px;
   text-align: center;
   font-size: 12px;
-  color: var(--pro-sidebar-muted, #888);
+  color: var(--text-muted);
   font-style: italic;
 }
 
 .pro-file-manager .file-manager-dialog {
   padding: 12px;
   background: rgba(0, 0, 0, 0.3);
-  border-bottom: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   gap: 8px;
 }
@@ -264,7 +264,7 @@
 .pro-file-manager .file-manager-dialog input {
   flex: 1;
   background: rgba(0, 0, 0, 0.4);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  border: 1px solid var(--border-subtle);
   color: #fff;
   border-radius: 6px;
   padding: 6px 10px;
@@ -273,12 +273,12 @@
 }
 
 .pro-file-manager .file-manager-dialog input:focus {
-  border-color: var(--pro-sidebar-accent, #00e5ff);
+  border-color: var(--accent-primary);
 }
 
 .pro-file-manager .file-manager-dialog button {
-  background: var(--pro-sidebar-hover, #141414);
-  border: 1px solid var(--pro-sidebar-border, #1a1a1a);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
   color: #fff;
   border-radius: 6px;
   padding: 6px 12px;
@@ -288,13 +288,13 @@
 }
 
 .pro-file-manager .file-manager-dialog button:first-of-type {
-  background: var(--pro-sidebar-accent, #00e5ff);
+  background: var(--accent-primary);
   color: #000;
   border-color: transparent;
 }
 
 .pro-file-manager .file-manager-dialog button:first-of-type:hover {
-  background: #00b8cc;
+  background: var(--accent-primary-hover);
 }
 
 @media (max-width: 768px) {

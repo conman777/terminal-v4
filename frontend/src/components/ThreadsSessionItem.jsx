@@ -195,7 +195,7 @@ export default function ThreadsSessionItem({
           {resolvedIsBusy ? (
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-              <path d="M14 8a6 6 0 0 0-6-6" stroke="#00e5ff" strokeWidth="2" strokeLinecap="round" />
+              <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           ) : (
             <span className="threads-session-ready-dot" aria-hidden="true" />
