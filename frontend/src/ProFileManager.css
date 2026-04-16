@@ -149,7 +149,7 @@
 
 .pro-file-manager .file-manager-toolbar input[type="text"]:focus {
   border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .pro-file-manager .file-manager-list {
@@ -274,6 +274,7 @@
 
 .pro-file-manager .file-manager-dialog input:focus {
   border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .pro-file-manager .file-manager-dialog button {

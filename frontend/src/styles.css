@@ -1958,7 +1958,7 @@ button {
 
 .terminal-input input:focus {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-primary-dim);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .terminal-input button {
@@ -2203,7 +2203,7 @@ button {
 .terminal-history-textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 1px var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 @media (max-width: 768px) {
@@ -2342,7 +2342,7 @@ button {
 
 .form-group input:focus {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-primary-dim);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .form-group small {
@@ -2588,7 +2588,7 @@ button {
 
 .bookmark-modal-search input:focus {
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .bookmark-modal-body {

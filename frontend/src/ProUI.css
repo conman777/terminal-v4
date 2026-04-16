@@ -44,7 +44,7 @@
 
 .preview-url-input:focus {
   border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
 }
 
 .preview-action-btn {
@@ -543,7 +543,7 @@
 
 .mobile-composer-input:focus {
   border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
 }
 
 /* .mobile-composer-send visual rules unified in styles.css (.btn-primary group) */
