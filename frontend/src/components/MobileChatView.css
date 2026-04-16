@@ -10,46 +10,55 @@
   background: var(--chat-bg, #f0f0f0);
 }
 
+/* Mobile chat consumes canonical surface/text/border tokens so it tracks
+   theme changes. The violet user bubble and warm orange avatar stay as
+   brand tokens — they are intentionally distinct from the cyan accent. */
+.mobile-chat-view {
+  --chat-brand-user: #6c47ff;
+  --chat-brand-user-disabled: color-mix(in srgb, var(--chat-brand-user) 45%, var(--bg-elevated));
+  --chat-brand-avatar: #ff6b2b;
+}
+
 .mobile-chat-view.dark {
-  --chat-bg: #1a1a1a;
-  --chat-bubble-assistant-bg: #2a2a2a;
-  --chat-bubble-assistant-color: #e8e8e8;
-  --chat-bubble-user-bg: #6c47ff;
+  --chat-bg: var(--bg-surface);
+  --chat-bubble-assistant-bg: var(--bg-elevated);
+  --chat-bubble-assistant-color: var(--text-primary);
+  --chat-bubble-user-bg: var(--chat-brand-user);
   --chat-bubble-user-color: #ffffff;
-  --chat-timestamp-color: #888;
-  --chat-input-bg: #2a2a2a;
-  --chat-input-color: #e8e8e8;
-  --chat-input-placeholder: #666;
-  --chat-input-bar-bg: #1a1a1a;
-  --chat-input-border: #3a3a3a;
-  --chat-avatar-bg: #ff6b2b;
-  --chat-avatar-color: #fff;
-  --chat-code-bg: #1e1e1e;
-  --chat-code-color: #d4d4d4;
-  --chat-inline-code-bg: #333;
-  --chat-send-btn-color: #6c47ff;
-  --chat-send-btn-disabled: #444;
+  --chat-timestamp-color: var(--text-muted);
+  --chat-input-bg: var(--bg-elevated);
+  --chat-input-color: var(--text-primary);
+  --chat-input-placeholder: var(--text-muted);
+  --chat-input-bar-bg: var(--bg-surface);
+  --chat-input-border: var(--border-subtle);
+  --chat-avatar-bg: var(--chat-brand-avatar);
+  --chat-avatar-color: #ffffff;
+  --chat-code-bg: var(--bg-base);
+  --chat-code-color: var(--text-primary);
+  --chat-inline-code-bg: var(--bg-hover);
+  --chat-send-btn-color: var(--chat-brand-user);
+  --chat-send-btn-disabled: var(--chat-brand-user-disabled);
 }
 
 .mobile-chat-view:not(.dark) {
-  --chat-bg: #f0f0f0;
-  --chat-bubble-assistant-bg: #ffffff;
-  --chat-bubble-assistant-color: #1a1a1a;
-  --chat-bubble-user-bg: #6c47ff;
+  --chat-bg: var(--bg-surface);
+  --chat-bubble-assistant-bg: var(--bg-base);
+  --chat-bubble-assistant-color: var(--text-primary);
+  --chat-bubble-user-bg: var(--chat-brand-user);
   --chat-bubble-user-color: #ffffff;
-  --chat-timestamp-color: #999;
-  --chat-input-bg: #ffffff;
-  --chat-input-color: #1a1a1a;
-  --chat-input-placeholder: #aaa;
-  --chat-input-bar-bg: #f8f8f8;
-  --chat-input-border: #e0e0e0;
-  --chat-avatar-bg: #ff6b2b;
-  --chat-avatar-color: #fff;
-  --chat-code-bg: #f5f5f5;
-  --chat-code-color: #333;
-  --chat-inline-code-bg: #eee;
-  --chat-send-btn-color: #6c47ff;
-  --chat-send-btn-disabled: #ccc;
+  --chat-timestamp-color: var(--text-muted);
+  --chat-input-bg: var(--bg-base);
+  --chat-input-color: var(--text-primary);
+  --chat-input-placeholder: var(--text-muted);
+  --chat-input-bar-bg: var(--bg-surface);
+  --chat-input-border: var(--border-subtle);
+  --chat-avatar-bg: var(--chat-brand-avatar);
+  --chat-avatar-color: #ffffff;
+  --chat-code-bg: var(--bg-elevated);
+  --chat-code-color: var(--text-primary);
+  --chat-inline-code-bg: var(--bg-hover);
+  --chat-send-btn-color: var(--chat-brand-user);
+  --chat-send-btn-disabled: var(--chat-brand-user-disabled);
 }
 
 /* ── Message list ── */
@@ -246,8 +255,8 @@
 }
 
 .chat-send-btn {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   background: var(--chat-send-btn-color);
@@ -297,8 +306,8 @@
 
 /* ── Small icon buttons (image upload, interrupt) ── */
 .chat-icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 1px solid var(--chat-input-border);
   background: transparent;
@@ -314,13 +323,13 @@
 .chat-icon-btn:active {
   color: var(--chat-send-btn-color);
   border-color: var(--chat-send-btn-color);
-  background: rgba(108, 71, 255, 0.1);
+  background: color-mix(in srgb, var(--chat-brand-user) 10%, transparent);
 }
 
 .chat-interrupt-btn:active {
-  color: #ef4444;
-  border-color: #ef4444;
-  background: rgba(239, 68, 68, 0.1);
+  color: var(--error);
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
 }
 
 /* ── Scroll-to-bottom button in chat ── */

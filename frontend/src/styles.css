@@ -207,6 +207,20 @@
   transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease, box-shadow 200ms ease !important;
 }
 
+/* Respect the user's OS-level reduce-motion preference. Keeps essential
+   opacity/transform state changes but collapses duration so animations read
+   as instant cuts rather than motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* Reset & Base */
 * {
   box-sizing: border-box;
