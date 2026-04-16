@@ -13,6 +13,7 @@ import { PreviewUrlBar } from './preview/PreviewUrlBar';
 import { PreviewInspector } from './preview/PreviewInspector';
 import { getSessionDisplayInfo } from '../utils/sessionDisplay';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
+import { buildTerminalAttachmentPrefix } from '../utils/mobileTerminalInput';
 
 // Format timestamp for log display
 function formatTime(timestamp) {
@@ -354,11 +355,11 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   const handlePreviewComposerSubmit = useCallback(async (text) => {
     const trimmed = typeof text === 'string' ? text.trim() : '';
-    const attachmentPaths = previewComposerAttachments
+    const attachmentPrefix = buildTerminalAttachmentPrefix(previewComposerAttachments
       .map((attachment) => attachment?.path)
-      .filter((path) => typeof path === 'string' && path.trim());
-    if ((!trimmed && attachmentPaths.length === 0) || !selectedTerminalSession) return;
-    const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
+      .filter((path) => typeof path === 'string' && path.trim()));
+    if ((!trimmed && !attachmentPrefix) || !selectedTerminalSession) return;
+    const payload = [attachmentPrefix, trimmed].filter(Boolean).join(' ').trim();
     if (!payload) return;
     try {
       await apiFetch(`/api/terminal/${selectedTerminalSession}/input`, {

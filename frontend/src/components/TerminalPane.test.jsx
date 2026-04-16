@@ -54,6 +54,7 @@ vi.mock('./DesktopStatusBar', () => ({
       data-testid="desktop-status-bar"
       data-connection-state={props.connectionState}
       data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
+      data-conversation-view={props.isConversationViewEnabled ? 'true' : 'false'}
     >
       <textarea
         aria-label="Command composer"
@@ -61,6 +62,17 @@ vi.mock('./DesktopStatusBar', () => ({
         value={props.composerValue}
         onChange={(event) => props.onComposerChange?.(event.target.value)}
       />
+      {props.showConversationToggle ? (
+        <button
+          type="button"
+          aria-label={props.isConversationViewEnabled
+            ? 'Disable chat view and show the classic terminal layout'
+            : 'Enable chat view'}
+          onClick={() => props.onToggleConversationView?.()}
+        >
+          Chat View
+        </button>
+      ) : null}
       {props.showTerminalToggle ? (
         <button
           type="button"
@@ -142,6 +154,7 @@ describe('TerminalPane', () => {
     listSessionGitBranches.mockReset();
     checkoutSessionGitBranch.mockReset();
     sendToSession.mockReset();
+    window.localStorage.clear();
     lastTerminalChatProps = null;
     lastConversationViewProps = null;
     listSessionGitBranches.mockResolvedValue({ currentBranch: 'main', branches: ['main', 'feature/ui'] });
@@ -228,6 +241,7 @@ describe('TerminalPane', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enable chat view' })).toBeInTheDocument();
     expect(lastTerminalChatProps?.inputEnabled).toBe(false);
   });
 
@@ -236,6 +250,89 @@ describe('TerminalPane', () => {
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+  });
+
+  it('switches terminal-backed AI sessions into the chat-first view when the toggle is enabled', async () => {
+    render(<TerminalPane {...buildProps()} />);
+
+    screen.getByRole('button', { name: 'Enable chat view' }).click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-conversation-view', 'true');
+    expect(window.localStorage.getItem('desktop.aiConversationView.enabled')).toBe('true');
+    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
+  });
+
+  it('restores the chat-first view from local storage while keeping the terminal runtime mounted in the background', async () => {
+    window.localStorage.setItem('desktop.aiConversationView.enabled', 'true');
+
+    render(<TerminalPane {...buildProps()} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show inline terminal panel' })).toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
+  });
+
+  it('opens the inline terminal panel from chat view even when direct terminal input is otherwise disabled', async () => {
+    window.localStorage.setItem('desktop.aiConversationView.enabled', 'true');
+
+    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    screen.getByRole('button', { name: 'Show inline terminal panel' }).click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-open', 'true');
+      expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+    });
+  });
+
+  it('forces the inline terminal dock open when an interactive prompt arrives in chat view', async () => {
+    window.localStorage.setItem('desktop.aiConversationView.enabled', 'true');
+
+    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    lastTerminalChatProps?.onCliEvent?.({
+      type: 'prompt_required',
+      prompt: 'bypass permissions on (shift+tab to cycle)',
+      actions: ['tab', 'shift_tab']
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-open', 'true');
+      expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+      expect(lastConversationViewProps?.isTerminalDockVisible).toBe(true);
+    });
+  });
+
+  it('shows the chat view toggle even when the session has no saved AI metadata', () => {
+    render(<TerminalPane {...buildProps({
+      sessions: [{
+        id: 'session-1',
+        title: 'Terminal session',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { gitStats: null, topic: 'Review code' }
+      }],
+      sessionAiTypes: {}
+    })} />);
+
+    expect(screen.getByRole('button', { name: 'Enable chat view' })).toBeInTheDocument();
   });
 
   it('renders the command composer inside the desktop terminal stack', () => {

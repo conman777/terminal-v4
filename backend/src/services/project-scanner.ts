@@ -28,6 +28,9 @@ interface ScanDirectoryOptions {
 
 function getDefaultScanDirectories(homeDir: string = os.homedir()): string[] {
   return [
+    path.join(homeDir, 'Documents'),
+    path.join(homeDir, 'OneDrive', 'Documents'),
+    path.join(homeDir, 'OneDrive', 'Personal', 'Documents'),
     path.join(homeDir, 'OneDrive', 'Personal', 'Documents', 'coding projects'),
     path.join(homeDir, 'code'),
     path.join(homeDir, 'Code'),

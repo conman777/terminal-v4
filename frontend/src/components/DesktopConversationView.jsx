@@ -8,6 +8,14 @@ function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
 }
 
+function getSnapshotLines(...sources) {
+  return sources
+    .filter((source) => typeof source === 'string' && source.trim())
+    .flatMap((source) => source.split('\n'))
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function mapKeyboardEventToTerminalInput(event) {
   const { key, ctrlKey, altKey, metaKey, shiftKey } = event;
   if (metaKey) return null;
@@ -340,6 +348,98 @@ function extractWorkingDirectory(...sources) {
   return '';
 }
 
+function extractLiveSessionTitle(lines, aiType) {
+  if (!Array.isArray(lines) || lines.length === 0) return '';
+
+  if (aiType === 'claude') {
+    return lines.find((line) => /\bClaude Code v[^\s]+/i.test(line)) || '';
+  }
+  if (aiType === 'codex') {
+    return lines.find((line) => /\bOpenAI Codex\b/i.test(line)) || '';
+  }
+  if (aiType === 'gemini') {
+    return lines.find((line) => /\bGemini CLI\b/i.test(line)) || '';
+  }
+
+  return lines.find((line) => /\b(Claude Code|OpenAI Codex|Gemini CLI)\b/i.test(line)) || '';
+}
+
+function extractLiveRuntimeLabel(lines, aiType) {
+  if (!Array.isArray(lines) || lines.length === 0) return '';
+
+  const runtimePatterns = aiType === 'claude'
+    ? [/\b(Opus 4\.6|Sonnet 4\.6|Claude Max)\b/i]
+    : aiType === 'codex'
+      ? [/\bgpt-5\.4\b/i, /\b\d+%\s+left\b/i]
+      : aiType === 'gemini'
+        ? [/\bGemini\b/i, /\b(context|ctx|token)\b/i]
+        : [/\b(Opus 4\.6|Sonnet 4\.6|Claude Max|gpt-5\.4|Gemini)\b/i];
+
+  return lines.find((line) => runtimePatterns.every((pattern) => pattern.test(line))) || '';
+}
+
+function extractLiveSessionIssues(lines, interactivePrompt) {
+  const issues = [];
+  const registerIssue = (value) => {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    if (normalized && !issues.includes(normalized)) {
+      issues.push(normalized);
+    }
+  };
+
+  const combined = [
+    ...lines,
+    typeof interactivePrompt?.prompt === 'string' ? interactivePrompt.prompt : '',
+  ];
+
+  combined.forEach((line) => {
+    const normalized = String(line || '').replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+
+    if (/mcp server failed/i.test(normalized)) {
+      registerIssue('MCP server failed /mcp');
+      return;
+    }
+
+    if (/connector needs auth/i.test(normalized)) {
+      registerIssue('Claude connector needs auth /mcp');
+    }
+  });
+
+  return issues;
+}
+
+function normalizeInteractivePromptText(prompt) {
+  if (typeof prompt !== 'string') return '';
+
+  return prompt
+    .replace(/\s+/g, ' ')
+    .replace(/^>\s*/, '')
+    .replace(/\s+\d+\s*(?:mcp server failed|claude\.ai connector needs auth)[\s\S]*$/i, '')
+    .replace(/\s+[|·•]\s*\/mcp[\s\S]*$/i, '')
+    .trim();
+}
+
+function getStatusTone(statusLabel) {
+  switch (statusLabel) {
+    case 'input':
+      return 'input-required';
+    case 'running':
+      return 'responding';
+    case 'connecting':
+      return 'connecting';
+    case 'starting':
+      return 'preparing';
+    case 'offline':
+      return 'offline';
+    case 'live':
+      return 'live';
+    case 'ready':
+    default:
+      return 'ready';
+  }
+}
+
 function getStatusLabel({
   interactivePrompt,
   isStreaming,
@@ -384,6 +484,7 @@ export function DesktopConversationView({
   conversationNotice = '',
   showTerminalMirror = false,
   interactivePromptEvent = null,
+  isTerminalDockVisible = false,
   mode = 'terminal',
   structuredMessages = [],
   structuredToolCalls = [],
@@ -395,6 +496,7 @@ export function DesktopConversationView({
   const visibleTurns = isStructured ? [] : buildVisibleTurns(turns, aiType);
   const hasBackgroundOutput = typeof terminalPreview === 'string' && terminalPreview.trim().length > 0;
   const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
+  const snapshotLines = getSnapshotLines(terminalScreenSnapshot, terminalPreview);
   const interactivePromptFromEvent = parseInteractivePromptEvent(interactivePromptEvent);
   const interactivePrompt = interactivePromptFromEvent
     || (hasLiveScreenSnapshot
@@ -418,16 +520,35 @@ export function DesktopConversationView({
     interactivePrompt && !showInteractivePromptBlock
       ? `Interactive terminal prompt active: ${interactivePrompt.prompt}`
       : '';
+  const normalizedInteractivePrompt = normalizeInteractivePromptText(interactivePrompt?.prompt);
   const workingDirectory = extractWorkingDirectory(terminalScreenSnapshot, terminalPreview);
-  const hasVisibleTurns =
-    displayTurns.length > 0
-    || Boolean(interactivePrompt)
-    || (isStructured && (
-      structuredMessages.length > 0
-      || structuredToolCalls.length > 0
-      || Boolean(pendingApproval)
-    ));
+  const liveSessionTitle = extractLiveSessionTitle(snapshotLines, aiType);
+  const liveRuntimeLabel = extractLiveRuntimeLabel(snapshotLines, aiType);
+  const liveSessionIssues = extractLiveSessionIssues(snapshotLines, interactivePrompt);
+  const hasLiveSessionEvidence = Boolean(
+    showTerminalMirror
+    || hasLiveScreenSnapshot
+    || hasBackgroundOutput
+    || liveSessionTitle
+    || liveRuntimeLabel
+    || showInteractivePromptBlock
+    || liveSessionIssues.length > 0
+  );
+  const hasStructuredActivity = isStructured && (
+    structuredMessages.length > 0
+    || structuredToolCalls.length > 0
+    || Boolean(pendingApproval)
+  );
+  const hasVisibleTurns = displayTurns.length > 0 || hasStructuredActivity;
   const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
+  const showTerminalStartupCard = !isStructured && displayTurns.length === 0 && !isLoadingHistory;
+  const showInlineInteractivePrompt = showInteractivePromptBlock && !showTerminalStartupCard;
+  const shouldRenderHeader = !showTerminalStartupCard;
+  const showPromptCopyInStartupPanel = !(showTerminalStartupCard && isTerminalDockVisible);
+  const showTerminalPreviewInStartupCard = Boolean(terminalPreview) && !(showTerminalStartupCard && isTerminalDockVisible);
+  const showLaunchButton = Boolean(launchCommand && (!showTerminalStartupCard || !hasLiveSessionEvidence));
+  const showOpenTerminalButton = Boolean(!isStructured && onOpenTerminal && !isTerminalDockVisible);
+  const hasStartupActions = showLaunchButton || showOpenTerminalButton;
   const startupMessage = isStructured
     ? (isOffline
       ? 'Structured session is offline. Refresh the session stream and try again.'
@@ -440,6 +561,10 @@ export function DesktopConversationView({
       ? 'Terminal is offline. Reconnect or open the terminal panel to inspect the session.'
       : connectionState === 'connecting'
         ? 'Connecting to terminal transport. You can still queue a launch command now.'
+        : showInteractivePromptBlock
+          ? `${assistantLabel} is waiting for terminal input before the first transcript turn.`
+        : liveSessionTitle || liveRuntimeLabel
+          ? `Live terminal attached. The first captured turn will appear here once ${assistantLabel} responds in full.`
         : hasBackgroundOutput
           ? `${assistantLabel} launched in background. Waiting for the first conversation turn...`
           : !isSendReady
@@ -447,6 +572,26 @@ export function DesktopConversationView({
         : isStreaming
           ? `${assistantLabel} is running. Waiting for the first response turn...`
           : `No ${assistantLabel} response yet. Start the CLI agent to begin this thread.`);
+  const startupCardSubtitle = showInteractivePromptBlock
+    ? (isTerminalDockVisible
+      ? `${assistantLabel} is paused on a terminal prompt. The live terminal is docked below so the exact screen state stays visible while you keep the conversation context above.`
+      : `${assistantLabel} is paused on a terminal prompt. Choose an action here or open the raw terminal for full control.`)
+    : liveSessionTitle || liveRuntimeLabel
+      ? `Live terminal attached. Chat View will show the transcript once ${assistantLabel} posts a full response turn.`
+      : hasBackgroundOutput
+        ? `${assistantLabel} launched in background. The transcript will appear here after the first full response turn.`
+        : startupMessage;
+  const headerTitle = liveSessionTitle || `${assistantLabel} session`;
+  const headerSubtitle = isStructured
+    ? 'Structured conversation view'
+    : showInteractivePromptBlock
+      ? 'Live terminal prompt detected. Chat View keeps the session context visible while the terminal waits for input.'
+      : liveRuntimeLabel
+        ? 'Live terminal summary'
+        : displayTurns.length > 0
+          ? 'Conversation transcript'
+          : startupMessage;
+  const statusTone = getStatusTone(statusLabel);
   const {
     containerRef,
     bottomRef,
@@ -486,26 +631,46 @@ export function DesktopConversationView({
 
   return (
     <div className="desktop-conversation-view mode-conversation">
-      <div className="desktop-conversation-header">
-        <div className="desktop-conversation-header-main">
-          <span className={`dcv-status-dot status-${statusLabel}`} title={statusLabel} />
-          <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
-            {assistantLabel}
-          </span>
-          {workingDirectory && (
-            <>
-              <span className="dcv-sep" aria-hidden="true">/</span>
-              <code className="desktop-conversation-path-value">{workingDirectory}</code>
-            </>
-          )}
+      {shouldRenderHeader && (
+        <div className="desktop-conversation-header">
+          <div className="desktop-conversation-header-main">
+            <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
+              {assistantLabel}
+            </span>
+            <div className="desktop-conversation-heading">
+              <span className="desktop-conversation-title">{headerTitle}</span>
+              <span className="desktop-conversation-subtitle">{headerSubtitle}</span>
+            </div>
+          </div>
+          <div className="desktop-conversation-header-meta">
+            {workingDirectory && (
+              <div className="desktop-conversation-path-block">
+                <span className="desktop-conversation-path-label">Workspace</span>
+                <code className="desktop-conversation-path-value">{workingDirectory}</code>
+              </div>
+            )}
+            <div className="desktop-conversation-chip-row">
+              <span className={`desktop-conversation-chip status-${statusTone}`}>
+                {statusLabel}
+              </span>
+              {liveRuntimeLabel && (
+                <span className="desktop-conversation-chip">{liveRuntimeLabel}</span>
+              )}
+              {showInteractivePromptBlock && (
+                <span className="desktop-conversation-chip mode-prompt">Prompt active</span>
+              )}
+              {liveSessionIssues.map((issue) => (
+                <span key={issue} className="desktop-conversation-chip mode-prompt">
+                  {issue}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
-        <span className={`desktop-conversation-status status-${statusLabel}`}>
-          {statusLabel}
-        </span>
-      </div>
+      )}
 
       <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
-        <div className="desktop-thread-inner">
+        <div className={`desktop-thread-inner${showTerminalStartupCard ? ' live-session-layout' : ''}`}>
           {conversationNotice && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
@@ -518,11 +683,11 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {showInteractivePromptBlock && (
+          {showInlineInteractivePrompt && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
                 <div className="structured-approval-prompt">
-                  <p>{interactivePrompt.prompt}</p>
+                  <p>{normalizedInteractivePrompt || interactivePrompt.prompt}</p>
                   <div className="desktop-interactive-prompt-actions">
                     {interactivePrompt.actions.map((action) => (
                       <button
@@ -546,13 +711,84 @@ export function DesktopConversationView({
           )}
 
           {showStartupCard && (
-            <div className="desktop-agent-status-card" role="status" aria-live="polite">
-              <pre className="dcv-startup-text">
+            <div className={`desktop-agent-status-card${showTerminalStartupCard ? ' live-session-card' : ''}`} role="status" aria-live="polite">
+              {showTerminalStartupCard && (
+                <>
+                  <div className="desktop-agent-session-overview">
+                    <div className="desktop-conversation-header-main">
+                      <span className={`desktop-conversation-provider${aiType ? ` ai-${aiType}` : ''}`}>
+                        {assistantLabel}
+                      </span>
+                      <div className="desktop-conversation-heading">
+                        <span className="desktop-conversation-title">{headerTitle}</span>
+                        <span className="desktop-conversation-subtitle">{startupCardSubtitle}</span>
+                      </div>
+                    </div>
+                    <div className="desktop-conversation-header-meta">
+                      {workingDirectory && (
+                        <div className="desktop-conversation-path-block">
+                          <span className="desktop-conversation-path-label">Workspace</span>
+                          <code className="desktop-conversation-path-value">{workingDirectory}</code>
+                        </div>
+                      )}
+                      <div className="desktop-conversation-chip-row">
+                        <span className={`desktop-conversation-chip status-${statusTone}`}>
+                          {statusLabel}
+                        </span>
+                        {liveRuntimeLabel && (
+                          <span className="desktop-conversation-chip">{liveRuntimeLabel}</span>
+                        )}
+                        {showInteractivePromptBlock && (
+                          <span className="desktop-conversation-chip mode-prompt">Prompt active</span>
+                        )}
+                        {liveSessionIssues.map((issue) => (
+                          <span key={`card-${issue}`} className="desktop-conversation-chip mode-prompt">
+                            {issue}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {showInteractivePromptBlock && (
+                    <div className="desktop-agent-prompt-panel">
+                      <span className="desktop-cli-focus-section-label">
+                        {isTerminalDockVisible ? 'Quick actions' : 'Awaiting input'}
+                      </span>
+                      {showPromptCopyInStartupPanel ? (
+                        <p className="desktop-agent-prompt-copy">
+                          {normalizedInteractivePrompt || interactivePrompt.prompt}
+                        </p>
+                      ) : (
+                        <p className="desktop-agent-prompt-hint">
+                          Live terminal prompt is docked below. Use the dock for the exact state, or use a quick action here.
+                        </p>
+                      )}
+                      <div className="desktop-interactive-prompt-actions">
+                        {interactivePrompt.actions.map((action) => (
+                          <button
+                            key={`${action.label}:${action.payload}`}
+                            type="button"
+                            className={`desktop-interactive-action ${action.kind === 'primary' ? 'primary' : 'secondary'}`}
+                            onClick={() => onSendRaw?.(action.payload)}
+                            disabled={!onSendRaw}
+                          >
+                            {action.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+              {!showTerminalStartupCard && (
+                <pre className="dcv-startup-text">
                 <span className="dcv-startup-msg">{startupMessage}</span>
                 <span className="dcv-cursor-blink">▍</span>
-              </pre>
+                </pre>
+              )}
 
-              {launchCommand && (
+              {showLaunchButton && (
                 <div className="dcv-startup-cmd">
                   <span className="dcv-prompt-char">$</span>
                   <code>{launchCommand}</code>
@@ -560,30 +796,32 @@ export function DesktopConversationView({
                 </div>
               )}
 
-              <div className="desktop-agent-actions-row">
-                {launchCommand && (
-                  <button
-                    type="button"
-                    className="desktop-agent-action primary"
-                    onClick={onLaunchAgent}
-                    disabled={!onLaunchAgent || isOffline || isStreaming}
-                  >
-                    Launch {assistantLabel}
-                  </button>
-                )}
-                {!isStructured && (
-                  <button
-                    type="button"
-                    className="desktop-agent-action"
-                    onClick={onOpenTerminal}
-                    disabled={!onOpenTerminal}
-                  >
-                    Open Terminal
-                  </button>
-                )}
-              </div>
+              {hasStartupActions && (
+                <div className="desktop-agent-actions-row">
+                  {showLaunchButton && (
+                    <button
+                      type="button"
+                      className="desktop-agent-action primary"
+                      onClick={onLaunchAgent}
+                      disabled={!onLaunchAgent || isOffline || isStreaming}
+                    >
+                      Launch {assistantLabel}
+                    </button>
+                  )}
+                  {showOpenTerminalButton && (
+                    <button
+                      type="button"
+                      className="desktop-agent-action"
+                      onClick={onOpenTerminal}
+                      disabled={!onOpenTerminal}
+                    >
+                      Open Terminal
+                    </button>
+                  )}
+                </div>
+              )}
 
-              {terminalPreview && (
+              {showTerminalPreviewInStartupCard && (
                 <pre className="desktop-agent-output-pre">
                   {terminalPreview}
                 </pre>

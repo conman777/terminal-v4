@@ -101,7 +101,7 @@ describe('PreviewPanel', () => {
     terminalChatSpy.mockClear();
     apiFetchMock.mockClear();
     uploadScreenshotMock.mockReset();
-    uploadScreenshotMock.mockResolvedValue('C:/tmp/preview-image.png');
+    uploadScreenshotMock.mockResolvedValue('C:/tmp/preview image.png');
     isMobile = false;
     activePortsResponse = [{
       port: 8081,
@@ -272,7 +272,7 @@ describe('PreviewPanel', () => {
         '/api/terminal/session-1/input',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ command: 'C:/tmp/preview-image.png hello' }),
+          body: JSON.stringify({ command: '"C:/tmp/preview image.png" hello' }),
         }),
       );
     });

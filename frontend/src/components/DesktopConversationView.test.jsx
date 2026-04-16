@@ -563,6 +563,66 @@ describe('DesktopConversationView', () => {
     expect(screen.getAllByText(/~\\OneDrive\\Personal\\Documents\\coding projects/i).length).toBeGreaterThan(0);
   });
 
+  it('renders a live Claude session summary card and keeps prompt issues separate from the prompt text', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'claude',
+          showTerminalMirror: true,
+          interactivePromptEvent: {
+            type: 'prompt_required',
+            prompt: 'bypass permissions on (shift+tab to cycle) 1 MCP server failed /mcp',
+            actions: ['tab', 'shift_tab']
+          },
+          terminalScreenSnapshot: [
+            'Claude Code v2.1.109',
+            'Opus 4.6 (1M context) with high effort · Claude Max',
+            'C:\\Users\\conor',
+            '> bypass permissions on (shift+tab to cycle)'
+          ].join('\n')
+        })}
+      />
+    );
+
+    expect(screen.getByText('Claude Code v2.1.109')).toBeInTheDocument();
+    expect(screen.getByText(/Opus 4\.6 \(1M context\) with high effort/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/C:\\Users\\conor/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('MCP server failed /mcp')).toBeInTheDocument();
+    expect(screen.getByText(/^bypass permissions on \(shift\+tab to cycle\)$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/bypass permissions on \(shift\+tab to cycle\) 1 MCP server failed \/mcp/i)).not.toBeInTheDocument();
+  });
+
+  it('hides duplicated preview output when the live terminal is docked for an interactive prompt', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'claude',
+          showTerminalMirror: true,
+          isTerminalDockVisible: true,
+          terminalPreview: [
+            'C:\\Users\\conor',
+            'bypass permissions on (shift+tab to cycle)'
+          ].join('\n'),
+          interactivePromptEvent: {
+            type: 'prompt_required',
+            prompt: 'bypass permissions on (shift+tab to cycle)',
+            actions: ['tab', 'shift_tab']
+          },
+          terminalScreenSnapshot: [
+            'Claude Code v2.1.109',
+            'Opus 4.6 (1M context) with high effort · Claude Max',
+            'C:\\Users\\conor',
+            '> bypass permissions on (shift+tab to cycle)'
+          ].join('\n')
+        })}
+      />
+    );
+
+    expect(screen.getByText(/Live terminal prompt is docked below/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^C:\\Users\\conor$/i, { selector: 'pre' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^bypass permissions on \(shift\+tab to cycle\)$/i, { selector: 'pre' })).not.toBeInTheDocument();
+  });
+
   it('does not render a live terminal snapshot section during prompt mode', () => {
     render(
       <DesktopConversationView
