@@ -539,10 +539,10 @@ export function DesktopStatusBar({
           flex-shrink: 0;
           position: relative;
           z-index: 3;
-          gap: 8px;
+          gap: 6px;
           height: auto;
-          min-height: 120px;
-          padding: 8px 18px 14px;
+          min-height: 96px;
+          padding: 6px 18px 14px;
           background: transparent;
           border-top: none;
         }
@@ -551,10 +551,12 @@ export function DesktopStatusBar({
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 12px;
+          gap: 8px;
           max-width: 880px;
           width: 100%;
           margin: 0 auto;
+          padding-bottom: 4px;
+          border-bottom: 1px solid color-mix(in srgb, var(--border-default) 20%, transparent);
         }
 
         .status-bar-top-actions {
@@ -1105,15 +1107,28 @@ export function DesktopStatusBar({
         }
 
         .status-terminal-toggle {
-          min-height: 34px;
-          padding: 0 12px;
-          border-radius: 14px;
-          background: linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--bg-elevated) 90%, transparent),
-            color-mix(in srgb, var(--bg-surface) 92%, transparent)
-          );
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
+          min-height: 26px;
+          padding: 0 10px;
+          font-size: 12px;
+          font-weight: 500;
+          color: var(--text-muted);
+          border-radius: 10px;
+          background: transparent;
+          border: 1px solid color-mix(in srgb, var(--border-default) 22%, transparent);
+          cursor: pointer;
+          transition: all var(--transition-fast);
+        }
+
+        .status-terminal-toggle:hover:not(:disabled) {
+          color: var(--text-primary);
+          background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
+          border-color: color-mix(in srgb, var(--border-default) 44%, transparent);
+        }
+
+        .status-terminal-toggle.active {
+          color: var(--accent-primary);
+          background: var(--accent-primary-dim);
+          border-color: color-mix(in srgb, var(--accent-primary) 36%, transparent);
         }
 
         .status-ai-menu-plus {
@@ -1161,8 +1176,8 @@ export function DesktopStatusBar({
 
         @media (max-width: 1120px) {
           .desktop-status-bar-shell {
-            min-height: 144px;
-            padding: 8px 16px 16px;
+            min-height: 112px;
+            padding: 6px 16px 16px;
           }
 
           .status-bar-meta-row,
