@@ -12780,9 +12780,9 @@ textarea:focus-visible {
 }
 
 .session-tab.active {
-  background: rgba(245, 158, 11, 0.15);
-  border-color: #f59e0b;
-  color: #f59e0b;
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  border-color: var(--accent-primary);
+  color: var(--accent-primary-light);
 }
 
 .session-tab-title {

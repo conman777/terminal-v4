@@ -203,17 +203,17 @@ export const SessionTab = memo(function SessionTab({
           align-items: center;
           gap: 6px;
           height: 100%;
-          padding: 0 10px;
+          padding: 0 14px;
           background: transparent;
           border: none;
           border-bottom: 2px solid transparent;
-          color: var(--text-muted, #52525b);
+          color: var(--text-muted);
           font-family: var(--font-ui);
           font-size: 12px;
-          font-weight: 400;
+          font-weight: 500;
           white-space: nowrap;
           cursor: pointer;
-          transition: color 0.1s ease;
+          transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
           position: relative;
           user-select: none;
           flex-shrink: 0;
@@ -221,21 +221,34 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .session-tab-item:hover:not(.active) {
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--text-primary);
+          background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
         }
 
         .session-tab-item.active {
-          color: var(--text-primary, #fafafa);
-          border-bottom-color: var(--text-muted, #52525b);
+          color: var(--text-primary);
+          border-bottom-color: var(--accent-primary);
         }
 
         .session-tab-item.has-unread:not(.active) {
-          color: var(--text-primary, #fafafa);
+          color: var(--text-primary);
+        }
+
+        .session-tab-item.has-unread:not(.active)::before {
+          content: '';
+          position: absolute;
+          left: 4px;
+          top: 50%;
+          transform: translateY(-50%);
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: var(--accent-primary);
         }
 
         .session-tab-item.drag-over {
-          color: var(--text-primary, #fafafa);
-          border-bottom-color: var(--text-muted, #52525b);
+          color: var(--text-primary);
+          border-bottom-color: var(--accent-primary-light);
         }
 
         .session-tab-item.dragging {
@@ -331,8 +344,8 @@ export const SessionTab = memo(function SessionTab({
 
         .tab-close-btn:hover {
           opacity: 1 !important;
-          background: rgba(244, 63, 94, 0.1);
-          color: var(--error, #f43f5e);
+          background: color-mix(in srgb, var(--error) 12%, transparent);
+          color: var(--error);
         }
 
         .tab-rename-input {
