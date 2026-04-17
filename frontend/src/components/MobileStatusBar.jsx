@@ -57,7 +57,7 @@ export function MobileStatusBar({
     [activeRuntimeProviderId, inputText]
   );
   const selectedAiOption = aiOptions.find((option) => option.id === aiType)
-    ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType, customAiProviders), color: '#38bdf8' } : null)
+    ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType, customAiProviders), color: 'var(--accent-primary-light)' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
 
@@ -535,9 +535,8 @@ export function MobileStatusBar({
           padding: 10px 10px calc(12px + env(safe-area-inset-bottom));
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
           background:
-            radial-gradient(circle at 12% 0%, rgba(244, 114, 182, 0.12), transparent 24%),
-            radial-gradient(circle at 88% 0%, rgba(251, 191, 36, 0.12), transparent 18%),
-            var(--terminal-bg, #0b0f17);
+            radial-gradient(circle at 88% 0%, color-mix(in srgb, var(--accent-primary-light) 12%, transparent), transparent 18%),
+            var(--bg-base);
           backdrop-filter: blur(18px);
           -webkit-tap-highlight-color: transparent;
         }
@@ -545,7 +544,7 @@ export function MobileStatusBar({
         .mobile-composer-shell:focus-within {
           gap: 4px;
           padding: 6px 8px calc(8px + env(safe-area-inset-bottom));
-          background: color-mix(in srgb, var(--terminal-bg, #0b0f17) 96%, black 4%);
+          background: color-mix(in srgb, var(--bg-base) 96%, black 4%);
         }
 
         .mobile-composer-form {
@@ -634,7 +633,7 @@ export function MobileStatusBar({
           border: none;
           border-radius: 9px;
           background: transparent;
-          color: var(--text-secondary, #d5deea);
+          color: var(--text-secondary);
           text-align: left;
           cursor: pointer;
         }
@@ -655,7 +654,7 @@ export function MobileStatusBar({
           flex: 1;
           min-width: 0;
           font-size: 11px;
-          color: var(--text-muted, #94a3b8);
+          color: var(--text-muted);
           text-align: right;
         }
 
@@ -708,7 +707,7 @@ export function MobileStatusBar({
           background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           border-radius: 12px;
-          color: var(--text-secondary, #d5deea);
+          color: var(--text-secondary);
           cursor: pointer;
           transition: all 0.15s ease;
           flex-shrink: 0;
@@ -781,7 +780,7 @@ export function MobileStatusBar({
           background: transparent;
           border: none;
           border-radius: 8px;
-          color: var(--text-secondary, #d5deea);
+          color: var(--text-secondary);
           cursor: pointer;
         }
 
@@ -873,7 +872,7 @@ export function MobileStatusBar({
           border: none;
           border-radius: 999px;
           background: transparent;
-          color: var(--text-muted, #94a3b8);
+          color: var(--text-muted);
           cursor: pointer;
           flex-shrink: 0;
         }

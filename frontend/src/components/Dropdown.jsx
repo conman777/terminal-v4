@@ -94,8 +94,9 @@ export function Dropdown({
         .dropdown-menu {
           position: absolute;
           top: calc(100% + 4px);
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
+          background: var(--bg-surface, #1c1814);
+          border: 1px solid var(--border-subtle, #2a241c);
+          border-radius: var(--radius-md, 10px);
           min-width: 170px;
           z-index: 2000;
           max-height: min(60vh, 340px);
@@ -103,6 +104,7 @@ export function Dropdown({
           overscroll-behavior: contain;
           padding: 4px;
           font-family: var(--font-ui);
+          box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.5));
         }
 
         .dropdown-menu.align-right {
@@ -120,30 +122,32 @@ export function Dropdown({
           padding: 5px 10px;
           border: none;
           background: transparent;
-          color: var(--text-secondary, #a1a1aa);
+          color: var(--text-secondary, #d5cab4);
           font-family: inherit;
           font-size: 11px;
           text-align: left;
           cursor: pointer;
           transition: color 0.1s ease, background 0.1s ease;
           gap: 8px;
+          border-radius: var(--radius-sm, 6px);
         }
 
         .dropdown-item:hover:not(:disabled) {
-          background: var(--bg-elevated, #1e1e21);
-          color: var(--text-primary, #fafafa);
+          background: var(--bg-hover, #2f2920);
+          color: var(--text-primary, #f4eee3);
         }
 
         .dropdown-item.active {
-          color: var(--text-primary, #fafafa);
+          color: var(--accent-primary-light, #fbbf24);
+          background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
         }
 
         .dropdown-item.danger {
-          color: var(--error, #f43f5e);
+          color: var(--error, #fb3654);
         }
 
         .dropdown-item.danger:hover:not(:disabled) {
-          background: rgba(244, 63, 94, 0.08);
+          background: rgba(251, 54, 84, 0.1);
         }
 
         .dropdown-item:disabled {
@@ -165,12 +169,12 @@ export function Dropdown({
         .dropdown-item-badge {
           font-family: inherit;
           font-size: 10px;
-          color: var(--text-muted, #71717a);
+          color: var(--text-muted, #8c8172);
         }
 
         .dropdown-separator {
           height: 1px;
-          background: var(--border-subtle, #1e1e21);
+          background: var(--border-subtle, #2a241c);
           margin: 4px 0;
         }
 

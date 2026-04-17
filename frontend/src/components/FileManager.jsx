@@ -328,7 +328,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   return (
     <div className="pro-file-manager">
       <div className="file-manager-header">
-        <h3 style={{ color: 'white', margin: 0 }}>Files</h3>
+        <h3 style={{ color: 'var(--text-primary)', margin: 0 }}>Files</h3>
         <button className="file-manager-close" onClick={onClose}>×</button>
       </div>
 
@@ -487,7 +487,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            backgroundColor: 'var(--bg-overlay, rgba(20, 17, 13, 0.92))',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -533,7 +533,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
             </button>
           </div>
           <div style={{
-            color: 'white',
+            color: 'var(--text-primary)',
             marginBottom: '10px',
             fontSize: '18px',
             fontWeight: 'bold'
@@ -548,8 +548,8 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
               maxWidth: '90%',
               maxHeight: '80vh',
               objectFit: 'contain',
-              border: '2px solid #555',
-              borderRadius: '8px'
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-md, 10px)'
             }}
           />
         </div>

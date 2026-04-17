@@ -219,13 +219,13 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                         ? 'On'
                         : 'Off'}
                   </button>
-                  <span style={{ fontSize: '12px', color: 'var(--text-secondary, #888)' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                     Current default: {sandboxDefaultMode === 'workspace-write' ? 'Sandboxed' : 'Host'}
                   </span>
                 </div>
               </div>
 
-              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '20px 0' }} />
 
               <div className="form-group">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -243,7 +243,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                 <p className="form-help">Store API keys for safe reference. Keys are stored on the server and can be copied to clipboard.</p>
 
                 {showAddKey && (
-                  <div style={{ background: 'var(--bg-secondary, #1a1a1a)', padding: '12px', borderRadius: '6px', marginBottom: '8px' }}>
+                  <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-subtle)', padding: '12px', borderRadius: 'var(--radius-md)', marginBottom: '8px' }}>
                     <input
                       type="text"
                       placeholder="Key name (e.g. Anthropic)"
@@ -292,15 +292,16 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       padding: '8px 10px',
-                      background: 'var(--bg-secondary, #1a1a1a)',
-                      borderRadius: '4px',
-                      marginBottom: '4px',
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      borderRadius: 'var(--radius-sm)',
+                      marginBottom: '6px',
                       fontSize: '13px'
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, overflow: 'hidden' }}>
                       <strong style={{ whiteSpace: 'nowrap' }}>{k.name}</strong>
-                      <code style={{ color: 'var(--text-secondary, #888)', fontSize: '12px' }}>{k.maskedValue}</code>
+                      <code style={{ color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>{k.maskedValue}</code>
                     </div>
                     <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                       <button
@@ -322,7 +323,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
                 ))}
               </div>
 
-              <hr style={{ border: 'none', borderTop: '1px solid var(--border-color, #333)', margin: '16px 0' }} />
+              <hr style={{ border: 'none', borderTop: '1px solid var(--border-subtle)', margin: '20px 0' }} />
 
               <PasskeyManager />
 

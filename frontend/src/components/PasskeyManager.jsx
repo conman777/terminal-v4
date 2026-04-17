@@ -89,8 +89,9 @@ export default function PasskeyManager() {
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 padding: '8px 10px',
-                background: 'var(--bg-secondary, #1a1a1a)',
-                borderRadius: '4px',
+                background: 'var(--bg-surface, #1c1814)',
+                border: '1px solid var(--border-subtle, #2a241c)',
+                borderRadius: 'var(--radius-sm, 6px)',
                 marginBottom: '4px',
                 fontSize: '13px'
               }}
@@ -99,7 +100,7 @@ export default function PasskeyManager() {
                 <strong style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {key.name || 'Unnamed passkey'}
                 </strong>
-                <span style={{ color: 'var(--text-secondary, #888)', fontSize: '11px' }}>
+                <span style={{ color: 'var(--text-muted, #8c8172)', fontSize: '11px' }}>
                   Added {formatDate(key.createdAt)}
                   {key.lastUsedAt ? ` · Last used ${formatDate(key.lastUsedAt)}` : ''}
                 </span>

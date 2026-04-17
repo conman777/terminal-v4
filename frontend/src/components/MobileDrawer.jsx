@@ -56,7 +56,7 @@ function SessionStateIndicator({ isBusy, showReady }) {
       {isBusy ? (
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-          <path d="M14 8a6 6 0 0 0-6-6" stroke="#93c5fd" strokeWidth="2" strokeLinecap="round" />
+          <path d="M14 8a6 6 0 0 0-6-6" stroke="var(--accent-primary-light)" strokeWidth="2" strokeLinecap="round" />
         </svg>
       ) : (
         <span className="mobile-session-state-dot" aria-hidden="true" />

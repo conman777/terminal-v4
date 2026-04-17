@@ -115,30 +115,31 @@ export default function ClaudeCodeSessionSelector({
           align-items: center;
           gap: 10px;
           padding: 0 12px;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          border-radius: 8px;
-          color: var(--text-primary, #fafafa);
+          background: var(--bg-surface, #1c1814);
+          border: 1px solid var(--border-subtle, #2a241c);
+          border-radius: var(--radius-sm, 6px);
+          color: var(--text-primary, #f4eee3);
+          font-family: var(--font-ui);
           font-size: 13px;
           font-weight: 600;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: background 0.15s ease, border-color 0.15s ease;
         }
 
         .claude-selector-btn-modern:hover {
-          border-color: var(--border-hover, #52525b);
-          background: var(--bg-elevated, #1e1e21);
+          border-color: var(--border-default, #4a4033);
+          background: var(--bg-elevated, #26211b);
         }
 
         .claude-selector-btn-modern.open {
-          border-color: var(--accent-primary, #f59e0b);
-          box-shadow: 0 0 0 2px var(--accent-primary-dim);
+          border-color: var(--accent-primary, #d97706);
+          background: var(--bg-elevated, #26211b);
         }
 
         .claude-icon-modern {
           display: flex;
           align-items: center;
-          color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary, #d97706);
         }
 
         .claude-label-modern {
@@ -155,7 +156,7 @@ export default function ClaudeCodeSessionSelector({
         .claude-arrow-modern.open {
           transform: rotate(180deg);
           opacity: 1;
-          color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary, #d97706);
         }
 
         .claude-dropdown-modern {
@@ -163,9 +164,9 @@ export default function ClaudeCodeSessionSelector({
           top: calc(100% + 8px);
           left: 0;
           width: 240px;
-          background: var(--bg-surface, #141416);
-          border: 1px solid var(--border-default, #2a2a2e);
-          border-radius: 10px;
+          background: var(--bg-surface, #1c1814);
+          border: 1px solid var(--border-subtle, #2a241c);
+          border-radius: var(--radius-md, 10px);
           box-shadow: var(--shadow-lg);
           z-index: 1000;
           overflow: hidden;
@@ -198,11 +199,11 @@ export default function ClaudeCodeSessionSelector({
         }
 
         .claude-item-modern:hover {
-          background: var(--bg-elevated, #1e1e21);
+          background: var(--bg-hover, #2f2920);
         }
 
         .claude-item-modern.active {
-          background: var(--accent-primary-dim);
+          background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
         }
 
         .claude-item-info-modern {
@@ -215,7 +216,7 @@ export default function ClaudeCodeSessionSelector({
         .claude-item-title-modern {
           font-size: 13px;
           font-weight: 600;
-          color: var(--text-primary, #fafafa);
+          color: var(--text-primary, #f4eee3);
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -225,7 +226,7 @@ export default function ClaudeCodeSessionSelector({
         }
 
         .claude-item-modern.active .claude-item-title-modern {
-          color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary-light, #fbbf24);
         }
 
         .status-dot-modern {
@@ -237,16 +238,15 @@ export default function ClaudeCodeSessionSelector({
 
         .status-dot-modern.active {
           background: var(--success, #10b981);
-          box-shadow: 0 0 8px var(--success);
         }
 
         .status-dot-modern.inactive {
-          background: var(--text-muted, #71717a);
+          background: var(--text-muted, #8c8172);
         }
 
         .claude-item-meta-modern {
           font-size: 11px;
-          color: var(--text-muted, #71717a);
+          color: var(--text-muted, #8c8172);
           margin-left: 14px;
         }
 
@@ -258,10 +258,10 @@ export default function ClaudeCodeSessionSelector({
           justify-content: center;
           background: transparent;
           border: none;
-          color: var(--text-muted, #71717a);
-          border-radius: 4px;
+          color: var(--text-muted, #8c8172);
+          border-radius: var(--radius-sm, 6px);
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: background 0.15s ease, color 0.15s ease;
           opacity: 0;
         }
 
@@ -270,7 +270,7 @@ export default function ClaudeCodeSessionSelector({
         }
 
         .claude-delete-btn-modern:hover {
-          background: rgba(244, 63, 94, 0.15);
+          background: color-mix(in srgb, var(--error, #f43f5e) 16%, transparent);
           color: var(--error, #f43f5e);
         }
 
@@ -281,24 +281,24 @@ export default function ClaudeCodeSessionSelector({
           align-items: center;
           justify-content: center;
           gap: 8px;
-          background: var(--bg-elevated, #1e1e21);
+          background: var(--bg-elevated, #26211b);
           border: none;
-          border-top: 1px solid var(--border-subtle, #1e1e21);
-          color: var(--accent-primary, #f59e0b);
+          border-top: 1px solid var(--border-subtle, #2a241c);
+          color: var(--accent-primary-light, #fbbf24);
           font-size: 13px;
           font-weight: 600;
           cursor: pointer;
-          transition: background 0.2s ease;
+          transition: background 0.15s ease;
         }
 
         .claude-new-btn-modern:hover {
-          background: var(--bg-surface, #141416);
+          background: var(--bg-hover, #2f2920);
         }
 
         .claude-empty-modern {
           padding: 16px;
           text-align: center;
-          color: var(--text-muted, #71717a);
+          color: var(--text-muted, #8c8172);
           font-style: italic;
           font-size: 12px;
         }

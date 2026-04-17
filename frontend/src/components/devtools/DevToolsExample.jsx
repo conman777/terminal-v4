@@ -167,8 +167,8 @@ export function DevToolsExample() {
   }, []);
 
   return (
-    <div style={{ height: '600px', border: '1px solid #ccc' }}>
-      <div style={{ padding: '10px', background: '#f0f0f0', borderBottom: '1px solid #ccc' }}>
+    <div style={{ height: '600px', border: '1px solid var(--border-subtle)' }}>
+      <div style={{ padding: '10px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}>
         <h3>DevTools Example</h3>
         <p>This is a standalone example showing the DevTools panel with mock data.</p>
       </div>

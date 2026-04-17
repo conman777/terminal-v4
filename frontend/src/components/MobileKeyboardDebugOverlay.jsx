@@ -197,11 +197,11 @@ export function MobileKeyboardDebugOverlay({
           gap: 0;
           padding: 0;
           border-radius: 999px;
-          background: rgba(2, 6, 23, 0.94);
-          border: 1px solid rgba(148, 163, 184, 0.32);
+          background: color-mix(in srgb, var(--bg-base) 94%, transparent);
+          border: 1px solid var(--border-default);
           box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
           backdrop-filter: blur(10px);
-          color: #e2e8f0;
+          color: var(--text-primary);
           font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
           font-size: 9px;
           line-height: 1;
@@ -218,7 +218,7 @@ export function MobileKeyboardDebugOverlay({
         .mobile-keyboard-debug-header button {
           border: none;
           border-radius: 999px;
-          background: rgba(15, 23, 42, 0.92);
+          background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
           color: inherit;
           font: inherit;
           font-weight: 700;
@@ -230,7 +230,7 @@ export function MobileKeyboardDebugOverlay({
         .mobile-keyboard-debug-indicator {
           border-radius: 999px;
           padding: 5px 8px;
-          background: rgba(15, 23, 42, 0.92);
+          background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
           font-weight: 700;
           letter-spacing: 0.02em;
           text-transform: uppercase;
