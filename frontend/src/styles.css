@@ -5,35 +5,35 @@
 
 /* CSS Variables */
 :root {
-  /* Background colors - deep slate */
-  --bg-base: #020617;
-  --bg-primary: #020617;
-  --bg-surface: #0f172a;
-  --bg-elevated: #1e293b;
-  --terminal-chrome-bg: #17191c;
-  --terminal-bg: #17191c;
-  --bg-overlay: rgba(2, 6, 23, 0.86);
+  /* Background colors - warm charcoal */
+  --bg-base: #14110d;
+  --bg-primary: #14110d;
+  --bg-surface: #1c1814;
+  --bg-elevated: #26211b;
+  --terminal-chrome-bg: #1a1713;
+  --terminal-bg: #1a1713;
+  --bg-overlay: rgba(20, 17, 13, 0.86);
 
-  /* Primary accent - cyan */
-  --accent-primary: #22d3ee;
-  --accent-primary-light: #67e8f9;
-  --accent-primary-dim: rgba(34, 211, 238, 0.16);
-  --accent-primary-glow: rgba(34, 211, 238, 0.28);
-  --accent-ember: #0e7490;
+  /* Primary accent - amber */
+  --accent-primary: #d97706;
+  --accent-primary-light: #fbbf24;
+  --accent-primary-dim: rgba(217, 119, 6, 0.18);
+  --accent-primary-glow: rgba(217, 119, 6, 0.32);
+  --accent-ember: #78350f;
 
-  /* Secondary accent */
-  --accent-secondary: #818cf8;
-  --accent-secondary-dim: rgba(129, 140, 248, 0.16);
+  /* Secondary accent - warm coral (distinct from primary) */
+  --accent-secondary: #e6875b;
+  --accent-secondary-dim: rgba(230, 135, 91, 0.16);
 
-  /* Text colors */
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
+  /* Text colors - warm cream */
+  --text-primary: #f4eee3;
+  --text-secondary: #d5cab4;
+  --text-muted: #8c8172;
 
-  /* Border colors - reduced usage, prefer shadows */
-  --border-subtle: #1e293b;
-  --border-default: #334155;
-  --border-hover: #475569;
+  /* Border colors */
+  --border-subtle: #2a241c;
+  --border-default: #4a4033;
+  --border-hover: #5c4f3e;
 
   /* Status colors */
   --success: #10b981;
@@ -41,10 +41,10 @@
   --warning: #f59e0b;
 
   /* Session tab colors */
-  --tab-active-bg: rgba(34, 211, 238, 0.28);
-  --tab-active-border: rgba(103, 232, 249, 0.95);
-  --tab-active-text: #f8fafc;
-  --tab-active-shadow: 0 0 0 1px rgba(34, 211, 238, 0.5), 0 0 18px rgba(14, 165, 233, 0.35);
+  --tab-active-bg: rgba(217, 119, 6, 0.22);
+  --tab-active-border: rgba(251, 191, 36, 0.85);
+  --tab-active-text: #f4eee3;
+  --tab-active-shadow: 0 0 0 1px rgba(217, 119, 6, 0.45), 0 0 14px rgba(180, 83, 9, 0.32);
   --tab-busy-border: rgba(59, 130, 246, 0.5);
   --tab-busy-bg: rgba(59, 130, 246, 0.16);
   --tab-busy-text: #dbeafe;
@@ -54,7 +54,7 @@
   --tab-busy-shadow-peak: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4);
   --tab-dot-busy: #60a5fa;
   --tab-dot-ready-active: #4ade80;
-  --tab-dot-ready-inactive: #475569;
+  --tab-dot-ready-inactive: #5c4f3e;
   /* Spacing */
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -72,7 +72,7 @@
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
   --shadow-glow: 0 0 20px var(--accent-primary-glow);
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
-  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(245, 158, 11, 0.05);
+  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(217, 119, 6, 0.06);
 
   /* Shared scrollbar palette – track matches composer card background */
   --scrollbar-track: var(--bg-surface);
@@ -83,17 +83,17 @@
   --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 44%, var(--border-hover) 56%);
 
   /* Atmospheric backgrounds - warm amber glow from top */
-  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(34, 211, 238, 0.2), transparent 50%),
-                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(129, 140, 248, 0.12), transparent 40%);
+  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(217, 119, 6, 0.18), transparent 50%),
+                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(230, 135, 91, 0.10), transparent 40%);
 
   /* Glass effects */
-  --surface-glass: rgba(15, 23, 42, 0.84);
-  --surface-glass-border: rgba(34, 211, 238, 0.18);
+  --surface-glass: rgba(28, 24, 20, 0.84);
+  --surface-glass-border: rgba(217, 119, 6, 0.18);
 
   /* Amber glow system */
-  --amber-glow-subtle: 0 0 20px rgba(34, 211, 238, 0.25);
-  --amber-glow-medium: 0 0 30px rgba(34, 211, 238, 0.4);
-  --amber-glow-strong: 0 0 40px rgba(34, 211, 238, 0.48), 0 0 80px rgba(14, 165, 233, 0.24);
+  --amber-glow-subtle: 0 0 20px rgba(217, 119, 6, 0.24);
+  --amber-glow-medium: 0 0 30px rgba(217, 119, 6, 0.38);
+  --amber-glow-strong: 0 0 40px rgba(217, 119, 6, 0.46), 0 0 80px rgba(180, 83, 9, 0.24);
 
   /* Font stacks */
   --font-display: 'Syne', 'Space Grotesk', sans-serif;
@@ -101,11 +101,11 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
 
   /* Interactive state colors */
-  --bg-hover: #1e293b;
-  --bg-active: #334155;
-  --bg-tertiary: #0b1220;
-  --border-dim: #1e293b;
-  --accent-primary-hover: #06b6d4;
+  --bg-hover: #2f2920;
+  --bg-active: #3a3226;
+  --bg-tertiary: #100d09;
+  --border-dim: #2a241c;
+  --accent-primary-hover: #b45309;
   --accent: var(--accent-primary);
 
   color-scheme: dark;
@@ -113,31 +113,31 @@
 
 /* Light Theme Override */
 [data-theme="light"] {
-  --bg-base: #f8fafc;
-  --bg-primary: #f8fafc;
-  --bg-surface: #eef2ff;
-  --bg-elevated: #e2e8f0;
-  --terminal-chrome-bg: #f1f3f5;
-  --terminal-bg: #f1f3f5;
-  --bg-overlay: rgba(248, 250, 252, 0.9);
+  --bg-base: #fbf6ec;
+  --bg-primary: #fbf6ec;
+  --bg-surface: #f3ecdb;
+  --bg-elevated: #eadfc6;
+  --terminal-chrome-bg: #f5eedb;
+  --terminal-bg: #f5eedb;
+  --bg-overlay: rgba(251, 246, 236, 0.9);
 
-  --accent-primary: #0891b2;
-  --accent-primary-light: #0369a1;
-  --accent-primary-dim: rgba(8, 145, 178, 0.12);
-  --accent-primary-glow: rgba(8, 145, 178, 0.16);
+  --accent-primary: #b45309;
+  --accent-primary-light: #92400e;
+  --accent-primary-dim: rgba(180, 83, 9, 0.14);
+  --accent-primary-glow: rgba(180, 83, 9, 0.18);
 
-  --accent-secondary: #6366f1;
-  --accent-secondary-dim: rgba(99, 102, 241, 0.12);
+  --accent-secondary: #c2410c;
+  --accent-secondary-dim: rgba(194, 65, 12, 0.12);
 
-  /* Text colors - reversed zinc */
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
+  /* Text colors - warm slate */
+  --text-primary: #1f1a13;
+  --text-secondary: #4a3f30;
+  --text-muted: #77685a;
 
   /* Border colors */
-  --border-subtle: #cbd5e1;
-  --border-default: #94a3b8;
-  --border-hover: #64748b;
+  --border-subtle: #e4d8bf;
+  --border-default: #b8a684;
+  --border-hover: #8a785b;
 
   /* Status colors - slightly deeper for light bg */
   --success: #059669;
@@ -145,10 +145,10 @@
   --warning: #d97706;
 
   /* Session tab colors */
-  --tab-active-bg: rgba(8, 145, 178, 0.2);
-  --tab-active-border: rgba(8, 145, 178, 0.78);
-  --tab-active-text: #0f172a;
-  --tab-active-shadow: 0 0 0 1px rgba(8, 145, 178, 0.28), 0 0 14px rgba(14, 116, 144, 0.22);
+  --tab-active-bg: rgba(180, 83, 9, 0.18);
+  --tab-active-border: rgba(180, 83, 9, 0.72);
+  --tab-active-text: #1f1a13;
+  --tab-active-shadow: 0 0 0 1px rgba(180, 83, 9, 0.26), 0 0 14px rgba(146, 64, 14, 0.20);
   --tab-busy-border: rgba(59, 130, 246, 0.45);
   --tab-busy-bg: rgba(59, 130, 246, 0.15);
   --tab-busy-text: #1e3a8a;
@@ -158,7 +158,7 @@
   --tab-busy-shadow-peak: 0 0 0 1px rgba(37, 99, 235, 0.52), 0 0 20px rgba(59, 130, 246, 0.32);
   --tab-dot-busy: #3b82f6;
   --tab-dot-ready-active: #16a34a;
-  --tab-dot-ready-inactive: #94a3b8;
+  --tab-dot-ready-inactive: #b8a684;
   /* Shadows - lighter */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
@@ -166,21 +166,21 @@
   --shadow-glow: 0 0 20px var(--accent-primary-glow);
 
   /* Atmospheric backgrounds - subtle warm tint */
-  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(8, 145, 178, 0.08), transparent 50%),
-                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(99, 102, 241, 0.05), transparent 40%);
+  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(180, 83, 9, 0.08), transparent 50%),
+                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(194, 65, 12, 0.05), transparent 40%);
 
   /* Glass effects */
-  --surface-glass: rgba(255, 255, 255, 0.9);
-  --surface-glass-border: rgba(8, 145, 178, 0.12);
+  --surface-glass: rgba(251, 246, 236, 0.9);
+  --surface-glass-border: rgba(180, 83, 9, 0.14);
 
   /* Amber glow system - subtle for light */
-  --amber-glow-subtle: 0 0 20px rgba(8, 145, 178, 0.1);
-  --amber-glow-medium: 0 0 30px rgba(8, 145, 178, 0.15);
-  --amber-glow-strong: 0 0 40px rgba(8, 145, 178, 0.2), 0 0 80px rgba(8, 145, 178, 0.1);
+  --amber-glow-subtle: 0 0 20px rgba(180, 83, 9, 0.10);
+  --amber-glow-medium: 0 0 30px rgba(180, 83, 9, 0.16);
+  --amber-glow-strong: 0 0 40px rgba(180, 83, 9, 0.20), 0 0 80px rgba(180, 83, 9, 0.10);
 
   /* Shadows - lighter */
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(8, 145, 178, 0.04);
+  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(180, 83, 9, 0.05);
 
   /* Shared scrollbar palette – track matches composer card background */
   --scrollbar-track: var(--bg-surface);
@@ -191,11 +191,11 @@
   --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 34%, var(--border-hover) 66%);
 
   /* Interactive state colors */
-  --bg-hover: #e2e8f0;
-  --bg-active: #cbd5e1;
-  --bg-tertiary: #edf2f7;
-  --border-dim: #dbe4f1;
-  --accent-primary-hover: #0369a1;
+  --bg-hover: #ebe0c5;
+  --bg-active: #dccfae;
+  --bg-tertiary: #f6eedc;
+  --border-dim: #e4d8bf;
+  --accent-primary-hover: #92400e;
   --accent: var(--accent-primary);
 
   color-scheme: light;
@@ -392,10 +392,10 @@ button {
 }
 
 .desktop-btn.active {
-  color: #67e8f9;
-  background: rgba(34, 211, 238, 0.18);
-  border-color: rgba(34, 211, 238, 0.48);
-  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.25), 0 8px 18px rgba(14, 165, 233, 0.22);
+  color: var(--accent-primary-light);
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 48%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary) 25%, transparent), 0 8px 18px color-mix(in srgb, var(--accent-primary-hover) 22%, transparent);
 }
 
 .desktop-btn.drag-over {
@@ -479,9 +479,9 @@ button {
 }
 
 .desktop-btn-add:hover {
-  color: #67e8f9;
-  border-color: rgba(34, 211, 238, 0.5);
-  background: rgba(34, 211, 238, 0.18);
+  color: var(--accent-primary-light);
+  border-color: color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
 
 /* ===========================================
@@ -1311,7 +1311,7 @@ button {
   position: relative;
   min-height: 0;
   overflow: hidden;
-  background: var(--terminal-bg, var(--bg-surface, #0f172a));
+  background: var(--terminal-bg, var(--bg-surface, #1c1814));
   touch-action: pan-y; /* Allow vertical scroll, let JS handle horizontal swipes */
   transition: box-shadow var(--transition-base);
 }
@@ -1452,7 +1452,7 @@ button {
   flex: 1;
   overflow-y: auto;
   overflow-x: auto;
-  background: var(--terminal-bg, var(--bg-surface, #0f172a));
+  background: var(--terminal-bg, var(--bg-surface, #1c1814));
   color: var(--text-primary, #f8fafc);
   padding: 8px 12px 4px;
   position: absolute;
@@ -1503,7 +1503,7 @@ button {
 
 .reader-view-cursor {
   background: var(--cursor-bg, var(--text-primary, #f8fafc));
-  color: var(--cursor-fg, var(--terminal-bg, #0f172a));
+  color: var(--cursor-fg, var(--terminal-bg, #1a1713));
   animation: reader-view-cursor-blink 1.2s step-end infinite;
 }
 
@@ -1761,7 +1761,7 @@ button {
   right: 0;
   bottom: 0;
   overflow: hidden;
-  background: var(--terminal-bg, var(--bg-surface, #0f172a));
+  background: var(--terminal-bg, var(--bg-surface, #1c1814));
 }
 
 .xterm {
@@ -1771,8 +1771,8 @@ button {
 
 .xterm .xterm-screen,
 .xterm .xterm-viewport {
-  background: var(--terminal-bg, var(--bg-surface, #0f172a)) !important;
-  background-color: var(--terminal-bg, var(--bg-surface, #0f172a)) !important;
+  background: var(--terminal-bg, var(--bg-surface, #1c1814)) !important;
+  background-color: var(--terminal-bg, var(--bg-surface, #1c1814)) !important;
 }
 
 .xterm-viewport {
@@ -3683,7 +3683,7 @@ button {
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   overflow: hidden;
-  background: #0f172a;
+  background: var(--bg-surface);
 }
 
 .preview-terminal-section {
@@ -3691,7 +3691,7 @@ button {
   min-width: 320px;
   display: flex;
   flex-direction: column;
-  background: var(--terminal-bg, var(--bg-surface, #17191c));
+  background: var(--terminal-bg, var(--bg-surface, #1a1713));
   border: 1px solid var(--preview-border);
   border-radius: 12px;
   box-shadow: none;
@@ -3904,7 +3904,7 @@ button {
   gap: 8px;
   padding: 8px 12px;
   flex-shrink: 0;
-  background: var(--terminal-chrome-bg, #17191c);
+  background: var(--terminal-chrome-bg, #1a1713);
   border-top: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
 }
 
@@ -5019,7 +5019,7 @@ button {
 
 /* Network/proxy log entries */
 .preview-log-network {
-  border-left-color: #06b6d4;
+  border-left-color: var(--accent-primary-hover);
 }
 .preview-log-network.preview-log-warn {
   border-left-color: var(--warning);
@@ -5037,7 +5037,7 @@ button {
   padding: 1px 4px;
   border-radius: 3px;
   background: rgba(6, 182, 212, 0.15);
-  color: #06b6d4;
+  color: var(--accent-primary-hover);
 }
 .preview-log-status-warn {
   background: rgba(245, 158, 11, 0.15);
@@ -5429,7 +5429,7 @@ button {
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  background: #0f172a;
+  background: var(--bg-surface);
   border-bottom: 1px solid rgba(148, 163, 184, 0.2);
   flex-shrink: 0;
 }
@@ -5564,7 +5564,7 @@ button {
 }
 
 .preview-inspector-class {
-  color: #67e8f9;
+  color: var(--accent-primary-light);
 }
 
 .preview-inspector-muted {
@@ -5658,7 +5658,7 @@ button {
 .preview-inspector-actions {
   padding: 12px;
   border-top: 1px solid rgba(148, 163, 184, 0.2);
-  background: #0f172a;
+  background: var(--bg-surface);
 }
 
 .preview-inspector-edit-btn {
@@ -6188,8 +6188,8 @@ button {
 
 .style-preset-btn {
   padding: 8px 16px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(14, 165, 233, 0.15));
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
   border-radius: var(--radius-md);
   color: var(--accent-primary-light);
   font-size: 11px;
@@ -6200,7 +6200,7 @@ button {
 }
 
 .style-preset-btn:hover {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.25), rgba(14, 165, 233, 0.25));
+  background: color-mix(in srgb, var(--accent-primary) 22%, transparent);
   border-color: var(--accent-primary);
   transform: translateY(-1px);
 }
@@ -7345,7 +7345,7 @@ button {
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background: #0f172a;
+  background: var(--bg-surface);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
@@ -7569,7 +7569,7 @@ button {
 .preview-inspector-sheet-actions {
   padding: 10px 12px;
   border-top: 1px solid var(--border-subtle);
-  background: #0f172a;
+  background: var(--bg-surface);
 }
 
 .preview-inspector-edit-btn-mobile {
@@ -13175,7 +13175,7 @@ textarea:focus-visible {
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  background: var(--terminal-chrome-bg, #17191c);
+  background: var(--terminal-chrome-bg, #1a1713);
   border-top: none;
   font-size: 11px;
   font-weight: 500;
@@ -13358,7 +13358,7 @@ textarea:focus-visible {
 }
 
 .desktop-status-bar.pane-active .status-bar-btn {
-  background: rgba(34, 211, 238, 0.06);
+  background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   color: rgba(241, 245, 249, 0.92);
 }
 
@@ -13368,7 +13368,7 @@ textarea:focus-visible {
 }
 
 .desktop-status-bar.pane-active .status-bar-btn:hover:not(:disabled) {
-  background: rgba(34, 211, 238, 0.1);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   color: var(--text-primary);
 }
 
@@ -13396,7 +13396,7 @@ textarea:focus-visible {
 }
 
 .desktop-status-bar.pane-active .terminal-mic-button-inline:not(.recording):not(.requesting):not(.checking) {
-  background: rgba(34, 211, 238, 0.06);
+  background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
   color: rgba(241, 245, 249, 0.92);
 }
 
@@ -13406,7 +13406,7 @@ textarea:focus-visible {
 }
 
 .desktop-status-bar.pane-active .terminal-mic-button-inline:hover:not(:disabled):not(.recording):not(.requesting):not(.checking) {
-  background: rgba(34, 211, 238, 0.1);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   color: var(--text-primary);
 }
 
@@ -13417,7 +13417,7 @@ textarea:focus-visible {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--terminal-bg, var(--bg-surface, #17191c));
+  background: var(--terminal-bg, var(--bg-surface, #1a1713));
 }
 
 .terminal-with-status .desktop-terminal-stack {
@@ -14634,7 +14634,7 @@ textarea:focus-visible {
 
 [data-theme="light"] .mobile-drawer-modern {
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 24%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 24%),
     radial-gradient(circle at top left, rgba(59, 130, 246, 0.06), transparent 28%),
     linear-gradient(
       180deg,
@@ -15476,13 +15476,13 @@ textarea:focus-visible {
     calc(10px + env(safe-area-inset-bottom, 0px));
   gap: var(--mobile-shell-gap);
   background:
-    radial-gradient(circle at top right, rgba(34, 211, 238, 0.14), transparent 34%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent-primary) 14%, transparent), transparent 34%),
     linear-gradient(180deg, rgba(2, 6, 23, 0.92), rgba(2, 6, 23, 0.98));
 }
 
 [data-theme="light"] .mobile-shell {
   background:
-    radial-gradient(circle at top right, rgba(8, 145, 178, 0.12), transparent 34%),
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 34%),
     linear-gradient(180deg, rgba(248, 250, 252, 0.96), rgba(239, 246, 255, 0.98));
 }
 
@@ -15854,7 +15854,7 @@ textarea:focus-visible {
 
 .mobile-shell-empty-state.preview {
   background:
-    radial-gradient(circle at top left, rgba(34, 211, 238, 0.12), transparent 36%),
+    radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 12%, transparent), transparent 36%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, transparent), color-mix(in srgb, var(--bg-primary) 94%, transparent));
 }
 

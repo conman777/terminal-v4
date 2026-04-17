@@ -850,7 +850,7 @@ export const TerminalPane = memo(function TerminalPane({
           justify-content: space-between;
           height: 36px;
           padding: 0 6px 0 12px;
-          background: var(--terminal-chrome-bg, #17191c);
+          background: var(--terminal-chrome-bg, #1a1713);
           border-bottom: none;
           flex-shrink: 0;
           z-index: 1;

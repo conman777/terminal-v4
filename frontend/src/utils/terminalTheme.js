@@ -1,17 +1,17 @@
 export const TERMINAL_THEME_FALLBACKS = {
   dark: {
-    background: '#0f172a',
-    foreground: '#f8fafc',
-    cursor: '#f8fafc',
-    cursorAccent: '#0f172a',
-    selectionBackground: 'rgba(34, 211, 238, 0.16)',
+    background: '#1a1713',
+    foreground: '#f4eee3',
+    cursor: '#f4eee3',
+    cursorAccent: '#1a1713',
+    selectionBackground: 'rgba(217, 119, 6, 0.18)',
   },
   light: {
-    background: '#eef2ff',
-    foreground: '#0f172a',
-    cursor: '#0f172a',
-    cursorAccent: '#eef2ff',
-    selectionBackground: 'rgba(8, 145, 178, 0.12)',
+    background: '#f5eedb',
+    foreground: '#1f1a13',
+    cursor: '#1f1a13',
+    cursorAccent: '#f5eedb',
+    selectionBackground: 'rgba(180, 83, 9, 0.14)',
   }
 };
 
