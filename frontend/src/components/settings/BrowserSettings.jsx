@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 /**
  * BrowserSettings Component
  *
- * Allows users to configure browser session settings like timeouts, limits, and quality
+ * Allows users to configure browser session settings like timeouts, limits, and quality.
+ * Styled via canonical tokens from styles.css — no Tailwind runtime in this project.
  */
 export function BrowserSettings() {
   const [settings, setSettings] = useState(null);
@@ -59,13 +60,14 @@ export function BrowserSettings() {
   };
 
   const resetToDefaults = async () => {
-    if (!confirm('Reset all browser settings to defaults?')) return;
-
     setIsSaving(true);
     setMessage(null);
 
     try {
-      const response = await fetch('/api/settings/browser/reset', { method: 'POST' });
+      const response = await fetch('/api/settings/browser', {
+        method: 'DELETE'
+      });
+
       if (response.ok) {
         const data = await response.json();
         setSettings(data.settings);
@@ -102,36 +104,27 @@ export function BrowserSettings() {
   };
 
   if (!settings || !defaults) {
-    return <div className="p-4">Loading...</div>;
+    return <div className="browser-settings-loading">Loading...</div>;
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h2 className="text-2xl font-bold mb-6">Browser Settings</h2>
+    <div className="browser-settings-root">
+      <h2 className="browser-settings-title">Browser Settings</h2>
 
       {message && (
-        <div
-          className={`mb-6 p-4 rounded ${
-            message.type === 'success'
-              ? 'bg-green-100 text-green-800 border border-green-200'
-              : 'bg-red-100 text-red-800 border border-red-200'
-          }`}
-        >
+        <div className={`browser-settings-banner browser-settings-banner-${message.type}`}>
           {message.text}
         </div>
       )}
 
-      <div className="space-y-6">
-        {/* Session Timeouts */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold mb-4">Session Timeouts</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+      <div className="browser-settings-sections">
+        <section className="browser-settings-card">
+          <h3 className="browser-settings-card-title">Session Timeouts</h3>
+          <div className="browser-settings-fields">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">
                 Idle Timeout
-                <span className="text-gray-500 font-normal ml-2">
-                  (1 min - 1 hour)
-                </span>
+                <span className="browser-settings-label-hint">(1 min – 1 hour)</span>
               </label>
               <input
                 type="number"
@@ -141,20 +134,18 @@ export function BrowserSettings() {
                 }
                 min="1"
                 max="60"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="browser-settings-input"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Current: {formatMs(formValues.idleTimeoutMs)} | Default:{' '}
+              <div className="browser-settings-meta">
+                Current: {formatMs(formValues.idleTimeoutMs)} · Default:{' '}
                 {formatMs(defaults.idleTimeoutMs)}
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">
                 Max Lifetime
-                <span className="text-gray-500 font-normal ml-2">
-                  (10 min - 4 hours)
-                </span>
+                <span className="browser-settings-label-hint">(10 min – 4 hours)</span>
               </label>
               <input
                 type="number"
@@ -164,23 +155,22 @@ export function BrowserSettings() {
                 }
                 min="10"
                 max="240"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="browser-settings-input"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Current: {formatMs(formValues.maxLifetimeMs)} | Default:{' '}
+              <div className="browser-settings-meta">
+                Current: {formatMs(formValues.maxLifetimeMs)} · Default:{' '}
                 {formatMs(defaults.maxLifetimeMs)}
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Session Limits */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold mb-4">Session Limits</h3>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+        <section className="browser-settings-card">
+          <h3 className="browser-settings-card-title">Session Limits</h3>
+          <div className="browser-settings-field">
+            <label className="browser-settings-label">
               Max Concurrent Sessions
-              <span className="text-gray-500 font-normal ml-2">(1-20)</span>
+              <span className="browser-settings-label-hint">(1–20)</span>
             </label>
             <input
               type="number"
@@ -188,24 +178,21 @@ export function BrowserSettings() {
               onChange={(e) => handleChange('maxSessions', parseInt(e.target.value))}
               min="1"
               max="20"
-              className="w-full px-3 py-2 border border-gray-300 rounded"
+              className="browser-settings-input"
             />
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="browser-settings-meta">
               Default: {defaults.maxSessions}
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Cleanup Settings */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold mb-4">Cleanup Settings</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+        <section className="browser-settings-card">
+          <h3 className="browser-settings-card-title">Cleanup</h3>
+          <div className="browser-settings-fields">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">
                 Cleanup Interval
-                <span className="text-gray-500 font-normal ml-2">
-                  (30s - 10 min)
-                </span>
+                <span className="browser-settings-label-hint">(30s – 10 min)</span>
               </label>
               <input
                 type="number"
@@ -215,20 +202,18 @@ export function BrowserSettings() {
                 }
                 min="30"
                 max="600"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="browser-settings-input"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Current: {formatMs(formValues.cleanupIntervalMs)} | Default:{' '}
+              <div className="browser-settings-meta">
+                Current: {formatMs(formValues.cleanupIntervalMs)} · Default:{' '}
                 {formatMs(defaults.cleanupIntervalMs)}
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">
                 Log Retention
-                <span className="text-gray-500 font-normal ml-2">
-                  (10 min - 24 hours)
-                </span>
+                <span className="browser-settings-label-hint">(10 min – 24 hours)</span>
               </label>
               <input
                 type="number"
@@ -238,41 +223,38 @@ export function BrowserSettings() {
                 }
                 min="10"
                 max="1440"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="browser-settings-input"
               />
-              <div className="text-xs text-gray-500 mt-1">
-                Current: {formatMs(formValues.logRetentionMs)} | Default:{' '}
+              <div className="browser-settings-meta">
+                Current: {formatMs(formValues.logRetentionMs)} · Default:{' '}
                 {formatMs(defaults.logRetentionMs)}
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Screenshot Settings */}
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold mb-4">Screenshot Settings</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Format
-              </label>
+        <section className="browser-settings-card">
+          <h3 className="browser-settings-card-title">Screenshots</h3>
+          <div className="browser-settings-fields">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">Format</label>
               <select
                 value={formValues.screenshotFormat}
                 onChange={(e) => handleChange('screenshotFormat', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded"
+                className="browser-settings-input"
               >
                 <option value="png">PNG (lossless)</option>
                 <option value="jpeg">JPEG (lossy, smaller)</option>
               </select>
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="browser-settings-meta">
                 Default: {defaults.screenshotFormat.toUpperCase()}
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+            <div className="browser-settings-field">
+              <label className="browser-settings-label">
                 JPEG Quality
-                <span className="text-gray-500 font-normal ml-2">(1-100)</span>
+                <span className="browser-settings-label-hint">(1–100)</span>
               </label>
               <input
                 type="number"
@@ -283,34 +265,163 @@ export function BrowserSettings() {
                 min="1"
                 max="100"
                 disabled={formValues.screenshotFormat !== 'jpeg'}
-                className="w-full px-3 py-2 border border-gray-300 rounded disabled:bg-gray-100"
+                className="browser-settings-input"
               />
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="browser-settings-meta">
                 Default: {defaults.screenshotQuality}
-                {formValues.screenshotFormat !== 'jpeg' && ' (only applies to JPEG)'}
+                {formValues.screenshotFormat !== 'jpeg' && ' · only applies to JPEG'}
               </div>
             </div>
           </div>
-        </div>
+        </section>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex justify-between mt-8">
+      <div className="browser-settings-actions">
         <button
+          type="button"
           onClick={resetToDefaults}
           disabled={isSaving}
-          className="px-4 py-2 bg-gray-600 text-white rounded font-medium hover:bg-gray-700 disabled:opacity-50"
+          className="btn-secondary"
         >
           Reset to Defaults
         </button>
         <button
+          type="button"
           onClick={saveSettings}
           disabled={isSaving}
-          className="px-6 py-2 bg-blue-600 text-white rounded font-medium hover:bg-blue-700 disabled:opacity-50"
+          className="btn-primary"
         >
-          {isSaving ? 'Saving...' : 'Save Settings'}
+          {isSaving ? 'Saving…' : 'Save Settings'}
         </button>
       </div>
+
+      <style>{`
+        .browser-settings-root {
+          padding: 24px;
+          max-width: 720px;
+          margin: 0 auto;
+          color: var(--text-primary);
+          font-family: var(--font-ui);
+        }
+
+        .browser-settings-title {
+          margin: 0 0 20px;
+          font-size: 22px;
+          font-weight: 600;
+          letter-spacing: -0.015em;
+          color: var(--text-primary);
+        }
+
+        .browser-settings-loading {
+          padding: 24px;
+          color: var(--text-muted);
+          font-family: var(--font-ui);
+        }
+
+        .browser-settings-banner {
+          margin-bottom: 20px;
+          padding: 12px 14px;
+          border-radius: var(--radius-md);
+          font-size: 13px;
+          font-weight: 500;
+          border: 1px solid transparent;
+        }
+
+        .browser-settings-banner-success {
+          color: var(--success);
+          background: color-mix(in srgb, var(--success) 12%, transparent);
+          border-color: color-mix(in srgb, var(--success) 30%, transparent);
+        }
+
+        .browser-settings-banner-error {
+          color: var(--error);
+          background: color-mix(in srgb, var(--error) 12%, transparent);
+          border-color: color-mix(in srgb, var(--error) 30%, transparent);
+        }
+
+        .browser-settings-sections {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+
+        .browser-settings-card {
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-subtle);
+          border-radius: var(--radius-lg);
+          padding: 18px 20px;
+        }
+
+        .browser-settings-card-title {
+          margin: 0 0 14px;
+          font-size: 14px;
+          font-weight: 600;
+          letter-spacing: 0.01em;
+          color: var(--text-primary);
+        }
+
+        .browser-settings-fields {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+        }
+
+        .browser-settings-field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .browser-settings-label {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--text-secondary);
+        }
+
+        .browser-settings-label-hint {
+          font-size: 11px;
+          font-weight: 400;
+          color: var(--text-muted);
+        }
+
+        .browser-settings-input {
+          width: 100%;
+          padding: 8px 12px;
+          border-radius: var(--radius-md);
+          border: 1px solid var(--border-default);
+          background: var(--bg-surface);
+          color: var(--text-primary);
+          font-family: inherit;
+          font-size: 13px;
+          outline: none;
+          transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+        }
+
+        .browser-settings-input:focus {
+          border-color: var(--accent-primary);
+          box-shadow: 0 0 0 2px var(--accent-primary-dim);
+        }
+
+        .browser-settings-input:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .browser-settings-meta {
+          font-size: 11px;
+          color: var(--text-muted);
+        }
+
+        .browser-settings-actions {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          margin-top: 24px;
+        }
+      `}</style>
     </div>
   );
 }
