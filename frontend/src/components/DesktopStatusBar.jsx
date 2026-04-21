@@ -50,9 +50,6 @@ export function DesktopStatusBar({
   gitBranch,
   isActive = false,
   isTerminalPanelOpen = false,
-  showConversationToggle = false,
-  isConversationViewEnabled = false,
-  onToggleConversationView,
   showTerminalToggle = true,
   onToggleTerminalPanel,
   aiType = null,
@@ -93,10 +90,10 @@ export function DesktopStatusBar({
   const normalizedCwd = typeof cwd === 'string' ? cwd.replace(/\\/g, '/') : '';
   const folderName = normalizedCwd ? normalizedCwd.split('/').filter(Boolean).pop() || normalizedCwd : '';
   const selectedAiOption = aiOptions.find((option) => option.id === aiType)
-    ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: '#38bdf8' } : null)
+    ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: 'var(--accent-info)' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
-  const showMetaRow = Boolean(showConversationToggle || showTerminalToggle);
+  const showMetaRow = Boolean(showTerminalToggle);
   const showComposerFooter = Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
   const slashSuggestions = useMemo(
@@ -258,23 +255,6 @@ export function DesktopStatusBar({
           <div className="status-bar-left" />
 
           <div className="status-bar-top-actions">
-            {showConversationToggle && (
-              <button
-                type="button"
-                className={`status-terminal-toggle ${isConversationViewEnabled ? 'active' : ''}`}
-                onClick={onToggleConversationView}
-                disabled={!onToggleConversationView}
-                aria-pressed={isConversationViewEnabled}
-                aria-label={isConversationViewEnabled
-                  ? 'Disable chat view and show the classic terminal layout'
-                  : 'Enable chat view'}
-                title={isConversationViewEnabled
-                  ? 'Disable chat view and show the classic terminal layout'
-                  : 'Enable chat view'}
-              >
-                Chat View
-              </button>
-            )}
             {showTerminalToggle && (
               <button
                 type="button"

@@ -19,19 +19,19 @@ const TOOL_ICONS = {
   default: '⚙️'
 };
 
-// Tool type to color mapping
+// Tool type to color mapping (canonical tokens)
 const TOOL_COLORS = {
-  bash: '#22c55e',
-  read: '#3b82f6',
-  write: '#f59e0b',
-  edit: '#f59e0b',
-  glob: '#8b5cf6',
-  grep: '#8b5cf6',
-  task: '#06b6d4',
-  todowrite: '#ec4899',
-  webfetch: '#0ea5e9',
-  websearch: '#0ea5e9',
-  default: '#6b7280'
+  bash: 'var(--success)',
+  read: 'var(--accent-info)',
+  write: 'var(--accent-primary)',
+  edit: 'var(--accent-primary)',
+  glob: 'var(--accent-secondary)',
+  grep: 'var(--accent-secondary)',
+  task: 'var(--accent-primary-light)',
+  todowrite: 'var(--warning)',
+  webfetch: 'var(--accent-info)',
+  websearch: 'var(--accent-info)',
+  default: 'var(--text-muted)'
 };
 
 // Regex to match file:line patterns

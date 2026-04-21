@@ -184,7 +184,7 @@ export function PerformanceTab({ port }) {
           </button>
           <button
             onClick={fetchMetrics}
-            className="px-3 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700"
+            className="px-3 py-1 bg-amber-600 text-white rounded text-sm font-medium hover:bg-amber-700"
           >
             Refresh
           </button>
@@ -286,7 +286,7 @@ export function PerformanceTab({ port }) {
               {fpsData.map((fps, i) => (
                 <div
                   key={i}
-                  className="flex-1 bg-blue-500 rounded-t"
+                  className="flex-1 bg-amber-500 rounded-t"
                   style={{ height: `${(fps / 60) * 100}%` }}
                   title={`${fps.toFixed(1)} FPS`}
                 />

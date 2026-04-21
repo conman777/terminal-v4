@@ -258,7 +258,7 @@ export function SessionTabBar({
           height: 100%;
           flex-shrink: 0;
           position: relative;
-          font-family: var(--font-ui);
+          font-family: var(--font-mono);
         }
 
         .session-tab-bar-container-modern.in-header {
@@ -284,40 +284,44 @@ export function SessionTabBar({
         }
 
         .session-tab-scroll-btn-modern {
-          width: 20px;
-          height: 20px;
+          width: 22px;
+          height: 22px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: transparent;
-          border: none;
+          background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-subtle, #52525b) 72%, transparent);
+          border-radius: 999px;
           color: var(--text-muted, #71717a);
           cursor: pointer;
           z-index: 10;
-          transition: color 0.1s ease;
+          transition: color 0.1s ease, border-color 0.1s ease, background 0.1s ease;
         }
 
         .session-tab-scroll-btn-modern:hover {
           color: var(--text-primary, #fafafa);
+          border-color: color-mix(in srgb, var(--accent-primary, #f59e0b) 34%, transparent);
         }
 
         .session-tab-new-modern {
           flex-shrink: 0;
-          width: 20px;
-          height: 20px;
+          width: 22px;
+          height: 22px;
           display: flex;
           align-items: center;
           justify-content: center;
-          background: transparent;
-          border: none;
+          background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+          border: 1px solid color-mix(in srgb, var(--border-subtle, #52525b) 72%, transparent);
+          border-radius: 999px;
           color: var(--text-muted, #71717a);
           cursor: pointer;
-          transition: color 0.1s ease;
-          margin-left: 4px;
+          transition: color 0.1s ease, border-color 0.1s ease, background 0.1s ease;
+          margin-left: 8px;
         }
 
         .session-tab-new-modern:hover {
           color: var(--text-primary, #fafafa);
+          border-color: color-mix(in srgb, var(--accent-primary, #f59e0b) 34%, transparent);
         }
 
       `}</style>

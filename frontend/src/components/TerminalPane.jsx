@@ -5,14 +5,13 @@ import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
 import { DesktopConversationView } from './DesktopConversationView';
 import { shouldFallbackToTerminalView } from '../utils/conversationMode';
-import { getAiCapabilities, getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
+import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
 import { isStructuredSessionId } from '../utils/structuredSessions';
 import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
-const DESKTOP_AI_CONVERSATION_VIEW_KEY = 'desktop.aiConversationView.enabled';
 
 function extractTerminalPreviewLines(chunk) {
   if (typeof chunk !== 'string' || chunk.length === 0) return [];
@@ -101,14 +100,6 @@ export const TerminalPane = memo(function TerminalPane({
   const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
   const [interactivePromptEvent, setInteractivePromptEvent] = useState(null);
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
-  const [desktopAiConversationViewEnabled, setDesktopAiConversationViewEnabled] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      return window.localStorage.getItem(DESKTOP_AI_CONVERSATION_VIEW_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
@@ -127,10 +118,6 @@ export const TerminalPane = memo(function TerminalPane({
       }
       return next;
     });
-  }, []);
-  const handleToggleConversationView = useCallback(() => {
-    setIsTerminalPanelOpen(false);
-    setDesktopAiConversationViewEnabled((enabled) => !enabled);
   }, []);
 
   const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession } = useTerminalSession();
@@ -151,19 +138,15 @@ export const TerminalPane = memo(function TerminalPane({
     [inferredAiType, terminalPreview, terminalScreenSnapshot]
   );
   const currentAiType = inferredAiType ?? runtimeInfo?.providerId ?? null;
-  const currentAiCapabilities = getAiCapabilities(currentAiType, customAiProviders);
   const launchCommand = getAiInitialCommand(currentAiType, customAiProviders);
   const aiOptions = getAiTypeOptions(customAiProviders);
   const showSessionSelector = canClose && selectableSessions.length > 0;
-  // Detect if session uses structured mode (ss- prefix)
   const isStructuredSession = isStructuredSessionId(pane.sessionId);
-  const canUseConversationToggle = Boolean(pane.sessionId) && !isStructuredSession;
-  const useConversationFirstLayout = isStructuredSession || (canUseConversationToggle && desktopAiConversationViewEnabled);
+  const useConversationFirstLayout = isStructuredSession;
   const useTerminalFirstLayout = !useConversationFirstLayout;
-  const shouldKeepBackgroundTerminalRuntime = useConversationFirstLayout && !isStructuredSession;
-  const shouldForcePromptDock = useConversationFirstLayout && !isStructuredSession && Boolean(interactivePromptEvent);
-  const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen || shouldForcePromptDock;
-  const shouldRenderTerminalRuntime = useTerminalFirstLayout || isTerminalPanelOpen || shouldKeepBackgroundTerminalRuntime;
+  const shouldForcePromptDock = false;
+  const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen;
+  const shouldRenderTerminalRuntime = useTerminalFirstLayout || isTerminalPanelOpen;
 
   const {
     turns,
@@ -199,18 +182,6 @@ export const TerminalPane = memo(function TerminalPane({
     const timer = setTimeout(() => setViewModeNotice(''), 5000);
     return () => clearTimeout(timer);
   }, [viewModeNotice, isNoticePersistent]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(
-        DESKTOP_AI_CONVERSATION_VIEW_KEY,
-        desktopAiConversationViewEnabled ? 'true' : 'false'
-      );
-    } catch {
-      // Ignore storage failures and keep the toggle session-local.
-    }
-  }, [desktopAiConversationViewEnabled]);
 
   useEffect(() => {
     setIsSessionBusy(false);
@@ -404,7 +375,7 @@ export const TerminalPane = memo(function TerminalPane({
     conversationFallbackRef.current = true;
     setIsNoticePersistent(false);
     setViewModeNotice('');
-  }, [currentAiCapabilities.prefersStructuredUi]);
+  }, []);
 
   const handleCliEvent = useCallback((event) => {
     if (!event || typeof event !== 'object') return;
@@ -439,10 +410,10 @@ export const TerminalPane = memo(function TerminalPane({
   }, []);
 
   useEffect(() => {
-    if (!desktopAllowTerminalInput && !isStructuredSession && !canUseConversationToggle) {
+    if (!desktopAllowTerminalInput && !isStructuredSession) {
       setIsTerminalPanelOpen(false);
     }
-  }, [canUseConversationToggle, desktopAllowTerminalInput, isStructuredSession]);
+  }, [desktopAllowTerminalInput, isStructuredSession]);
 
   const launchAiType = useCallback((aiTypeToLaunch, commandOverride = null) => {
     const nextLaunchCommand = commandOverride || getAiInitialCommand(aiTypeToLaunch, customAiProviders);
@@ -746,11 +717,11 @@ export const TerminalPane = memo(function TerminalPane({
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
                     onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
-                    onOpenTerminal={isStructuredSession || desktopAllowTerminalInput || canUseConversationToggle ? handleOpenTerminalPanel : undefined}
+                    onOpenTerminal={isStructuredSession || desktopAllowTerminalInput ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
                     interactivePromptEvent={interactivePromptEvent}
-                    isTerminalDockVisible={shouldForcePromptDock}
+                    isTerminalDockVisible={isTerminalDockVisible}
                     mode={isStructuredSession ? 'structured' : 'terminal'}
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
@@ -803,11 +774,8 @@ export const TerminalPane = memo(function TerminalPane({
                 isActive={shouldHighlightActiveChrome}
                 onImageUpload={handleImageUpload}
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
-                showConversationToggle={canUseConversationToggle}
-                isConversationViewEnabled={useConversationFirstLayout && !isStructuredSession}
-                onToggleConversationView={canUseConversationToggle ? handleToggleConversationView : undefined}
-                showTerminalToggle={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput || canUseConversationToggle)}
-                onToggleTerminalPanel={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput || canUseConversationToggle) ? handleToggleTerminalPanel : undefined}
+                showTerminalToggle={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput)}
+                onToggleTerminalPanel={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
                 connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}

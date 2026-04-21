@@ -56,6 +56,8 @@ export function MobileHeader({
   showDrawerViewTabs = true,
   compactForTextEntry = false,
   singleRow = false,
+  projectInfo = null,
+  pathParts = null,
 }) {
   const { theme, toggleTheme } = useTheme();
   const visibleActiveSessions = activeSessions.filter((session) => !session.thread?.archived);
@@ -346,14 +348,30 @@ export function MobileHeader({
           </button>
 
           <div className="mobile-header-title-block">
-            {!isCondensedHeader && (
-              <span className="mobile-header-kicker">V4 Terminal</span>
-            )}
             {isPreviewView ? (
               <span className="mobile-header-title">Preview</span>
-            ) : (
-              <span className="mobile-header-brand">V4</span>
-            )}
+            ) : pathParts ? (
+              <div className="mobile-header-path" title={projectInfo?.cwd || 'Workspace'}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                </svg>
+                {!isCondensedHeader && (
+                  <>
+                    <span className="mobile-header-path-parent">{pathParts.parentPath}</span>
+                    <span className="mobile-header-path-sep">/</span>
+                  </>
+                )}
+                <span className="mobile-header-path-current">{pathParts.currentName}</span>
+                {projectInfo?.gitBranch ? (
+                  <>
+                    <span className="mobile-header-path-sep">.</span>
+                    <span className="mobile-header-path-branch">{projectInfo.gitBranch}</span>
+                  </>
+                ) : null}
+              </div>
+            ) : !isCondensedHeader ? (
+              <span className="mobile-header-brand">V4 Terminal</span>
+            ) : null}
           </div>
 
           <div className="mobile-header-actions-right">

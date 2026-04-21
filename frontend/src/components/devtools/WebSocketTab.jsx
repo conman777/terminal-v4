@@ -133,7 +133,7 @@ export function WebSocketTab({ port }) {
           </select>
           <button
             onClick={fetchData}
-            className="px-3 py-1 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700"
+            className="px-3 py-1 bg-amber-600 text-white rounded text-sm font-medium hover:bg-amber-700"
           >
             Refresh
           </button>
@@ -162,7 +162,7 @@ export function WebSocketTab({ port }) {
                     key={conn.id}
                     onClick={() => setSelectedConnectionId(conn.id === selectedConnectionId ? null : conn.id)}
                     className={`p-3 cursor-pointer hover:bg-gray-50 ${
-                      selectedConnectionId === conn.id ? 'bg-blue-50' : ''
+                      selectedConnectionId === conn.id ? 'bg-amber-50' : ''
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -210,7 +210,7 @@ export function WebSocketTab({ port }) {
                 onClick={() => setDirectionFilter('all')}
                 className={`px-3 py-1 rounded text-sm font-medium ${
                   directionFilter === 'all'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-amber-600 text-white'
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                 }`}
               >
@@ -220,7 +220,7 @@ export function WebSocketTab({ port }) {
                 onClick={() => setDirectionFilter('sent')}
                 className={`px-3 py-1 rounded text-sm font-medium ${
                   directionFilter === 'sent'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-amber-600 text-white'
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                 }`}
               >
@@ -230,7 +230,7 @@ export function WebSocketTab({ port }) {
                 onClick={() => setDirectionFilter('received')}
                 className={`px-3 py-1 rounded text-sm font-medium ${
                   directionFilter === 'received'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-amber-600 text-white'
                     : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                 }`}
               >
@@ -255,7 +255,7 @@ export function WebSocketTab({ port }) {
                 <div>
                   <div className="text-sm font-medium text-gray-500">Direction</div>
                   <div className={`text-sm font-medium ${
-                    selectedMessage.direction === 'sent' ? 'text-blue-600' : 'text-green-600'
+                    selectedMessage.direction === 'sent' ? 'text-amber-600' : 'text-green-600'
                   }`}>
                     {selectedMessage.direction === 'sent' ? '→ Sent' : '← Received'}
                   </div>
@@ -319,7 +319,7 @@ export function WebSocketTab({ port }) {
                         </td>
                         <td className="p-2">
                           <span className={`text-xs font-medium ${
-                            msg.direction === 'sent' ? 'text-blue-600' : 'text-green-600'
+                            msg.direction === 'sent' ? 'text-amber-600' : 'text-green-600'
                           }`}>
                             {msg.direction === 'sent' ? '→ Sent' : '← Received'}
                           </span>

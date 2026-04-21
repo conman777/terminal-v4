@@ -45,7 +45,8 @@ const AGENT_SLASH_ALIASES = new Map([
   ['gemni', 'gemini'],
 ]);
 const AI_TYPE_ID_RE = /^[a-z][a-z0-9_-]*$/;
-const CUSTOM_AI_COLORS = ['#f97316', '#06b6d4', '#84cc16', '#e879f9', '#f43f5e', '#a78bfa'];
+// Warm palette for user-defined AIs (cohesive with canonical theme tokens).
+const CUSTOM_AI_COLORS = ['#d97706', '#fbbf24', '#e6875b', '#10b981', '#fb3654', '#92400e'];
 const DEFAULT_AI_CAPABILITIES = {
   prefersStructuredUi: false,
   supportsStructuredEvents: false,
@@ -83,7 +84,7 @@ function createCustomOption(provider) {
   return {
     id: provider.id,
     label: provider.label,
-    color: provider.color ?? '#38bdf8'
+    color: provider.color ?? '#e6875b'
   };
 }
 
@@ -100,7 +101,7 @@ export function buildCustomAiProvider({ id, label, initialCommand, color }) {
     title: trimmedLabel,
     launchCommand,
     initialCommand: trimmedCommand,
-    color: color ?? '#38bdf8',
+    color: color ?? '#e6875b',
     capabilities: { ...DEFAULT_AI_CAPABILITIES }
   };
 }
@@ -154,7 +155,7 @@ export function getAiProvider(aiType, customProviders = []) {
     title: label,
     launchCommand: normalized,
     initialCommand: normalized,
-    color: '#38bdf8',
+    color: '#e6875b',
     capabilities: { ...DEFAULT_AI_CAPABILITIES }
   };
 }

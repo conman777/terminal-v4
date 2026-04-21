@@ -1436,10 +1436,14 @@ function AppContent() {
               isMobile={false}
               sessionProps={headerSessionProps}
               modalProps={headerModalProps}
+              projectInfo={projectInfo}
+              isSidebarCollapsed={sidebarCollapsed}
+              onToggleSidebar={toggleSidebar}
               showPreview={showPreview}
               onTogglePreview={togglePreview}
               showFileManager={showFileManager}
               onToggleFileManager={toggleFileManager}
+              desktopOnOpenSettings={handleOpenSettings}
               showSystemResources={showSystemResources}
               onToggleSystemResources={toggleSystemResources}
               user={user}

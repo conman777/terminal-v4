@@ -57,15 +57,15 @@ function Sparkline({ data, color, height = 40, width = 100 }) {
   const gradientId = `gradient-${color.replace(/[^a-z0-9]/gi, '')}`;
 
   return (
-    <svg width={width} height={height} style={{ display: 'block' }}>
+    <svg width={width} height={height} style={{ display: 'block', color }}>
       <defs>
         <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor={color} stopOpacity="0.4" />
-          <stop offset="100%" stopColor={color} stopOpacity="0.05" />
+          <stop offset="0%" style={{ stopColor: 'currentColor', stopOpacity: 0.4 }} />
+          <stop offset="100%" style={{ stopColor: 'currentColor', stopOpacity: 0.05 }} />
         </linearGradient>
       </defs>
       <path d={areaD} fill={`url(#${gradientId})`} />
-      <path d={pathD} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={pathD} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -77,26 +77,25 @@ function CircularProgress({ value, size = 80, strokeWidth = 8, color }) {
   const offset = circumference - (value / 100) * circumference;
 
   return (
-    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', color }}>
       <circle
         cx={size / 2}
         cy={size / 2}
         r={radius}
         fill="none"
-        stroke="var(--border-default)"
         strokeWidth={strokeWidth}
+        style={{ stroke: 'var(--border-default)' }}
       />
       <circle
         cx={size / 2}
         cy={size / 2}
         r={radius}
         fill="none"
-        stroke={color}
         strokeWidth={strokeWidth}
         strokeDasharray={circumference}
         strokeDashoffset={offset}
         strokeLinecap="round"
-        style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+        style={{ transition: 'stroke-dashoffset 0.5s ease', stroke: 'currentColor' }}
       />
     </svg>
   );
@@ -271,7 +270,7 @@ export function SystemResourcesView() {
   }, [windowActive]);
 
   const getStatus = (pct) => pct >= 85 ? 'critical' : pct >= 70 ? 'warning' : 'healthy';
-  const getColor = (status) => status === 'critical' ? '#ef4444' : status === 'warning' ? '#f59e0b' : '#22c55e';
+  const getColor = (status) => status === 'critical' ? 'var(--error)' : status === 'warning' ? 'var(--warning)' : 'var(--success)';
 
   const memPct = systemStats?.memory?.percentage ?? 0;
   const cpuPct = systemStats?.cpu?.percentage ?? 0;
@@ -345,7 +344,7 @@ export function SystemResourcesView() {
           </div>
           {statsHistory?.history?.length > 1 && (
             <div className="sr-card-chart">
-              <Sparkline data={statsHistory.history.map(p => p.memory)} color="#3b82f6" height={50} width={280} />
+              <Sparkline data={statsHistory.history.map(p => p.memory)} color="var(--accent-primary-light)" height={50} width={280} />
               <div className="sr-chart-legend">
                 Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.memory, 0) / statsHistory.history.length)}% · Max: {Math.max(...statsHistory.history.map(p => p.memory))}%
               </div>
@@ -394,7 +393,7 @@ export function SystemResourcesView() {
           </div>
           {statsHistory?.history?.length > 1 && (
             <div className="sr-card-chart">
-              <Sparkline data={statsHistory.history.map(p => p.cpu)} color="#22c55e" height={50} width={280} />
+              <Sparkline data={statsHistory.history.map(p => p.cpu)} color="var(--success)" height={50} width={280} />
               <div className="sr-chart-legend">
                 Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.cpu, 0) / statsHistory.history.length)}% · Max: {Math.max(...statsHistory.history.map(p => p.cpu))}%
               </div>
@@ -442,11 +441,11 @@ export function SystemResourcesView() {
             <div className="sr-card-chart small">
               <div className="sr-dual-chart">
                 <div>
-                  <Sparkline data={statsHistory.history.map(p => p.diskRead || 0)} color="#06b6d4" height={30} width={100} />
+                  <Sparkline data={statsHistory.history.map(p => p.diskRead || 0)} color="var(--accent-info)" height={30} width={100} />
                   <span className="sr-mini-label">Read</span>
                 </div>
                 <div>
-                  <Sparkline data={statsHistory.history.map(p => p.diskWrite || 0)} color="#f59e0b" height={30} width={100} />
+                  <Sparkline data={statsHistory.history.map(p => p.diskWrite || 0)} color="var(--accent-primary)" height={30} width={100} />
                   <span className="sr-mini-label">Write</span>
                 </div>
               </div>
@@ -472,14 +471,14 @@ export function SystemResourcesView() {
               <span className="sr-latency-label">API</span>
               <span className="sr-latency-value">{latencyMs !== null ? `${latencyMs}ms` : '—'}</span>
               {latencyHistory.length > 1 && (
-                <Sparkline data={latencyHistory} color="#3b82f6" height={24} width={60} />
+                <Sparkline data={latencyHistory} color="var(--accent-primary-light)" height={24} width={60} />
               )}
             </div>
             <div className="sr-latency-row">
               <span className="sr-latency-label">WebSocket</span>
               <span className="sr-latency-value">{wsLatencyMs !== null ? `${wsLatencyMs}ms` : '—'}</span>
               {wsLatencyHistory.length > 1 && (
-                <Sparkline data={wsLatencyHistory} color="#38bdf8" height={24} width={60} />
+                <Sparkline data={wsLatencyHistory} color="var(--accent-info)" height={24} width={60} />
               )}
             </div>
           </div>
@@ -500,7 +499,7 @@ export function SystemResourcesView() {
               <span className="sr-latency-label">Client Frame</span>
               <span className="sr-latency-value">{clientFrameMs !== null ? `${clientFrameMs}ms` : '—'}</span>
               {clientFrameHistory.length > 1 && (
-                <Sparkline data={clientFrameHistory} color="#f59e0b" height={24} width={60} />
+                <Sparkline data={clientFrameHistory} color="var(--accent-primary)" height={24} width={60} />
               )}
             </div>
             <div className="sr-latency-row">
@@ -574,7 +573,7 @@ export function SystemResourcesView() {
           margin: 0;
           font-size: 16px;
           font-weight: 700;
-          color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary);
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
@@ -587,18 +586,18 @@ export function SystemResourcesView() {
         }
 
         .sr-status-badge.healthy {
-          background: rgba(34, 197, 94, 0.1);
-          color: #22c55e;
+          background: color-mix(in srgb, var(--success) 12%, transparent);
+          color: var(--success);
         }
 
         .sr-status-badge.warning {
-          background: rgba(245, 158, 11, 0.1);
-          color: #f59e0b;
+          background: color-mix(in srgb, var(--warning) 12%, transparent);
+          color: var(--warning);
         }
 
         .sr-status-badge.critical {
-          background: rgba(239, 68, 68, 0.1);
-          color: #ef4444;
+          background: color-mix(in srgb, var(--error) 12%, transparent);
+          color: var(--error);
         }
 
         .sr-time-range select {
@@ -613,7 +612,7 @@ export function SystemResourcesView() {
         }
 
         .sr-time-range select:hover {
-          border-color: rgba(245, 158, 11, 0.3);
+          border-color: color-mix(in srgb, var(--accent-primary) 36%, transparent);
         }
 
         .sr-alert {
@@ -624,15 +623,15 @@ export function SystemResourcesView() {
         }
 
         .sr-alert.warning {
-          background: rgba(245, 158, 11, 0.06);
-          border: 1px solid rgba(245, 158, 11, 0.2);
-          color: #f59e0b;
+          background: color-mix(in srgb, var(--warning) 8%, transparent);
+          border: 1px solid color-mix(in srgb, var(--warning) 24%, transparent);
+          color: var(--warning);
         }
 
         .sr-alert.critical {
-          background: rgba(239, 68, 68, 0.06);
-          border: 1px solid rgba(239, 68, 68, 0.2);
-          color: #ef4444;
+          background: color-mix(in srgb, var(--error) 8%, transparent);
+          border: 1px solid color-mix(in srgb, var(--error) 24%, transparent);
+          color: var(--error);
         }
 
         .sr-grid {
@@ -833,11 +832,11 @@ export function SystemResourcesView() {
         }
 
         .sr-io-direction.read {
-          color: #06b6d4;
+          color: var(--accent-info);
         }
 
         .sr-io-direction.write {
-          color: var(--accent-primary, #f59e0b);
+          color: var(--accent-primary);
         }
 
         .sr-io-value {
@@ -931,7 +930,7 @@ export function SystemResourcesView() {
         }
 
         .sr-process-ports {
-          color: var(--accent-info, #38bdf8);
+          color: var(--accent-info);
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -942,11 +941,11 @@ export function SystemResourcesView() {
         }
 
         .sr-process-cpu.critical {
-          color: var(--error, #fb3654);
+          color: var(--error);
         }
 
         .sr-process-cpu.warning {
-          color: var(--accent-primary, #f59e0b);
+          color: var(--warning);
         }
 
         .sr-process-mem {

@@ -1,4 +1,5 @@
 use std::env;
+use std::ffi::OsString;
 use std::io::{Error, ErrorKind, Read, Result, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -18,6 +19,55 @@ struct BackendProcess(Mutex<Option<Child>>);
 
 fn io_error(message: impl Into<String>) -> Error {
     Error::new(ErrorKind::Other, message.into())
+}
+
+fn parse_env_file(contents: &str) -> Vec<(String, String)> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            if key.is_empty() {
+                return None;
+            }
+
+            let value = value.trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|trimmed| trimmed.strip_suffix('"'))
+                .or_else(|| {
+                    value
+                        .strip_prefix('\'')
+                        .and_then(|trimmed| trimmed.strip_suffix('\''))
+                })
+                .unwrap_or(value)
+                .to_string();
+
+            Some((key.to_string(), value))
+        })
+        .collect()
+}
+
+fn load_backend_env_file(repo_root: &Path) -> Result<Vec<(String, String)>> {
+    let env_path = repo_root.join("backend").join(".env");
+    match std::fs::read_to_string(&env_path) {
+        Ok(contents) => Ok(parse_env_file(&contents)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(io_error(format!(
+            "Failed to read backend env file at {}: {error}",
+            env_path.display()
+        ))),
+    }
+}
+
+fn env_value_from_sources(key: &str, backend_env: &[(String, String)]) -> Option<String> {
+    env::var(key).ok().or_else(|| {
+        backend_env
+            .iter()
+            .find_map(|(env_key, env_value)| (env_key == key).then(|| env_value.clone()))
+    })
 }
 
 fn resolve_repo_root() -> Result<PathBuf> {
@@ -50,9 +100,8 @@ fn desktop_health_host() -> &'static str {
     DESKTOP_LOOPBACK_HOST
 }
 
-fn desktop_jwt_secret(share_mode: &str) -> Option<String> {
-    let configured = env::var("JWT_SECRET")
-        .ok()
+fn desktop_jwt_secret(share_mode: &str, backend_env: &[(String, String)]) -> Option<String> {
+    let configured = env_value_from_sources("JWT_SECRET", backend_env)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
@@ -75,21 +124,27 @@ fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> 
     assert_backend_port_available()?;
 
     let repo_root = resolve_repo_root()?;
+    let backend_env = load_backend_env_file(&repo_root)?;
     let rust_bin = find_rust_binary(app_handle, &repo_root).ok_or_else(|| {
     io_error(
       "Rust backend binary not found. Build it with `cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml` before launching the desktop app.",
     )
   })?;
-    let data_dir = resolve_data_dir(app_handle)?;
+    let data_dir = resolve_data_dir(app_handle, &backend_env)?;
     let share_mode = desktop_share_mode();
     let backend_host = desktop_backend_host(&share_mode);
-    let jwt_secret = desktop_jwt_secret(&share_mode);
+    let jwt_secret = desktop_jwt_secret(&share_mode, &backend_env);
 
     std::fs::create_dir_all(&data_dir)
         .map_err(|err| io_error(format!("Failed to create desktop data directory: {err}")))?;
 
     eprintln!("[tauri] Starting Rust backend: {}", rust_bin.display());
     let mut command = Command::new(&rust_bin);
+    for (key, value) in &backend_env {
+        if env::var_os(key).is_none() {
+            command.env(key, value);
+        }
+    }
     command
         .env("HOST", backend_host)
         .env("PORT", DESKTOP_PORT.to_string())
@@ -109,8 +164,11 @@ fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> 
         .map_err(|err| io_error(format!("Failed to launch Rust backend: {err}")))
 }
 
-fn resolve_data_dir<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("TERMINAL_DATA_DIR") {
+fn resolve_data_dir<R: tauri::Runtime>(
+    app_handle: &AppHandle<R>,
+    backend_env: &[(String, String)],
+) -> Result<PathBuf> {
+    if let Some(path) = resolve_data_dir_override(backend_env) {
         return Ok(PathBuf::from(path));
     }
 
@@ -118,6 +176,14 @@ fn resolve_data_dir<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Path
         .path()
         .app_local_data_dir()
         .map_err(|_| io_error("Failed to resolve the desktop app data directory"))
+}
+
+fn resolve_data_dir_override(backend_env: &[(String, String)]) -> Option<OsString> {
+    env::var_os("TERMINAL_DATA_DIR").or_else(|| {
+        backend_env
+            .iter()
+            .find_map(|(key, value)| (key == "TERMINAL_DATA_DIR").then(|| OsString::from(value)))
+    })
 }
 
 fn find_rust_binary<R: tauri::Runtime>(
@@ -270,4 +336,52 @@ fn main() {
                 stop_backend(&state);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_env_file, resolve_data_dir_override};
+    use std::ffi::OsString;
+
+    #[test]
+    fn parse_env_file_reads_plain_and_quoted_pairs() {
+        let parsed = parse_env_file(
+            r#"
+            # comment
+            STORAGE_DATABASE_URL=postgres://db.example/app
+            TERMINAL_DATA_DIR="C:\Users\conor\AppData\Local\terminal-v4"
+            EMPTY=
+            "#,
+        );
+
+        assert_eq!(
+            parsed,
+            vec![
+                (
+                    "STORAGE_DATABASE_URL".to_string(),
+                    "postgres://db.example/app".to_string()
+                ),
+                (
+                    "TERMINAL_DATA_DIR".to_string(),
+                    r"C:\Users\conor\AppData\Local\terminal-v4".to_string()
+                ),
+                ("EMPTY".to_string(), "".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_data_dir_override_uses_backend_env_when_process_env_missing() {
+        let backend_env = vec![(
+            "TERMINAL_DATA_DIR".to_string(),
+            r"C:\Users\conor\AppData\Local\terminal-v4".to_string(),
+        )];
+
+        let resolved = resolve_data_dir_override(&backend_env);
+
+        assert_eq!(
+            resolved,
+            Some(OsString::from(r"C:\Users\conor\AppData\Local\terminal-v4"))
+        );
+    }
 }

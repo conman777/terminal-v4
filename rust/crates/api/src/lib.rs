@@ -450,18 +450,25 @@ fn resolve_frontend_dir_with_current_dir(
     data_dir: &FsPath,
     current_dir: Option<&FsPath>,
 ) -> PathBuf {
-    let repo_frontend_dir = current_dir.map(|dir| dir.join("frontend").join("dist"));
     let data_relative_frontend_dir = data_dir
         .parent()
         .and_then(|p| p.parent())
         .map(|p| p.join("frontend").join("dist"));
+    let repo_frontend_dir = current_dir.and_then(find_frontend_dist_from_ancestors);
     let fallback_frontend_dir = PathBuf::from("frontend").join("dist");
 
-    [repo_frontend_dir, data_relative_frontend_dir]
+    [data_relative_frontend_dir, repo_frontend_dir]
         .into_iter()
         .flatten()
         .find(|path| path.exists())
         .unwrap_or(fallback_frontend_dir)
+}
+
+fn find_frontend_dist_from_ancestors(start_dir: &FsPath) -> Option<PathBuf> {
+    start_dir
+        .ancestors()
+        .map(|dir| dir.join("frontend").join("dist"))
+        .find(|path| path.exists())
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -4718,6 +4725,23 @@ mod tests {
         let resolved = resolve_frontend_dir_with_current_dir(
             std::path::Path::new("unused/data-dir"),
             Some(&repo_root),
+        );
+
+        assert_eq!(resolved, repo_frontend_dist);
+    }
+
+    #[test]
+    fn resolve_frontend_dir_finds_bundle_in_current_dir_ancestors() {
+        let temp_root = tempdir().expect("temp dir should create");
+        let repo_root = temp_root.path().join("repo");
+        let desktop_workdir = repo_root.join("desktop").join("tauri");
+        let repo_frontend_dist = repo_root.join("frontend").join("dist");
+        fs::create_dir_all(&desktop_workdir).expect("desktop workdir should create");
+        fs::create_dir_all(&repo_frontend_dist).expect("frontend dist should create");
+
+        let resolved = resolve_frontend_dir_with_current_dir(
+            std::path::Path::new("unused/data-dir"),
+            Some(&desktop_workdir),
         );
 
         assert_eq!(resolved, repo_frontend_dist);

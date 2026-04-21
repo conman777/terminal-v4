@@ -85,29 +85,6 @@ describe('DesktopStatusBar', () => {
     expect(onToggleTerminalPanel).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a chat view toggle for terminal-backed AI sessions', () => {
-    render(<DesktopStatusBar {...buildProps({ showTerminalToggle: false, showConversationToggle: true })} />);
-
-    expect(screen.getByRole('button', { name: 'Enable chat view' })).toHaveTextContent('Chat View');
-  });
-
-  it('marks the chat view toggle active and forwards clicks', () => {
-    const onToggleConversationView = vi.fn();
-    render(<DesktopStatusBar {...buildProps({
-      showConversationToggle: true,
-      isConversationViewEnabled: true,
-      onToggleConversationView
-    })} />);
-
-    const toggle = screen.getByRole('button', { name: 'Disable chat view and show the classic terminal layout' });
-    expect(toggle).toHaveClass('active');
-    expect(toggle).toHaveAttribute('aria-pressed', 'true');
-
-    fireEvent.click(toggle);
-
-    expect(onToggleConversationView).toHaveBeenCalledTimes(1);
-  });
-
   it('hides the terminal toggle when terminal-first mode is active', () => {
     render(<DesktopStatusBar {...buildProps({ showTerminalToggle: false })} />);
     expect(screen.queryByRole('button', { name: 'Show inline terminal panel' })).not.toBeInTheDocument();

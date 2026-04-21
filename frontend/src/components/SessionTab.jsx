@@ -203,13 +203,13 @@ export const SessionTab = memo(function SessionTab({
           align-items: center;
           gap: 6px;
           height: 100%;
-          padding: 0 14px;
+          padding: 0 12px 0 14px;
           background: transparent;
           border: none;
-          border-bottom: 2px solid transparent;
+          border-top: 2px solid transparent;
           color: var(--text-muted);
-          font-family: var(--font-ui);
-          font-size: 12px;
+          font-family: var(--font-mono);
+          font-size: 11px;
           font-weight: 500;
           white-space: nowrap;
           cursor: pointer;
@@ -217,17 +217,18 @@ export const SessionTab = memo(function SessionTab({
           position: relative;
           user-select: none;
           flex-shrink: 0;
-          margin-bottom: -1px;
+          min-width: 0;
         }
 
         .session-tab-item:hover:not(.active) {
           color: var(--text-primary);
-          background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+          background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
         }
 
         .session-tab-item.active {
           color: var(--text-primary);
-          border-bottom-color: var(--accent-primary);
+          border-top-color: var(--accent-primary);
+          background: color-mix(in srgb, var(--bg-base) 78%, transparent);
         }
 
         .session-tab-item.has-unread:not(.active) {
@@ -248,7 +249,7 @@ export const SessionTab = memo(function SessionTab({
 
         .session-tab-item.drag-over {
           color: var(--text-primary);
-          border-bottom-color: var(--accent-primary-light);
+          border-top-color: var(--accent-primary-light);
         }
 
         .session-tab-item.dragging {
@@ -286,7 +287,7 @@ export const SessionTab = memo(function SessionTab({
           gap: 6px;
           min-width: 0;
           color: var(--text-muted, #71717a);
-          font-size: 10px;
+          font-size: 9px;
           line-height: 1;
         }
 
@@ -299,8 +300,8 @@ export const SessionTab = memo(function SessionTab({
         }
 
         .tab-unread-dot-modern {
-          background: var(--accent-primary, #38bdf8);
-          box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary, #38bdf8) 26%, transparent);
+          background: var(--accent-primary, #d97706);
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-primary, #d97706) 26%, transparent);
         }
 
         .tab-status-dot-modern.busy {
