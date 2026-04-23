@@ -727,6 +727,7 @@ export const TerminalPane = memo(function TerminalPane({
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
                     onApprove={structuredApprove}
+                    allowPromptKeyboardCapture={desktopAllowTerminalInput === true}
                   />
                 </div>
               )}
@@ -745,7 +746,7 @@ export const TerminalPane = memo(function TerminalPane({
                     onUrlDetected={onUrlDetected}
                     fontSize={fontSize}
                     webglEnabled={webglEnabled}
-                    inputEnabled={isStructuredSession || desktopAllowTerminalInput || isTerminalPanelOpen || shouldForcePromptDock}
+                    inputEnabled={desktopAllowTerminalInput || shouldForcePromptDock}
                     usesTmux={currentSession?.usesTmux}
                     viewMode="terminal"
                     isPrimary={isActive}
@@ -779,6 +780,7 @@ export const TerminalPane = memo(function TerminalPane({
                 connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}
+                customAiProviders={customAiProviders}
                 onSelectAiType={handleSelectAiType}
                 onAddCustomAiCommand={handleAddCustomAiCommand}
                 onLaunchAi={handleLaunchAgent}

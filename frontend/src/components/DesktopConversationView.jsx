@@ -490,6 +490,7 @@ export function DesktopConversationView({
   structuredToolCalls = [],
   pendingApproval = null,
   onApprove = null,
+  allowPromptKeyboardCapture = false,
 }) {
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const isStructured = mode === 'structured';
@@ -502,7 +503,7 @@ export function DesktopConversationView({
     || (hasLiveScreenSnapshot
       ? parseInteractivePromptSnapshot(terminalScreenSnapshot)
       : null);
-  const shouldCaptureRawKeyboard = showTerminalMirror && Boolean(interactivePrompt);
+  const shouldCaptureRawKeyboard = allowPromptKeyboardCapture && showTerminalMirror && Boolean(interactivePrompt);
   const showInteractivePromptBlock = Boolean(interactivePrompt && interactivePrompt.actions?.length > 0);
   const shouldShowMirrorScreen = false;
   const displayTurns = isStructured ? [] : visibleTurns;

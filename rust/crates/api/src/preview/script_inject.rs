@@ -31,26 +31,8 @@ pub fn inject_debug_script_with_options(
   var flushTimer = null;
   var storageSyncTimer = null;
 
-  function getAccessToken() {{
-    try {{
-      if (typeof window.localStorage === "undefined") return null;
-      return window.localStorage.getItem("terminal_access_token");
-    }} catch (e) {{
-      return null;
-    }}
-  }}
-
   function apiUrl(path) {{
-    var target = apiOrigin + path;
-    var token = getAccessToken();
-    if (!token) return target;
-    try {{
-      var url = new URL(target, window.location.href);
-      url.searchParams.set("token", token);
-      return url.toString();
-    }} catch (e) {{
-      return target + (target.indexOf("?") === -1 ? "?" : "&") + "token=" + encodeURIComponent(token);
-    }}
+    return apiOrigin + path;
   }}
 
   function postToParent(payload) {{
@@ -543,7 +525,6 @@ mod tests {
         let html = "<html><head></head><body></body></html>";
         let result = inject_debug_script(html, 5173, "http://localhost:3020");
 
-        assert!(result.contains("terminal_access_token"));
         assert!(result.contains(r#"fetch(apiUrl("/api/preview/" + port + "/logs")"#));
         assert!(result.contains(r#"fetch(apiUrl("/api/preview/" + port + "/performance")"#));
         assert!(result.contains(r#"trackMetric("runtimeMetrics""#));

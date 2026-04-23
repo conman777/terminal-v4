@@ -681,6 +681,7 @@ describe('DesktopConversationView', () => {
     render(
       <DesktopConversationView
         {...buildProps({
+          allowPromptKeyboardCapture: true,
           showTerminalMirror: true,
           onSendRaw,
           terminalScreenSnapshot: 'Continue anyway? [y/N]'
@@ -697,6 +698,24 @@ describe('DesktopConversationView', () => {
       ['\r'],
       ['y']
     ]);
+  });
+
+  it('does not forward raw keyboard controls in mirror mode when direct terminal typing is disabled', () => {
+    const onSendRaw = vi.fn();
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          showTerminalMirror: true,
+          onSendRaw,
+          terminalScreenSnapshot: 'Continue anyway? [y/N]'
+        })}
+      />
+    );
+
+    fireEvent.keyDown(window, { key: 'ArrowDown', code: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'Enter', code: 'Enter' });
+
+    expect(onSendRaw).not.toHaveBeenCalled();
   });
 
   it('renders inline prompt actions when prompt metadata arrives before the snapshot', () => {
@@ -786,6 +805,7 @@ describe('DesktopConversationView', () => {
     render(
       <DesktopConversationView
         {...buildProps({
+          allowPromptKeyboardCapture: true,
           showTerminalMirror: true,
           onSendRaw,
           terminalScreenSnapshot: 'Continue anyway? [y/N]'

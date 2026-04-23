@@ -16,6 +16,15 @@ function normalizeAuthError(err) {
   return new Error('Authentication failed');
 }
 
+async function syncPreviewSession(accessToken) {
+  if (!accessToken) return;
+
+  await fetch(resolveApiUrl('/api/preview/session'), {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${accessToken}` }
+  });
+}
+
 export function AuthProvider({ children }) {
   const [user, setUserState] = useState(() => getUser());
   const [loading, setLoading] = useState(true);
@@ -49,6 +58,7 @@ export function AuthProvider({ children }) {
               const userData = await response.json();
               setUser(userData);
               setUserState(userData);
+              await syncPreviewSession(accessToken).catch(() => {});
               setLoading(false);
               return;
             }
@@ -83,6 +93,7 @@ export function AuthProvider({ children }) {
                 setUserState(userData);
               }
             }
+            await syncPreviewSession(result.accessToken).catch(() => {});
             setLoading(false);
             return;
           } catch (err) {
@@ -130,6 +141,7 @@ export function AuthProvider({ children }) {
       setTokens(data.tokens.accessToken, data.tokens.refreshToken);
       setUser(data.user);
       setUserState(data.user);
+      await syncPreviewSession(data.tokens.accessToken).catch(() => {});
       return data.user;
     } catch (err) {
       const normalized = normalizeAuthError(err);
@@ -156,6 +168,7 @@ export function AuthProvider({ children }) {
       setTokens(data.tokens.accessToken, data.tokens.refreshToken);
       setUser(data.user);
       setUserState(data.user);
+      await syncPreviewSession(data.tokens.accessToken).catch(() => {});
       return data.user;
     } catch (err) {
       const normalized = normalizeAuthError(err);
@@ -168,6 +181,7 @@ export function AuthProvider({ children }) {
     setTokens(data.tokens.accessToken, data.tokens.refreshToken);
     setUser(data.user);
     setUserState(data.user);
+    void syncPreviewSession(data.tokens.accessToken).catch(() => {});
   }, []);
 
   const logout = useCallback(async () => {

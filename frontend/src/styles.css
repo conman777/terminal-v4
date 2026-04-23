@@ -468,22 +468,6 @@ button {
   background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
 }
 
-.desktop-workbench-bar {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 12px;
-  min-height: 42px;
-  padding: 0 14px 0 16px;
-}
-
-.desktop-workbench-tabs {
-  min-width: 0;
-  height: 100%;
-  display: flex;
-  align-items: stretch;
-}
-
 /* ===========================================
    Desktop Switcher
    =========================================== */

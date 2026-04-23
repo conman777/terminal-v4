@@ -5,6 +5,7 @@ import {
   NEW_TAB_AI_OPTIONS,
   createCustomAiProvider,
   getAiCapabilities,
+  getAiComposerSlashCommands,
   getAiDisplayLabel,
   getAiInitialCommand,
   getAiLaunchCommand,
@@ -45,10 +46,19 @@ describe('aiProviders', () => {
   });
 
   it('supports custom providers with explicit launch commands', () => {
-    const customProvider = createCustomAiProvider('Qwen 3', 'qwen --fast');
+    const customProvider = createCustomAiProvider('Qwen 3', 'qwen --fast', [], {
+      slashCommands: [
+        { cmd: '/model', desc: 'Pick model' },
+        { cmd: '/clear', desc: 'Reset chat' },
+      ]
+    });
     expect(customProvider?.id).toBe('qwen-3');
     expect(getAiDisplayLabel('qwen-3', [customProvider])).toBe('Qwen 3');
     expect(getAiInitialCommand('qwen-3', [customProvider])).toBe('qwen --fast');
+    expect(getAiComposerSlashCommands('qwen-3', [customProvider])).toEqual([
+      { cmd: '/model', desc: 'Pick model' },
+      { cmd: '/clear', desc: 'Reset chat' },
+    ]);
     expect(getAiTypeOptions([customProvider]).some((option) => option.id === 'qwen-3')).toBe(true);
   });
 
@@ -63,6 +73,10 @@ describe('aiProviders', () => {
     expect(getAiCapabilities('codex').prefersStructuredUi).toBe(true);
     expect(shouldCreateStructuredSession('gemini')).toBe(true);
     expect(shouldCreateStructuredSession('cli')).toBe(false);
+    expect(getAiComposerSlashCommands('claude')).toContainEqual({
+      cmd: '/help',
+      desc: 'Show available commands'
+    });
   });
 
   it('infers a provider from session shell or title when explicit aiType is missing', () => {

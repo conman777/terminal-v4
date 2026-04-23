@@ -2747,6 +2747,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 onLoad={handleLoad}
                 onError={handleError}
                 title="Browser"
+                sandbox="allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts"
                 allow="camera; microphone"
                 style={{ opacity: isLoading ? 0 : 1 }}
               />
@@ -3692,6 +3693,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                   onLoad={handleLoad}
                   onError={handleError}
                   title="Browser"
+                  sandbox="allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts"
                   allow="camera; microphone"
                   style={{ opacity: isLoading ? 0 : 1 }}
                 />

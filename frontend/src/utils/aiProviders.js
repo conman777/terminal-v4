@@ -6,6 +6,13 @@ const KNOWN_AI_PROVIDERS = [
     launchCommand: 'claude',
     initialCommand: 'claude --dangerously-skip-permissions',
     color: '#ff6b2b',
+    slashCommands: [
+      { cmd: '/model', desc: 'Change AI model' },
+      { cmd: '/clear', desc: 'Clear conversation' },
+      { cmd: '/help', desc: 'Show available commands' },
+      { cmd: '/compact', desc: 'Toggle compact mode' },
+      { cmd: '/cost', desc: 'Show token usage' },
+    ],
     capabilities: {
       prefersStructuredUi: false,
       supportsStructuredEvents: true,
@@ -19,6 +26,9 @@ const KNOWN_AI_PROVIDERS = [
     launchCommand: 'codex',
     initialCommand: 'codex --yolo',
     color: '#3b82f6',
+    slashCommands: [
+      { cmd: '/model', desc: 'Change AI model' },
+    ],
     capabilities: {
       prefersStructuredUi: true,
       supportsStructuredEvents: true,
@@ -53,6 +63,43 @@ const DEFAULT_AI_CAPABILITIES = {
   supportsPromptEvents: false
 };
 
+function normalizeSlashCommands(slashCommands) {
+  if (!Array.isArray(slashCommands)) return [];
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const command of slashCommands) {
+    const cmd = typeof command?.cmd === 'string' ? command.cmd.trim() : '';
+    const desc = typeof command?.desc === 'string' ? command.desc.trim() : '';
+    if (!cmd.startsWith('/') || !desc) continue;
+    if (seen.has(cmd)) continue;
+    seen.add(cmd);
+    normalized.push({ cmd, desc });
+  }
+
+  return normalized;
+}
+
+function normalizeCustomProvider(provider) {
+  if (!provider || typeof provider !== 'object') return null;
+  return buildCustomAiProvider({
+    id: provider.id,
+    label: provider.label ?? provider.title,
+    initialCommand: provider.initialCommand ?? provider.launchCommand,
+    color: provider.color,
+    slashCommands: provider.slashCommands,
+    capabilities: provider.capabilities,
+  });
+}
+
+function normalizeCustomProviders(customProviders = []) {
+  if (!Array.isArray(customProviders)) return [];
+  return customProviders
+    .map(normalizeCustomProvider)
+    .filter(Boolean);
+}
+
 function humanizeAiType(aiType) {
   return aiType
     .split(/[-_]/)
@@ -74,8 +121,7 @@ export function normalizeAiType(aiType) {
 
 function createCustomProviderMap(customProviders = []) {
   return new Map(
-    (Array.isArray(customProviders) ? customProviders : [])
-      .filter((provider) => provider?.id)
+    normalizeCustomProviders(customProviders)
       .map((provider) => [provider.id, provider])
   );
 }
@@ -88,7 +134,7 @@ function createCustomOption(provider) {
   };
 }
 
-export function buildCustomAiProvider({ id, label, initialCommand, color }) {
+export function buildCustomAiProvider({ id, label, initialCommand, color, slashCommands, capabilities }) {
   const normalizedId = normalizeAiType(id);
   const trimmedLabel = typeof label === 'string' ? label.trim() : '';
   const trimmedCommand = typeof initialCommand === 'string' ? initialCommand.trim() : '';
@@ -102,11 +148,15 @@ export function buildCustomAiProvider({ id, label, initialCommand, color }) {
     launchCommand,
     initialCommand: trimmedCommand,
     color: color ?? '#e6875b',
-    capabilities: { ...DEFAULT_AI_CAPABILITIES }
+    slashCommands: normalizeSlashCommands(slashCommands),
+    capabilities: {
+      ...DEFAULT_AI_CAPABILITIES,
+      ...(capabilities && typeof capabilities === 'object' ? capabilities : {})
+    }
   };
 }
 
-export function createCustomAiProvider(label, initialCommand, existingProviders = []) {
+export function createCustomAiProvider(label, initialCommand, existingProviders = [], options = {}) {
   const trimmedLabel = typeof label === 'string' ? label.trim() : '';
   const trimmedCommand = typeof initialCommand === 'string' ? initialCommand.trim() : '';
   if (!trimmedLabel || !trimmedCommand) return null;
@@ -134,7 +184,9 @@ export function createCustomAiProvider(label, initialCommand, existingProviders 
     id: nextId,
     label: trimmedLabel,
     initialCommand: trimmedCommand,
-    color
+    color,
+    slashCommands: options?.slashCommands,
+    capabilities: options?.capabilities,
   });
 }
 
@@ -156,6 +208,7 @@ export function getAiProvider(aiType, customProviders = []) {
     launchCommand: normalized,
     initialCommand: normalized,
     color: '#e6875b',
+    slashCommands: [],
     capabilities: { ...DEFAULT_AI_CAPABILITIES }
   };
 }
@@ -212,6 +265,10 @@ export function getAiCapabilities(aiType, customProviders = []) {
     ...DEFAULT_AI_CAPABILITIES,
     ...(capabilities && typeof capabilities === 'object' ? capabilities : {})
   };
+}
+
+export function getAiComposerSlashCommands(aiType, customProviders = []) {
+  return getAiProvider(aiType, customProviders)?.slashCommands ?? [];
 }
 
 export function shouldCreateStructuredSession(aiType, customProviders = []) {
@@ -273,7 +330,7 @@ export function getAiTypeOptions(customProviders = []) {
       label: provider.label,
       color: provider.color
     })),
-    ...(Array.isArray(customProviders) ? customProviders.map(createCustomOption) : [])
+    ...normalizeCustomProviders(customProviders).map(createCustomOption)
   ];
 }
 
@@ -282,12 +339,12 @@ export const AI_TYPE_OPTIONS = getAiTypeOptions();
 export function getNewTabAiOptions(customProviders = []) {
   return [
     ...NEW_TAB_AI_OPTIONS,
-    ...(Array.isArray(customProviders) ? customProviders.map((provider) => ({
+    ...normalizeCustomProviders(customProviders).map((provider) => ({
       id: provider.id,
       label: provider.title ?? provider.label,
       title: provider.title ?? provider.label,
       command: provider.initialCommand
-    })) : [])
+    }))
   ];
 }
 

@@ -51,10 +51,10 @@ export function MobileStatusBar({
     handleSelectionChange: handleAutocorrectSelectionChange
   } = useAutocorrectInput(inputText, setInputText, autocorrectEnabled);
   const aiOptions = useMemo(() => getAiTypeOptions(customAiProviders), [customAiProviders]);
-  const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
+  const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
   const slashSuggestions = useMemo(
-    () => getComposerSlashSuggestions(inputText, activeRuntimeProviderId),
-    [activeRuntimeProviderId, inputText]
+    () => getComposerSlashSuggestions(inputText, activeRuntimeProviderId, customAiProviders),
+    [activeRuntimeProviderId, customAiProviders, inputText]
   );
   const selectedAiOption = aiOptions.find((option) => option.id === aiType)
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType, customAiProviders), color: 'var(--accent-primary-light)' } : null)

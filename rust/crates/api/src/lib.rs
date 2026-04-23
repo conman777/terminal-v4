@@ -16,7 +16,11 @@ pub mod turn_detector;
 pub mod vault;
 pub mod webcontainer;
 
-use auth::{authenticate_token, require_auth, AuthenticatedUser};
+use auth::{
+    authenticate_preview_token, authenticate_token, issue_preview_token, require_auth,
+    AuthenticatedUser,
+};
+use axum::body::Body;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequestParts, Path, Query, State};
@@ -39,6 +43,7 @@ use terminal::{TerminalCreateOptions, TerminalSubscriptionEvent, ThreadUpdate};
 use terminal_v4_core::{HealthResponse, StructuredSessionSnapshot};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::io::ReaderStream;
 use tower::ServiceExt as _;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -46,7 +51,7 @@ use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 pub use state::AppState as ApiState;
 
-const ANONYMOUS_PREVIEW_SCOPE_ID: &str = "__preview_anonymous__";
+const PREVIEW_COOKIE_NAME: &str = "terminal_preview_token";
 
 /// Maximum bytes buffered on a terminal WebSocket before dropping output and
 /// suggesting a resync.  Mirrors the TypeScript backend's
@@ -179,6 +184,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/fs/list", get(list_filesystem_folders))
         .route("/api/settings", get(get_settings).patch(update_settings))
         .route("/api/system/preview-config", get(get_preview_config))
+        .route("/api/preview/session", post(create_preview_session))
         .route("/api/bookmarks", get(list_bookmarks).post(create_bookmark))
         .route(
             "/api/bookmarks/{id}",
@@ -579,11 +585,30 @@ async fn refresh(
 async fn logout(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     state
         .logout_user(&user.user_id)
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "success": true })))
+    Ok((
+        [(axum::http::header::SET_COOKIE, expired_preview_cookie())],
+        Json(json!({ "success": true })),
+    )
+        .into_response())
+}
+
+async fn create_preview_session(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<axum::response::Response, ApiError> {
+    let token = issue_preview_token(&state.config().jwt_secret, &user.user_id, &user.username);
+    Ok((
+        [(
+            axum::http::header::SET_COOKIE,
+            preview_cookie_header(&token),
+        )],
+        Json(json!({ "success": true })),
+    )
+        .into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -2305,10 +2330,11 @@ async fn download_directory(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<FilePathQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let data = tokio::task::spawn_blocking(move || files::create_zip_archive(&query.path))
+    let file = tokio::task::spawn_blocking(move || files::create_zip_archive_file(&query.path))
         .await
         .map_err(|e| ApiError::internal(format!("ZIP task failed: {e}")))?
         .map_err(ApiError::internal)?;
+    let stream = ReaderStream::new(tokio::fs::File::from_std(file));
 
     Ok((
         [
@@ -2318,7 +2344,7 @@ async fn download_directory(
                 "attachment; filename=\"download.zip\"",
             ),
         ],
-        data,
+        Body::from_stream(stream),
     )
         .into_response())
 }
@@ -2881,7 +2907,8 @@ async fn preview_proxy_response(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     rewrite_mode: PreviewRewriteMode,
 ) -> Result<axum::response::Response, ApiError> {
-    let scope_user_id = preview_scope_user_id(&state, &request);
+    let preview_user = authenticate_preview_request_user(&state, &request)?;
+    let scope_user_id = preview_user.user_id.clone();
     let cookie_header = state
         .cookie_store()
         .get_cookie_header(&scope_user_id, port)
@@ -4265,34 +4292,61 @@ fn host_port(host: &str) -> Option<&str> {
         .filter(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
 }
 
-fn preview_scope_user_id(state: &AppState, request: &axum::extract::Request) -> String {
-    preview_request_token(request)
-        .and_then(|token| {
-            authenticate_token(
-                &state.config().jwt_secret,
-                state.config().allowed_username.as_deref(),
-                &token,
-            )
-            .ok()
-        })
-        .map(|user| user.user_id)
-        .unwrap_or_else(|| ANONYMOUS_PREVIEW_SCOPE_ID.to_string())
+fn authenticate_preview_request_user(
+    state: &AppState,
+    request: &axum::extract::Request,
+) -> Result<AuthenticatedUser, ApiError> {
+    let token = preview_request_token(request).ok_or_else(|| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "Missing preview session".to_string(),
+    })?;
+
+    authenticate_preview_token(
+        &state.config().jwt_secret,
+        state.config().allowed_username.as_deref(),
+        &token,
+        preview_auth_route_path(request),
+    )
+    .map_err(|_| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "Invalid or expired preview session".to_string(),
+    })
+}
+
+fn preview_auth_route_path(request: &axum::extract::Request) -> &str {
+    if preview_subdomain_port(request.headers()).is_some() {
+        "/preview/"
+    } else {
+        request.uri().path()
+    }
 }
 
 fn preview_request_token(request: &axum::extract::Request) -> Option<String> {
-    if let Some(token) = request
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-    {
-        return Some(token.to_string());
-    }
+    preview_cookie_token(request).or_else(|| preview_query_token(request))
+}
 
+fn preview_cookie_token(request: &axum::extract::Request) -> Option<String> {
+    request
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookie_header| {
+            cookie_header.split(';').find_map(|segment| {
+                let (name, value) = segment.trim().split_once('=')?;
+                if name == PREVIEW_COOKIE_NAME {
+                    Some(value.to_string())
+                } else {
+                    None
+                }
+            })
+        })
+}
+
+fn preview_query_token(request: &axum::extract::Request) -> Option<String> {
     request.uri().query().and_then(|query| {
         query.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=')?;
-            if key == "token" {
+            if key == "previewToken" {
                 Some(value.to_string())
             } else {
                 None
@@ -4301,29 +4355,33 @@ fn preview_request_token(request: &axum::extract::Request) -> Option<String> {
     })
 }
 
+fn preview_cookie_header(token: &str) -> String {
+    let secure = if matches!(
+        std::env::var("API_ORIGIN").ok().as_deref(),
+        Some(origin) if origin.starts_with("https://")
+    ) {
+        "; Secure"
+    } else {
+        ""
+    };
+
+    format!("{PREVIEW_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=900{secure}")
+}
+
+fn expired_preview_cookie() -> String {
+    format!("{PREVIEW_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+}
+
 async fn preview_cookies_for_user(
     state: &AppState,
     user_id: &str,
     port: u16,
 ) -> Vec<preview::cookie_jar::StoredCookie> {
-    let cookies = state.cookie_store().list_cookies(user_id, port).await;
-    if !cookies.is_empty() || user_id == ANONYMOUS_PREVIEW_SCOPE_ID {
-        return cookies;
-    }
-    state
-        .cookie_store()
-        .list_cookies(ANONYMOUS_PREVIEW_SCOPE_ID, port)
-        .await
+    state.cookie_store().list_cookies(user_id, port).await
 }
 
 async fn clear_preview_cookies_for_user(state: &AppState, user_id: &str, port: u16) {
     state.cookie_store().clear_cookies(user_id, port).await;
-    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
-        state
-            .cookie_store()
-            .clear_cookies(ANONYMOUS_PREVIEW_SCOPE_ID, port)
-            .await;
-    }
 }
 
 async fn preview_proxy_logs_for_user(
@@ -4336,26 +4394,12 @@ async fn preview_proxy_logs_for_user(
         .request_log_store()
         .get_logs(user_id, port, since)
         .await;
-    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
-        logs.extend(
-            state
-                .request_log_store()
-                .get_logs(ANONYMOUS_PREVIEW_SCOPE_ID, port, since)
-                .await,
-        );
-    }
     sort_proxy_logs(&mut logs);
     logs
 }
 
 async fn clear_preview_proxy_logs_for_user(state: &AppState, user_id: &str, port: u16) {
     state.request_log_store().clear_logs(user_id, port).await;
-    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
-        state
-            .request_log_store()
-            .clear_logs(ANONYMOUS_PREVIEW_SCOPE_ID, port)
-            .await;
-    }
 }
 
 async fn preview_proxy_logs_after_cursor_for_user(
@@ -4367,13 +4411,6 @@ async fn preview_proxy_logs_after_cursor_for_user(
     let mut entries = request_log_store
         .get_logs_after_cursor(user_id, port, cursor.clone())
         .await;
-    if user_id != ANONYMOUS_PREVIEW_SCOPE_ID {
-        entries.extend(
-            request_log_store
-                .get_logs_after_cursor(ANONYMOUS_PREVIEW_SCOPE_ID, port, cursor)
-                .await,
-        );
-    }
     sort_proxy_logs(&mut entries);
     entries
 }
@@ -6530,6 +6567,7 @@ done
     async fn path_preview_proxy_rewrites_html_and_surfaces_anonymous_logs_and_cookies() {
         let state = test_state();
         let token = issue_access_token(&state.config().jwt_secret, "user-path-preview", "conor");
+        let preview_cookie = preview_test_cookie(&state, "user-path-preview", "conor");
         let app = app(state);
         let (port, upstream_handle) = spawn_preview_upstream().await;
 
@@ -6538,16 +6576,13 @@ done
             .oneshot(
                 Request::builder()
                     .uri(format!("/preview/{port}/?view=app"))
+                    .header(axum::http::header::COOKIE, preview_cookie.as_str())
                     .body(Body::empty())
                     .expect("request should build"),
             )
             .await
             .expect("router should respond");
         assert_eq!(preview_response.status(), StatusCode::OK);
-        assert!(preview_response
-            .headers()
-            .get(axum::http::header::SET_COOKIE)
-            .is_none());
         let preview_body = preview_response
             .into_body()
             .collect()
@@ -6568,6 +6603,7 @@ done
             .oneshot(
                 Request::builder()
                     .uri(format!("/preview/{port}/styles.css"))
+                    .header(axum::http::header::COOKIE, preview_cookie.as_str())
                     .body(Body::empty())
                     .expect("request should build"),
             )
@@ -6648,12 +6684,14 @@ done
     #[tokio::test]
     async fn preview_subdomain_host_proxy_intercepts_http_requests() {
         let state = test_state();
+        let preview_cookie = preview_test_cookie(&state, "user-preview-subdomain", "conor");
         let (upstream_port, upstream_handle) = spawn_preview_upstream().await;
         let (app_port, app_handle) = spawn_router(app(state)).await;
         let client = reqwest::Client::new();
 
         let response = client
             .get(format!("http://127.0.0.1:{app_port}/?mode=subdomain"))
+            .header(reqwest::header::COOKIE, preview_cookie)
             .header(
                 "Host",
                 format!("preview-{upstream_port}.localhost:{app_port}"),
@@ -6702,11 +6740,19 @@ done
     #[tokio::test]
     async fn path_preview_proxy_bridges_websocket_messages_to_upstream() {
         let state = test_state();
+        let preview_cookie = preview_test_cookie(&state, "user-path-preview-ws", "conor");
         let (upstream_port, upstream_handle) = spawn_preview_ws_upstream().await;
         let (app_port, app_handle) = spawn_router(app(state)).await;
 
         let url = format!("ws://127.0.0.1:{app_port}/preview/{upstream_port}/hmr");
-        let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+        let mut request = url
+            .into_client_request()
+            .expect("websocket request should build");
+        request.headers_mut().insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_str(&preview_cookie).expect("cookie header should build"),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request)
             .await
             .expect("websocket client should connect");
 
@@ -6737,12 +6783,17 @@ done
     #[tokio::test]
     async fn preview_subdomain_host_proxy_bridges_websocket_messages_to_upstream() {
         let state = test_state();
+        let preview_cookie = preview_test_cookie(&state, "user-preview-subdomain-ws", "conor");
         let (upstream_port, upstream_handle) = spawn_preview_ws_upstream().await;
         let (app_port, app_handle) = spawn_router(app(state)).await;
 
         let mut request = format!("ws://127.0.0.1:{app_port}/hmr")
             .into_client_request()
             .expect("websocket request should build");
+        request.headers_mut().insert(
+            axum::http::header::COOKIE,
+            axum::http::HeaderValue::from_str(&preview_cookie).expect("cookie header should build"),
+        );
         request.headers_mut().insert(
             axum::http::header::HOST,
             axum::http::HeaderValue::from_str(&format!(
@@ -7396,6 +7447,14 @@ done
 
     fn test_state() -> ApiState {
         test_state_with_external_auth(None)
+    }
+
+    fn preview_test_cookie(state: &ApiState, user_id: &str, username: &str) -> String {
+        format!(
+            "{}={}",
+            crate::PREVIEW_COOKIE_NAME,
+            crate::issue_preview_token(&state.config().jwt_secret, user_id, username)
+        )
     }
 
     fn test_state_with_data_dir(data_dir: PathBuf) -> ApiState {

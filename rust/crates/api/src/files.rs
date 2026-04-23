@@ -1,3 +1,4 @@
+use std::io::{Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
@@ -131,6 +132,24 @@ pub fn create_zip_archive(dir_path: &str) -> Result<Vec<u8>, String> {
         .finish()
         .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
     Ok(buffer.into_inner())
+}
+
+pub fn create_zip_archive_file(dir_path: &str) -> Result<std::fs::File, String> {
+    let resolved = resolve_safe_path(dir_path)?;
+    let temp_file = tempfile::tempfile().map_err(|e| format!("Failed to create temp ZIP: {e}"))?;
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(5));
+
+    let mut zip = zip::ZipWriter::new(temp_file);
+    add_directory_to_zip(&mut zip, &resolved, &resolved, options)?;
+
+    let mut file = zip
+        .finish()
+        .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|e| format!("Failed to rewind ZIP: {e}"))?;
+    Ok(file)
 }
 
 #[allow(clippy::write_with_newline)]

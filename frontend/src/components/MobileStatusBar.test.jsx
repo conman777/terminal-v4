@@ -85,7 +85,9 @@ describe('MobileStatusBar', () => {
   });
 
   it('submits the selected slash suggestion when Enter is pressed', () => {
-    render(<MobileStatusBar {...buildProps({ runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high Â· 100% left' } })} />);
+    render(<MobileStatusBar {...buildProps({
+      runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high · 100% left' }
+    })} />);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
       target: { value: '/' }
@@ -97,8 +99,43 @@ describe('MobileStatusBar', () => {
     expect(sendToSessionMock).toHaveBeenCalledWith('session-1', '/model\r');
   });
 
+  it('uses the selected AI type for slash suggestions before runtime metadata is available', () => {
+    render(<MobileStatusBar {...buildProps({ aiType: 'codex' })} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
+      target: { value: '/' }
+    });
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /\/model/i })).toBeInTheDocument();
+  });
+
+  it('supports slash suggestions for custom AI providers', () => {
+    render(<MobileStatusBar {...buildProps({
+      aiType: 'qwen-3',
+      customAiProviders: [{
+        id: 'qwen-3',
+        label: 'Qwen 3',
+        title: 'Qwen 3',
+        initialCommand: 'qwen --fast',
+        slashCommands: [
+          { cmd: '/reset', desc: 'Reset session' }
+        ]
+      }]
+    })} />);
+
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
+      target: { value: '/' }
+    });
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /\/reset/i })).toBeInTheDocument();
+  });
+
   it('keeps the composer focused when selecting a slash suggestion', () => {
-    render(<MobileStatusBar {...buildProps({ runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high Â· 100% left' } })} />);
+    render(<MobileStatusBar {...buildProps({
+      runtimeInfo: { providerId: 'codex', label: 'gpt-5.4 high · 100% left' }
+    })} />);
 
     const composer = screen.getByRole('textbox', { name: 'Command composer' });
     composer.focus();
@@ -128,7 +165,7 @@ describe('MobileStatusBar', () => {
   });
 
   it('hides slash suggestions when no coding cli runtime is active', () => {
-    render(<MobileStatusBar {...buildProps()} />);
+    render(<MobileStatusBar {...buildProps({ aiType: null })} />);
 
     fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), {
       target: { value: '/' }

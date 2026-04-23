@@ -1,6 +1,4 @@
 import { MobileHeader } from './MobileHeader';
-import { DesktopSwitcher } from './DesktopSwitcher';
-import { SessionTabBar } from './SessionTabBar';
 
 function getPathParts(cwd) {
   if (typeof cwd !== 'string' || !cwd.trim()) {
@@ -64,16 +62,13 @@ export function Header({
   showFileManager,
   onToggleFileManager,
   desktopOnOpenSettings,
-  desktopSwitcherProps,
   // Mobile specific props
   mobileProps,
 }) {
   // Destructure grouped props
   const {
     activeSessions, inactiveSessions, activeSessionId,
-    orderedSessions = activeSessions,
     onSelectSession, onRestoreSession, onCreateSession, onCloseSession, onRenameSession,
-    onReorderSessions,
     sessionActivity, sessionsGroupedByProject, showTabStatusLabels,
     sessionAiTypes, onSetSessionAiType,
   } = sessionProps;
@@ -143,26 +138,6 @@ export function Header({
             <TitlebarAction ariaLabel="Open settings" toggleable={false} onClick={desktopOnOpenSettings}>
               settings
             </TitlebarAction>
-          </div>
-        </div>
-
-        <div className="desktop-workbench-bar">
-          <DesktopSwitcher {...desktopSwitcherProps} variant="header" />
-          <div className="desktop-workbench-tabs">
-            <SessionTabBar
-              sessions={orderedSessions}
-              activeSessionId={activeSessionId}
-              sessionActivity={sessionActivity}
-              onSelectSession={onSelectSession}
-              onCreateSession={onCreateSession}
-              onCloseSession={onCloseSession}
-              onRenameSession={onRenameSession}
-              onReorderSessions={onReorderSessions}
-              inHeader
-              showStatusLabels={showTabStatusLabels}
-              sessionAiTypes={sessionAiTypes}
-              onSetSessionAiType={onSetSessionAiType}
-            />
           </div>
         </div>
       </header>

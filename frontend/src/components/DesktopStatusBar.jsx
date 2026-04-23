@@ -54,6 +54,7 @@ export function DesktopStatusBar({
   onToggleTerminalPanel,
   aiType = null,
   aiOptions = AI_TYPE_OPTIONS,
+  customAiProviders = [],
   onSelectAiType,
   onAddCustomAiCommand,
   composerValue = '',
@@ -95,10 +96,10 @@ export function DesktopStatusBar({
     ?? AI_TYPE_OPTIONS[0];
   const showMetaRow = Boolean(showTerminalToggle);
   const showComposerFooter = Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
-  const activeRuntimeProviderId = runtimeInfo?.providerId ?? null;
+  const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
   const slashSuggestions = useMemo(
-    () => getComposerSlashSuggestions(composerValue, activeRuntimeProviderId),
-    [activeRuntimeProviderId, composerValue]
+    () => getComposerSlashSuggestions(composerValue, activeRuntimeProviderId, customAiProviders),
+    [activeRuntimeProviderId, composerValue, customAiProviders]
   );
 
   useEffect(() => {

@@ -46,6 +46,7 @@ function buildProps(overrides = {}) {
     sessionTitle: 'Terminal 1',
     cwd: 'C:\\Users\\conor\\project',
     gitBranch: 'main',
+    customAiProviders: [],
     composerValue: '',
     composerAttachments: [],
     onComposerChange: vi.fn(),
@@ -220,6 +221,36 @@ describe('DesktopStatusBar', () => {
 
     expect(onComposerChange).not.toHaveBeenCalled();
     expect(onComposerSubmit).toHaveBeenCalledWith('/clear');
+  });
+
+  it('shows slash suggestions from the selected AI type before runtime metadata arrives', () => {
+    render(<DesktopStatusBar {...buildProps({
+      aiType: 'claude',
+      composerValue: '/'
+    })} />);
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '/helpShow available commands' })).toBeInTheDocument();
+  });
+
+  it('shows slash suggestions for custom AI providers with their own command catalog', () => {
+    render(<DesktopStatusBar {...buildProps({
+      aiType: 'qwen-3',
+      composerValue: '/',
+      customAiProviders: [{
+        id: 'qwen-3',
+        label: 'Qwen 3',
+        title: 'Qwen 3',
+        initialCommand: 'qwen --fast',
+        slashCommands: [
+          { cmd: '/reset', desc: 'Reset session' },
+          { cmd: '/model', desc: 'Pick model' }
+        ]
+      }]
+    })} />);
+
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '/resetReset session' })).toBeInTheDocument();
   });
 
   it('hides slash suggestions when the terminal is not inside a coding cli', () => {

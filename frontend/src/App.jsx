@@ -40,6 +40,7 @@ import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
+import { resolveDesktopTerminalInputPreference } from './utils/desktopTypingPreference';
 
 function isDynamicImportFetchError(error) {
   const message = error instanceof Error ? error.message : String(error || '');
@@ -693,12 +694,11 @@ function AppContent() {
       return resolveTerminalWebglEnabled(true);
     }
   });
+  const desktopTerminalInputMigrationRef = useRef(false);
   const [desktopAllowTerminalInput, setDesktopAllowTerminalInput] = useState(() => {
-    try {
-      return localStorage.getItem('desktopAllowTerminalInput') === 'true';
-    } catch {
-      return false;
-    }
+    const preference = resolveDesktopTerminalInputPreference();
+    desktopTerminalInputMigrationRef.current = preference.didResetLegacyPreference;
+    return preference.value;
   });
   const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
     try {
@@ -721,6 +721,18 @@ function AppContent() {
 
   // Fetch settings from server on mount
   useEffect(() => {
+    const shouldResetLegacyDesktopTypingPreference = desktopTerminalInputMigrationRef.current;
+    if (shouldResetLegacyDesktopTypingPreference) {
+      setDesktopAllowTerminalInput(false);
+      apiFetch('/api/settings', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desktopAllowTerminalInput: false })
+      }).catch((error) => {
+        console.error('Failed to reset desktop terminal input setting to composer-only', error);
+      });
+    }
+
     const fetchSettings = async () => {
       try {
         const response = await apiFetch('/api/settings');
@@ -750,7 +762,11 @@ function AppContent() {
               localStorage.setItem('terminalWebglEnabled', String(resolvedWebglEnabled));
             } catch { /* ignore */ }
           }
-          if (data.desktopAllowTerminalInput !== null && data.desktopAllowTerminalInput !== undefined) {
+          if (
+            !shouldResetLegacyDesktopTypingPreference
+            && data.desktopAllowTerminalInput !== null
+            && data.desktopAllowTerminalInput !== undefined
+          ) {
             setDesktopAllowTerminalInput(data.desktopAllowTerminalInput);
             try {
               localStorage.setItem('desktopAllowTerminalInput', String(data.desktopAllowTerminalInput));
@@ -780,6 +796,7 @@ function AppContent() {
       } catch (e) {
         console.error('Failed to fetch settings from server:', e);
       } finally {
+        desktopTerminalInputMigrationRef.current = false;
         setSettingsLoaded(true);
       }
     };

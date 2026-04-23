@@ -116,6 +116,10 @@ export async function refreshTokens() {
       if (data.user) {
         setUser(data.user);
       }
+      await fetch(resolveApiUrl('/api/preview/session'), {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${tokens.accessToken}` }
+      }).catch(() => {});
       return { accessToken: tokens.accessToken, user: data.user };
     } finally {
       refreshPromise = null;

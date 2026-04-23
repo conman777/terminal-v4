@@ -201,6 +201,31 @@ describe('TerminalPane', () => {
       expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
     });
     expect(lastTerminalChatProps?.sessionId).toBe('ss-structured');
+    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
+  });
+
+  it('only enables direct terminal typing for structured sessions when desktop terminal input is allowed', async () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-structured' },
+      sessions: [{
+        id: 'ss-structured',
+        title: 'Structured session',
+        shell: 'claude',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { topic: 'Review code', projectPath: 'C:\\repo' }
+      }],
+      desktopAllowTerminalInput: true,
+      sessionAiTypes: {}
+    })} />);
+
+    screen.getByRole('button', { name: 'Show inline terminal panel' }).click();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    });
+
+    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 
   it('routes structured raw input through the session transport instead of the terminal chat sender', async () => {
@@ -240,6 +265,28 @@ describe('TerminalPane', () => {
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+  });
+
+  it('gates prompt keyboard capture behind the desktop terminal input setting', async () => {
+    render(<TerminalPane {...buildProps({
+      pane: { id: 'pane-1', sessionId: 'ss-structured' },
+      sessions: [{
+        id: 'ss-structured',
+        title: 'Structured session',
+        shell: 'claude',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        thread: { topic: 'Review code', projectPath: 'C:\\repo' }
+      }],
+      desktopAllowTerminalInput: false,
+      sessionAiTypes: {}
+    })} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    });
+
+    expect(lastConversationViewProps?.allowPromptKeyboardCapture).toBe(false);
   });
 
   it('does not show the chat view toggle even when the session has no saved AI metadata', () => {

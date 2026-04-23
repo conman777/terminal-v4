@@ -1,4 +1,3 @@
-import { getAccessToken } from './auth';
 import { apiFetch } from './api';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
@@ -22,14 +21,7 @@ function isPrivateIpv4Host(hostname) {
 }
 
 function getPreviewDefaultMode() {
-  if (typeof window === 'undefined') return 'subdomain-first';
-  try {
-    const stored = localStorage.getItem(PREVIEW_DEFAULT_MODE_KEY);
-    if (stored === 'adaptive' || stored === 'path-first' || stored === 'subdomain-first') {
-      return stored;
-    }
-  } catch {}
-  return 'subdomain-first';
+  return 'path-first';
 }
 
 /**
@@ -210,22 +202,7 @@ function isResolvableLoopbackSubdomainBase(base) {
  * Add auth token to URL as query parameter
  */
 export function withAuthToken(url) {
-  const token = getAccessToken();
-  if (!token) return url;
-
-  try {
-    const fullUrl = new URL(url, window.location.origin);
-    if (!fullUrl.searchParams.has('token')) {
-      fullUrl.searchParams.set('token', token);
-    }
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url) && fullUrl.origin !== window.location.origin) {
-      return fullUrl.toString();
-    }
-    return `${fullUrl.pathname}${fullUrl.search}${fullUrl.hash}`;
-  } catch {
-    const separator = url.includes('?') ? '&' : '?';
-    return `${url}${separator}token=${encodeURIComponent(token)}`;
-  }
+  return url;
 }
 
 /**
@@ -284,28 +261,13 @@ export function toPreviewUrl(inputUrl) {
     const hostname = parsed.hostname;
     const isLoopback = isLoopbackHost(hostname);
     const isPrivateIP = isPrivateIpv4Host(hostname);
-    const uiProtocol = typeof window !== 'undefined' ? window.location.protocol : 'http:';
     const uiHost = typeof window !== 'undefined' ? window.location.hostname : '';
     const uiIsLoopback = isLoopbackHost(uiHost);
-    const uiIsIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(uiHost);
-    const canUseLocalSubdomain = uiProtocol === 'http:';
-    const uiPort = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
-    const subdomainBase = getEffectiveSubdomainBase();
     const proxyHosts = getPreviewProxyHosts();
     const targetIsLocalPreview = isLocalPreviewTarget(hostname, uiHost, proxyHosts);
-    const preferPathBased = shouldPreferPathBased();
-    const defaultMode = getPreviewDefaultMode();
 
     if ((isLoopback || (isPrivateIP && targetIsLocalPreview)) && parsed.port) {
       const path = parsed.pathname + parsed.search + parsed.hash;
-      const loopbackSubdomainCapable = !uiIsLoopback || isResolvableLoopbackSubdomainBase(subdomainBase);
-      const canUseSubdomain = canUseLocalSubdomain && loopbackSubdomainCapable && Boolean(subdomainBase || uiIsIp);
-      const shouldUseSubdomain = defaultMode === 'subdomain-first'
-        ? canUseSubdomain
-        : (!preferPathBased && canUseSubdomain);
-      if (shouldUseSubdomain) {
-        return withAuthToken(`http://preview-${parsed.port}.${subdomainBase}${uiPort}${path}`);
-      }
       return `/preview/${parsed.port}${path}`;
     }
 
