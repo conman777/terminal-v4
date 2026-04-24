@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { apiFetch } from '../utils/api';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
 import './FolderBrowserModal.css';
@@ -122,7 +123,7 @@ export function FolderBrowserModal({
     }
   }
 
-  return (
+  const modal = (
     <div className="modal-overlay" onClick={onClose}>
       <div className="pro-folder-browser" onClick={(e) => e.stopPropagation()}>
         {/* Path bar with integrated back button and breadcrumbs */}
@@ -307,4 +308,10 @@ export function FolderBrowserModal({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modal;
+  }
+
+  return createPortal(modal, document.body);
 }

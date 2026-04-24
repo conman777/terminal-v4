@@ -57,4 +57,43 @@ describe('ReaderView', () => {
     expect(input).toBeNull();
     expect(containerFocus).toHaveBeenCalledWith({ preventScroll: true });
   });
+
+  it('does not refocus the hidden mobile input when scrollToken changes', () => {
+    vi.useFakeTimers();
+
+    const { rerender } = render(
+      <ReaderView
+        content="example"
+        lines={null}
+        fontSize={12}
+        lineHeight={null}
+        scrollToken={0}
+        onInput={vi.fn()}
+        isMobile={true}
+      />
+    );
+
+    const input = document.querySelector('.reader-view-mobile-input');
+    const inputFocus = vi.spyOn(input, 'focus').mockImplementation(() => {});
+
+    vi.advanceTimersByTime(100);
+    expect(inputFocus).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <ReaderView
+        content="example"
+        lines={null}
+        fontSize={12}
+        lineHeight={null}
+        scrollToken={1}
+        onInput={vi.fn()}
+        isMobile={true}
+      />
+    );
+
+    vi.advanceTimersByTime(100);
+    expect(inputFocus).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
 });

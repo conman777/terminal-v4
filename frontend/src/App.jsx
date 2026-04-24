@@ -9,6 +9,7 @@ import { FileManager } from './components/FileManager';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileShell } from './components/MobileShell';
+import { WorkspaceStartView } from './components/WorkspaceStartView';
 import { MobileKeyboardDebugOverlay } from './components/MobileKeyboardDebugOverlay';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -39,6 +40,7 @@ import {
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
+import { resolveStartupWorkspacePath } from './utils/startupWorkspace';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 import { resolveDesktopTerminalInputPreference } from './utils/desktopTypingPreference';
 
@@ -384,6 +386,11 @@ function AppContent() {
     }
     setMobileView(normalizedView);
   }, [activeSessionId, activeSessions, keybarOpen]);
+
+  useEffect(() => {
+    if (!isMobile || mobileView !== 'preview' || previewUrl) return;
+    setMobileView('terminal');
+  }, [isMobile, mobileView, previewUrl]);
 
   const handleMobileViewportStateChange = useCallback((atBottom) => {
     mobileViewportAtBottomRef.current = atBottom;
@@ -980,6 +987,24 @@ function AppContent() {
     }
   }, [addSessionToDesktop, addSidebarProject, createSession, setShowNewSessionModal]);
 
+  const handleSubmitWorkspaceStartPrompt = useCallback(async (prompt) => {
+    const initialCommand = typeof prompt === 'string' ? prompt.trim() : '';
+    if (!initialCommand) return;
+
+    try {
+      const cwd = startupWorkspacePath || undefined;
+      const session = await createSession({ cwd, initialCommand });
+      if (session?.id) {
+        if (cwd) {
+          persistSidebarProject(addSidebarProject, cwd, session);
+        }
+        addSessionToDesktop(session.id);
+      }
+    } catch {
+      // createSession already logs
+    }
+  }, [addSessionToDesktop, addSidebarProject, createSession, startupWorkspacePath]);
+
   const handleCloseNewSessionModal = useCallback(() => {
     setShowNewSessionModal(false);
   }, []);
@@ -1253,8 +1278,9 @@ function AppContent() {
 
   const handleAddProjectSelect = useCallback((folderPath) => {
     addSidebarProject(folderPath);
+    addRecentFolder(folderPath);
     setShowAddProjectModal(false);
-  }, [addSidebarProject]);
+  }, [addRecentFolder, addSidebarProject]);
 
   const handleCloseProject = useCallback((projectPath, sessionIds = []) => {
     sessionIds.forEach((sessionId) => {
@@ -1299,6 +1325,10 @@ function AppContent() {
     archivedSessions,
     activeSessions
   }), [activeSessions, archivedSessions, pinnedSessions, sessionsGroupedByProject]);
+  const startupWorkspacePath = useMemo(
+    () => resolveStartupWorkspacePath(projectInfo?.cwd, recentFolders),
+    [projectInfo?.cwd, recentFolders]
+  );
 
   // Grouped props for Header
   const headerSessionProps = {
@@ -1393,7 +1423,7 @@ function AppContent() {
       <FolderBrowserModal
         isOpen={showNewSessionModal}
         onClose={handleCloseNewSessionModal}
-        currentPath={projectInfo?.cwd || recentFolders[0] || ''}
+        currentPath={startupWorkspacePath}
         recentFolders={recentFolders}
         onSelect={handleCreateSessionFromFolder}
         showAiSelector={true}
@@ -1410,7 +1440,7 @@ function AppContent() {
       <FolderBrowserModal
         isOpen={showAddProjectModal}
         onClose={() => setShowAddProjectModal(false)}
-        currentPath={projectInfo?.cwd || recentFolders[0] || ''}
+        currentPath={startupWorkspacePath}
         recentFolders={recentFolders}
         onSelect={handleAddProjectSelect}
       />
@@ -1497,20 +1527,12 @@ function AppContent() {
                       <p>Loading sessions…</p>
                     </div>
                   ) : activeSessions.length === 0 ? (
-                    <div className="pro-terminal-empty">
-                      <div className="pro-empty-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="4 17 10 11 4 5"></polyline>
-                          <line x1="12" y1="19" x2="20" y2="19"></line>
-                        </svg>
-                      </div>
-                      <h2 className="pro-empty-title">No Active Terminals</h2>
-                      <p className="pro-empty-desc">Initialize a new secure workspace session to begin commanding.</p>
-                      <button className="pro-empty-btn" onClick={() => handleRequestNewSession()}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        Initialize Session
-                      </button>
-                    </div>
+                    <WorkspaceStartView
+                      currentPath={startupWorkspacePath}
+                      onCreateSession={() => handleRequestNewSession(startupWorkspacePath)}
+                      onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
+                      onAddWorkspace={openAddProjectModal}
+                    />
                   ) : (
                     <ErrorBoundary name="terminal" resetKey={activeSessionId}>
                       <SplitPaneContainer
@@ -1601,7 +1623,7 @@ function AppContent() {
       {/* Mobile layout */}
       {isMobile && (
         <div className="main-pane">
-          <MobileHeader
+            <MobileHeader
             activeSessions={activeSessions}
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
@@ -1631,58 +1653,69 @@ function AppContent() {
             sessionsGroupedByProject={scopedSidebarData.sessionsGroupedByProject}
             sessionAiTypes={sessionAiTypes}
             onSetSessionAiType={handleSetSessionAiType}
-            chatMode={chatMode}
-            onToggleChatMode={() => setChatMode((value) => !value)}
-            showPreviewNavigation={false}
-            showConversationToggle={false}
-            showDrawerViewTabs={false}
-            singleRow={true}
-          />
-          <main
-            className="terminal-main"
-            style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
-          >
-            <MobileShell
-              sessions={activeSessions}
-              activeSessionId={activeSessionId}
-              onSelectSession={selectSession}
-              onCreateSession={handleRequestNewSession}
-              previewUrl={previewUrl}
-              onPreviewUrlChange={handlePreviewUrlChange}
-              projectInfo={projectInfo}
-              onStartProject={handleStartProject}
-              onSendToTerminal={handleSendToTerminal}
-              onSendToClaudeCode={handleSendToClaudeCode}
-              sessionActivity={sessionActivity}
-              onSessionBusyChange={handleSessionBusyChange}
-              fontSize={terminalFontSize}
-              webglEnabled={terminalWebglEnabled}
-              onUrlDetected={handleUrlDetected}
-              viewportHeight={viewportHeight}
-              mobileView={mobileView}
-              onViewChange={handleMobileViewChange}
               chatMode={chatMode}
-              onChatModeChange={setChatMode}
-              accessoryOpen={keybarOpen}
-              onAccessoryToggle={handleToggleKeybar}
-              onAccessoryHeightChange={handleKeybarHeightChange}
-              onRegisterFocusTerminal={handleRegisterFocusTerminal}
-              sessionAiTypes={sessionAiTypes}
-              customAiProviders={customAiProviders}
-              onSetSessionAiType={handleSetSessionAiType}
-              onAddCustomAiProvider={handleAddCustomAiProvider}
-              showSessionStrip={false}
-              onOpenFiles={toggleFileManager}
-              onOpenBookmarks={() => setShowBookmarks(true)}
-              onOpenNotes={() => setShowNotes(true)}
-              onOpenSystemResources={toggleSystemResources}
-              onOpenSettings={handleOpenSettings}
-              onLogout={logout}
-              showStatusLabels={showTabStatusLabels}
+              onToggleChatMode={() => setChatMode((value) => !value)}
+              showPreviewNavigation={Boolean(previewUrl)}
+              showConversationToggle={false}
+              showDrawerViewTabs={false}
+              singleRow={true}
             />
-          </main>
-        </div>
-      )}
+            <main
+              className="terminal-main"
+              style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
+            >
+              {mobileView === 'preview' && previewUrl ? (
+                <ErrorBoundary name="mobile-preview" resetKey={previewUrl}>
+                  <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
+                    <PreviewPanel
+                      url={previewUrl}
+                      onClose={handlePreviewClose}
+                      onUrlChange={handlePreviewUrlChange}
+                      projectInfo={projectInfo}
+                      onStartProject={handleStartProject}
+                      onSendToTerminal={handleSendToTerminal}
+                      onSendToClaudeCode={handleSendToClaudeCode}
+                      activeSessions={activeSessions}
+                      activeSessionId={activeSessionId}
+                      sessionActivity={sessionActivity}
+                      onSessionBusyChange={handleSessionBusyChange}
+                      fontSize={terminalFontSize}
+                      webglEnabled={terminalWebglEnabled}
+                      onUrlDetected={handlePreviewUrlChange}
+                      mainTerminalMinimized={mainTerminalMinimized}
+                      onToggleMainTerminal={handleToggleMainTerminal}
+                      showStatusLabels={showTabStatusLabels}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              ) : (
+                <MobileShell
+                  sessions={activeSessions}
+                  activeSessionId={activeSessionId}
+                  onSelectSession={selectSession}
+                  onCreateSession={() => handleRequestNewSession(startupWorkspacePath)}
+                  onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
+                  onAddWorkspace={openAddProjectModal}
+                  projectInfo={projectInfo ? { ...projectInfo, cwd: projectInfo.cwd || startupWorkspacePath } : { cwd: startupWorkspacePath }}
+                  sessionActivity={sessionActivity}
+                  onSessionBusyChange={handleSessionBusyChange}
+                  fontSize={terminalFontSize}
+                  webglEnabled={terminalWebglEnabled}
+                  onUrlDetected={handleUrlDetected}
+                  viewportHeight={viewportHeight}
+                  accessoryOpen={keybarOpen}
+                  onAccessoryHeightChange={handleKeybarHeightChange}
+                  onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                  sessionAiTypes={sessionAiTypes}
+                  customAiProviders={customAiProviders}
+                  onSetSessionAiType={handleSetSessionAiType}
+                  onAddCustomAiProvider={handleAddCustomAiProvider}
+                  showSessionStrip={false}
+                />
+              )}
+            </main>
+          </div>
+        )}
 
       {/* Mobile File Manager - render at root level outside all containers */}
       {isMobile && showFileManager && (

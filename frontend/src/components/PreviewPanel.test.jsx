@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PreviewPanel } from './PreviewPanel';
 
+const MOBILE_VIEW_MODE_KEY = 'preview_mobile_view_mode_v1';
+const MOBILE_SPLIT_ENABLED_KEY = 'preview_mobile_split_enabled_v1';
 const previewUrlBarSpy = vi.fn();
 const terminalChatSpy = vi.fn();
 const apiFetchMock = vi.fn(async () => ({
@@ -356,6 +358,27 @@ describe('PreviewPanel', () => {
 
     await waitFor(() => {
       expect(screen.queryByTestId('terminal-chat-session-1')).not.toBeInTheDocument();
+    });
+  });
+
+  it('restores persisted mobile terminal mode instead of resetting to preview', async () => {
+    isMobile = true;
+    window.localStorage.setItem(MOBILE_VIEW_MODE_KEY, 'terminal');
+
+    render(<PreviewPanel {...buildProps()} />);
+
+    expect(await screen.findByTestId('terminal-chat-session-1')).toBeInTheDocument();
+    expect(window.localStorage.getItem(MOBILE_VIEW_MODE_KEY)).toBe('terminal');
+  });
+
+  it('migrates the legacy mobile split flag to split mode', async () => {
+    isMobile = true;
+    window.localStorage.setItem(MOBILE_SPLIT_ENABLED_KEY, 'true');
+
+    render(<PreviewPanel {...buildProps()} />);
+
+    await waitFor(() => {
+      expect(window.localStorage.getItem(MOBILE_VIEW_MODE_KEY)).toBe('split');
     });
   });
 });

@@ -70,7 +70,14 @@ export function DesktopStatusBar({
   isSwitchingGitBranch = false,
   onSelectGitBranch,
   composerPlaceholder = 'Send a command or prompt',
-  composerDisabled = false
+  composerDisabled = false,
+  showTopRow = null,
+  showComposerFooter = null,
+  showImageButton = true,
+  showAiSelector = true,
+  showAutocorrectToggle = true,
+  showMicButtons = true,
+  composerSecondaryAction = null,
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
   const {
@@ -94,8 +101,10 @@ export function DesktopStatusBar({
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: 'var(--accent-info)' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
-  const showMetaRow = Boolean(showTerminalToggle);
-  const showComposerFooter = Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
+  const resolvedShowTopRow = typeof showTopRow === 'boolean' ? showTopRow : Boolean(showTerminalToggle);
+  const resolvedShowComposerFooter = typeof showComposerFooter === 'boolean'
+    ? showComposerFooter
+    : Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
   const slashSuggestions = useMemo(
     () => getComposerSlashSuggestions(composerValue, activeRuntimeProviderId, customAiProviders),
@@ -251,7 +260,7 @@ export function DesktopStatusBar({
 
   return (
     <div className={`desktop-status-bar desktop-status-bar-shell${isActive ? ' pane-active' : ''}`}>
-      {showMetaRow && (
+      {resolvedShowTopRow && (
         <div className="status-bar-meta-row">
           <div className="status-bar-left" />
 
@@ -335,105 +344,114 @@ export function DesktopStatusBar({
         />
 
         <div className="status-bar-right">
-        <button
-          type="button"
-          className="status-bar-btn"
-          onClick={() => imageInputRef.current?.click()}
-          disabled={composerDisabled || isPastingImage}
-          aria-label="Add image"
-          title="Add image"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-        </button>
-        <div className="status-ai-controls" ref={aiMenuRef}>
+        {showImageButton && (
           <button
             type="button"
-            className={`status-ai-selector ${isAiMenuOpen ? 'active' : ''}`}
-            onClick={() => setIsAiMenuOpen((open) => !open)}
-            aria-haspopup="menu"
-            aria-expanded={isAiMenuOpen ? 'true' : 'false'}
-            aria-label="Choose AI coder"
-            title={`Assistant: ${selectedAiOption.label}`}
+            className="status-bar-btn"
+            onClick={() => imageInputRef.current?.click()}
+            disabled={composerDisabled || isPastingImage}
+            aria-label="Add image"
+            title="Add image"
           >
-            <span
-              className="status-ai-swatch"
-              style={{ backgroundColor: selectedAiOption.color ?? 'var(--accent-primary)' }}
-              aria-hidden="true"
-            />
-            <span className="status-ai-selector-label">{selectedAiOption.label}</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polyline points="6 9 12 15 18 9" />
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
-          {isAiMenuOpen && (
-            <div className="status-ai-menu" role="menu" aria-label="AI coder options">
-              {aiOptions.map((option) => {
-                const isSelected = option.id === aiType || (!option.id && !aiType);
-                return (
-                  <button
-                    key={option.id ?? 'cli'}
-                    type="button"
-                    className={`status-ai-menu-item ${isSelected ? 'selected' : ''}`}
-                    onClick={() => handleAiTypeSelect(option.id)}
-                    role="menuitemradio"
-                    aria-checked={isSelected ? 'true' : 'false'}
-                  >
-                    <span
-                      className="status-ai-swatch"
-                      style={{ backgroundColor: option.color ?? 'var(--accent-primary)' }}
-                      aria-hidden="true"
-                    />
-                    <span className="status-ai-menu-label">{option.label}</span>
-                    {isSelected && (
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    )}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                className="status-ai-menu-item status-ai-menu-add"
-                onClick={handleAddCustomCommand}
-                role="menuitem"
-              >
-                <span className="status-ai-menu-plus" aria-hidden="true">+</span>
-                <span className="status-ai-menu-label">Add custom command</span>
-              </button>
-            </div>
-          )}
-        </div>
+        )}
+        {showAiSelector && (
+          <div className="status-ai-controls" ref={aiMenuRef}>
+            <button
+              type="button"
+              className={`status-ai-selector ${isAiMenuOpen ? 'active' : ''}`}
+              onClick={() => setIsAiMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={isAiMenuOpen ? 'true' : 'false'}
+              aria-label="Choose AI coder"
+              title={`Assistant: ${selectedAiOption.label}`}
+            >
+              <span
+                className="status-ai-swatch"
+                style={{ backgroundColor: selectedAiOption.color ?? 'var(--accent-primary)' }}
+                aria-hidden="true"
+              />
+              <span className="status-ai-selector-label">{selectedAiOption.label}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+            {isAiMenuOpen && (
+              <div className="status-ai-menu" role="menu" aria-label="AI coder options">
+                {aiOptions.map((option) => {
+                  const isSelected = option.id === aiType || (!option.id && !aiType);
+                  return (
+                    <button
+                      key={option.id ?? 'cli'}
+                      type="button"
+                      className={`status-ai-menu-item ${isSelected ? 'selected' : ''}`}
+                      onClick={() => handleAiTypeSelect(option.id)}
+                      role="menuitemradio"
+                      aria-checked={isSelected ? 'true' : 'false'}
+                    >
+                      <span
+                        className="status-ai-swatch"
+                        style={{ backgroundColor: option.color ?? 'var(--accent-primary)' }}
+                        aria-hidden="true"
+                      />
+                      <span className="status-ai-menu-label">{option.label}</span>
+                      {isSelected && (
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  className="status-ai-menu-item status-ai-menu-add"
+                  onClick={handleAddCustomCommand}
+                  role="menuitem"
+                >
+                  <span className="status-ai-menu-plus" aria-hidden="true">+</span>
+                  <span className="status-ai-menu-label">Add custom command</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
-        {/* Autocorrect toggle button */}
-        <button
-          type="button"
-          className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
-          onClick={toggleAutocorrect}
-          aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
-          title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
-        >
-          <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
-        </button>
+        {showAutocorrectToggle && (
+          <button
+            type="button"
+            className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
+            onClick={toggleAutocorrect}
+            aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
+            title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
+          >
+            <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
+          </button>
+        )}
 
-        {/* Mic buttons - local Whisper + Groq cloud */}
-        <TerminalMicButton
-          sessionId={sessionId}
-          provider="local"
-          inline
-          disabled={composerDisabled || isPastingImage}
-          onTranscript={handleComposerTranscript}
-        />
-        <TerminalMicButton
-          sessionId={sessionId}
-          provider="groq"
-          inline
-          disabled={composerDisabled || isPastingImage}
-          onTranscript={handleComposerTranscript}
-        />
+        {showMicButtons && (
+          <>
+            <TerminalMicButton
+              sessionId={sessionId}
+              provider="local"
+              inline
+              disabled={composerDisabled || isPastingImage}
+              onTranscript={handleComposerTranscript}
+            />
+            <TerminalMicButton
+              sessionId={sessionId}
+              provider="groq"
+              inline
+              disabled={composerDisabled || isPastingImage}
+              onTranscript={handleComposerTranscript}
+            />
+          </>
+        )}
+        {composerSecondaryAction}
         <button
           type="submit"
           className={`status-send-btn ${canSubmitComposer ? '' : 'disabled'}`}
@@ -447,7 +465,7 @@ export function DesktopStatusBar({
         </button>
         </div>
       </form>
-      {showComposerFooter && (
+      {resolvedShowComposerFooter && (
         <div className="status-composer-footer-row" aria-label="Git context">
           <span className="status-composer-footer-spacer" aria-hidden="true" />
           <div className="status-runtime-meta">

@@ -33,6 +33,11 @@ const PREVIEW_CHROME_COMPACT_KEY = 'preview_compact_chrome_v1';
 const PREVIEW_DESKTOP_MOBILE_VIEW_KEY = 'preview_desktop_mobile_view_v1';
 const DESKTOP_BROWSER_SPLIT_DEFAULT = 68;
 const GENERIC_RUNTIME_PROCESSES = new Set(['node', 'npm', 'pnpm', 'yarn', 'bun', 'python', 'python3', 'deno']);
+const MOBILE_VIEW_MODES = new Set(['preview', 'terminal', 'split']);
+
+function normalizeMobileViewMode(value) {
+  return MOBILE_VIEW_MODES.has(value) ? value : 'preview';
+}
 
 function getPathLeafLabel(value) {
   if (typeof value !== 'string') return '';
@@ -426,9 +431,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [mobileViewMode, setMobileViewMode] = useState(() => {
     try {
       const stored = localStorage.getItem(MOBILE_VIEW_MODE_KEY);
-      if (stored === 'preview' || stored === 'terminal' || stored === 'split') return 'preview';
+      if (MOBILE_VIEW_MODES.has(stored)) return stored;
       // Migration from old boolean key
-      if (localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true') return 'preview';
+      if (localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true') return 'split';
       return 'preview';
     } catch { return 'preview'; }
   });
@@ -441,7 +446,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       return 320;
     }
   });
-  const mobileModeInitializedRef = useRef(false);
   const [isDraggingMobileSplit, setIsDraggingMobileSplit] = useState(false);
   const mobileSplitStartY = useRef(0);
   const mobileSplitStartHeight = useRef(0);
@@ -2058,7 +2062,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
 
   // Mobile view mode handler
   const handleSetMobileViewMode = useCallback((mode) => {
-    const nextMode = mode === 'terminal' ? 'terminal' : 'preview';
+    const nextMode = normalizeMobileViewMode(mode);
     setMobileViewMode(nextMode);
     try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, nextMode); } catch {}
     if (nextMode !== 'terminal') setShowMobileToolsMenu(false);
@@ -2068,9 +2072,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     // is also reloaded without __inspect=1 (just setInspectMode(false) would update
     // the button but leave the inspector script running in the iframe).
     if (nextMode === 'terminal' && inspectMode) handleToggleInspect();
-    // Trigger terminal refit when entering terminal mode
-    if (nextMode === 'terminal') setPreviewTerminalFitToken(t => t + 1);
-  }, [clampMobileSplitHeight, handleToggleInspect, inspectMode]);
+    if (nextMode !== 'preview') setPreviewTerminalFitToken(t => t + 1);
+  }, [handleToggleInspect, inspectMode]);
 
   const handleToggleMobileTerminal = useCallback(() => {
     handleSetMobileViewMode(mobileViewMode === 'terminal' ? 'preview' : 'terminal');
@@ -2192,19 +2195,6 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     }
     setMobileSplitHeight((height) => clampMobileSplitHeight(height));
   }, [activeSessions, clampMobileSplitHeight, isMobile, mobileViewMode]);
-
-  useEffect(() => {
-    if (!isMobile || mobileModeInitializedRef.current) return;
-    mobileModeInitializedRef.current = true;
-    if (!url && mobileViewMode !== 'preview') {
-      setMobileViewMode('preview');
-      try {
-        localStorage.setItem(MOBILE_VIEW_MODE_KEY, 'preview');
-      } catch {
-        // Ignore localStorage failures
-      }
-    }
-  }, [isMobile, mobileViewMode, url]);
 
   useEffect(() => {
     if (!isMobile) return;

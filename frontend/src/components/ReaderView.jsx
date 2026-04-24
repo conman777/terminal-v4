@@ -48,7 +48,7 @@ export function ReaderView({ content, lines, fontSize, lineHeight, scrollToken, 
       }
     }, 100);
     return () => clearTimeout(timer);
-  }, [canAcceptInput, isMobile, scrollToken]);
+  }, [canAcceptInput, isMobile]);
 
   const scrollToBottom = useCallback(() => {
     const el = containerRef.current;

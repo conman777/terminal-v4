@@ -62,6 +62,18 @@ vi.mock('./DesktopStatusBar', () => ({
   },
 }));
 
+vi.mock('./MobileKeybar', () => ({
+  MobileKeybar(props) {
+    return (
+      <div
+        data-testid="mobile-keybar"
+        data-session-id={props.sessionId}
+        data-open={props.isOpen ? 'true' : 'false'}
+      />
+    );
+  },
+}));
+
 vi.mock('../hooks/useMobileChatTurns', () => ({
   useMobileChatTurns(args) {
     return mockUseMobileChatTurns(args);
@@ -231,6 +243,22 @@ describe('MobileShell', () => {
     fireEvent.click(screen.getByRole('tab', { name: /review release checklist/i }));
 
     expect(onSelectSession).toHaveBeenCalledWith('session-b');
+  });
+
+  it('preserves parent mobile state and renders the accessory keybar when opened', () => {
+    const onViewChange = vi.fn();
+    const onChatModeChange = vi.fn();
+
+    renderMobileShell({
+      accessoryOpen: true,
+      onViewChange,
+      onChatModeChange,
+    });
+
+    expect(onViewChange).not.toHaveBeenCalled();
+    expect(onChatModeChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mobile-keybar')).toHaveAttribute('data-session-id', 'session-a');
+    expect(screen.getByTestId('mobile-keybar')).toHaveAttribute('data-open', 'true');
   });
 
   it('keeps mobile text inputs at 16px to prevent Safari keyboard zoom', () => {

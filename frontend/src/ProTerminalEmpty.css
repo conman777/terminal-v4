@@ -61,6 +61,117 @@
   font-weight: 600;
 }
 
+.workspace-start-view {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  height: 100%;
+  padding: 24px;
+}
+
+.workspace-start-shell {
+  width: min(760px, 100%);
+  margin: auto auto 8vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.workspace-start-lightbar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workspace-start-path-pill,
+.workspace-start-light-action {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 76%, transparent);
+  color: var(--text-secondary);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-start-path-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, 100%);
+}
+
+.workspace-start-path-pill-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.workspace-start-path-pill code {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workspace-start-light-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.workspace-start-light-action:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  color: var(--text-primary);
+}
+
+.workspace-start-composer-shell {
+  width: min(680px, 100%);
+  margin: 0 auto;
+  border-radius: 24px;
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.workspace-start-composer-shell .desktop-status-bar-shell {
+  background: transparent;
+}
+
+.workspace-start-composer-shell .status-composer-shell {
+  min-height: 72px;
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+  border-color: color-mix(in srgb, var(--accent-primary) 14%, var(--border-default));
+}
+
+.workspace-start-composer-shell .status-composer-shell:focus-within {
+  border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
+}
+
+@media (max-width: 720px) {
+  .workspace-start-view {
+    padding: 16px;
+  }
+
+  .workspace-start-shell {
+    margin-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .workspace-start-lightbar {
+    gap: 8px;
+  }
+}
+
 @keyframes pro-fade-in {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }

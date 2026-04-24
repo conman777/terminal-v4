@@ -13,6 +13,34 @@ describe('FolderBrowserModal', () => {
     apiFetchMock.mockReset();
   });
 
+  it('renders the modal overlay at the document root when opened', async () => {
+    apiFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        path: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects',
+        folders: ['terminal v4'],
+        parent: 'C:\\Users\\conor\\OneDrive\\Personal\\Documents'
+      })
+    });
+
+    const { container } = render(
+      <FolderBrowserModal
+        isOpen={true}
+        onClose={vi.fn()}
+        currentPath="C:\\Users\\conor\\OneDrive\\Personal\\Documents\\coding projects"
+        recentFolders={[]}
+        onSelect={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Open here' })).toBeInTheDocument();
+    });
+
+    expect(container).toBeEmptyDOMElement();
+    expect(document.body.querySelector('.modal-overlay')).toBeTruthy();
+  });
+
   it('does not reload the same directory when ai options rerender with a new array identity', async () => {
     apiFetchMock.mockResolvedValue({
       ok: true,

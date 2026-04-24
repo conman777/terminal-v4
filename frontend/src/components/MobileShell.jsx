@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TerminalChat } from './TerminalChat';
 import { DesktopConversationView } from './DesktopConversationView';
 import { DesktopStatusBar } from './DesktopStatusBar';
+import { MobileKeybar } from './MobileKeybar';
+import { WorkspaceStartView } from './WorkspaceStartView';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
 import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
@@ -25,6 +27,8 @@ export function MobileShell({
   activeSessionId = null,
   onSelectSession,
   onCreateSession,
+  onSubmitPrompt,
+  onAddWorkspace,
   projectInfo,
   sessionActivity = {},
   onSessionBusyChange,
@@ -32,10 +36,7 @@ export function MobileShell({
   webglEnabled,
   onUrlDetected,
   viewportHeight,
-  onViewChange,
-  onChatModeChange,
   accessoryOpen = false,
-  onAccessoryToggle,
   onAccessoryHeightChange,
   onRegisterFocusTerminal,
   sessionAiTypes = {},
@@ -109,11 +110,9 @@ export function MobileShell({
   });
   const resolvedConnectionState = isStructuredSession ? structuredConnectionState : connectionState;
 
-  useEffect(() => {
-    onViewChange?.('terminal');
-    onChatModeChange?.(false);
+  useEffect(() => () => {
     onAccessoryHeightChange?.(0);
-  }, [onAccessoryHeightChange, onChatModeChange, onViewChange]);
+  }, [onAccessoryHeightChange]);
 
   useEffect(() => {
     setConnectionState('connecting');
@@ -379,22 +378,22 @@ export function MobileShell({
             </div>
           </div>
         ) : (
-          <div className="pro-terminal-empty" style={{ margin: '16px' }}>
-            <div className="pro-empty-icon">
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="4 17 10 11 4 5"></polyline>
-                <line x1="12" y1="19" x2="20" y2="19"></line>
-              </svg>
-            </div>
-            <h2 className="pro-empty-title">No Active Terminals</h2>
-            <p className="pro-empty-desc">Initialize a new secure workspace session to begin commanding.</p>
-            <button className="pro-empty-btn" onClick={() => onCreateSession?.()}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-              Initialize Session
-            </button>
-          </div>
+          <WorkspaceStartView
+            currentPath={projectInfo?.cwd || ''}
+            onCreateSession={onCreateSession}
+            onSubmitPrompt={onSubmitPrompt}
+            onAddWorkspace={onAddWorkspace}
+          />
         )}
       </section>
+
+      {currentSession?.id && shouldRenderTerminalRuntime ? (
+        <MobileKeybar
+          sessionId={currentSession.id}
+          isOpen={accessoryOpen}
+          onHeightChange={onAccessoryHeightChange}
+        />
+      ) : null}
 
       {transportNotice ? (
         <div className="mobile-shell-launch-notice" role="status" aria-live="polite">
