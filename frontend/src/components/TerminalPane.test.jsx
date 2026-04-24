@@ -250,13 +250,13 @@ describe('TerminalPane', () => {
     expect(sendToSession).toHaveBeenCalledWith('ss-structured', '\r');
   });
 
-  it('defaults terminal-backed AI sessions into the terminal-first desktop layout', () => {
+  it('defaults terminal-backed AI sessions into an interactive terminal-first desktop layout', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show inline terminal panel' })).not.toBeInTheDocument();
-    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
+    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 
   it('keeps the terminal interactive when direct input is allowed', () => {

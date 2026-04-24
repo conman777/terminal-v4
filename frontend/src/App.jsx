@@ -40,7 +40,11 @@ import {
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
-import { resolveStartupWorkspacePath } from './utils/startupWorkspace';
+import {
+  createWorkspaceAutoStartKey,
+  resolveStartupWorkspacePath,
+  shouldAutoStartWorkspaceSession,
+} from './utils/startupWorkspace';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 import { resolveDesktopTerminalInputPreference } from './utils/desktopTypingPreference';
 
@@ -218,6 +222,10 @@ function AppContent() {
     projects, projectsLoading, addScanFolder,
     sidebarProjects, addSidebarProject, removeSidebarProject,
   } = useFolders();
+  const startupWorkspacePath = useMemo(
+    () => resolveStartupWorkspacePath(projectInfo?.cwd, recentFolders),
+    [projectInfo?.cwd, recentFolders]
+  );
 
   const {
     bookmarks, addBookmark, updateBookmark, deleteBookmark, executeBookmark,
@@ -312,6 +320,7 @@ function AppContent() {
 
   const mainContentRef = useRef(null);
   const focusTerminalRef = useRef(null);
+  const autoStartedWorkspaceRef = useRef('');
   const mobileViewportAtBottomRef = useRef(true);
   const previousActiveSessionRef = useRef(null);
   const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
@@ -987,6 +996,24 @@ function AppContent() {
     }
   }, [addSessionToDesktop, addSidebarProject, createSession, setShowNewSessionModal]);
 
+  useEffect(() => {
+    const autoStartKey = createWorkspaceAutoStartKey(activeDesktopId, startupWorkspacePath);
+    if (!shouldAutoStartWorkspaceSession({
+      loadingSessions,
+      visibleSessionCount: visibleDesktopSessions.length,
+      autoStartKey,
+      lastAutoStartKey: autoStartedWorkspaceRef.current,
+    })) {
+      return;
+    }
+
+    autoStartedWorkspaceRef.current = autoStartKey;
+    handleRequestNewSession(startupWorkspacePath).catch(() => {
+      // createSession already logs the failure; allow retry if the workspace remains empty.
+      autoStartedWorkspaceRef.current = '';
+    });
+  }, [activeDesktopId, handleRequestNewSession, loadingSessions, startupWorkspacePath, visibleDesktopSessions.length]);
+
   const handleSubmitWorkspaceStartPrompt = useCallback(async (prompt) => {
     const initialCommand = typeof prompt === 'string' ? prompt.trim() : '';
     if (!initialCommand) return;
@@ -1325,10 +1352,6 @@ function AppContent() {
     archivedSessions,
     activeSessions
   }), [activeSessions, archivedSessions, pinnedSessions, sessionsGroupedByProject]);
-  const startupWorkspacePath = useMemo(
-    () => resolveStartupWorkspacePath(projectInfo?.cwd, recentFolders),
-    [projectInfo?.cwd, recentFolders]
-  );
 
   // Grouped props for Header
   const headerSessionProps = {
@@ -1526,7 +1549,7 @@ function AppContent() {
                     <div className="empty-state">
                       <p>Loading sessions…</p>
                     </div>
-                  ) : activeSessions.length === 0 ? (
+                  ) : visibleDesktopSessions.length === 0 ? (
                     <WorkspaceStartView
                       currentPath={startupWorkspacePath}
                       onCreateSession={() => handleRequestNewSession(startupWorkspacePath)}

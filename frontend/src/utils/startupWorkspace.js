@@ -12,3 +12,21 @@ export function resolveStartupWorkspacePath(projectCwd, recentFolders = []) {
 
   return '';
 }
+
+export function createWorkspaceAutoStartKey(activeDesktopId, workspacePath) {
+  const path = typeof workspacePath === 'string' ? workspacePath.trim() : '';
+  if (!path) return '';
+  return `${activeDesktopId || 'default'}:${path}`;
+}
+
+export function shouldAutoStartWorkspaceSession({
+  loadingSessions,
+  visibleSessionCount,
+  autoStartKey,
+  lastAutoStartKey,
+}) {
+  if (loadingSessions) return false;
+  if ((visibleSessionCount || 0) > 0) return false;
+  if (!autoStartKey) return false;
+  return autoStartKey !== lastAutoStartKey;
+}
