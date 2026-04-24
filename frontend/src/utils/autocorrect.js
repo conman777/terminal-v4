@@ -1,29 +1,5 @@
-// Shared spell-checker utilities for text inputs and terminal local buffering.
-let spellInstance = null;
-let loadPromise = null;
-
 export async function getSpellChecker() {
-  if (spellInstance) return spellInstance;
-  if (loadPromise) return loadPromise;
-
-  loadPromise = (async () => {
-    const [{ default: nspell }, affRes, dicRes] = await Promise.all([
-      import('nspell'),
-      fetch('/dictionary-en.aff'),
-      fetch('/dictionary-en.dic'),
-    ]);
-
-    const decoder = new TextDecoder('utf-8');
-    const [aff, dic] = await Promise.all([
-      affRes.arrayBuffer().then((b) => decoder.decode(b)),
-      dicRes.arrayBuffer().then((b) => decoder.decode(b)),
-    ]);
-
-    spellInstance = nspell({ aff, dic });
-    return spellInstance;
-  })();
-
-  return loadPromise;
+  return null;
 }
 
 export function shouldSkipAutocorrectWord(word) {

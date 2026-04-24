@@ -108,13 +108,33 @@ npm run api:dev
 Frontend (React + Vite):
 
 ```bash
-cd frontend
-npm run dev
+npm run frontend:dev
 ```
 
 Defaults:
 - Backend: http://localhost:3020
 - Frontend: http://localhost:5173 (proxying `/api/*` to backend)
+
+Production-style local run:
+
+```bash
+npm run frontend:build
+npm run api:dev
+npm run app:verify
+```
+
+Open `http://127.0.0.1:3020` for this path. The Rust API serves
+`frontend/dist`, which matches the desktop/native app serving model and avoids
+Vite request-time transforms.
+
+Fast local health check:
+
+```bash
+npm run app:verify
+```
+
+This checks Node/npm/Cargo, the Rust API health endpoint, the production UI on
+`3020`, and the optional Vite UI on `5173` if it is running.
 
 If login fails with a network error or "Failed to fetch", first verify the Rust
 API is running on `127.0.0.1:3020`. The Vite dev server proxies auth and API

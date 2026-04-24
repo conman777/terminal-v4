@@ -1,8 +1,5 @@
 import { useState, useEffect, useMemo, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { createTwoFilesPatch } from 'diff';
-import { LazySyntaxHighlighter } from './LazySyntaxHighlighter';
+import { LightweightMarkdown } from './LightweightMarkdown';
 
 // Tool icons (emoji-based for simplicity, could use SVG icons)
 const TOOL_ICONS = {
@@ -134,8 +131,14 @@ function DiffView({ oldString, newString, filePath }) {
   const diffLines = useMemo(() => {
     if (!oldString || !newString) return null;
 
-    const patch = createTwoFilesPatch(filePath, filePath, oldString, newString, '', '', { context: 3 });
-    return patch.split('\n').slice(4);
+    if (oldString === newString) return [];
+
+    return [
+      `--- ${filePath}`,
+      `+++ ${filePath}`,
+      ...oldString.split('\n').map((line) => `-${line}`),
+      ...newString.split('\n').map((line) => `+${line}`)
+    ];
   }, [oldString, newString, filePath]);
 
   if (!diffLines) return null;
@@ -286,55 +289,16 @@ function generateToolSummary(tool, input, output, isError) {
   }
 }
 
-// Custom code block renderer
-const CodeBlock = memo(function CodeBlock({ node, inline, className, children, ...props }) {
-  const match = /language-(\w+)/.exec(className || '');
-  const codeString = String(children).replace(/\n$/, '');
-
-  if (!inline && (match || codeString.includes('\n'))) {
-    const language = match ? match[1] : 'text';
-    return (
-      <div className="code-block-wrapper">
-        <CopyButton text={codeString} />
-        <LazySyntaxHighlighter
-          language={language}
-          customStyle={{
-            margin: 0,
-            borderRadius: '6px',
-            fontSize: '0.8125rem',
-          }}
-          {...props}
-        >
-          {codeString}
-        </LazySyntaxHighlighter>
-      </div>
-    );
-  }
-
-  return <code className="inline-code" {...props}>{children}</code>;
-});
-
 // Markdown renderer
 const MarkdownContent = memo(function MarkdownContent({ content }) {
   if (!content) return null;
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code: CodeBlock,
-        a: ({ node, ...props }) => (
-          <a {...props} target="_blank" rel="noopener noreferrer" className="md-link" />
-        ),
-        table: ({ node, ...props }) => (
-          <div className="md-table-wrapper">
-            <table className="md-table" {...props} />
-          </div>
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
+    <LightweightMarkdown
+      content={content}
+      linkClassName="md-link"
+      renderCodeActions={(code) => <CopyButton text={code} />}
+    />
   );
 });
 

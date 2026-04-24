@@ -6,8 +6,6 @@
  * eliminating URL rewriting issues and providing reliable HMR.
  */
 
-import { WebContainer } from '@webcontainer/api';
-
 // Singleton instance - WebContainer only allows one instance per page
 let webContainerInstance = null;
 let bootPromise = null;
@@ -65,7 +63,7 @@ export async function getWebContainer() {
 
   // Start booting with coep: 'none' to avoid requiring COEP headers
   // This relies on Chrome's Origin Trial for SharedArrayBuffer
-  bootPromise = WebContainer.boot({ coep: 'none' }).then(instance => {
+  bootPromise = import('@webcontainer/api').then(({ WebContainer }) => WebContainer.boot({ coep: 'none' })).then(instance => {
     webContainerInstance = instance;
     return instance;
   }).catch(err => {

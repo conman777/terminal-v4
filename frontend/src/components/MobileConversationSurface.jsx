@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { MobileChatView } from './MobileChatView';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 
 export function MobileConversationSurface({
@@ -58,7 +58,7 @@ export function MobileConversationSurface({
         }}
         aria-hidden="true"
       >
-        <TerminalChat
+        <LazyTerminalChat
           surface="mobile"
           sessionId={session.id}
           keybarOpen={false}

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { MobileChatView } from './MobileChatView';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 
@@ -69,7 +69,7 @@ export default function ClaudeCodePanel({
         } : { height: '100%' }}
         aria-hidden={chatMode ? 'true' : undefined}
       >
-        <TerminalChat
+        <LazyTerminalChat
           surface="mobile"
           sessionId={sessionId}
           keybarOpen={keybarOpen}

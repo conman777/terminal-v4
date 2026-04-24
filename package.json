@@ -5,6 +5,10 @@
   "main": "index.js",
   "scripts": {
     "api:dev": "cargo run -p terminal-v4-api --manifest-path rust/Cargo.toml",
+    "frontend:dev": "npm --prefix frontend run dev -- --host 127.0.0.1 --port 5173 --strictPort",
+    "frontend:build": "npm --prefix frontend run build",
+    "app:build": "npm run frontend:build && cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml",
+    "app:verify": "node scripts/verify-local-app.cjs",
     "test": "npm --prefix backend test",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

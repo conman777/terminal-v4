@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ContextMenu } from './ContextMenu';
 import { MobileStatusBar } from './MobileStatusBar';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { useLongPress } from '../hooks/useLongPress';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import { getAiInitialCommand } from '../utils/aiProviders';
@@ -342,7 +342,7 @@ export function MobileTerminalSurface({
       )}
 
       <div className="carousel-content" {...longPressHandlers}>
-        <TerminalChat
+        <LazyTerminalChat
           key={`${session.id}-${refreshToken}`}
           surface="mobile"
           sessionId={session.id}

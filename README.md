@@ -34,8 +34,20 @@ See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 1. Install dependencies: `cd backend && npm install && cd ../frontend && npm install`
 2. Create `.env` with JWT secrets and optional API keys
 3. Start Rust API: `npm run api:dev`
-4. Start frontend: `cd frontend && npm run dev`
+4. Start frontend: `npm run frontend:dev`
 5. Open `http://localhost:5173` and create your first terminal!
+
+For the production-style local path, build the frontend and use the Rust API as
+the single app server:
+
+```bash
+npm run frontend:build
+npm run api:dev
+npm run app:verify
+```
+
+Then open `http://127.0.0.1:3020`. This is the same serving model used by the
+desktop/native wrapper and avoids Vite dev-server transforms.
 
 ## Windows Desktop (Phase 1)
 

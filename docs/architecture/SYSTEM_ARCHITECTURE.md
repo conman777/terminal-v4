@@ -19,6 +19,13 @@ backend is Fastify/TypeScript, and the active rewrite/runtime path is now the
 Rust Axum workspace under `rust/`. The backend serves the built frontend in
 production.
 
+Frontend startup keeps the first app shell intentionally small. Heavy runtime
+surfaces such as the xterm/WebGL terminal, conversation markdown/tool rendering,
+preview DevTools, and WebContainer boot code are loaded behind lazy boundaries
+instead of being required before the root UI can paint. The production desktop
+path should prefer `frontend/dist` served by the Rust API over Vite's
+request-time module transforms.
+
 Phase 1 also includes a Windows desktop wrapper (`desktop/tauri`) that launches
 the Rust backend as a local child process and hosts the same UI in a native
 window. In this phase, desktop mode is local-only (`127.0.0.1:3020`).

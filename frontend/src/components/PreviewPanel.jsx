@@ -4,7 +4,7 @@ import { toPreviewUrl, toPathPreviewFallbackUrl, withAuthToken, extractPortFromU
 import { getAccessToken } from '../utils/auth';
 import { apiFetch } from '../utils/api';
 import { isWebContainerSupported } from '../utils/webcontainer';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { StyleEditor } from './StyleEditor';
 import { DevToolsPanel } from './devtools/DevToolsPanel';
@@ -2838,7 +2838,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
             {/* Terminal content */}
             <div className="preview-mobile-terminal-content">
               {selectedTerminalSession ? (
-                <TerminalChat
+                <LazyTerminalChat
                   key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
                   surface={isMobile ? 'mobile' : 'desktop'}
                   sessionId={selectedTerminalSession}
@@ -3771,7 +3771,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               </div>
               <div className="preview-terminal-content">
                 {selectedTerminalSession ? (
-                <TerminalChat
+                <LazyTerminalChat
                   key={`${selectedTerminalSession}-${previewTerminalRefreshToken}`}
                   surface={isMobile ? 'mobile' : 'desktop'}
                   sessionId={selectedTerminalSession}

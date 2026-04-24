@@ -1,53 +1,10 @@
 import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { LazySyntaxHighlighter } from './LazySyntaxHighlighter';
-
-// Code block renderer for markdown
-const CodeBlock = memo(function CodeBlock({ node, inline, className, children, ...props }) {
-  const match = /language-(\w+)/.exec(className || '');
-  const language = match ? match[1] : '';
-
-  if (inline) {
-    return (
-      <code className="note-inline-code" {...props}>
-        {children}
-      </code>
-    );
-  }
-
-  return (
-    <LazySyntaxHighlighter
-      language={language || 'text'}
-      customStyle={{
-        margin: '12px 0',
-        borderRadius: '6px',
-        fontSize: '13px',
-      }}
-      {...props}
-    >
-      {String(children).replace(/\n$/, '')}
-    </LazySyntaxHighlighter>
-  );
-});
+import { LightweightMarkdown } from './LightweightMarkdown';
 
 // Markdown renderer
 const MarkdownContent = memo(function MarkdownContent({ content }) {
   if (!content) return null;
-
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code: CodeBlock,
-        a: ({ node, ...props }) => (
-          <a {...props} target="_blank" rel="noopener noreferrer" />
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
+  return <LightweightMarkdown content={content} codeClassName="note-code-block" />;
 });
 
 // Format relative time

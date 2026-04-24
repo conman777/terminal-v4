@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 
 if (process.env.VITEST) {
   // Keep React in test/dev mode even if shell exports NODE_ENV=production.
@@ -7,7 +6,22 @@ if (process.env.VITEST) {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [],
+  esbuild: {
+    jsx: 'automatic'
+  },
+  optimizeDeps: {
+    entries: ['index.html'],
+    holdUntilCrawlEnd: false,
+    noDiscovery: true,
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'react/jsx-runtime',
+      'react/jsx-dev-runtime'
+    ]
+  },
   build: {
     rollupOptions: {
       output: {
@@ -16,23 +30,6 @@ export default defineConfig({
           if (id.includes('@xterm')) return 'vendor-xterm';
           if (id.includes('react') || id.includes('scheduler')) return 'vendor-react';
           if (id.includes('@webcontainer') || id.includes('comlink')) return 'vendor-webcontainer';
-          if (id.includes('react-syntax-highlighter') || id.includes('refractor') || id.includes('prism')) {
-            return 'vendor-highlight';
-          }
-          if (
-            id.includes('react-markdown') ||
-            id.includes('remark-') ||
-            id.includes('rehype-') ||
-            id.includes('/micromark') ||
-            id.includes('/mdast-') ||
-            id.includes('/hast-') ||
-            id.includes('/unist-') ||
-            id.includes('/unified')
-          ) {
-            return 'vendor-markdown';
-          }
-          if (id.includes('/diff/')) return 'vendor-diff';
-          if (id.includes('nspell') || id.includes('dictionary-en')) return 'vendor-spellcheck';
           return 'vendor-misc';
         }
       }
@@ -47,6 +44,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    preTransformRequests: false,
     allowedHosts: [
       '.ngrok-free.app',
       '.ngrok.io',

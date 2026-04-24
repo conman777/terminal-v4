@@ -1,9 +1,9 @@
 import { useRef, useState, useCallback, useEffect, useMemo, memo } from 'react';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
-import { DesktopConversationView } from './DesktopConversationView';
+import { LazyDesktopConversationView } from './LazyDesktopConversationView';
 import { shouldFallbackToTerminalView } from '../utils/conversationMode';
 import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
@@ -700,7 +700,7 @@ export const TerminalPane = memo(function TerminalPane({
               {/* CliActivityStrip removed — interactive prompts handled in terminal directly */}
               {!useTerminalFirstLayout && (
                 <div className="desktop-conversation-surface">
-                  <DesktopConversationView
+                  <LazyDesktopConversationView
                     turns={turns}
                     isStreaming={isStructuredSession ? structuredIsStreaming : isSessionBusy}
                     isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
@@ -737,7 +737,7 @@ export const TerminalPane = memo(function TerminalPane({
                 aria-hidden={!isTerminalDockVisible ? 'true' : undefined}
               >
                 {shouldRenderTerminalRuntime ? (
-                  <TerminalChat
+                  <LazyTerminalChat
                     key={`${pane.sessionId}-${refreshToken}`}
                     surface="desktop"
                     sessionId={pane.sessionId}

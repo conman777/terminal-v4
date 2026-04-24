@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { TerminalChat } from './TerminalChat';
+import { LazyTerminalChat } from './LazyTerminalChat';
 import { MobileStatusBar } from './MobileStatusBar';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { MobileChatView } from './MobileChatView';
@@ -392,7 +392,7 @@ export function MobileTerminalCarousel({
         aria-hidden={chatMode ? 'true' : undefined}
         {...longPressHandlers}
       >
-          <TerminalChat
+          <LazyTerminalChat
             key={`${currentSession.id}-${refreshToken}`}
             surface="mobile"
             sessionId={currentSession.id}

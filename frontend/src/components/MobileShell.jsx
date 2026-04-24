@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { TerminalChat } from './TerminalChat';
-import { DesktopConversationView } from './DesktopConversationView';
+import { LazyTerminalChat } from './LazyTerminalChat';
+import { LazyDesktopConversationView } from './LazyDesktopConversationView';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { MobileKeybar } from './MobileKeybar';
 import { WorkspaceStartView } from './WorkspaceStartView';
@@ -285,7 +285,7 @@ export function MobileShell({
             <div className={`desktop-terminal-stack mobile-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
               {!useTerminalFirstLayout ? (
                 <div className="desktop-conversation-surface mobile-conversation-surface">
-                  <DesktopConversationView
+                  <LazyDesktopConversationView
                     turns={turns}
                     isStreaming={structuredIsStreaming}
                     isLoadingHistory={isConversationHistoryLoading}
@@ -320,7 +320,7 @@ export function MobileShell({
                 aria-hidden={!useTerminalFirstLayout && !isTerminalPanelOpen ? 'true' : undefined}
               >
                 {shouldRenderTerminalRuntime ? (
-                  <TerminalChat
+                  <LazyTerminalChat
                     key={`${currentSession.id}-${refreshToken}`}
                     surface="mobile"
                     sessionId={currentSession.id}
