@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TerminalPane } from './TerminalPane';
 
 const refreshSessionGitStats = vi.fn();
@@ -315,7 +315,7 @@ describe('TerminalPane', () => {
     expect(composer.closest('.desktop-terminal-stack')).not.toBeNull();
   });
 
-  it('moves sandbox launch selection into the composer controls', () => {
+  it('moves permission selection into the composer controls', () => {
     render(<TerminalPane {...buildProps({
       sessions: [{
         id: 'session-1',
@@ -328,11 +328,34 @@ describe('TerminalPane', () => {
       }]
     })} />);
 
-    screen.getByRole('button', { name: 'Use sandbox on next launch' }).click();
+    fireEvent.click(screen.getByRole('button', { name: 'Choose permissions for next launch' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Default permissions/i }));
 
     expect(updateThreadMetadata).toHaveBeenCalledWith('session-1', {
       sandboxMode: 'workspace-write',
       sandboxWorkspaceRoot: 'C:\\repo'
+    });
+  });
+
+  it('can select full access from the composer permission menu', () => {
+    render(<TerminalPane {...buildProps({
+      sessions: [{
+        id: 'session-1',
+        title: 'Claude Terminal',
+        cwd: 'C:\\repo',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        sandbox: { mode: 'workspace-write', workspaceRoot: 'C:\\repo' },
+        thread: { gitStats: null, topic: 'Review code', sandboxMode: 'workspace-write', sandboxWorkspaceRoot: 'C:\\repo' }
+      }]
+    })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Choose permissions for next launch' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Full access/i }));
+
+    expect(updateThreadMetadata).toHaveBeenCalledWith('session-1', {
+      sandboxMode: 'off',
+      sandboxWorkspaceRoot: null
     });
   });
 

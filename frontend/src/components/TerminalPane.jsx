@@ -12,6 +12,23 @@ import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const SANDBOX_PERMISSION_OPTIONS = [
+  {
+    mode: 'off',
+    label: 'Full access',
+    description: 'Host shell'
+  },
+  {
+    mode: 'workspace-write',
+    label: 'Default permissions',
+    description: 'Workspace sandbox'
+  },
+  {
+    mode: 'read-only',
+    label: 'Read-only',
+    description: 'View-only sandbox'
+  }
+];
 
 function extractTerminalPreviewLines(chunk) {
   if (typeof chunk !== 'string' || chunk.length === 0) return [];
@@ -103,6 +120,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
+  const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
   const conversationFallbackRef = useRef(false);
   const interactivePromptRef = useRef(null);
   const outputProbeRef = useRef('');
@@ -504,10 +522,12 @@ export const TerminalPane = memo(function TerminalPane({
     launchAiType(provider.id, provider.initialCommand);
   }, [launchAiType, onAddCustomAiProvider, onSetSessionAiType, pane.sessionId]);
 
-  const handleToggleSandboxMode = useCallback(() => {
+  const selectedPermission = SANDBOX_PERMISSION_OPTIONS.find((option) => option.mode === requestedSandboxMode)
+    ?? SANDBOX_PERMISSION_OPTIONS[0];
+
+  const handleSelectSandboxMode = useCallback((nextMode) => {
     if (!pane.sessionId || !currentSession) return;
 
-    const nextMode = requestedSandboxMode === 'off' ? 'workspace-write' : 'off';
     const nextWorkspaceRoot = nextMode === 'off'
       ? null
       : currentSession.thread?.projectPath
@@ -521,11 +541,11 @@ export const TerminalPane = memo(function TerminalPane({
       sandboxMode: nextMode,
       sandboxWorkspaceRoot: nextWorkspaceRoot
     });
+    setIsPermissionMenuOpen(false);
   }, [
     currentSession,
     pane.sessionId,
     projectInfo?.cwd,
-    requestedSandboxMode,
     updateThreadMetadata
   ]);
 
@@ -828,18 +848,39 @@ export const TerminalPane = memo(function TerminalPane({
                 isSwitchingGitBranch={isSwitchingGitBranch}
                 onSelectGitBranch={handleSelectGitBranch}
                 composerSecondaryAction={(
-                  <button
-                    type="button"
-                    className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
-                    onClick={handleToggleSandboxMode}
-                    title={isSandboxRequested ? 'Use full access on next launch' : 'Use sandbox on next launch'}
-                    aria-label={isSandboxRequested ? 'Use full access on next launch' : 'Use sandbox on next launch'}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                      <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
-                    </svg>
-                    <span>{isSandboxRequested ? (sandboxChangePending ? 'Sandbox next' : 'Sandbox') : 'Full access'}</span>
-                  </button>
+                  <div className="status-permission-picker">
+                    <button
+                      type="button"
+                      className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
+                      onClick={() => setIsPermissionMenuOpen((isOpen) => !isOpen)}
+                      title="Choose permissions for the next launch"
+                      aria-label="Choose permissions for next launch"
+                      aria-haspopup="menu"
+                      aria-expanded={isPermissionMenuOpen}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
+                      </svg>
+                      <span>{sandboxChangePending ? `${selectedPermission.label} next` : selectedPermission.label}</span>
+                    </button>
+                    {isPermissionMenuOpen && (
+                      <div className="status-permission-menu" role="menu" aria-label="Launch permissions">
+                        {SANDBOX_PERMISSION_OPTIONS.map((option) => (
+                          <button
+                            key={option.mode}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={requestedSandboxMode === option.mode}
+                            className={`status-permission-option ${requestedSandboxMode === option.mode ? 'active' : ''}`}
+                            onClick={() => handleSelectSandboxMode(option.mode)}
+                          >
+                            <span>{option.label}</span>
+                            <small>{option.description}</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
               />
             </div>

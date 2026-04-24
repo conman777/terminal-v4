@@ -770,6 +770,12 @@ export function DesktopStatusBar({
           gap: 6px;
         }
 
+        .status-permission-picker {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+
         .status-sandbox-toggle {
           display: inline-flex;
           align-items: center;
@@ -800,6 +806,46 @@ export function DesktopStatusBar({
 
         .status-sandbox-toggle.pending {
           color: var(--accent-primary-light);
+        }
+
+        .status-permission-menu {
+          position: absolute;
+          right: 0;
+          bottom: calc(100% + 8px);
+          z-index: 20;
+          display: grid;
+          gap: 4px;
+          min-width: 190px;
+          padding: 6px;
+          border-radius: 12px;
+          border: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
+          background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+          box-shadow: var(--shadow-lg);
+        }
+
+        .status-permission-option {
+          display: grid;
+          gap: 2px;
+          width: 100%;
+          padding: 9px 10px;
+          border: 1px solid transparent;
+          border-radius: 9px;
+          background: transparent;
+          color: var(--text-primary);
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .status-permission-option small {
+          color: var(--text-muted);
+          font-size: 10px;
+          font-weight: 600;
+        }
+
+        .status-permission-option:hover,
+        .status-permission-option.active {
+          border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
         }
 
         .status-bar-right {

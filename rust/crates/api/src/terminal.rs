@@ -35,6 +35,8 @@ pub struct TerminalCreateOptions {
     pub rows: Option<i64>,
     pub title: Option<String>,
     pub shell: Option<String>,
+    pub sandbox_mode: Option<String>,
+    pub sandbox_workspace_root: Option<String>,
     pub initial_command: Option<String>,
 }
 
@@ -52,6 +54,8 @@ pub struct ThreadUpdate {
     pub pinned: Option<bool>,
     pub archived: Option<bool>,
     pub project_path: Option<Option<String>>,
+    pub sandbox_mode: Option<String>,
+    pub sandbox_workspace_root: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -430,6 +434,13 @@ impl TerminalManager {
                 format!("Terminal {next}")
             });
         let uses_tmux = should_use_tmux().await;
+        let sandbox = build_sandbox_info(
+            options.sandbox_mode.as_deref(),
+            options
+                .sandbox_workspace_root
+                .or_else(|| options.cwd.clone()),
+            &id,
+        );
         self.spawn_session(
             user_id,
             id,
@@ -440,6 +451,7 @@ impl TerminalManager {
             options.rows,
             Vec::new(),
             options.initial_command,
+            sandbox,
             uses_tmux,
             false,
         )
@@ -489,7 +501,14 @@ impl TerminalManager {
             }
             persisted.history.clear();
         }
-        let restored_sandbox = persisted.sandbox.clone();
+        let restored_sandbox = match persisted.thread.as_ref() {
+            Some(thread) => build_sandbox_info(
+                Some(thread.sandbox_mode.as_str()),
+                thread.sandbox_workspace_root.clone(),
+                &persisted.id,
+            ),
+            None => persisted.sandbox.clone(),
+        };
         let restored_thread = persisted.thread.clone();
         let snapshot = self
             .spawn_session(
@@ -502,6 +521,7 @@ impl TerminalManager {
                 rows,
                 persisted.history,
                 None,
+                restored_sandbox.clone(),
                 uses_tmux,
                 has_existing_tmux,
             )
@@ -927,6 +947,7 @@ impl TerminalManager {
         rows: Option<i64>,
         history: Vec<TerminalStreamEvent>,
         initial_command: Option<String>,
+        sandbox: Option<TerminalSandboxInfo>,
         uses_tmux: bool,
         existing_tmux: bool,
     ) -> Result<TerminalSessionSnapshot, String> {
@@ -973,7 +994,7 @@ impl TerminalManager {
                 current_rows,
                 primary_client_id: None,
                 client_dimensions: HashMap::new(),
-                sandbox: None,
+                sandbox: sandbox.clone(),
                 thread: None,
                 is_busy: false,
                 last_activity_at: now_millis(),
@@ -1015,7 +1036,7 @@ impl TerminalManager {
             uses_tmux,
             current_cols: Some(current_cols),
             current_rows: Some(current_rows),
-            sandbox: None,
+            sandbox,
         })
     }
 
@@ -1218,7 +1239,31 @@ fn apply_thread_update(thread: &mut ThreadMetadata, updates: ThreadUpdate) {
     if let Some(project_path) = updates.project_path {
         thread.project_path = normalize_optional_text(project_path);
     }
+    if let Some(sandbox_mode) = updates.sandbox_mode {
+        thread.sandbox_mode = sandbox_mode;
+    }
+    if let Some(sandbox_workspace_root) = updates.sandbox_workspace_root {
+        thread.sandbox_workspace_root = normalize_optional_text(sandbox_workspace_root);
+    }
     thread.last_activity_at = iso_timestamp();
+}
+
+fn build_sandbox_info(
+    mode: Option<&str>,
+    workspace_root: Option<String>,
+    runtime_id: &str,
+) -> Option<TerminalSandboxInfo> {
+    let mode = mode.unwrap_or("off").trim();
+    if mode.is_empty() || mode == "off" {
+        return None;
+    }
+
+    Some(TerminalSandboxInfo {
+        mode: mode.to_string(),
+        workspace_root: normalize_optional_text(workspace_root),
+        runtime_id: Some(runtime_id.to_string()),
+        runtime_kind: "workspace-copy".to_string(),
+    })
 }
 
 fn normalize_optional_text(value: Option<String>) -> Option<String> {
@@ -1978,13 +2023,15 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 #[cfg(test)]
 mod tests {
     use super::{
-        intercept_terminal_queries, normalize_newlines, shell_command, tmux_mode_from_env,
+        apply_thread_update, build_sandbox_info, intercept_terminal_queries, normalize_newlines,
+        shell_command, tmux_mode_from_env, ThreadUpdate,
     };
     #[cfg(not(windows))]
     use super::{AppConfig, TerminalCreateOptions, TerminalManager};
     use std::sync::{LazyLock, Mutex as StdMutex};
     #[cfg(not(windows))]
     use tempfile::tempdir;
+    use terminal_v4_core::ThreadMetadata;
 
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
@@ -2011,6 +2058,56 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_sandbox_info_maps_default_permissions_to_workspace_copy() {
+        let sandbox = build_sandbox_info(
+            Some("workspace-write"),
+            Some("C:\\repo".to_string()),
+            "session-1",
+        )
+        .expect("workspace sandbox should be present");
+
+        assert_eq!(sandbox.mode, "workspace-write");
+        assert_eq!(sandbox.workspace_root.as_deref(), Some("C:\\repo"));
+        assert_eq!(sandbox.runtime_id.as_deref(), Some("session-1"));
+        assert_eq!(sandbox.runtime_kind, "workspace-copy");
+    }
+
+    #[test]
+    fn build_sandbox_info_leaves_full_access_without_sandbox_metadata() {
+        assert_eq!(
+            build_sandbox_info(Some("off"), Some("C:\\repo".to_string()), "session-1"),
+            None
+        );
+    }
+
+    #[test]
+    fn apply_thread_update_persists_next_launch_permissions() {
+        let mut thread = ThreadMetadata {
+            topic: None,
+            topic_auto_generated: false,
+            pinned: false,
+            archived: false,
+            project_path: None,
+            sandbox_mode: "off".to_string(),
+            sandbox_workspace_root: None,
+            git_stats: None,
+            last_activity_at: "2026-04-24T00:00:00Z".to_string(),
+        };
+
+        apply_thread_update(
+            &mut thread,
+            ThreadUpdate {
+                sandbox_mode: Some("read-only".to_string()),
+                sandbox_workspace_root: Some(Some("C:\\repo".to_string())),
+                ..ThreadUpdate::default()
+            },
+        );
+
+        assert_eq!(thread.sandbox_mode, "read-only");
+        assert_eq!(thread.sandbox_workspace_root.as_deref(), Some("C:\\repo"));
+    }
+
     #[tokio::test]
     #[cfg(not(windows))]
     async fn resize_updates_the_underlying_pty_dimensions() {
@@ -2030,6 +2127,8 @@ mod tests {
                     rows: Some(28),
                     title: None,
                     shell: None,
+                    sandbox_mode: None,
+                    sandbox_workspace_root: None,
                     initial_command: None,
                 },
             )
