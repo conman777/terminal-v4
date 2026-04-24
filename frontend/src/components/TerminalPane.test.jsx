@@ -6,6 +6,7 @@ const refreshSessionGitStats = vi.fn();
 const listSessionGitBranches = vi.fn();
 const checkoutSessionGitBranch = vi.fn();
 const sendToSession = vi.fn();
+const updateThreadMetadata = vi.fn();
 let lastTerminalChatProps = null;
 let lastConversationViewProps = null;
 
@@ -14,7 +15,8 @@ vi.mock('../contexts/TerminalSessionContext', () => ({
     refreshSessionGitStats,
     listSessionGitBranches,
     checkoutSessionGitBranch,
-    sendToSession
+    sendToSession,
+    updateThreadMetadata
   })
 }));
 
@@ -70,6 +72,7 @@ vi.mock('./DesktopStatusBar', () => ({
           {props.isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
         </button>
       ) : null}
+      {props.composerSecondaryAction}
     </div>
   )
 }));
@@ -142,6 +145,7 @@ describe('TerminalPane', () => {
     listSessionGitBranches.mockReset();
     checkoutSessionGitBranch.mockReset();
     sendToSession.mockReset();
+    updateThreadMetadata.mockReset();
     window.localStorage.clear();
     lastTerminalChatProps = null;
     lastConversationViewProps = null;
@@ -309,6 +313,27 @@ describe('TerminalPane', () => {
 
     const composer = screen.getByRole('textbox', { name: 'Command composer' });
     expect(composer.closest('.desktop-terminal-stack')).not.toBeNull();
+  });
+
+  it('moves sandbox launch selection into the composer controls', () => {
+    render(<TerminalPane {...buildProps({
+      sessions: [{
+        id: 'session-1',
+        title: 'Claude Terminal',
+        cwd: 'C:\\repo',
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+        sandbox: { mode: 'off' },
+        thread: { gitStats: null, topic: 'Review code', projectPath: 'C:\\repo' }
+      }]
+    })} />);
+
+    screen.getByRole('button', { name: 'Use sandbox on next launch' }).click();
+
+    expect(updateThreadMetadata).toHaveBeenCalledWith('session-1', {
+      sandboxMode: 'workspace-write',
+      sandboxWorkspaceRoot: 'C:\\repo'
+    });
   });
 
   it('renders the DesktopStatusBar with the Ask V4 placeholder visible', () => {

@@ -120,13 +120,17 @@ export const TerminalPane = memo(function TerminalPane({
     });
   }, []);
 
-  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession } = useTerminalSession();
+  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession, updateThreadMetadata } = useTerminalSession();
 
   const selectableSessions = useMemo(
     () => sessions.filter((session) => !session.thread?.archived),
     [sessions]
   );
   const currentSession = selectableSessions.find(s => s.id === pane.sessionId);
+  const effectiveSandboxMode = currentSession?.sandbox?.mode ?? 'off';
+  const requestedSandboxMode = currentSession?.thread?.sandboxMode ?? effectiveSandboxMode;
+  const isSandboxRequested = requestedSandboxMode !== 'off';
+  const sandboxChangePending = requestedSandboxMode !== effectiveSandboxMode;
   const shouldHighlightActiveChrome = isActive && selectableSessions.length > 1;
   const inferredAiType = sessionAiTypes?.[pane.sessionId] ?? inferSessionAiType(currentSession);
   const rawTopic = currentSession?.thread?.topic || null;
@@ -500,6 +504,31 @@ export const TerminalPane = memo(function TerminalPane({
     launchAiType(provider.id, provider.initialCommand);
   }, [launchAiType, onAddCustomAiProvider, onSetSessionAiType, pane.sessionId]);
 
+  const handleToggleSandboxMode = useCallback(() => {
+    if (!pane.sessionId || !currentSession) return;
+
+    const nextMode = requestedSandboxMode === 'off' ? 'workspace-write' : 'off';
+    const nextWorkspaceRoot = nextMode === 'off'
+      ? null
+      : currentSession.thread?.projectPath
+        || currentSession.thread?.sandboxWorkspaceRoot
+        || currentSession.sandbox?.workspaceRoot
+        || currentSession.cwd
+        || projectInfo?.cwd
+        || null;
+
+    updateThreadMetadata?.(pane.sessionId, {
+      sandboxMode: nextMode,
+      sandboxWorkspaceRoot: nextWorkspaceRoot
+    });
+  }, [
+    currentSession,
+    pane.sessionId,
+    projectInfo?.cwd,
+    requestedSandboxMode,
+    updateThreadMetadata
+  ]);
+
   const handleCwdChange = useCallback((cwd) => {
     setCurrentCwd(cwd);
     onCwdChange?.(cwd);
@@ -798,6 +827,20 @@ export const TerminalPane = memo(function TerminalPane({
                 isLoadingGitBranches={isLoadingGitBranches}
                 isSwitchingGitBranch={isSwitchingGitBranch}
                 onSelectGitBranch={handleSelectGitBranch}
+                composerSecondaryAction={(
+                  <button
+                    type="button"
+                    className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
+                    onClick={handleToggleSandboxMode}
+                    title={isSandboxRequested ? 'Use full access on next launch' : 'Use sandbox on next launch'}
+                    aria-label={isSandboxRequested ? 'Use full access on next launch' : 'Use sandbox on next launch'}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                      <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
+                    </svg>
+                    <span>{isSandboxRequested ? (sandboxChangePending ? 'Sandbox next' : 'Sandbox') : 'Full access'}</span>
+                  </button>
+                )}
               />
             </div>
           </div>

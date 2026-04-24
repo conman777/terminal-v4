@@ -231,7 +231,6 @@ export default function ThreadsSidebar({
         <div className="pro-sidebar-panel">
           <div className="pro-sidebar-header">
             <div className="pro-sidebar-brand">
-              <span className="pro-sidebar-kicker">Workspace</span>
               <span>Threads</span>
             </div>
             <div className="pro-sidebar-count">{visibleSessionCount}</div>

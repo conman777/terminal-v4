@@ -64,6 +64,7 @@ describe('SettingsModal', () => {
       () => {
         const onWebglChange = vi.fn();
         render(<SettingsModal {...buildProps({ onWebglChange })} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Terminal' }));
 
         const webglButton = screen.getByRole('button', { name: 'WebGL' });
         const canvasButton = screen.getByRole('button', { name: 'Canvas' });
@@ -84,6 +85,7 @@ describe('SettingsModal', () => {
     const onOpenApiSettings = vi.fn();
 
     render(<SettingsModal {...buildProps({ onOpenApiSettings })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Voice' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Open API Settings' }));
 
@@ -94,6 +96,7 @@ describe('SettingsModal', () => {
     const onOpenProcessManager = vi.fn();
 
     render(<SettingsModal {...buildProps({ onOpenProcessManager })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Processes' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Open Process Manager' }));
 
@@ -104,6 +107,7 @@ describe('SettingsModal', () => {
     const onDesktopTerminalInputChange = vi.fn();
 
     render(<SettingsModal {...buildProps({ onDesktopTerminalInputChange, desktopAllowTerminalInput: false })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Ask V4 + Terminal' }));
     fireEvent.click(screen.getByRole('button', { name: 'Ask V4 Only' }));
