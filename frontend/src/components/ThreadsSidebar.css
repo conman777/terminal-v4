@@ -223,7 +223,7 @@
 }
 
 .pro-sidebar-search input::placeholder {
-  color: var(--text-muted);
+  color: var(--text-placeholder, var(--text-muted));
 }
 
 .pro-sidebar-tree {

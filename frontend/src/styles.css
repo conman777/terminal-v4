@@ -29,6 +29,7 @@
   --text-primary: #f4eee3;
   --text-secondary: #d5cab4;
   --text-muted: #8c8172;
+  --text-placeholder: #a89d8f;
 
   /* Border colors */
   --border-subtle: #2a241c;
@@ -133,7 +134,8 @@
   /* Text colors - warm slate */
   --text-primary: #1f1a13;
   --text-secondary: #4a3f30;
-  --text-muted: #77685a;
+  --text-muted: #5f5144;
+  --text-placeholder: #4f4337;
 
   /* Border colors */
   --border-subtle: #e4d8bf;
@@ -343,7 +345,7 @@ button {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  min-height: 78px;
+  min-height: 42px;
   border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, black 4%), color-mix(in srgb, var(--bg-base) 92%, transparent));
@@ -353,9 +355,8 @@ button {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 36px;
+  min-height: 42px;
   padding: 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
 }
 
 .desktop-titlebar-traffic {
@@ -853,7 +854,7 @@ button {
 }
 
 .sidebar-search-input::placeholder {
-  color: var(--text-muted);
+  color: var(--text-placeholder, var(--text-muted));
 }
 
 .sidebar-search-clear {

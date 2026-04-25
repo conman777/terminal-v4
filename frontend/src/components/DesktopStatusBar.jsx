@@ -631,7 +631,7 @@ export function DesktopStatusBar({
           font-family: var(--font-ui);
           font-size: 16px;
           font-weight: 500;
-          letter-spacing: -0.015em;
+          letter-spacing: 0;
           line-height: 1.35;
           appearance: none;
           -webkit-appearance: none;
@@ -648,7 +648,7 @@ export function DesktopStatusBar({
         }
 
         .status-composer-input::placeholder {
-          color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+          color: var(--text-placeholder, var(--text-muted));
           font-weight: 500;
         }
 
@@ -768,6 +768,84 @@ export function DesktopStatusBar({
           display: flex;
           align-items: center;
           gap: 6px;
+        }
+
+        .status-permission-picker {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+
+        .status-sandbox-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          height: 28px;
+          padding: 0 10px;
+          border-radius: 8px;
+          border: 1px solid color-mix(in srgb, var(--border-default) 32%, transparent);
+          background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
+          color: color-mix(in srgb, var(--text-secondary) 94%, transparent);
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+
+        .status-sandbox-toggle:hover {
+          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+          color: var(--text-primary);
+        }
+
+        .status-sandbox-toggle.active {
+          border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+          color: var(--text-primary);
+        }
+
+        .status-sandbox-toggle.pending {
+          color: var(--accent-primary-light);
+        }
+
+        .status-permission-menu {
+          position: absolute;
+          right: 0;
+          bottom: calc(100% + 8px);
+          z-index: 20;
+          display: grid;
+          gap: 4px;
+          min-width: 190px;
+          padding: 6px;
+          border-radius: 12px;
+          border: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
+          background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
+          box-shadow: var(--shadow-lg);
+        }
+
+        .status-permission-option {
+          display: grid;
+          gap: 2px;
+          width: 100%;
+          padding: 9px 10px;
+          border: 1px solid transparent;
+          border-radius: 9px;
+          background: transparent;
+          color: var(--text-primary);
+          text-align: left;
+          cursor: pointer;
+        }
+
+        .status-permission-option small {
+          color: var(--text-muted);
+          font-size: 10px;
+          font-weight: 600;
+        }
+
+        .status-permission-option:hover,
+        .status-permission-option.active {
+          border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
+          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
         }
 
         .status-bar-right {
@@ -1017,6 +1095,7 @@ export function DesktopStatusBar({
         .desktop-status-bar-shell.pane-active .status-ai-selector,
         .desktop-status-bar-shell.pane-active .status-bar-btn,
         .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
+        .desktop-status-bar-shell.pane-active .status-sandbox-toggle,
         .desktop-status-bar-shell.pane-active .status-send-btn {
           border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
           background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
@@ -1024,7 +1103,8 @@ export function DesktopStatusBar({
 
         .desktop-status-bar-shell.pane-active .status-ai-selector,
         .desktop-status-bar-shell.pane-active .status-bar-btn,
-        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline {
+        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
+        .desktop-status-bar-shell.pane-active .status-sandbox-toggle {
           color: color-mix(in srgb, var(--text-primary) 94%, transparent);
         }
 
@@ -1035,7 +1115,8 @@ export function DesktopStatusBar({
         .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
         .desktop-status-bar-shell.pane-active .status-ai-selector.active,
         .desktop-status-bar-shell.pane-active .status-bar-btn:hover:not(:disabled),
-        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline:hover:not(:disabled) {
+        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline:hover:not(:disabled),
+        .desktop-status-bar-shell.pane-active .status-sandbox-toggle:hover {
           border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
           background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
         }

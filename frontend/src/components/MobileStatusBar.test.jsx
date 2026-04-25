@@ -181,6 +181,7 @@ describe('MobileStatusBar', () => {
 
     expect(styles).toContain('color-mix(in srgb, var(--bg-surface) 94%, transparent)');
     expect(styles).toContain('color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated))');
+    expect(styles).toContain('color: var(--text-placeholder, var(--text-muted))');
     expect(styles).toContain('font-size: 16px;');
   });
 

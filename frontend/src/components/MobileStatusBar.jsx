@@ -601,7 +601,7 @@ export function MobileStatusBar({
         }
 
         .mobile-composer-input::placeholder {
-          color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+          color: var(--text-placeholder, var(--text-muted));
         }
 
         .mobile-composer-input:disabled {

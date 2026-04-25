@@ -40,7 +40,7 @@ use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use structured::StructuredSessionManager;
 use terminal::{TerminalCreateOptions, TerminalSubscriptionEvent, ThreadUpdate};
-use terminal_v4_core::{HealthResponse, StructuredSessionSnapshot};
+use terminal_v4_core::{HealthResponse, StructuredSessionSnapshot, SANDBOX_MODES};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
@@ -958,6 +958,8 @@ struct TerminalCreateInput {
     rows: Option<i64>,
     title: Option<String>,
     shell: Option<String>,
+    sandbox_mode: Option<String>,
+    workspace_root: Option<String>,
     initial_command: Option<String>,
 }
 
@@ -995,6 +997,8 @@ struct ThreadUpdateInput {
     pinned: Option<bool>,
     archived: Option<bool>,
     project_path: Option<Option<String>>,
+    sandbox_mode: Option<String>,
+    sandbox_workspace_root: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1021,6 +1025,12 @@ async fn create_terminal_session(
     if let Some(initial_command) = &input.initial_command {
         validate_string(initial_command, 0, 1000, "initialCommand")?;
     }
+    if let Some(sandbox_mode) = &input.sandbox_mode {
+        validate_sandbox_mode(sandbox_mode)?;
+    }
+    if let Some(workspace_root) = &input.workspace_root {
+        validate_string(workspace_root, 1, 1024, "workspaceRoot")?;
+    }
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
@@ -1034,6 +1044,8 @@ async fn create_terminal_session(
                 rows: input.rows,
                 title: input.title,
                 shell: input.shell,
+                sandbox_mode: input.sandbox_mode,
+                sandbox_workspace_root: input.workspace_root,
                 initial_command: input.initial_command,
             },
         )
@@ -1319,6 +1331,12 @@ async fn update_terminal_thread(
     Path(session_id): Path<String>,
     Json(input): Json<ThreadUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
+    if let Some(sandbox_mode) = &input.sandbox_mode {
+        validate_sandbox_mode(sandbox_mode)?;
+    }
+    if let Some(Some(sandbox_workspace_root)) = &input.sandbox_workspace_root {
+        validate_string(sandbox_workspace_root, 1, 1024, "sandboxWorkspaceRoot")?;
+    }
     let Some(thread) = state
         .terminal_manager()
         .update_thread(
@@ -1330,6 +1348,8 @@ async fn update_terminal_thread(
                 pinned: input.pinned,
                 archived: input.archived,
                 project_path: input.project_path,
+                sandbox_mode: input.sandbox_mode,
+                sandbox_workspace_root: input.sandbox_workspace_root,
             },
         )
         .await
@@ -1388,6 +1408,8 @@ async fn generate_terminal_topic(
                 pinned: None,
                 archived: None,
                 project_path: None,
+                sandbox_mode: None,
+                sandbox_workspace_root: None,
             },
         )
         .await
@@ -3602,6 +3624,16 @@ fn validate_string(
     Ok(())
 }
 
+fn validate_sandbox_mode(value: &str) -> Result<(), ApiError> {
+    if !SANDBOX_MODES.contains(&value) {
+        return Err(ApiError::bad_request(format!(
+            "Sandbox mode must be one of: {}",
+            SANDBOX_MODES.join(", ")
+        )));
+    }
+    Ok(())
+}
+
 fn parse_terminal_history_query(input: TerminalHistoryQueryInput) -> HistoryQuery {
     let max_history_chars = parse_positive_usize(input.history_chars.as_deref());
     let max_history_events = parse_positive_usize(input.history_events.as_deref());
@@ -5711,7 +5743,9 @@ mod tests {
                     .body(Body::from(
                         json!({
                             "topic": "Rust rewrite",
-                            "pinned": true
+                            "pinned": true,
+                            "sandboxMode": "read-only",
+                            "sandboxWorkspaceRoot": repo_path_string
                         })
                         .to_string(),
                     ))
@@ -5730,6 +5764,11 @@ mod tests {
             serde_json::from_slice(&thread_body).expect("thread payload should deserialize");
         assert_eq!(thread_payload["thread"]["topic"], "Rust rewrite");
         assert_eq!(thread_payload["thread"]["pinned"], true);
+        assert_eq!(thread_payload["thread"]["sandboxMode"], "read-only");
+        assert_eq!(
+            thread_payload["thread"]["sandboxWorkspaceRoot"],
+            repo_path.to_string_lossy().to_string()
+        );
 
         let detect_response = app
             .clone()

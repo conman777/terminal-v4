@@ -96,4 +96,31 @@ describe('ThreadsSessionItem', () => {
 
     expect(container.querySelector('.threads-session-indicator.ready')).toBeNull();
   });
+
+  it('keeps sandbox launch controls out of the thread row actions', () => {
+    render(
+      <ThreadsSessionItem
+        session={buildSession({
+          sandbox: { mode: 'off' },
+          thread: { sandboxMode: 'off', projectPath: 'C:\\repo' }
+        })}
+        isBusy={false}
+        isActive={true}
+        hasActivity={false}
+        onSelect={vi.fn()}
+        onPin={vi.fn()}
+        onUnpin={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        onUpdateThreadMetadata={vi.fn()}
+        onTopicChange={vi.fn()}
+        onRenameSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.mouseEnter(screen.getByText('Old title').closest('.threads-session-item'));
+
+    expect(screen.queryByRole('button', { name: /sandbox/i })).not.toBeInTheDocument();
+  });
 });

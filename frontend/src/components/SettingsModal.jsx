@@ -26,6 +26,7 @@ export function SettingsModal({
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [activeSection, setActiveSection] = useState('workspace');
   const resolvedWebglEnabled = resolveTerminalWebglEnabled(terminalWebglEnabled);
   const webglGuardReason = getTerminalRendererGuardReason();
   const webglLocked = Boolean(webglGuardReason);
@@ -108,25 +109,26 @@ export function SettingsModal({
         </div>
 
         <div className="modal-body session-settings-body">
-          <section className="session-settings-hero-card">
-            <div className="session-settings-hero-main">
-              <span className="session-settings-hero-label">Session</span>
-              <h3>{sessionTitle || 'New Terminal'}</h3>
-              <p>Manage how this session opens, renders, and accepts desktop input.</p>
-            </div>
-            <div className="session-settings-hero-meta">
-              <div className="session-settings-meta-block">
-                <span className="session-settings-meta-label">Current path</span>
-                <code>{currentCwd || 'Backend default'}</code>
-              </div>
-              <div className="session-settings-meta-block">
-                <span className="session-settings-meta-label">Save behavior</span>
-                <span>{shouldNavigateOnSave ? 'Navigate on save' : 'Stay in current workspace'}</span>
-              </div>
-            </div>
-          </section>
+          <nav className="session-settings-nav" aria-label="Settings sections">
+            {[
+              ['workspace', 'Workspace'],
+              ['terminal', 'Terminal'],
+              ['interface', 'Interface'],
+              ['voice', 'Voice'],
+              ['processes', 'Processes'],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className={`session-settings-nav-btn${activeSection === id ? ' active' : ''}`}
+                onClick={() => setActiveSection(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
 
-          <section className="session-settings-section">
+          <section className="session-settings-section" hidden={activeSection !== 'workspace'}>
             <div className="session-settings-section-heading">
               <span className="session-settings-section-kicker">Workspace</span>
               <h3>Directory and file access</h3>
@@ -230,7 +232,7 @@ export function SettingsModal({
             </div>
           </section>
 
-          <section className="session-settings-section">
+          <section className="session-settings-section" hidden={activeSection !== 'terminal'}>
             <div className="session-settings-section-heading">
               <span className="session-settings-section-kicker">Runtime</span>
               <h3>Terminal rendering and desktop behavior</h3>
@@ -282,7 +284,7 @@ export function SettingsModal({
             </div>
           </section>
 
-          <section className="session-settings-section">
+          <section className="session-settings-section" hidden={activeSection !== 'interface'}>
             <div className="session-settings-section-heading">
               <span className="session-settings-section-kicker">Desktop UX</span>
               <h3>Choose how the interface behaves</h3>
@@ -336,13 +338,13 @@ export function SettingsModal({
             </div>
           </section>
 
-          <section className="session-settings-section">
+          <section className="session-settings-section" hidden={activeSection !== 'voice' && activeSection !== 'processes'}>
             <div className="session-settings-section-heading">
-              <span className="session-settings-section-kicker">Utilities</span>
-              <h3>Voice and process tooling</h3>
+              <span className="session-settings-section-kicker">{activeSection === 'voice' ? 'Voice' : 'Processes'}</span>
+              <h3>{activeSection === 'voice' ? 'Voice input' : 'Process tooling'}</h3>
             </div>
             <div className="session-settings-grid">
-              <div className="session-settings-panel session-settings-panel-compact">
+              <div className="session-settings-panel session-settings-panel-compact" hidden={activeSection !== 'voice'}>
                 <div className="form-group session-settings-field">
                   <label>Voice Input</label>
                   <div className="settings-inline-actions">
@@ -362,7 +364,7 @@ export function SettingsModal({
                 </div>
               </div>
 
-              <div className="session-settings-panel session-settings-panel-compact">
+              <div className="session-settings-panel session-settings-panel-compact" hidden={activeSection !== 'processes'}>
                 <div className="form-group session-settings-field">
                   <label>Process Manager</label>
                   <div className="settings-inline-actions">
@@ -413,7 +415,7 @@ export function SettingsModal({
         />
         <style>{`
           .session-settings-modal {
-            max-width: 760px;
+            max-width: 820px;
             background:
               linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 10%, var(--bg-surface)) 0%, var(--bg-surface) 18%, var(--bg-surface) 100%);
             overflow: hidden;
@@ -475,9 +477,41 @@ export function SettingsModal({
           }
 
           .session-settings-body {
+            display: grid;
+            grid-template-columns: 150px minmax(0, 1fr);
+            align-items: start;
+            gap: 20px;
+          }
+
+          .session-settings-nav {
             display: flex;
             flex-direction: column;
-            gap: 22px;
+            gap: 6px;
+            padding: 6px;
+            border-radius: 16px;
+            background: color-mix(in srgb, var(--bg-base) 62%, transparent);
+            border: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
+          }
+
+          .session-settings-nav-btn {
+            min-height: 38px;
+            padding: 0 12px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text-secondary);
+            text-align: left;
+            font-size: 13px;
+            font-weight: 650;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+          }
+
+          .session-settings-nav-btn:hover,
+          .session-settings-nav-btn.active {
+            color: var(--text-primary);
+            border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-default));
+            background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
           }
 
           .session-settings-hero-card,
@@ -542,6 +576,11 @@ export function SettingsModal({
             display: flex;
             flex-direction: column;
             gap: 12px;
+          }
+
+          .session-settings-section[hidden],
+          .session-settings-panel[hidden] {
+            display: none;
           }
 
           .session-settings-section-heading {
@@ -626,8 +665,18 @@ export function SettingsModal({
             }
 
             .session-settings-hero-card,
-            .session-settings-grid {
+            .session-settings-grid,
+            .session-settings-body {
               grid-template-columns: 1fr;
+            }
+
+            .session-settings-nav {
+              flex-direction: row;
+              overflow-x: auto;
+            }
+
+            .session-settings-nav-btn {
+              flex: 0 0 auto;
             }
 
             .session-settings-inline-utility,
