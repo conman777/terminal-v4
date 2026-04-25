@@ -1,22 +1,3 @@
-import pg from 'pg';
-
-const { Pool } = pg;
-
-let pool: pg.Pool | null = null;
-
-function getPool(): pg.Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.STORAGE_DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 3,
-      idleTimeoutMillis: 10000,
-      connectionTimeoutMillis: 10000
-    });
-  }
-  return pool;
-}
-
 export interface NeonUser {
   id: string;
   email: string;
@@ -25,9 +6,36 @@ export interface NeonUser {
   created_at: string;
 }
 
+interface QueryablePool {
+  query<T>(text: string, params: unknown[]): Promise<{ rows: T[] }>;
+}
+
+let poolPromise: Promise<QueryablePool> | null = null;
+
+async function getPool(): Promise<QueryablePool> {
+  if (!process.env.STORAGE_DATABASE_URL) {
+    throw new Error('STORAGE_DATABASE_URL is not configured');
+  }
+
+  if (!poolPromise) {
+    poolPromise = import('pg').then(({ default: pg }) => {
+      const { Pool } = pg;
+      return new Pool({
+        connectionString: process.env.STORAGE_DATABASE_URL,
+        ssl: { rejectUnauthorized: false },
+        max: 3,
+        idleTimeoutMillis: 10000,
+        connectionTimeoutMillis: 10000
+      }) as unknown as QueryablePool;
+    });
+  }
+
+  return poolPromise;
+}
+
 export async function getNeonUserByIdentifier(identifier: string): Promise<NeonUser | undefined> {
   const normalized = identifier.toLowerCase();
-  const result = await getPool().query(
+  const result = await (await getPool()).query<NeonUser>(
     `SELECT id, email, password_hash, display_name, created_at
      FROM users
      WHERE lower(email) = $1 OR lower(coalesce(display_name, '')) = $1
@@ -38,7 +46,7 @@ export async function getNeonUserByIdentifier(identifier: string): Promise<NeonU
 }
 
 export async function getNeonUserByEmail(email: string): Promise<NeonUser | undefined> {
-  const result = await getPool().query(
+  const result = await (await getPool()).query<NeonUser>(
     'SELECT id, email, password_hash, display_name, created_at FROM users WHERE email = $1',
     [email.toLowerCase()]
   );
@@ -46,7 +54,7 @@ export async function getNeonUserByEmail(email: string): Promise<NeonUser | unde
 }
 
 export async function getNeonUserById(id: string): Promise<NeonUser | undefined> {
-  const result = await getPool().query(
+  const result = await (await getPool()).query<NeonUser>(
     'SELECT id, email, password_hash, display_name, created_at FROM users WHERE id = $1',
     [id]
   );
