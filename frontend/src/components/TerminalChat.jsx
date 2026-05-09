@@ -1616,6 +1616,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     // can cancel in-flight writes and prevent cross-session data leaks.
     let activePendingWriteFrame = null;
     let activeMessageQueue = null;
+    let connectSocket = () => {};
     const reconnectController = createTerminalReconnectController((options = {}) => {
       connectSocket(options);
     });
@@ -2801,7 +2802,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         reconnectController.scheduleReconnect(delay, options);
       };
 
-      const connectSocket = (options = {}) => {
+      connectSocket = (options = {}) => {
         reconnectSocketRef.current = connectSocket;
         reconnectController.clearScheduledReconnect();
         if (disposed) return () => {};

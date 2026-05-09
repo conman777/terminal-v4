@@ -123,4 +123,29 @@ describe('ThreadsSessionItem', () => {
 
     expect(screen.queryByRole('button', { name: /sandbox/i })).not.toBeInTheDocument();
   });
+
+  it('does not show stale sandbox badges from legacy session metadata', () => {
+    const { container } = render(
+      <ThreadsSessionItem
+        session={buildSession({
+          sandbox: { mode: 'workspace-write', workspaceRoot: 'C:\\repo' },
+          thread: { sandboxMode: 'workspace-write', projectPath: 'C:\\repo' }
+        })}
+        isBusy={false}
+        isActive={true}
+        hasActivity={false}
+        onSelect={vi.fn()}
+        onPin={vi.fn()}
+        onUnpin={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        onUpdateThreadMetadata={vi.fn()}
+        onTopicChange={vi.fn()}
+        onRenameSession={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(container.querySelector('.threads-session-sandbox-badge')).toBeNull();
+  });
 });

@@ -44,7 +44,7 @@ describe('ClaudeCodePanel', () => {
     usesTmux: false,
   };
 
-  it('forwards viewport state from the visible surface only', () => {
+  it('forwards viewport state from the visible surface only', async () => {
     const onViewportStateChange = vi.fn();
     const { rerender } = render(
       <ClaudeCodePanel
@@ -54,7 +54,7 @@ describe('ClaudeCodePanel', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'mark-terminal-scrolled-up' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'mark-terminal-scrolled-up' }));
     expect(onViewportStateChange).toHaveBeenLastCalledWith(false);
 
     rerender(
@@ -69,7 +69,7 @@ describe('ClaudeCodePanel', () => {
     fireEvent.click(screen.getByText('mark-terminal-scrolled-up'));
     expect(onViewportStateChange).toHaveBeenCalledTimes(callsBeforeHiddenTerminal);
 
-    fireEvent.click(screen.getByRole('button', { name: 'mark-chat-scrolled-up' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'mark-chat-scrolled-up' }));
     expect(onViewportStateChange).toHaveBeenLastCalledWith(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'mark-chat-at-bottom' }));

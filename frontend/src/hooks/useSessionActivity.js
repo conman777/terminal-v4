@@ -103,6 +103,7 @@ export function useSessionActivity() {
     if (!sessionId) return;
     setActivity(prev => {
       const current = normalizeActivityState(prev[sessionId]);
+      if (!current.hasUnread) return prev;
       return {
         ...prev,
         [sessionId]: normalizeActivityState({
@@ -132,6 +133,10 @@ export function useSessionActivity() {
 
       const nextLastActivity = activityTs || now;
       const completedOffscreen = current.isBusy && !busy && focusedSessionRef.current !== sessionId;
+
+      if (!busy && !current.isBusy && !completedOffscreen && activityTs === 0) {
+        return prev;
+      }
 
       if (
         current.isBusy === busy

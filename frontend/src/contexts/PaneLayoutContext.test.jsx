@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { updateActiveDesktopLayout } from './PaneLayoutContext';
+import {
+  initializeActivePaneWithSessionState,
+  updateActiveDesktopLayout
+} from './PaneLayoutContext';
 
 function buildState() {
   const activeLayout = {
@@ -59,6 +62,38 @@ describe('updateActiveDesktopLayout', () => {
       ]
     });
     expect(nextState).not.toBe(state);
+    expect(nextState.desktops[1]).toBe(state.desktops[1]);
+  });
+});
+
+describe('initializeActivePaneWithSessionState', () => {
+  it('preserves state identity when the active pane already owns the session', () => {
+    const state = buildState();
+
+    const nextState = initializeActivePaneWithSessionState(state, 'session-1');
+
+    expect(nextState).toBe(state);
+  });
+
+  it('assigns the active pane and adds the session to the active desktop ownership list', () => {
+    const state = buildState();
+
+    const nextState = initializeActivePaneWithSessionState(state, 'session-3');
+
+    expect(nextState).toEqual({
+      ...state,
+      desktops: [
+        {
+          ...state.desktops[0],
+          paneLayout: {
+            ...state.desktops[0].paneLayout,
+            root: { type: 'pane', id: 'pane-1', sessionId: 'session-3' }
+          },
+          ownedSessionIds: ['session-1', 'session-3']
+        },
+        state.desktops[1]
+      ]
+    });
     expect(nextState.desktops[1]).toBe(state.desktops[1]);
   });
 });

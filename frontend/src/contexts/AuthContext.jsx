@@ -196,7 +196,7 @@ export function AuthProvider({ children }) {
     } catch {
       // Ignore logout errors
     } finally {
-      clearTokens();
+      clearTokens(true);
       setUserState(null);
     }
   }, []);

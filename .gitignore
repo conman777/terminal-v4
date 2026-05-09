@@ -44,12 +44,25 @@ Thumbs.db
 
 # Test screenshots and generated output
 tests/screenshots/*.png
+screenshots/
+manual-screenshots/
+manual_screenshots/
+**/playwright-report/
+**/test-results/
+**/.playwright/
 output/
 
 # npm bin stubs (desktop)
 desktop/tauri/codex
 desktop/tauri/codex.cmd
 desktop/tauri/codex.ps1
+
+# macOS and native build artifacts
+*.app/
+*.dSYM/
+*.xcarchive/
+*.xcresult/
+DerivedData/
 
 # Temporary files
 *.tmp

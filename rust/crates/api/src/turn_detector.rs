@@ -296,8 +296,10 @@ pub fn output_indicates_idle_prompt(output: &str) -> bool {
         return true;
     }
 
-    // Unix prompt: user@host:path$ or user@host:path#
-    if trimmed.contains('@') && (trimmed.ends_with('$') || trimmed.ends_with('#')) {
+    // Unix prompt: user@host:path$, user@host:path#, or zsh's user@host path %
+    if trimmed.contains('@')
+        && (trimmed.ends_with('$') || trimmed.ends_with('#') || trimmed.ends_with('%'))
+    {
         return true;
     }
 
@@ -383,6 +385,7 @@ mod tests {
     fn idle_prompt_detects_unix() {
         assert!(output_indicates_idle_prompt("user@host:~/projects$"));
         assert!(output_indicates_idle_prompt("root@server:/etc#"));
+        assert!(output_indicates_idle_prompt("conordart@192-168-1-195 ~ %"));
     }
 
     #[test]

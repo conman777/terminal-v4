@@ -2024,7 +2024,7 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 mod tests {
     use super::{
         apply_thread_update, build_sandbox_info, intercept_terminal_queries, normalize_newlines,
-        shell_command, tmux_mode_from_env, ThreadUpdate,
+        tmux_mode_from_env, ThreadUpdate,
     };
     #[cfg(not(windows))]
     use super::{AppConfig, TerminalCreateOptions, TerminalManager};

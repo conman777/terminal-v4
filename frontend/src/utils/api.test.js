@@ -8,6 +8,7 @@ vi.mock('./auth', () => ({
 }));
 
 import { apiFetch } from './api';
+import { clearTokens, refreshTokens } from './auth';
 
 describe('apiFetch', () => {
   beforeEach(() => {
@@ -53,5 +54,14 @@ describe('apiFetch', () => {
       expect.any(String),
       expect.objectContaining({ body: JSON.stringify(body) })
     );
+  });
+
+  it('force-clears local auth when refresh fails after a 401', async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce({ status: 401, ok: false });
+    refreshTokens.mockRejectedValueOnce(new Error('Token refresh failed'));
+
+    await expect(apiFetch('/api/test')).rejects.toThrow('Session expired');
+
+    expect(clearTokens).toHaveBeenCalledWith(true);
   });
 });

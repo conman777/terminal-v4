@@ -59,11 +59,11 @@ is now a compatibility/reference implementation rather than the desktop runtime.
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                             Backend (Fastify)                               │
+│                         Backend (Rust Axum active)                          │
 │  - Auth (JWT + refresh tokens + SQLite)                                    │
-│  - Terminal Manager (node-pty + tmux persistence)                          │
-│  - Claude Code Manager (Claude CLI via PTY)                                │
-│  - Preview/Proxy (subdomain routing, cache-busting, cookie management)     │
+│  - Terminal Manager (portable PTY + tmux persistence)                      │
+│  - Structured Session Manager (Claude CLI provider)                        │
+│  - Preview/Proxy (path/subdomain routing, cookies, logs, dev proxy)        │
 │  - Preview DevTools (log injection, storage inspection)                    │
 │  - File + project services (upload, download, unzip, scanning)             │
 │  - Process manager + logs (port detection, repo start/stop)                │
@@ -105,22 +105,19 @@ Key files:
 - SSE and WebSocket clients can pass `?token=` when headers are unavailable.
 
 Key files:
-- `backend/src/auth/auth-service.ts`
-- `backend/src/auth/auth-routes.ts`
-- `backend/src/auth/auth-hook.ts`
+- `rust/crates/api/src/auth.rs`
+- `rust/crates/api/src/external_auth.rs`
+- `rust/crates/api/src/passkey.rs`
 
 ### Terminal Manager
 - Uses `@homebridge/node-pty-prebuilt-multiarch` to spawn real PTYs.
 - Optional tmux integration for persistence across restarts (Linux/macOS).
 - Sessions are stored per-user as JSON for history and metadata.
-- Terminal creation now passes through a sandbox runtime abstraction.
-- The current default runtime is a local workspace-copy sandbox for sandboxed
-  sessions: it copies the selected workspace into the app data directory and
-  launches the PTY against that copy, keeping terminal-driven file mutations
-  away from the original host folder.
-- Session metadata carries sandbox mode and workspace root so stronger
-  container-backed runtimes can replace the current runtime without changing
-  the terminal API shape.
+- Terminal creation currently runs only in full-access host mode. Requested
+  sandbox modes fail closed until runtime isolation is implemented.
+- Legacy session metadata can still carry sandbox mode and workspace root, but
+  the API no longer accepts new sandboxed launches because no enforced
+  workspace copy or read-only runtime exists yet.
 - WebSocket stream (`/api/terminal/:id/ws`) is the primary IO channel.
 - PTY sessions also emit lightweight terminal metadata events (`turn`, `cli_event`)
   over the same WebSocket channel so the frontend can render prompt cards and
@@ -231,7 +228,7 @@ Key files:
   - Preview URL preferences
   - Terminal font size (8-32)
   - Sidebar collapse state
-  - Default sandbox mode for new terminal sessions
+  - Sandbox default mode, normalized to `off` until runtime isolation exists
 - `/api/transcribe` uses Groq Whisper for voice input with support for multiple audio formats.
 - Browser settings are persisted in the user settings table.
 
@@ -424,7 +421,11 @@ Stored in `backend/data/preview-cookies.json` by default (overridable via
 - Public routes include health checks, preview logs, process logs, and
   browser automation endpoints.
 - Preview file server is sandboxed to the project root.
-- File manager resolves paths safely but is not restricted to project root.
+- File manager list, upload, rename, delete, unzip, download, and ZIP creation
+  use canonical containment checks to reject traversal, symlink escapes, and
+  paths outside allowed roots. Allowed roots default to the user's home
+  directory plus the server working directory; deployments can add roots with
+  `TERMINAL_V4_ALLOWED_FILE_ROOTS`.
 - Dev proxy allows localhost ports across the valid TCP range (1-65535),
   excluding the Terminal V4 UI port to prevent self-preview recursion.
 - External proxy blocks localhost and private IP ranges.
@@ -433,8 +434,8 @@ Stored in `backend/data/preview-cookies.json` by default (overridable via
 
 Development:
 - Frontend: `vite dev` on port 5173
-- Backend: `tsx watch` on port 3020
+- Backend: `cargo run -p terminal-v4-api --manifest-path rust/Cargo.toml` on port 3020
 
 Production:
 - Build frontend (`frontend/dist`)
-- Fastify serves static assets and SPA fallback
+- Rust Axum serves static assets and SPA fallback

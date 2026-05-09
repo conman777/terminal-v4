@@ -2179,7 +2179,7 @@ async fn list_files(
 ) -> Result<Json<Value>, ApiError> {
     let entries = files::list_directory(&query.path)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(Json(json!({ "entries": entries })))
 }
 
@@ -2194,7 +2194,7 @@ async fn mkdir(
 ) -> Result<StatusCode, ApiError> {
     files::create_directory(&input.path)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(StatusCode::CREATED)
 }
 
@@ -2235,7 +2235,7 @@ async fn upload_file(
 
     files::write_file(&path, &data)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(Json(json!({ "success": true, "path": path })))
 }
 
@@ -2243,9 +2243,9 @@ async fn download_file(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<FilePathQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let data = tokio::fs::read(&query.path)
+    let data = files::read_download_file(&query.path)
         .await
-        .map_err(|e| ApiError::internal(format!("Failed to read file: {e}")))?;
+        .map_err(file_api_error)?;
 
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
@@ -2265,7 +2265,7 @@ async fn delete_file(
 ) -> Result<StatusCode, ApiError> {
     files::delete_path(&input.path)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2281,7 +2281,7 @@ async fn rename_file(
 ) -> Result<StatusCode, ApiError> {
     files::rename_path(&input.from, &input.to)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -2297,7 +2297,7 @@ async fn unzip_file(
 ) -> Result<Json<Value>, ApiError> {
     let count = files::extract_zip(&input.path, &input.target)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(Json(json!({ "extracted": count })))
 }
 
@@ -2344,7 +2344,7 @@ async fn upload_screenshot(
 
     files::write_file(&path, &data)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     Ok(Json(json!({ "success": true, "path": path })))
 }
 
@@ -2355,7 +2355,7 @@ async fn download_directory(
     let file = tokio::task::spawn_blocking(move || files::create_zip_archive_file(&query.path))
         .await
         .map_err(|e| ApiError::internal(format!("ZIP task failed: {e}")))?
-        .map_err(ApiError::internal)?;
+        .map_err(file_api_error)?;
     let stream = ReaderStream::new(tokio::fs::File::from_std(file));
 
     Ok((
@@ -2369,6 +2369,18 @@ async fn download_directory(
         Body::from_stream(stream),
     )
         .into_response())
+}
+
+fn file_api_error(message: String) -> ApiError {
+    let status = if message.starts_with("Access denied") {
+        StatusCode::FORBIDDEN
+    } else if message.starts_with("Path not found") || message.starts_with("Cannot resolve") {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+
+    ApiError { status, message }
 }
 
 // --- Preview handlers ---
@@ -3631,6 +3643,11 @@ fn validate_sandbox_mode(value: &str) -> Result<(), ApiError> {
             SANDBOX_MODES.join(", ")
         )));
     }
+    if value != "off" {
+        return Err(ApiError::bad_request(
+            "Sandbox modes are disabled until runtime isolation is enforced",
+        ));
+    }
     Ok(())
 }
 
@@ -4720,7 +4737,10 @@ async fn send_ws_output(
 
 #[cfg(test)]
 mod tests {
-    use super::{app, normalize_filesystem_path, resolve_frontend_dir_with_current_dir, ApiState};
+    use super::{
+        app, normalize_filesystem_path, resolve_frontend_dir_with_current_dir,
+        validate_sandbox_mode, ApiState,
+    };
     use crate::auth::issue_access_token;
     use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser};
     use crate::preview;
@@ -4757,6 +4777,23 @@ mod tests {
 
     #[cfg(unix)]
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
+
+    #[test]
+    fn validate_sandbox_mode_rejects_unenforced_modes() {
+        assert!(validate_sandbox_mode("off").is_ok());
+
+        let workspace_write = validate_sandbox_mode("workspace-write")
+            .expect_err("workspace-write should stay disabled until enforced");
+        assert_eq!(workspace_write.status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            workspace_write.message,
+            "Sandbox modes are disabled until runtime isolation is enforced"
+        );
+
+        let read_only =
+            validate_sandbox_mode("read-only").expect_err("read-only should stay disabled");
+        assert_eq!(read_only.status, StatusCode::BAD_REQUEST);
+    }
 
     #[tokio::test]
     async fn health_route_returns_the_expected_payload() {
@@ -5744,8 +5781,8 @@ mod tests {
                         json!({
                             "topic": "Rust rewrite",
                             "pinned": true,
-                            "sandboxMode": "read-only",
-                            "sandboxWorkspaceRoot": repo_path_string
+                            "sandboxMode": "off",
+                            "sandboxWorkspaceRoot": null
                         })
                         .to_string(),
                     ))
@@ -5764,11 +5801,8 @@ mod tests {
             serde_json::from_slice(&thread_body).expect("thread payload should deserialize");
         assert_eq!(thread_payload["thread"]["topic"], "Rust rewrite");
         assert_eq!(thread_payload["thread"]["pinned"], true);
-        assert_eq!(thread_payload["thread"]["sandboxMode"], "read-only");
-        assert_eq!(
-            thread_payload["thread"]["sandboxWorkspaceRoot"],
-            repo_path.to_string_lossy().to_string()
-        );
+        assert_eq!(thread_payload["thread"]["sandboxMode"], "off");
+        assert!(thread_payload["thread"]["sandboxWorkspaceRoot"].is_null());
 
         let detect_response = app
             .clone()
@@ -6264,6 +6298,39 @@ mod tests {
         let preview_payload: Value =
             serde_json::from_slice(&preview_body).expect("preview payload should deserialize");
         assert!(preview_payload["ports"].is_array());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn file_download_rejects_symlink_escape() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "user-download", "conor");
+        let app = app(state);
+        let temp_root = tempdir().expect("temp dir should create");
+        let base_dir = temp_root.path().join("base");
+        let outside_dir = temp_root.path().join("outside");
+        fs::create_dir_all(&base_dir).expect("base dir should create");
+        fs::create_dir_all(&outside_dir).expect("outside dir should create");
+        let outside_file = outside_dir.join("secret.txt");
+        fs::write(&outside_file, "secret").expect("outside file should write");
+        let link_path = base_dir.join("link.txt");
+        std::os::unix::fs::symlink(&outside_file, &link_path).expect("symlink should create");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/files/download?path={}",
+                        link_path.to_string_lossy()
+                    ))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

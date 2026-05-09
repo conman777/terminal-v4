@@ -2,6 +2,8 @@ use std::io::{Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 
+const ALLOWED_FILE_ROOTS_ENV: &str = "TERMINAL_V4_ALLOWED_FILE_ROOTS";
+
 /// A file/directory entry returned by the list endpoint.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,7 +18,7 @@ pub struct FileEntry {
 /// List directory contents, returning files and directories sorted
 /// (directories first, then alphabetically).
 pub async fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
-    let resolved = resolve_safe_path(path)?;
+    let resolved = resolve_existing_contained_path(path)?;
     let mut entries = Vec::new();
 
     let mut reader = fs::read_dir(&resolved)
@@ -67,7 +69,7 @@ pub async fn list_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 
 /// Create a directory recursively.
 pub async fn create_directory(path: &str) -> Result<(), String> {
-    let resolved = resolve_safe_path(path)?;
+    let resolved = resolve_contained_path_for_write(path)?;
     fs::create_dir_all(&resolved)
         .await
         .map_err(|e| format!("Failed to create directory: {e}"))
@@ -75,7 +77,7 @@ pub async fn create_directory(path: &str) -> Result<(), String> {
 
 /// Delete a file or directory recursively.
 pub async fn delete_path(path: &str) -> Result<(), String> {
-    let resolved = resolve_safe_path(path)?;
+    let resolved = resolve_existing_contained_path(path)?;
     let metadata = fs::metadata(&resolved)
         .await
         .map_err(|e| format!("Path not found: {e}"))?;
@@ -93,8 +95,8 @@ pub async fn delete_path(path: &str) -> Result<(), String> {
 
 /// Rename/move a file or directory.
 pub async fn rename_path(from: &str, to: &str) -> Result<(), String> {
-    let from_resolved = resolve_safe_path(from)?;
-    let to_resolved = resolve_safe_path(to)?;
+    let from_resolved = resolve_existing_contained_path(from)?;
+    let to_resolved = resolve_contained_path_for_write(to)?;
     fs::rename(&from_resolved, &to_resolved)
         .await
         .map_err(|e| format!("Failed to rename: {e}"))
@@ -102,7 +104,7 @@ pub async fn rename_path(from: &str, to: &str) -> Result<(), String> {
 
 /// Write uploaded bytes to a file.
 pub async fn write_file(path: &str, data: &[u8]) -> Result<(), String> {
-    let resolved = resolve_safe_path(path)?;
+    let resolved = resolve_contained_path_for_write(path)?;
     if let Some(parent) = resolved.parent() {
         fs::create_dir_all(parent)
             .await
@@ -113,13 +115,29 @@ pub async fn write_file(path: &str, data: &[u8]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write file: {e}"))
 }
 
+/// Read a file for download after canonical containment validation.
+pub async fn read_download_file(path: &str) -> Result<Vec<u8>, String> {
+    let resolved = resolve_existing_contained_path(path)?;
+    let metadata = fs::metadata(&resolved)
+        .await
+        .map_err(|e| format!("Path not found: {e}"))?;
+    if !metadata.is_file() {
+        return Err("Path is not a file".to_string());
+    }
+
+    fs::read(&resolved)
+        .await
+        .map_err(|e| format!("Failed to read file: {e}"))
+}
+
 /// Create a ZIP archive of a directory and return the bytes.
 pub fn create_zip_archive(dir_path: &str) -> Result<Vec<u8>, String> {
     use std::io::Cursor;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
-    let resolved = resolve_safe_path(dir_path)?;
+    let resolved = resolve_existing_contained_path(dir_path)?;
+    ensure_directory(&resolved)?;
     let buffer = Cursor::new(Vec::new());
     let mut zip = ZipWriter::new(buffer);
     let options = SimpleFileOptions::default()
@@ -135,7 +153,8 @@ pub fn create_zip_archive(dir_path: &str) -> Result<Vec<u8>, String> {
 }
 
 pub fn create_zip_archive_file(dir_path: &str) -> Result<std::fs::File, String> {
-    let resolved = resolve_safe_path(dir_path)?;
+    let resolved = resolve_existing_contained_path(dir_path)?;
+    ensure_directory(&resolved)?;
     let temp_file = tempfile::tempfile().map_err(|e| format!("Failed to create temp ZIP: {e}"))?;
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -172,17 +191,26 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
             continue;
         }
 
-        let relative = path
+        let canonical_path = std::fs::canonicalize(&path)
+            .map_err(|e| format!("Failed to resolve path {}: {e}", path.display()))?;
+        if !canonical_path.starts_with(base) {
+            return Err(format!(
+                "Access denied: {} escapes archive root",
+                path.display()
+            ));
+        }
+
+        let relative = canonical_path
             .strip_prefix(base)
             .map_err(|e| format!("Path prefix error: {e}"))?
             .to_string_lossy()
             .to_string();
 
-        if path.is_dir() {
-            add_directory_to_zip(zip, base, &path, options)?;
+        if canonical_path.is_dir() {
+            add_directory_to_zip(zip, base, &canonical_path, options)?;
         } else {
-            let data =
-                std::fs::read(&path).map_err(|e| format!("Failed to read file {relative}: {e}"))?;
+            let data = std::fs::read(&canonical_path)
+                .map_err(|e| format!("Failed to read file {relative}: {e}"))?;
             zip.start_file(&relative, options)
                 .map_err(|e| format!("Failed to add {relative} to ZIP: {e}"))?;
             use std::io::Write;
@@ -195,8 +223,8 @@ fn add_directory_to_zip<W: std::io::Write + std::io::Seek>(
 
 /// Extract a ZIP archive to a target directory with Zip Slip validation.
 pub async fn extract_zip(zip_path: &str, target_dir: &str) -> Result<usize, String> {
-    let zip_resolved = resolve_safe_path(zip_path)?;
-    let target_resolved = resolve_safe_path(target_dir)?;
+    let zip_resolved = resolve_existing_contained_path(zip_path)?;
+    let target_resolved = resolve_contained_path_for_write(target_dir)?;
 
     // Run ZIP extraction in blocking task since zip crate is sync
     let count = tokio::task::spawn_blocking(move || {
@@ -311,10 +339,131 @@ fn resolve_safe_path(path: &str) -> Result<PathBuf, String> {
     Ok(expanded)
 }
 
+fn resolve_existing_contained_path(path: &str) -> Result<PathBuf, String> {
+    resolve_existing_contained_path_with_roots(path, allowed_file_roots()?)
+}
+
+fn resolve_contained_path_for_write(path: &str) -> Result<PathBuf, String> {
+    resolve_contained_path_for_write_with_roots(path, allowed_file_roots()?)
+}
+
+fn resolve_existing_contained_path_with_roots(
+    path: &str,
+    allowed_roots: Vec<PathBuf>,
+) -> Result<PathBuf, String> {
+    let expanded = resolve_safe_path(path)?;
+    let requested = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Cannot resolve current directory: {e}"))?
+            .join(expanded)
+    };
+
+    let canonical_target =
+        std::fs::canonicalize(&requested).map_err(|e| format!("Path not found: {e}"))?;
+
+    if !allowed_roots
+        .iter()
+        .any(|allowed_root| canonical_target.starts_with(allowed_root))
+    {
+        return Err("Access denied: path is outside allowed roots".to_string());
+    }
+
+    Ok(canonical_target)
+}
+
+fn resolve_contained_path_for_write_with_roots(
+    path: &str,
+    allowed_roots: Vec<PathBuf>,
+) -> Result<PathBuf, String> {
+    let expanded = resolve_safe_path(path)?;
+    let requested = if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Cannot resolve current directory: {e}"))?
+            .join(expanded)
+    };
+
+    let mut existing_ancestor = requested.as_path();
+    while !existing_ancestor.exists() {
+        existing_ancestor = existing_ancestor
+            .parent()
+            .ok_or_else(|| "Cannot resolve path ancestor".to_string())?;
+    }
+
+    let canonical_ancestor =
+        std::fs::canonicalize(existing_ancestor).map_err(|e| format!("Path not found: {e}"))?;
+
+    if !allowed_roots
+        .iter()
+        .any(|allowed_root| canonical_ancestor.starts_with(allowed_root))
+    {
+        return Err("Access denied: path is outside allowed roots".to_string());
+    }
+
+    if let Ok(canonical_target) = std::fs::canonicalize(&requested) {
+        if !allowed_roots
+            .iter()
+            .any(|allowed_root| canonical_target.starts_with(allowed_root))
+        {
+            return Err("Access denied: path is outside allowed roots".to_string());
+        }
+        return Ok(canonical_target);
+    }
+
+    Ok(requested)
+}
+
+fn allowed_file_roots() -> Result<Vec<PathBuf>, String> {
+    let mut roots = Vec::new();
+
+    if let Some(configured_roots) = std::env::var_os(ALLOWED_FILE_ROOTS_ENV) {
+        roots.extend(std::env::split_paths(&configured_roots));
+    }
+
+    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        roots.push(PathBuf::from(home));
+    }
+
+    roots.push(
+        std::env::current_dir().map_err(|e| format!("Cannot resolve current directory: {e}"))?,
+    );
+
+    let mut canonical_roots = Vec::new();
+    for root in roots {
+        if let Ok(canonical_root) = std::fs::canonicalize(root) {
+            if !canonical_roots
+                .iter()
+                .any(|existing: &PathBuf| existing == &canonical_root)
+            {
+                canonical_roots.push(canonical_root);
+            }
+        }
+    }
+
+    if canonical_roots.is_empty() {
+        return Err("No allowed file roots are available".to_string());
+    }
+
+    Ok(canonical_roots)
+}
+
+fn ensure_directory(path: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(path).map_err(|e| format!("Path not found: {e}"))?;
+    if !metadata.is_dir() {
+        return Err("Path is not a directory".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::tempdir;
 
     #[test]
@@ -327,6 +476,85 @@ mod tests {
     fn resolve_safe_path_allows_normal_paths() {
         assert!(resolve_safe_path("/tmp/test").is_ok());
         assert!(resolve_safe_path("C:\\Users\\test").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_existing_contained_path_rejects_symlink_escape() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let base_dir = temp_dir.path().join("base");
+        let outside_dir = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&base_dir).expect("base dir should create");
+        std::fs::create_dir_all(&outside_dir).expect("outside dir should create");
+        let outside_file = outside_dir.join("secret.txt");
+        std::fs::write(&outside_file, "secret").expect("outside file should write");
+        symlink(&outside_file, base_dir.join("link.txt")).expect("symlink should create");
+
+        let result = resolve_existing_contained_path_with_roots(
+            base_dir
+                .join("link.txt")
+                .to_str()
+                .expect("symlink path should be utf-8"),
+            vec![std::fs::canonicalize(&base_dir).expect("base should canonicalize")],
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_existing_contained_path_rejects_files_outside_allowed_roots() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let allowed_dir = temp_dir.path().join("allowed");
+        let outside_dir = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&allowed_dir).expect("allowed dir should create");
+        std::fs::create_dir_all(&outside_dir).expect("outside dir should create");
+        let outside_file = outside_dir.join("secret.txt");
+        std::fs::write(&outside_file, "secret").expect("outside file should write");
+
+        let result = resolve_existing_contained_path_with_roots(
+            outside_file.to_str().expect("outside path should be utf-8"),
+            vec![std::fs::canonicalize(&allowed_dir).expect("allowed should canonicalize")],
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_contained_path_for_write_allows_new_paths_under_allowed_roots() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let allowed_dir = temp_dir.path().join("allowed");
+        std::fs::create_dir_all(&allowed_dir).expect("allowed dir should create");
+
+        let result = resolve_contained_path_for_write_with_roots(
+            allowed_dir
+                .join("nested")
+                .join("new.txt")
+                .to_str()
+                .expect("new path should be utf-8"),
+            vec![std::fs::canonicalize(&allowed_dir).expect("allowed should canonicalize")],
+        )
+        .expect("new contained path should resolve");
+
+        assert_eq!(result, allowed_dir.join("nested").join("new.txt"));
+    }
+
+    #[test]
+    fn resolve_contained_path_for_write_rejects_new_paths_outside_allowed_roots() {
+        let temp_dir = tempdir().expect("temp dir should exist");
+        let allowed_dir = temp_dir.path().join("allowed");
+        let outside_dir = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&allowed_dir).expect("allowed dir should create");
+        std::fs::create_dir_all(&outside_dir).expect("outside dir should create");
+
+        let result = resolve_contained_path_for_write_with_roots(
+            outside_dir
+                .join("new.txt")
+                .to_str()
+                .expect("outside path should be utf-8"),
+            vec![std::fs::canonicalize(&allowed_dir).expect("allowed should canonicalize")],
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]

@@ -47,10 +47,6 @@ export default function ThreadsSessionItem({
   const topic = getPreferredSessionTopic(thread.topic, session.title || 'New session');
   const isPinned = thread.pinned || false;
   const isArchived = thread.archived || false;
-  const effectiveSandboxMode = session.sandbox?.mode ?? 'off';
-  const requestedSandboxMode = thread.sandboxMode ?? effectiveSandboxMode;
-  const isSandboxed = requestedSandboxMode !== 'off' || effectiveSandboxMode !== 'off';
-  const sandboxChangePending = requestedSandboxMode !== effectiveSandboxMode;
   const sessionAge = formatRelativeTime(session.createdAt);
   const resolvedIsBusy = typeof isBusy === 'boolean' ? isBusy : Boolean(session.isBusy);
   const showReadyIndicator = !resolvedIsBusy && Boolean(hasActivity) && !isActive;
@@ -192,14 +188,6 @@ export default function ThreadsSessionItem({
         ) : (
           <>
             <span className="threads-session-topic">{topic}</span>
-            {isSandboxed && (
-              <span
-                className={`threads-session-sandbox-badge${sandboxChangePending ? ' pending' : ''}`}
-                title={sandboxChangePending ? 'Sandbox setting will apply next launch' : 'Sandbox copy enabled'}
-              >
-                SBX
-              </span>
-            )}
           </>
         )}
       </div>

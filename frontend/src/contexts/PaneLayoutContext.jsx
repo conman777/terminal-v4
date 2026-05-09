@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { reconcilePaneSessionIds } from '../utils/paneSessionAssignments';
 
 const PaneLayoutContext = createContext(null);
@@ -237,6 +237,51 @@ export function updateActiveDesktopLayout(desktopsState, updater) {
   };
 }
 
+export function initializeActivePaneWithSessionState(desktopsState, sessionId) {
+  if (!sessionId) return desktopsState;
+
+  const { activeDesktopId, desktops } = desktopsState;
+  let changed = false;
+
+  const nextDesktops = desktops.map((desktop) => {
+    if (desktop.id !== activeDesktopId) return desktop;
+
+    const layout = desktop.paneLayout;
+    const owned = desktop.ownedSessionIds || [];
+    const alreadyOwned = owned.includes(sessionId);
+    const found = findPaneInTree(layout.root, layout.activePaneId);
+    const activePaneAlreadyAssigned = found?.node?.sessionId === sessionId;
+
+    if (activePaneAlreadyAssigned && alreadyOwned) {
+      return desktop;
+    }
+
+    changed = true;
+    const nextOwnedSessionIds = alreadyOwned ? owned : [...owned, sessionId];
+
+    if (!found || activePaneAlreadyAssigned) {
+      return { ...desktop, ownedSessionIds: nextOwnedSessionIds };
+    }
+
+    const newRoot = cloneNode(layout.root);
+    const clonedFound = findPaneInTree(newRoot, layout.activePaneId);
+    if (clonedFound) clonedFound.node.sessionId = sessionId;
+
+    return {
+      ...desktop,
+      paneLayout: { ...layout, root: newRoot },
+      ownedSessionIds: nextOwnedSessionIds
+    };
+  });
+
+  if (!changed) return desktopsState;
+
+  return {
+    ...desktopsState,
+    desktops: nextDesktops
+  };
+}
+
 export function PaneLayoutProvider({ children }) {
   // Multi-desktop state
   const [desktopsState, setDesktopsState] = useState(() => loadDesktopsFromStorage());
@@ -262,27 +307,7 @@ export function PaneLayoutProvider({ children }) {
 
   // Initialize first pane with active session if not set (called from App)
   const initializePaneWithSession = useCallback((sessionId) => {
-    if (!sessionId) return;
-
-    setDesktopsState(prev => {
-      const { activeDesktopId, desktops } = prev;
-      return {
-        ...prev,
-        desktops: desktops.map(d => {
-          if (d.id !== activeDesktopId) return d;
-          const layout = d.paneLayout;
-          const newRoot = cloneNode(layout.root);
-          const found = findPaneInTree(newRoot, layout.activePaneId);
-          if (found) found.node.sessionId = sessionId;
-          const owned = d.ownedSessionIds || [];
-          return {
-            ...d,
-            paneLayout: { ...layout, root: newRoot },
-            ownedSessionIds: owned.includes(sessionId) ? owned : [...owned, sessionId]
-          };
-        })
-      };
-    });
+    setDesktopsState(prev => initializeActivePaneWithSessionState(prev, sessionId));
   }, []);
 
   // Add a session to the active desktop's owned list (without pane assignment)
@@ -582,11 +607,11 @@ export function PaneLayoutProvider({ children }) {
   }, []);
 
   // Compute legacy-compatible layout object for components that need it
-  const legacyLayout = {
+  const legacyLayout = useMemo(() => ({
     type: paneLayout.root.type === 'pane' ? 'single' : paneLayout.root.direction,
     panes: getAllPanes(paneLayout.root),
     activePaneId: paneLayout.activePaneId
-  };
+  }), [paneLayout]);
 
   const value = {
     // Tree-based layout

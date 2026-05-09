@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../utils/api';
-import { getAccessToken } from '../utils/auth';
+import { getAccessToken, isAccessTokenExpired, refreshTokens } from '../utils/auth';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 /**
@@ -17,6 +17,7 @@ export function useStructuredSession({ sessionId, active = true }) {
   const wsRef = useRef(null);
   const reconnectTimerRef = useRef(null);
   const connectRef = useRef(null);
+  const isConnectingRef = useRef(false);
   const windowActiveRef = useRef(windowActive);
   const lastSeqRef = useRef(0);
   const isReconnectRef = useRef(false);
@@ -186,11 +187,31 @@ export function useStructuredSession({ sessionId, active = true }) {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    function connect() {
-      if (disposed || !windowActiveRef.current) {
+    async function getFreshAccessToken() {
+      const accessToken = getAccessToken();
+      if (!accessToken || !isAccessTokenExpired(accessToken)) {
+        return accessToken;
+      }
+
+      const refreshed = await refreshTokens();
+      return refreshed.accessToken;
+    }
+
+    async function connect() {
+      if (disposed || !windowActiveRef.current || isConnectingRef.current) {
         return;
       }
-      const accessToken = getAccessToken();
+      isConnectingRef.current = true;
+      let accessToken = null;
+      try {
+        accessToken = await getFreshAccessToken();
+      } catch {
+        accessToken = getAccessToken();
+      }
+      if (disposed || !windowActiveRef.current) {
+        isConnectingRef.current = false;
+        return;
+      }
       const wsBaseUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
       const params = new URLSearchParams();
       if (accessToken) params.set('token', accessToken);
@@ -200,6 +221,7 @@ export function useStructuredSession({ sessionId, active = true }) {
       const wsUrl = `${wsBaseUrl}?${params.toString()}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+      isConnectingRef.current = false;
 
       ws.onopen = () => {
         if (disposed || wsRef.current !== ws) {
@@ -234,6 +256,7 @@ export function useStructuredSession({ sessionId, active = true }) {
       };
 
       ws.onclose = () => {
+        isConnectingRef.current = false;
         if (wsRef.current === ws) {
           wsRef.current = null;
         }
@@ -266,6 +289,7 @@ export function useStructuredSession({ sessionId, active = true }) {
     return () => {
       disposed = true;
       connectRef.current = null;
+      isConnectingRef.current = false;
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -282,7 +306,7 @@ export function useStructuredSession({ sessionId, active = true }) {
     if (!windowActive || !active || !sessionId) {
       return;
     }
-    if (wsRef.current || reconnectTimerRef.current) {
+    if (wsRef.current || reconnectTimerRef.current || isConnectingRef.current) {
       return;
     }
     connectRef.current?.();

@@ -12,16 +12,16 @@ This guide covers local setup for the Terminal v4 project (web terminal + Claude
 
 ```bash
 # From project root
-cd backend
 npm install
 
-cd ../frontend
+cd frontend
 npm install
 ```
 
 ## Environment Variables
 
-Backend configuration (set in `backend/.env` or your shell):
+Backend configuration (set in your shell, or in the environment used to launch
+the Rust API):
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -90,9 +90,9 @@ Notes:
 
 Login is required. `/api/auth/register` is disabled and returns `403`.
 
-The live TypeScript backend authenticates users against the external Postgres
-database referenced by `STORAGE_DATABASE_URL`, then stores refresh tokens and
-user settings locally in SQLite/JSON.
+The active Rust API authenticates users against the external Postgres database
+referenced by `STORAGE_DATABASE_URL`, then stores refresh tokens and user
+settings locally in SQLite/JSON.
 
 If `ALLOWED_USERNAME` is set in the backend environment, login is restricted to
 that username after the external user lookup succeeds.
@@ -165,8 +165,7 @@ Notes:
 
 ## Rust Backend Rewrite Workspace
 
-A parallel Rust workspace lives in `rust/`. It is the foundation for the
-incremental backend rewrite and now covers the primary desktop/runtime path.
+The Rust workspace lives in `rust/`. It covers the primary desktop/runtime path.
 
 Commands:
 
@@ -203,6 +202,11 @@ Current scope:
 - process manager routes, preview recording/screenshots, system stats/history/rebuild, vault routes, transcription, and WebContainer file tree routes
 - desktop Tauri runtime now builds and launches the Rust backend directly
 
+File-manager access is limited to canonical allowed roots. By default this is
+the user's home directory and the server working directory. Set
+`TERMINAL_V4_ALLOWED_FILE_ROOTS` to a path-list value to add explicit roots for
+local development or packaged deployments.
+
 Current limitation:
 - The legacy Node backend still exists in `backend/` as a migration reference, but the desktop runtime no longer falls back to it.
 - Rust verification on Windows still depends on the local Perl/OpenSSL toolchain being available in the shell environment that launches Cargo.
@@ -226,12 +230,26 @@ If the preview only shows the background or a blank page:
 ## Project Structure
 
 ```
-backend/     # Fastify server, terminal/Claude services, API routes
+backend/     # Legacy Fastify migration reference
+rust/        # Active Rust Axum API runtime and shared crates
 frontend/    # React + Vite SPA
 docs/        # Architecture + development docs
 tests/       # Legacy Playwright tests
 frontend/e2e # Newer Playwright tests (see frontend/playwright.config.ts)
 ```
+
+## Verification
+
+Run repo-level checks from the root:
+
+```bash
+npm test       # Rust workspace tests + frontend unit tests
+npm run verify # Rust fmt/check/tests + frontend unit tests/build
+```
+
+`npm run verify` is the pre-commit hygiene path for the active runtime. It does
+not run the legacy Fastify backend tests by default; use
+`npm --prefix backend test` when changing migration-reference code.
 
 ## Recommended Tooling
 

@@ -31,7 +31,7 @@ See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 
 **TL;DR:**
-1. Install dependencies: `cd backend && npm install && cd ../frontend && npm install`
+1. Install dependencies: `npm install && cd frontend && npm install`
 2. Create `.env` with JWT secrets and optional API keys
 3. Start Rust API: `npm run api:dev`
 4. Start frontend: `npm run frontend:dev`
@@ -85,7 +85,7 @@ See [Windows Desktop Development](docs/development/WINDOWS_DESKTOP_DEVELOPMENT.m
 
 ```
 terminal-v4/
-├── backend/              # Fastify server with PTY support
+├── backend/              # Legacy Fastify migration reference
 │   ├── src/
 │   │   ├── index.ts      # Main server entry point
 │   │   ├── terminal/     # Terminal manager with PTY
@@ -203,13 +203,13 @@ See `docs/architecture/SYSTEM_ARCHITECTURE.md` for detailed security recommendat
 ### Troubleshooting
 - 🔧 [Common Issues](docs/troubleshooting/COMMON_ISSUES.md) - Solutions to frequent problems
 
-## Testing
+## Testing And Verification
 
-Run the test suite:
+Run the active Rust runtime and frontend verification from the repo root:
 ```bash
-cd backend
-npm test              # Run all tests
-npm run test:watch   # Watch mode
+npm test              # Rust workspace tests + frontend unit tests
+npm run verify        # Rust fmt/check/tests + frontend unit tests/build
+npm run test:e2e      # Frontend Playwright tests against localhost:3020
 ```
 
 ## Troubleshooting
@@ -231,7 +231,7 @@ npm run test:watch   # Watch mode
 ## Contributing
 
 1. Follow Conventional Commits format for commit messages
-2. Run tests before committing: `npm test`
+2. Run verification before committing: `npm run verify`
 3. Update documentation for significant changes
 4. See `CLAUDE.md` for coding standards
 
@@ -243,4 +243,4 @@ MIT
 
 - Built with [xterm.js](https://xtermjs.org/) for terminal emulation
 - Uses [node-pty](https://github.com/microsoft/node-pty) for PTY support
-- Powered by [Fastify](https://www.fastify.io/) and [React](https://reactjs.org/)
+- Powered by [Axum](https://github.com/tokio-rs/axum) and [React](https://reactjs.org/), with the legacy Fastify implementation retained during migration

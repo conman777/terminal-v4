@@ -11,7 +11,9 @@ vi.mock('../utils/api', () => ({
 }));
 
 vi.mock('../utils/auth', () => ({
-  getAccessToken: vi.fn(() => 'test-token')
+  getAccessToken: vi.fn(() => 'test-token'),
+  isAccessTokenExpired: vi.fn(() => false),
+  refreshTokens: vi.fn()
 }));
 
 vi.mock('../utils/windowActivity', () => ({
@@ -23,6 +25,7 @@ vi.mock('../utils/windowActivity', () => ({
 }));
 
 import { apiFetch } from '../utils/api';
+import { getAccessToken, isAccessTokenExpired, refreshTokens } from '../utils/auth';
 import { useStructuredSession } from './useStructuredSession';
 
 class MockWebSocket {
@@ -58,6 +61,11 @@ describe('useStructuredSession websocket lifecycle', () => {
     windowActivityState.active = true;
     windowActivityState.listeners = new Set();
     apiFetch.mockReset();
+    getAccessToken.mockReset();
+    getAccessToken.mockReturnValue('test-token');
+    isAccessTokenExpired.mockReset();
+    isAccessTokenExpired.mockReturnValue(false);
+    refreshTokens.mockReset();
     globalThis.WebSocket = MockWebSocket;
   });
 
@@ -84,6 +92,23 @@ describe('useStructuredSession websocket lifecycle', () => {
     });
 
     expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it('refreshes an expired access token before opening the websocket', async () => {
+    getAccessToken.mockReturnValue('expired-token');
+    isAccessTokenExpired.mockReturnValue(true);
+    refreshTokens.mockResolvedValue({ accessToken: 'fresh-token' });
+
+    renderHook(() => useStructuredSession({ sessionId: 'ss-token', active: true }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(refreshTokens).toHaveBeenCalledTimes(1);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(MockWebSocket.instances[0].url).toContain('token=fresh-token');
   });
 
   it('does not reconnect a stale session after the hook switches to a new session id', async () => {
@@ -137,8 +162,9 @@ describe('useStructuredSession websocket lifecycle', () => {
 
     expect(MockWebSocket.instances).toHaveLength(1);
 
-    act(() => {
+    await act(async () => {
       setWindowActive(true);
+      await Promise.resolve();
     });
 
     expect(MockWebSocket.instances).toHaveLength(2);

@@ -40,7 +40,7 @@ export async function apiFetch(url, options = {}) {
       // Only clear tokens if it's actually an auth failure, not a network error
       // Network errors should not log out the user
       if (err.message === 'Token refresh failed' || err.message === 'No refresh token' || err.message === 'Invalid token response') {
-        clearTokens();
+        clearTokens(true);
         throw new Error('Session expired');
       }
       // For network errors, just rethrow without clearing tokens

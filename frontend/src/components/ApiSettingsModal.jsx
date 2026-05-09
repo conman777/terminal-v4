@@ -5,13 +5,11 @@ import PasskeyManager from './PasskeyManager';
 
 export default function ApiSettingsModal({ isOpen, onClose }) {
   const { user } = useAuth();
-  const [sandboxDefaultMode, setSandboxDefaultMode] = useState('off');
   const [groqApiKey, setGroqApiKey] = useState('');
   const [hasExistingGroqKey, setHasExistingGroqKey] = useState(false);
   const [maskedGroqKey, setMaskedGroqKey] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSavingSandbox, setIsSavingSandbox] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
 
@@ -37,32 +35,11 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
       const data = await apiGet('/api/settings');
       setHasExistingGroqKey(data.hasGroqApiKey);
       setMaskedGroqKey(data.groqApiKey || '');
-      setSandboxDefaultMode(data.sandboxDefaultMode || 'off');
       setGroqApiKey('');
     } catch (err) {
       setError('Failed to load settings');
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const handleToggleSandbox = async () => {
-    const nextMode = sandboxDefaultMode === 'workspace-write' ? 'off' : 'workspace-write';
-    setIsSavingSandbox(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      await apiPatch('/api/settings', { sandboxDefaultMode: nextMode });
-      setSandboxDefaultMode(nextMode);
-      setSuccess(
-        nextMode === 'workspace-write'
-          ? 'Sandbox mode enabled for new terminals'
-          : 'Sandbox mode disabled for new terminals'
-      );
-    } catch (err) {
-      setError(err.message || 'Failed to update sandbox mode');
-    } finally {
-      setIsSavingSandbox(false);
     }
   };
 
@@ -204,23 +181,18 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
               <div className="form-group">
                 <label>Sandbox New Terminals</label>
                 <p className="form-help">
-                  When enabled, new terminal sessions default to the sandbox workspace copy instead of the original host folder.
+                  Sandbox modes are disabled until runtime isolation is enforced.
                 </p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <button
                     type="button"
-                    className={sandboxDefaultMode === 'workspace-write' ? 'btn-primary' : 'btn-secondary'}
-                    onClick={handleToggleSandbox}
-                    disabled={isSavingSandbox}
+                    className="btn-secondary"
+                    disabled
                   >
-                    {isSavingSandbox
-                      ? 'Saving...'
-                      : sandboxDefaultMode === 'workspace-write'
-                        ? 'On'
-                        : 'Off'}
+                    Unavailable
                   </button>
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Current default: {sandboxDefaultMode === 'workspace-write' ? 'Sandboxed' : 'Host'}
+                    Current default: Host
                   </span>
                 </div>
               </div>

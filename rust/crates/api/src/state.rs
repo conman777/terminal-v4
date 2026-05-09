@@ -1355,6 +1355,11 @@ impl SettingsPatch {
                     SANDBOX_MODES.join(", ")
                 ));
             }
+            if mode != "off" {
+                return Err(
+                    "Sandbox modes are disabled until runtime isolation is enforced".to_string(),
+                );
+            }
         }
 
         Ok(Self {
@@ -1471,7 +1476,7 @@ fn deserialize_array<T: serde::de::DeserializeOwned>(
 
 fn normalize_sandbox_mode(value: Option<String>) -> String {
     let value = value.unwrap_or_else(|| "off".to_string());
-    if SANDBOX_MODES.contains(&value.as_str()) {
+    if value == "off" {
         value
     } else {
         "off".to_string()

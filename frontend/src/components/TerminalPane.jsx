@@ -17,16 +17,6 @@ const SANDBOX_PERMISSION_OPTIONS = [
     mode: 'off',
     label: 'Full access',
     description: 'Host shell'
-  },
-  {
-    mode: 'workspace-write',
-    label: 'Default permissions',
-    description: 'Workspace sandbox'
-  },
-  {
-    mode: 'read-only',
-    label: 'Read-only',
-    description: 'View-only sandbox'
   }
 ];
 
@@ -853,15 +843,16 @@ export const TerminalPane = memo(function TerminalPane({
                       type="button"
                       className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
                       onClick={() => setIsPermissionMenuOpen((isOpen) => !isOpen)}
-                      title="Choose permissions for the next launch"
-                      aria-label="Choose permissions for next launch"
+                      title="Sandbox modes are unavailable until runtime isolation is enforced"
+                      aria-label="Launch permissions unavailable"
                       aria-haspopup="menu"
                       aria-expanded={isPermissionMenuOpen}
+                      disabled
                     >
                       <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                         <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
                       </svg>
-                      <span>{sandboxChangePending ? `${selectedPermission.label} next` : selectedPermission.label}</span>
+                      <span>Full access</span>
                     </button>
                     {isPermissionMenuOpen && (
                       <div className="status-permission-menu" role="menu" aria-label="Launch permissions">

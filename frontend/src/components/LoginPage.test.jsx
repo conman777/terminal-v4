@@ -39,6 +39,20 @@ describe('LoginPage', () => {
     });
   });
 
+  it('trims username but preserves whitespace-significant password characters', async () => {
+    login.mockResolvedValue({ id: 'user-1', username: 'conor' });
+
+    render(<LoginPage />);
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: '  conor  ' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: '  secret  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Initialize Session' }));
+
+    await waitFor(() => {
+      expect(login).toHaveBeenCalledWith('conor', '  secret  ');
+    });
+  });
+
   it('requires a username before starting passkey auth', async () => {
     render(<LoginPage />);
 

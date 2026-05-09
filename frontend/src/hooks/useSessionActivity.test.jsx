@@ -54,6 +54,26 @@ describe('useSessionActivity', () => {
     });
   });
 
+  it('does not create activity for repeated idle snapshots without backend timestamps', () => {
+    const { result } = renderHook(() => useSessionActivity());
+
+    act(() => {
+      result.current.setBusy('session-a', false);
+    });
+
+    expect(result.current.activity).toEqual({});
+  });
+
+  it('does not update focused-session activity when unread state is already clear', () => {
+    const { result } = renderHook(() => useSessionActivity());
+
+    act(() => {
+      result.current.setFocusedSession('session-a');
+    });
+
+    expect(result.current.activity).toEqual({});
+  });
+
   it('auto-clears busy after staleness timeout', () => {
     const { result } = renderHook(() => useSessionActivity());
 

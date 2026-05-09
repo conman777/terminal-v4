@@ -932,12 +932,23 @@ export function TerminalSessionProvider({ children }) {
     }
   }, []);
 
+  const loadSessionsRef = useRef(loadSessions);
+  const fetchAppStateRef = useRef(fetchAppState);
+
+  useEffect(() => {
+    loadSessionsRef.current = loadSessions;
+  }, [loadSessions]);
+
+  useEffect(() => {
+    fetchAppStateRef.current = fetchAppState;
+  }, [fetchAppState]);
+
   // Initial load and polling setup
   useEffect(() => {
     isMountedRef.current = true;
 
     const initializeSessions = async () => {
-      const initialSessions = await loadSessions();
+      const initialSessions = await loadSessionsRef.current();
       if (!isMountedRef.current) return;
 
       const lastSessionId = localStorage.getItem('lastActiveSession');
@@ -1004,7 +1015,7 @@ export function TerminalSessionProvider({ children }) {
       const interval = getPollingInterval();
       if (interval !== null) {
         pollTimeoutId = setTimeout(() => {
-          fetchAppState();
+          fetchAppStateRef.current();
           schedulePoll();
         }, interval);
       }
@@ -1020,7 +1031,7 @@ export function TerminalSessionProvider({ children }) {
     const handleWindowActivityChange = (windowIsActive) => {
       if (windowIsActive) {
         lastActivityRef.current = Date.now();
-        fetchAppState();
+        fetchAppStateRef.current();
         schedulePoll();
       } else {
         if (pollTimeoutId) clearTimeout(pollTimeoutId);
@@ -1039,7 +1050,7 @@ export function TerminalSessionProvider({ children }) {
       window.removeEventListener('keydown', handleActivity);
       unsubscribeWindowActivity();
     };
-  }, [loadSessions, fetchAppState]);
+  }, []);
 
   // Auto-restore inactive sessions
   useEffect(() => {

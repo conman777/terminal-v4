@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
+import { render, screen } from '@testing-library/react';
 import ApiSettingsModal from './ApiSettingsModal';
 
 vi.mock('../contexts/AuthContext', () => ({
@@ -32,7 +31,7 @@ describe('ApiSettingsModal', () => {
     apiPatchMock.mockReset();
   });
 
-  it('loads and displays the current sandbox default', async () => {
+  it('shows sandbox controls as unavailable even when old settings contain sandbox mode', async () => {
     apiGetMock.mockImplementation(async (url) => {
       if (url === '/api/settings') {
         return {
@@ -49,12 +48,11 @@ describe('ApiSettingsModal', () => {
 
     render(<ApiSettingsModal isOpen onClose={vi.fn()} />);
 
-    expect(await screen.findByText('Current default: Sandboxed')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'On' })).toBeInTheDocument();
+    expect(await screen.findByText('Current default: Host')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Unavailable' })).toBeDisabled();
   });
 
-  it('toggles the sandbox default for new terminals', async () => {
-    const user = userEvent.setup();
+  it('does not save unsupported sandbox defaults', async () => {
     apiGetMock.mockImplementation(async (url) => {
       if (url === '/api/settings') {
         return {
@@ -72,14 +70,10 @@ describe('ApiSettingsModal', () => {
 
     render(<ApiSettingsModal isOpen onClose={vi.fn()} />);
 
-    const toggle = await screen.findByRole('button', { name: 'Off' });
-    await user.click(toggle);
+    const toggle = await screen.findByRole('button', { name: 'Unavailable' });
+    expect(toggle).toBeDisabled();
 
-    await waitFor(() => {
-      expect(apiPatchMock).toHaveBeenCalledWith('/api/settings', {
-        sandboxDefaultMode: 'workspace-write'
-      });
-    });
-    expect(await screen.findByText('Current default: Sandboxed')).toBeInTheDocument();
+    expect(apiPatchMock).not.toHaveBeenCalled();
+    expect(await screen.findByText('Current default: Host')).toBeInTheDocument();
   });
 });

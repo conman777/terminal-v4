@@ -3,6 +3,8 @@ use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use tokio_postgres::Row;
 
+const ACCEPT_INVALID_CERTS_ENV: &str = "TERMINAL_V4_EXTERNAL_AUTH_ACCEPT_INVALID_CERTS";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalAuthUser {
     pub id: String,
@@ -47,11 +49,7 @@ impl PostgresExternalAuthProvider {
         query: &str,
         params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
     ) -> Result<Option<ExternalAuthUser>, String> {
-        let tls = TlsConnector::builder()
-            .danger_accept_invalid_certs(true)
-            .build()
-            .map(MakeTlsConnector::new)
-            .map_err(|error| error.to_string())?;
+        let tls = external_auth_tls_connector()?;
         let (client, connection) = tokio_postgres::connect(&self.connection_string, tls)
             .await
             .map_err(|error| error.to_string())?;
@@ -66,6 +64,25 @@ impl PostgresExternalAuthProvider {
             .map_err(|error| error.to_string())
             .and_then(|row| row.map(map_row).transpose())
     }
+}
+
+fn external_auth_tls_connector() -> Result<MakeTlsConnector, String> {
+    let mut builder = TlsConnector::builder();
+    if external_auth_accepts_invalid_certs() {
+        builder.danger_accept_invalid_certs(true);
+    }
+
+    builder
+        .build()
+        .map(MakeTlsConnector::new)
+        .map_err(|error| error.to_string())
+}
+
+fn external_auth_accepts_invalid_certs() -> bool {
+    std::env::var(ACCEPT_INVALID_CERTS_ENV)
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"))
 }
 
 #[async_trait]
@@ -110,4 +127,40 @@ fn map_row(row: Row) -> Result<ExternalAuthUser, String> {
             .try_get("created_at")
             .map_err(|error| error.to_string())?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{external_auth_accepts_invalid_certs, ACCEPT_INVALID_CERTS_ENV};
+    use std::sync::{LazyLock, Mutex};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn external_auth_tls_rejects_invalid_certs_by_default() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock should acquire");
+        let original = std::env::var(ACCEPT_INVALID_CERTS_ENV).ok();
+        std::env::remove_var(ACCEPT_INVALID_CERTS_ENV);
+
+        assert!(!external_auth_accepts_invalid_certs());
+
+        match original {
+            Some(value) => std::env::set_var(ACCEPT_INVALID_CERTS_ENV, value),
+            None => std::env::remove_var(ACCEPT_INVALID_CERTS_ENV),
+        }
+    }
+
+    #[test]
+    fn external_auth_tls_allows_invalid_certs_with_dev_flag() {
+        let _env_guard = ENV_LOCK.lock().expect("env lock should acquire");
+        let original = std::env::var(ACCEPT_INVALID_CERTS_ENV).ok();
+        std::env::set_var(ACCEPT_INVALID_CERTS_ENV, "true");
+
+        assert!(external_auth_accepts_invalid_certs());
+
+        match original {
+            Some(value) => std::env::set_var(ACCEPT_INVALID_CERTS_ENV, value),
+            None => std::env::remove_var(ACCEPT_INVALID_CERTS_ENV),
+        }
+    }
 }

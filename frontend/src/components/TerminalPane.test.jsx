@@ -315,7 +315,7 @@ describe('TerminalPane', () => {
     expect(composer.closest('.desktop-terminal-stack')).not.toBeNull();
   });
 
-  it('moves permission selection into the composer controls', () => {
+  it('disables permission selection until sandbox isolation is implemented', () => {
     render(<TerminalPane {...buildProps({
       sessions: [{
         id: 'session-1',
@@ -328,16 +328,13 @@ describe('TerminalPane', () => {
       }]
     })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Choose permissions for next launch' }));
-    fireEvent.click(screen.getByRole('menuitemradio', { name: /Default permissions/i }));
+    expect(screen.getByRole('button', { name: 'Launch permissions unavailable' })).toBeDisabled();
+    expect(screen.queryByRole('menuitemradio', { name: /Default permissions/i })).not.toBeInTheDocument();
 
-    expect(updateThreadMetadata).toHaveBeenCalledWith('session-1', {
-      sandboxMode: 'workspace-write',
-      sandboxWorkspaceRoot: 'C:\\repo'
-    });
+    expect(updateThreadMetadata).not.toHaveBeenCalled();
   });
 
-  it('can select full access from the composer permission menu', () => {
+  it('shows full access when a session has legacy sandbox metadata', () => {
     render(<TerminalPane {...buildProps({
       sessions: [{
         id: 'session-1',
@@ -350,13 +347,11 @@ describe('TerminalPane', () => {
       }]
     })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Choose permissions for next launch' }));
-    fireEvent.click(screen.getByRole('menuitemradio', { name: /Full access/i }));
+    const permissions = screen.getByRole('button', { name: 'Launch permissions unavailable' });
 
-    expect(updateThreadMetadata).toHaveBeenCalledWith('session-1', {
-      sandboxMode: 'off',
-      sandboxWorkspaceRoot: null
-    });
+    expect(permissions).toBeDisabled();
+    expect(permissions).toHaveTextContent('Full access');
+    expect(updateThreadMetadata).not.toHaveBeenCalled();
   });
 
   it('renders the DesktopStatusBar with the Ask V4 placeholder visible', () => {

@@ -53,7 +53,7 @@ vi.mock('./MobileStatusBar', () => ({
 }));
 
 describe('MobileTerminalCarousel', () => {
-  it('can transition from empty sessions to an active session without hook-order crashes', () => {
+  it('can transition from empty sessions to an active session without hook-order crashes', async () => {
     const onIndexChange = vi.fn();
     const props = {
       currentIndex: 0,
@@ -86,7 +86,7 @@ describe('MobileTerminalCarousel', () => {
       );
     }).not.toThrow();
 
-    expect(screen.getByTestId('mobile-carousel-terminal')).toHaveTextContent('session-1');
+    expect(await screen.findByTestId('mobile-carousel-terminal')).toHaveTextContent('session-1');
     expect(screen.getByTestId('mobile-carousel-status')).toHaveTextContent('session-1');
     expect(latestTerminalChatProps?.surface).toBe('mobile');
   });

@@ -183,14 +183,14 @@ describe('MobileShell', () => {
     mockCheckoutSessionGitBranch.mockClear();
   });
 
-  it('uses the desktop composer flow for terminal-first mobile sessions', () => {
+  it('uses the desktop composer flow for terminal-first mobile sessions', async () => {
     const mobileChatState = createMobileChatTurnsState();
     mockUseMobileChatTurns.mockReturnValue(mobileChatState);
 
     renderMobileShell();
 
     expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'session-a', chatMode: true });
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-session-id', 'session-a');
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-session-id', 'session-a');
     expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-surface', 'mobile');
     expect(screen.getByPlaceholderText('Ask V4 anything')).toBeInTheDocument();
 
@@ -202,7 +202,7 @@ describe('MobileShell', () => {
     expect(mobileChatState.handleChatSend).toHaveBeenCalledWith('Fix the mobile composer layout');
   });
 
-  it('uses the desktop structured-session flow and can open the inline terminal', () => {
+  it('uses the desktop structured-session flow and can open the inline terminal', async () => {
     const sessions = [
       {
         id: 'ss-structured',
@@ -224,7 +224,7 @@ describe('MobileShell', () => {
     expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'ss-structured', chatMode: false });
     expect(mockUseStructuredSession).toHaveBeenCalledWith({ sessionId: 'ss-structured', active: true });
     expect(mockListSessionGitBranches).not.toHaveBeenCalled();
-    expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
+    expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-toggle', 'true');
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-connection-state', 'online');
     expect(screen.queryByTestId('terminal-chat')).not.toBeInTheDocument();
@@ -232,7 +232,7 @@ describe('MobileShell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open terminal view' }));
 
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-open', 'true');
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
   });
 
   it('switches sessions from the mobile session rail', () => {

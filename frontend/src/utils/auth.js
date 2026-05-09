@@ -103,12 +103,14 @@ export async function refreshTokens() {
       });
 
       if (!response.ok) {
+        clearTokens(true);
         throw new Error('Token refresh failed');
       }
 
       const data = await response.json();
       const tokens = data?.tokens || data;
       if (!tokens?.accessToken || !tokens?.refreshToken) {
+        clearTokens(true);
         throw new Error('Invalid token response');
       }
 
