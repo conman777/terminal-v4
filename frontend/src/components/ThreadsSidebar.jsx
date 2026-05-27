@@ -233,7 +233,30 @@ export default function ThreadsSidebar({
             <div className="pro-sidebar-brand">
               <span>Threads</span>
             </div>
-            <div className="pro-sidebar-count">{visibleSessionCount}</div>
+            <div className="pro-sidebar-header-actions">
+              <div className="pro-sidebar-count">{visibleSessionCount}</div>
+              <button
+                className="pro-sidebar-minimize"
+                type="button"
+                onClick={onToggle}
+                aria-label="Minimize sidebar"
+                title="Minimize sidebar"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           <div className="pro-sidebar-toolbar">

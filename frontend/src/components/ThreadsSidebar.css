@@ -166,6 +166,40 @@
   border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
 }
 
+.pro-sidebar-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pro-sidebar-minimize {
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.pro-sidebar-minimize:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--border-default) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, transparent);
+}
+
+.pro-sidebar-minimize:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 60%, transparent);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
+}
+
 .pro-sidebar-toolbar {
   display: flex;
   gap: 8px;

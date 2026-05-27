@@ -142,6 +142,7 @@ pub fn app(state: AppState) -> Router {
             "/api/terminal/{id}/history",
             get(get_terminal_session_history),
         )
+        .route("/api/terminal/{id}/stream", get(stream_terminal_session))
         .route("/api/terminal/{id}/turns", get(get_terminal_turns))
         .route("/api/terminal/{id}/input", post(write_terminal_input))
         .route("/api/terminal/{id}/resize", post(resize_terminal))
@@ -207,7 +208,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/files/mkdir", post(mkdir))
         .route("/api/files/upload", post(upload_file))
         .route("/api/files/download", get(download_file))
-        .route("/api/files/delete", post(delete_file))
+        .route("/api/files/delete", delete(delete_file).post(delete_file))
         .route("/api/files/rename", post(rename_file))
         .route("/api/files/unzip", post(unzip_file))
         .route("/api/files/screenshot", post(upload_screenshot))
@@ -355,7 +356,6 @@ pub fn app(state: AppState) -> Router {
             get(stream_preview_performance),
         )
         .route("/api/terminal/{id}/ws", get(connect_terminal_ws))
-        .route("/api/terminal/{id}/stream", get(stream_terminal_session))
         .merge(protected)
         .with_state(state.clone());
 
@@ -2173,6 +2173,70 @@ struct FilePathQuery {
     path: String,
 }
 
+fn frontend_file_item(entry: &files::FileEntry) -> Value {
+    json!({
+        "name": &entry.name,
+        "path": &entry.path,
+        "type": if entry.is_directory { "directory" } else { "file" },
+        "isDirectory": entry.is_directory,
+        "size": entry.size,
+        "modified": &entry.modified,
+    })
+}
+
+fn safe_relative_upload_path(filename: &str) -> Result<PathBuf, ApiError> {
+    let normalized = filename.replace('\\', "/");
+    let mut relative = PathBuf::new();
+
+    for component in FsPath::new(&normalized).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => relative.push(part),
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(ApiError::bad_request("Invalid filename"));
+            }
+        }
+    }
+
+    if relative.as_os_str().is_empty() {
+        return Err(ApiError::bad_request("Invalid filename"));
+    }
+
+    Ok(relative)
+}
+
+fn upload_target_path(base_path: &str, filename: &str) -> Result<String, ApiError> {
+    let relative = safe_relative_upload_path(filename)?;
+    if base_path == "~" {
+        return Ok(format!(
+            "~/{}",
+            relative.to_string_lossy().replace('\\', "/")
+        ));
+    }
+    Ok(PathBuf::from(base_path)
+        .join(relative)
+        .to_string_lossy()
+        .to_string())
+}
+
+fn download_filename(path: &FsPath, fallback: &str) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(fallback)
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '"' | '\\' | ';' | '\r' | '\n') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
 async fn list_files(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<FilePathQuery>,
@@ -2180,7 +2244,12 @@ async fn list_files(
     let entries = files::list_directory(&query.path)
         .await
         .map_err(file_api_error)?;
-    Ok(Json(json!({ "entries": entries })))
+    let items: Vec<Value> = entries.iter().map(frontend_file_item).collect();
+    Ok(Json(json!({
+        "path": query.path,
+        "items": items,
+        "entries": entries
+    })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2203,7 +2272,7 @@ async fn upload_file(
     mut multipart: axum_extra::extract::Multipart,
 ) -> Result<Json<Value>, ApiError> {
     let mut file_path = None;
-    let mut file_data = None;
+    let mut files_to_upload: Vec<(String, Option<String>, Vec<u8>)> = Vec::new();
 
     while let Some(field) = multipart
         .next_field()
@@ -2218,7 +2287,8 @@ async fn upload_file(
                     .await
                     .map_err(|e| ApiError::bad_request(format!("Failed to read path: {e}")))?,
             );
-        } else if name == "file" {
+        } else if name == "file" || name == "files" {
+            let filename = field.file_name().map(str::to_string);
             let data = field
                 .bytes()
                 .await
@@ -2226,30 +2296,86 @@ async fn upload_file(
             if data.len() > 100 * 1024 * 1024 {
                 return Err(ApiError::bad_request("File exceeds 100MB limit"));
             }
-            file_data = Some(data);
+            files_to_upload.push((name, filename, data.to_vec()));
         }
     }
 
     let path = file_path.ok_or_else(|| ApiError::bad_request("Missing path field"))?;
-    let data = file_data.ok_or_else(|| ApiError::bad_request("Missing file field"))?;
+    if files_to_upload.is_empty() {
+        return Err(ApiError::bad_request("Missing file field"));
+    }
 
-    files::write_file(&path, &data)
-        .await
-        .map_err(file_api_error)?;
-    Ok(Json(json!({ "success": true, "path": path })))
+    let mut uploaded_paths = Vec::new();
+    for (field_name, filename, data) in files_to_upload {
+        let target_path = if field_name == "files" {
+            let filename = filename.ok_or_else(|| ApiError::bad_request("Missing filename"))?;
+            upload_target_path(&path, &filename)?
+        } else {
+            path.clone()
+        };
+        files::write_file(&target_path, &data)
+            .await
+            .map_err(file_api_error)?;
+        uploaded_paths.push(target_path);
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "path": uploaded_paths.first().cloned().unwrap_or(path),
+        "files": uploaded_paths
+    })))
 }
 
 async fn download_file(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<FilePathQuery>,
 ) -> Result<axum::response::Response, ApiError> {
-    let data = files::read_download_file(&query.path)
+    match files::read_download_file(&query.path).await {
+        Ok(data) => {
+            let filename = download_filename(FsPath::new(&query.path), "download");
+            let content_length = data.len().to_string();
+            return Ok((
+                [
+                    (
+                        axum::http::header::CONTENT_TYPE,
+                        "application/octet-stream".to_string(),
+                    ),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!("attachment; filename=\"{filename}\""),
+                    ),
+                    (axum::http::header::CONTENT_LENGTH, content_length),
+                ],
+                Body::from(data),
+            )
+                .into_response());
+        }
+        Err(message) if message == "Path is not a file" => {}
+        Err(message) => return Err(file_api_error(message)),
+    }
+
+    let folder_name = format!(
+        "{}.zip",
+        download_filename(FsPath::new(&query.path), "download")
+    );
+    let file = tokio::task::spawn_blocking(move || files::create_zip_archive_file(&query.path))
         .await
+        .map_err(|e| ApiError::internal(format!("ZIP task failed: {e}")))?
         .map_err(file_api_error)?;
+    let stream = ReaderStream::new(tokio::fs::File::from_std(file));
 
     Ok((
-        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
-        data,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/zip".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{folder_name}\""),
+            ),
+        ],
+        Body::from_stream(stream),
     )
         .into_response())
 }
@@ -2270,8 +2396,11 @@ async fn delete_file(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RenameInput {
+    #[serde(alias = "oldPath")]
     from: String,
+    #[serde(alias = "newPath")]
     to: String,
 }
 
@@ -2286,19 +2415,49 @@ async fn rename_file(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UnzipInput {
-    path: String,
-    target: String,
+    path: Option<String>,
+    zip_path: Option<String>,
+    target: Option<String>,
+    extract_to: Option<String>,
 }
 
 async fn unzip_file(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(input): Json<UnzipInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let count = files::extract_zip(&input.path, &input.target)
+    let zip_path = input
+        .zip_path
+        .or(input.path)
+        .ok_or_else(|| ApiError::bad_request("zipPath is required"))?;
+    let target = input.target.or(input.extract_to).unwrap_or_else(|| {
+        FsPath::new(&zip_path)
+            .parent()
+            .and_then(|parent| parent.to_str())
+            .filter(|parent| !parent.is_empty())
+            .unwrap_or(".")
+            .to_string()
+    });
+    let count = files::extract_zip(&zip_path, &target)
         .await
         .map_err(file_api_error)?;
-    Ok(Json(json!({ "extracted": count })))
+    Ok(Json(
+        json!({ "success": true, "extracted": count, "extractedTo": target }),
+    ))
+}
+
+fn screenshot_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/heic" => "heic",
+        "image/heif" => "heif",
+        "image/avif" => "avif",
+        "image/bmp" => "bmp",
+        _ => "png",
+    }
 }
 
 async fn upload_screenshot(
@@ -2307,6 +2466,7 @@ async fn upload_screenshot(
 ) -> Result<Json<Value>, ApiError> {
     let mut file_path = None;
     let mut file_data = None;
+    let mut detected_mime = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -2321,7 +2481,7 @@ async fn upload_screenshot(
                     .await
                     .map_err(|e| ApiError::bad_request(format!("Failed to read path: {e}")))?,
             );
-        } else if name == "file" {
+        } else if name == "file" || name == "image" {
             let data = field
                 .bytes()
                 .await
@@ -2335,12 +2495,17 @@ async fn upload_screenshot(
                     "File is not a recognized image format",
                 ));
             }
+            detected_mime = mime;
             file_data = Some(data);
         }
     }
 
-    let path = file_path.ok_or_else(|| ApiError::bad_request("Missing path field"))?;
-    let data = file_data.ok_or_else(|| ApiError::bad_request("Missing file field"))?;
+    let data = file_data.ok_or_else(|| ApiError::bad_request("Missing image field"))?;
+    let path = file_path.unwrap_or_else(|| {
+        let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
+        let ext = screenshot_extension(detected_mime.unwrap_or("image/png"));
+        format!("~/screenshots/screenshot-{timestamp}.{ext}")
+    });
 
     files::write_file(&path, &data)
         .await
@@ -3477,18 +3642,149 @@ async fn delete_screenshot_handler(
 
 // --- Process handlers ---
 
+#[derive(Debug, Deserialize)]
+struct ProcessListQuery {
+    paths: Option<String>,
+}
+
+fn project_type_for_path(path: &str) -> &'static str {
+    let project_path = FsPath::new(path);
+    if project_path.join("package.json").exists() {
+        return "node";
+    }
+    if project_path.join("requirements.txt").exists()
+        || project_path.join("setup.py").exists()
+        || project_path.join("pyproject.toml").exists()
+    {
+        return "python";
+    }
+    "unknown"
+}
+
+fn repo_name_for_path(path: &str) -> String {
+    FsPath::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn normalized_path_string(path: &str) -> String {
+    path.replace('\\', "/").trim_end_matches('/').to_string()
+}
+
+fn process_is_in_repo(process_cwd: &str, repo_path: &str) -> bool {
+    let process_cwd = normalized_path_string(process_cwd);
+    let repo_path = normalized_path_string(repo_path);
+    process_cwd == repo_path || process_cwd.starts_with(&format!("{repo_path}/"))
+}
+
+fn repo_process_payload(
+    repo_paths: Vec<String>,
+    processes: Vec<processes::ProcessInfo>,
+) -> Vec<Value> {
+    repo_paths
+        .into_iter()
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| {
+            let name = repo_name_for_path(&path);
+            let project_type = project_type_for_path(&path);
+            let matching_processes: Vec<Value> = processes
+                .iter()
+                .filter(|process| process.running && process_is_in_repo(&process.cwd, &path))
+                .map(|process| {
+                    json!({
+                        "pid": process.pid,
+                        "port": process.port,
+                        "command": &process.command,
+                    })
+                })
+                .collect();
+            json!({
+                "path": path,
+                "name": name,
+                "projectType": project_type,
+                "running": !matching_processes.is_empty(),
+                "processes": matching_processes,
+            })
+        })
+        .collect()
+}
+
+fn start_command_for_project(path: &str) -> Option<(String, Vec<String>)> {
+    match project_type_for_path(path) {
+        "node" => {
+            let package_path = FsPath::new(path).join("package.json");
+            if let Ok(package_text) = fs::read_to_string(package_path) {
+                if let Ok(package_json) = serde_json::from_str::<Value>(&package_text) {
+                    if package_json
+                        .pointer("/scripts/start")
+                        .and_then(Value::as_str)
+                        .is_some()
+                    {
+                        return Some(("npm".to_string(), vec!["start".to_string()]));
+                    }
+                    if package_json
+                        .pointer("/scripts/dev")
+                        .and_then(Value::as_str)
+                        .is_some()
+                    {
+                        return Some((
+                            "npm".to_string(),
+                            vec!["run".to_string(), "dev".to_string()],
+                        ));
+                    }
+                }
+            }
+            Some(("npm".to_string(), vec!["start".to_string()]))
+        }
+        "python" => {
+            let project_path = FsPath::new(path);
+            if project_path.join("manage.py").exists() {
+                Some((
+                    "python".to_string(),
+                    vec!["manage.py".to_string(), "runserver".to_string()],
+                ))
+            } else if project_path.join("app.py").exists() {
+                Some(("python".to_string(), vec!["app.py".to_string()]))
+            } else if project_path.join("main.py").exists() {
+                Some(("python".to_string(), vec!["main.py".to_string()]))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 async fn list_processes(
     State(state): State<AppState>,
     Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<ProcessListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let processes = state.process_manager().list_active().await;
+    let repo_paths: Vec<String> = query
+        .paths
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect();
+    if !repo_paths.is_empty() {
+        return Ok(Json(json!({
+            "repos": repo_process_payload(repo_paths, processes)
+        })));
+    }
     Ok(Json(json!({ "processes": processes })))
 }
 
 #[derive(Debug, Deserialize)]
 struct StartProcessInput {
-    cwd: String,
-    command: String,
+    path: Option<String>,
+    cwd: Option<String>,
+    command: Option<String>,
     #[serde(default)]
     args: Vec<String>,
 }
@@ -3498,13 +3794,34 @@ async fn start_process(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(input): Json<StartProcessInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let args: Vec<&str> = input.args.iter().map(|s| s.as_str()).collect();
+    let (cwd, command, args) = if let Some(path) = input.path {
+        let (command, args) = start_command_for_project(&path).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Cannot determine start command for {} project",
+                project_type_for_path(&path)
+            ))
+        })?;
+        (path, command, args)
+    } else {
+        (
+            input
+                .cwd
+                .ok_or_else(|| ApiError::bad_request("cwd is required"))?,
+            input
+                .command
+                .ok_or_else(|| ApiError::bad_request("command is required"))?,
+            input.args,
+        )
+    };
+    let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let info = state
         .process_manager()
-        .start(&input.cwd, &input.command, &args)
+        .start(&cwd, &command, &args)
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "process": info })))
+    Ok(Json(
+        json!({ "success": true, "pid": info.pid, "process": info }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

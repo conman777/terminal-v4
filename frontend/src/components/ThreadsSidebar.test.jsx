@@ -122,6 +122,22 @@ describe('ThreadsSidebar', () => {
     expect(screen.getByRole('button', { name: 'Logout' })).toBeInTheDocument();
   });
 
+  it('minimizes the expanded sidebar from the panel header', () => {
+    const onToggle = vi.fn();
+    render(<ThreadsSidebar {...buildProps({ onToggle })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize sidebar' }));
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the sidebar tree when collapsed but keeps the rail toggle available', () => {
+    render(<ThreadsSidebar {...buildProps({ isCollapsed: true })} />);
+
+    expect(screen.queryByText('PROJECTS')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show threads' })).toBeInTheDocument();
+  });
+
   it('shows empty state when no projects and no sessions', () => {
     render(<ThreadsSidebar {...buildProps({
       projects: [],

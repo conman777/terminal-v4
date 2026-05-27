@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { MobileTerminalCarousel } from './MobileTerminalCarousel';
 
 let latestTerminalChatProps = null;
+const mockListSessionGitBranches = vi.fn().mockResolvedValue({
+  currentBranch: 'main',
+  branches: ['main', 'feature/mobile']
+});
+const mockCheckoutSessionGitBranch = vi.fn();
 
 vi.mock('../utils/windowActivity', () => ({
   isWindowActive: () => true,
@@ -11,8 +16,8 @@ vi.mock('../utils/windowActivity', () => ({
 
 vi.mock('../contexts/TerminalSessionContext', () => ({
   useTerminalSession: () => ({
-    listSessionGitBranches: vi.fn().mockResolvedValue({ currentBranch: 'main', branches: ['main', 'feature/mobile'] }),
-    checkoutSessionGitBranch: vi.fn()
+    listSessionGitBranches: mockListSessionGitBranches,
+    checkoutSessionGitBranch: mockCheckoutSessionGitBranch
   })
 }));
 
@@ -91,7 +96,7 @@ describe('MobileTerminalCarousel', () => {
     expect(latestTerminalChatProps?.surface).toBe('mobile');
   });
 
-  it('shows and hides the jump-to-latest button from actual viewport state', () => {
+  it('shows and hides the jump-to-latest button from actual viewport state', async () => {
     render(
       <MobileTerminalCarousel
         currentIndex={0}
@@ -110,14 +115,14 @@ describe('MobileTerminalCarousel', () => {
 
     expect(screen.queryByLabelText('Scroll to bottom')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'mark-terminal-scrolled-up' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'mark-terminal-scrolled-up' }));
     expect(screen.getByLabelText('Scroll to bottom')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'mark-terminal-at-bottom' }));
     expect(screen.queryByLabelText('Scroll to bottom')).not.toBeInTheDocument();
   });
 
-  it('only forwards viewport state from the visible mobile pane', () => {
+  it('only forwards viewport state from the visible mobile pane', async () => {
     const onViewportStateChange = vi.fn();
     const props = {
       currentIndex: 0,
@@ -136,7 +141,7 @@ describe('MobileTerminalCarousel', () => {
 
     const { rerender } = render(<MobileTerminalCarousel {...props} chatMode={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'mark-terminal-scrolled-up' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'mark-terminal-scrolled-up' }));
     expect(onViewportStateChange).toHaveBeenLastCalledWith(false);
 
     rerender(<MobileTerminalCarousel {...props} chatMode={true} />);
@@ -152,7 +157,7 @@ describe('MobileTerminalCarousel', () => {
     expect(onViewportStateChange).toHaveBeenLastCalledWith(true);
   });
 
-  it('does not show disconnected before the first successful connection', () => {
+  it('does not show disconnected before the first successful connection', async () => {
     render(
       <MobileTerminalCarousel
         currentIndex={0}
@@ -171,7 +176,7 @@ describe('MobileTerminalCarousel', () => {
 
     expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'mark-disconnected' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'mark-disconnected' }));
     expect(screen.queryByText('Disconnected')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'mark-connected' }));

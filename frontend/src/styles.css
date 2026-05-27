@@ -13799,6 +13799,11 @@ textarea:focus-visible {
   background: transparent;
 }
 
+.terminal-with-status.terminal-first .terminal-chat-desktop,
+.terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat-desktop {
+  --terminal-readable-width: 100%;
+}
+
 .terminal-with-status .desktop-terminal-runtime .terminal-chat {
   flex: 1;
   min-height: 0;

@@ -190,8 +190,9 @@ describe('MobileShell', () => {
     renderMobileShell();
 
     expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'session-a', chatMode: true });
-    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-session-id', 'session-a');
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-surface', 'mobile');
+    const terminalChat = await screen.findByTestId('terminal-chat');
+    expect(terminalChat).toHaveAttribute('data-session-id', 'session-a');
+    expect(terminalChat).toHaveAttribute('data-surface', 'mobile');
     expect(screen.getByPlaceholderText('Ask V4 anything')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Command composer'), {

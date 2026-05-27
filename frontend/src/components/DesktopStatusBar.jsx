@@ -538,10 +538,10 @@ export function DesktopStatusBar({
           flex-shrink: 0;
           position: relative;
           z-index: 3;
-          gap: 6px;
+          gap: 3px;
           height: auto;
-          min-height: 96px;
-          padding: 6px 18px 14px;
+          min-height: 58px;
+          padding: 3px 12px 8px;
           background: transparent;
           border-top: none;
         }
@@ -577,12 +577,12 @@ export function DesktopStatusBar({
         .status-composer-shell {
           display: flex;
           flex-direction: column;
-          gap: 10px;
-          max-width: 880px;
+          gap: 4px;
+          max-width: 720px;
           width: 100%;
           margin: 0 auto;
-          padding: 16px 18px 12px;
-          border-radius: 18px;
+          padding: 7px 10px 6px;
+          border-radius: 12px;
           background:
             linear-gradient(
               180deg,
@@ -605,9 +605,9 @@ export function DesktopStatusBar({
           align-items: center;
           justify-content: space-between;
           gap: 12px;
-          max-width: 880px;
+          max-width: 720px;
           width: 100%;
-          margin: -2px auto 0;
+          margin: -1px auto 0;
           padding: 0 4px;
         }
 
@@ -620,8 +620,8 @@ export function DesktopStatusBar({
 
         .status-composer-input {
           width: 100%;
-          min-height: 62px;
-          max-height: 180px;
+          min-height: 28px;
+          max-height: 104px;
           resize: none;
           padding: 0;
           margin: 0;
@@ -629,7 +629,7 @@ export function DesktopStatusBar({
           background: transparent;
           color: var(--text-primary);
           font-family: var(--font-ui);
-          font-size: 16px;
+          font-size: 13px;
           font-weight: 500;
           letter-spacing: 0;
           line-height: 1.35;
@@ -779,10 +779,10 @@ export function DesktopStatusBar({
         .status-sandbox-toggle {
           display: inline-flex;
           align-items: center;
-          gap: 7px;
-          height: 28px;
-          padding: 0 10px;
-          border-radius: 8px;
+          gap: 5px;
+          height: 23px;
+          padding: 0 7px;
+          border-radius: 7px;
           border: 1px solid color-mix(in srgb, var(--border-default) 32%, transparent);
           background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
           color: color-mix(in srgb, var(--text-secondary) 94%, transparent);
@@ -852,11 +852,24 @@ export function DesktopStatusBar({
           display: flex;
           align-items: center;
           justify-content: flex-start;
-          gap: 10px;
+          gap: 5px;
           flex-wrap: wrap;
-          padding: 8px 0 2px;
+          padding: 4px 0 0;
           border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
           transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .desktop-status-bar-shell .status-bar-btn,
+        .desktop-status-bar-shell .terminal-mic-button-inline {
+          width: 22px;
+          height: 22px;
+          border-radius: 5px;
+        }
+
+        .desktop-status-bar-shell .status-bar-btn svg,
+        .desktop-status-bar-shell .terminal-mic-button-inline svg {
+          width: 12px;
+          height: 12px;
         }
 
         .desktop-status-bar-shell.pane-active .status-composer-shell {
@@ -876,8 +889,8 @@ export function DesktopStatusBar({
         .desktop-status-bar-shell.pane-active .status-bar-right {
           border-top-color: color-mix(in srgb, var(--border-default) 24%, transparent);
           background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
-          border-radius: 12px;
-          padding: 8px 12px 2px;
+          border-radius: 8px;
+          padding: 4px 6px 0;
           box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
         }
 
@@ -900,7 +913,7 @@ export function DesktopStatusBar({
           display: inline-flex;
           align-items: center;
           justify-content: flex-end;
-          gap: 10px;
+          gap: 6px;
           flex-wrap: wrap;
           margin-left: auto;
         }
@@ -1074,12 +1087,12 @@ export function DesktopStatusBar({
         .status-ai-selector {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          height: 26px;
-          padding: 0 9px;
+          gap: 4px;
+          height: 22px;
+          padding: 0 7px;
           background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
           border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          border-radius: 7px;
+          border-radius: 6px;
           color: var(--text-secondary);
           cursor: pointer;
           transition: all 0.15s ease;
@@ -1122,11 +1135,11 @@ export function DesktopStatusBar({
         }
 
         .status-ai-selector-label {
-          max-width: 104px;
+          max-width: 78px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
-          font-size: 11px;
+          font-size: 10px;
           font-weight: 600;
         }
 
@@ -1223,8 +1236,8 @@ export function DesktopStatusBar({
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 34px;
-          height: 34px;
+          width: 26px;
+          height: 26px;
           border-radius: 999px;
           border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
           background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated));
@@ -1254,10 +1267,46 @@ export function DesktopStatusBar({
           transform: none;
         }
 
+        .desktop-status-bar.desktop-status-bar-shell {
+          min-height: 58px !important;
+          padding: 3px 12px 8px !important;
+        }
+
+        .desktop-status-bar .status-composer-shell {
+          gap: 4px !important;
+          max-width: 720px !important;
+          padding: 7px 10px 6px !important;
+          border-radius: 12px !important;
+        }
+
+        .desktop-status-bar .status-composer-input {
+          min-height: 28px !important;
+          height: 28px;
+          max-height: 104px !important;
+          font-size: 13px !important;
+          line-height: 1.25 !important;
+        }
+
+        .desktop-status-bar .status-bar-right {
+          gap: 5px !important;
+          padding-top: 4px !important;
+        }
+
+        .desktop-status-bar .status-bar-btn,
+        .desktop-status-bar .terminal-mic-button-inline {
+          width: 22px !important;
+          height: 22px !important;
+        }
+
+        .desktop-status-bar .status-send-btn {
+          width: 26px !important;
+          height: 26px !important;
+        }
+
         @media (max-width: 1120px) {
           .desktop-status-bar-shell {
-            min-height: 112px;
-            padding: 6px 16px 16px;
+            min-height: 68px;
+            padding: 3px 10px 10px;
           }
 
           .status-bar-meta-row,

@@ -322,4 +322,25 @@ describe('DesktopStatusBar', () => {
     expect(styles).toContain('color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated))');
     expect(styles).toContain('color: var(--text-placeholder, var(--text-muted))');
   });
+
+  it('keeps the desktop composer compact', () => {
+    const { container } = render(<DesktopStatusBar {...buildProps()} />);
+
+    const styles = Array.from(container.querySelectorAll('style')).map((node) => node.textContent || '').join('\n');
+    const composerShell = container.querySelector('.status-composer-shell');
+    const composerInput = container.querySelector('.status-composer-input');
+    const statusButton = container.querySelector('.status-bar-btn');
+    const sendButton = container.querySelector('.status-send-btn');
+
+    expect(styles).toContain('min-height: 58px');
+    expect(styles).toContain('max-width: 720px');
+    expect(styles).toContain('min-height: 28px');
+    expect(styles).toContain('font-size: 13px');
+    expect(styles).toContain('width: 22px');
+    expect(getComputedStyle(composerShell).maxWidth).toBe('720px');
+    expect(getComputedStyle(composerInput).minHeight).toBe('28px');
+    expect(getComputedStyle(composerInput).fontSize).toBe('13px');
+    expect(getComputedStyle(statusButton).width).toBe('22px');
+    expect(getComputedStyle(sendButton).width).toBe('26px');
+  });
 });

@@ -320,7 +320,7 @@ pub fn detect_image_mime(data: &[u8]) -> Option<&'static str> {
 }
 
 /// Resolve and validate a path, preventing directory traversal.
-fn resolve_safe_path(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_safe_path(path: &str) -> Result<PathBuf, String> {
     let expanded = if path.starts_with('~') {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))

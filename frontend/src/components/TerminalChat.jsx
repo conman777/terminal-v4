@@ -1608,7 +1608,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let openRetryCount = 0;
     let openRetryTimeout = null;
     let iosRefreshRaf = null;
-    const MAX_OPEN_RETRIES = 20;
+    const OPEN_RETRY_FAST_RETRIES = 20;
+    const MAX_OPEN_RETRIES = 40;
+    const OPEN_RETRY_DELAY_MS = 150;
     let suppressResizeSyncCount = 0;
     let pendingTrackedResize = null;
     let lastResizeRequestKey = '';
@@ -2128,7 +2130,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       if (containerTooSmall) {
         if (openRetryCount < MAX_OPEN_RETRIES) {
           openRetryCount++;
-          const retryDelay = openRetryCount < 30 ? 0 : 150;
+          const retryDelay = openRetryCount <= OPEN_RETRY_FAST_RETRIES ? 0 : OPEN_RETRY_DELAY_MS;
           if (openRetryTimeout) clearTimeout(openRetryTimeout);
           if (retryDelay === 0) {
             rafId = requestAnimationFrame(openWhenReady);
@@ -2188,7 +2190,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }, 200);
 
       const initWebglAddon = () => {
-        const shouldEnableWebgl = platformConfig.webglEnabled;
+        const shouldEnableWebgl = webglEnabledRef.current;
         if (!shouldEnableWebgl || webglAddonRef.current) {
           return;
         }
@@ -3749,10 +3751,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       requestAuthoritativeResizeRef.current = null;
       requestPriorityResizeRef.current = null;
     };
-  // Note: fontSize intentionally excluded - handled by separate effect below
+  // Note: fontSize and WebGL toggles are intentionally excluded - handled by
+  // separate live-update effects below.
   // Callbacks like onActivityChange, onConnectionChange, onCwdChange are stable refs
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, onUrlDetected, isMobile, platformConfig.fontSize, platformConfig.scrollback, platformConfig.webglEnabled]);
+  }, [sessionId, onUrlDetected, isMobile, platformConfig.scrollback]);
 
   useEffect(() => {
     const term = xtermRef.current;
