@@ -22,4 +22,31 @@ describe('LightweightMarkdown', () => {
     expect(screen.getByRole('button', { name: 'Copy 16' })).toBeInTheDocument();
     expect(renderCodeActions).toHaveBeenCalledWith('const ok = true;');
   });
+
+  it('renders transcript bullet lines as a readable list', () => {
+    render(
+      <LightweightMarkdown
+        content={'Result summary. \u2022 Wrapped terminal output \u2022 Review `styles.css` next'}
+        linkClassName="md-link"
+      />
+    );
+
+    expect(screen.getByText('Result summary.')).toBeInTheDocument();
+    expect(screen.getByRole('list')).toBeInTheDocument();
+    expect(screen.getByText('Wrapped terminal output')).toBeInTheDocument();
+    expect(screen.getByText('styles.css')).toHaveClass('inline-code');
+  });
+
+  it('renders numbered markdown lines as an ordered list', () => {
+    render(
+      <LightweightMarkdown
+        content={'1. First fix\n2. Second fix'}
+        linkClassName="md-link"
+      />
+    );
+
+    expect(screen.getByRole('list')).toBeInTheDocument();
+    expect(screen.getByText('First fix')).toBeInTheDocument();
+    expect(screen.getByText('Second fix')).toBeInTheDocument();
+  });
 });

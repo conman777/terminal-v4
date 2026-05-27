@@ -10215,7 +10215,7 @@ textarea:focus-visible {
 
 /* Base message container */
 .cc-message {
-  margin: 0.75rem 0;
+  margin: 1rem 0;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -10230,13 +10230,13 @@ textarea:focus-visible {
 .cc-user-bubble {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
-  border-radius: 1rem;
-  padding: 0.875rem 1.25rem;
+  border-radius: 12px;
+  padding: 0.7rem 0.95rem;
   color: var(--text-primary);
-  font-size: 0.9375rem;
-  line-height: 1.6;
+  font-size: 0.875rem;
+  line-height: 1.55;
   box-sizing: border-box;
-  max-width: 85%;
+  max-width: min(74%, 640px);
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -10244,13 +10244,13 @@ textarea:focus-visible {
 
 /* Assistant message - full width with markdown */
 .cc-message.cc-assistant {
-  padding: 0.5rem 0;
+  padding: 0.15rem 0;
 }
 
 .cc-assistant-bubble {
-  color: var(--text-primary);
-  font-size: 0.9375rem;
-  line-height: 1.7;
+  color: color-mix(in srgb, var(--text-primary) 92%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.65;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -11326,18 +11326,30 @@ textarea:focus-visible {
 /* Code Block Wrapper with Copy Button */
 .code-block-wrapper {
   position: relative;
-  margin: 0.5rem 0;
+  margin: 0.75rem 0;
   max-width: 100%;
   min-width: 0;
   overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border-default) 34%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-base) 92%, transparent);
 }
 
 .code-block-wrapper pre {
   margin: 0 !important;
+  padding: 0.8rem 0.9rem;
   max-width: 100%;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.code-block-wrapper code,
+.lazy-syntax-fallback {
+  color: color-mix(in srgb, var(--text-secondary) 94%, transparent);
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
 }
 
 .copy-btn {
@@ -11495,6 +11507,7 @@ textarea:focus-visible {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+  color: color-mix(in srgb, var(--text-primary) 90%, transparent);
 }
 
 .cc-assistant-content > * {
@@ -11507,21 +11520,32 @@ textarea:focus-visible {
 .cc-assistant-content h4 { font-size: 0.875rem; }
 
 .cc-assistant-content p {
-  margin: 0.5rem 0;
+  margin: 0 0 0.85rem;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.cc-assistant-content p:last-child {
+  margin-bottom: 0;
 }
 
 .cc-assistant-content ul,
 .cc-assistant-content ol {
-  margin: 0.5rem 0;
-  padding-left: 1.5rem;
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.65rem 0 0.95rem;
+  padding-left: 1.35rem;
 }
 
 .cc-assistant-content li {
-  margin: 0.25rem 0;
+  margin: 0;
+  padding-left: 0.15rem;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.cc-assistant-content li::marker {
+  color: color-mix(in srgb, var(--accent-primary) 84%, var(--text-primary));
 }
 
 .cc-assistant-content strong {
@@ -13907,7 +13931,7 @@ textarea:focus-visible {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding: 14px 18px 16px;
+  padding: 12px 18px 14px;
   border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
   background:
@@ -13935,7 +13959,7 @@ textarea:focus-visible {
 
 .desktop-conversation-title {
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
   line-height: 1.15;
 }
@@ -13951,12 +13975,12 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 26px;
-  padding: 0 10px;
-  border-radius: 10px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 7px;
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -14091,15 +14115,15 @@ textarea:focus-visible {
 .desktop-thread-inner {
   box-sizing: border-box;
   width: 100%;
-  max-width: min(920px, 100%);
+  max-width: min(780px, 100%);
   min-width: 0;
   margin: 0 auto;
-  padding: 28px 20px 24px;
+  padding: 22px 24px 26px;
 }
 
 .desktop-thread-inner.live-session-layout {
-  max-width: 980px;
-  padding-top: 28px;
+  max-width: min(840px, 100%);
+  padding-top: 24px;
   padding-bottom: 28px;
 }
 

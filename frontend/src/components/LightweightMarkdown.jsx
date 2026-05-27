@@ -2,6 +2,9 @@ import { memo } from 'react';
 
 const LINK_RE = /(https?:\/\/[^\s)]+)|`([^`]+)`/g;
 const SAFE_URL_RE = /^https?:\/\//i;
+const BULLET_RE = /^\s*[-*\u2022]\s+(.+)$/;
+const NUMBERED_RE = /^\s*(\d+)[.)]\s+(.+)$/;
+const HEADING_RE = /^(#{1,4})\s+(.+)$/;
 
 function renderInline(text, linkClassName) {
   if (!text) return null;
@@ -46,9 +49,24 @@ function renderInline(text, linkClassName) {
   return parts.length > 0 ? parts : text;
 }
 
+function normalizeContent(content) {
+  return String(content || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/([^\n])\s+(?=\u2022\s+)/g, '$1\n');
+}
+
+function isBlockStart(line) {
+  return (
+    /^```(\w+)?\s*$/.test(line)
+    || BULLET_RE.test(line)
+    || NUMBERED_RE.test(line)
+    || HEADING_RE.test(line)
+  );
+}
+
 function parseBlocks(content) {
   const blocks = [];
-  const lines = String(content || '').split('\n');
+  const lines = normalizeContent(content).split('\n');
   let index = 0;
 
   while (index < lines.length) {
@@ -73,17 +91,54 @@ function parseBlocks(content) {
       continue;
     }
 
+    const heading = line.match(HEADING_RE);
+    if (heading) {
+      blocks.push({
+        type: 'heading',
+        level: Math.min(heading[1].length, 4),
+        content: heading[2].trim()
+      });
+      index += 1;
+      continue;
+    }
+
+    const bullet = line.match(BULLET_RE);
+    if (bullet) {
+      const items = [];
+      while (index < lines.length) {
+        const item = lines[index].match(BULLET_RE);
+        if (!item) break;
+        items.push(item[1].trim());
+        index += 1;
+      }
+      blocks.push({ type: 'list', ordered: false, items });
+      continue;
+    }
+
+    const numbered = line.match(NUMBERED_RE);
+    if (numbered) {
+      const items = [];
+      while (index < lines.length) {
+        const item = lines[index].match(NUMBERED_RE);
+        if (!item) break;
+        items.push(item[2].trim());
+        index += 1;
+      }
+      blocks.push({ type: 'list', ordered: true, items });
+      continue;
+    }
+
     const paragraph = [line];
     index += 1;
     while (
       index < lines.length &&
       lines[index].trim() &&
-      !/^```(\w+)?\s*$/.test(lines[index])
+      !isBlockStart(lines[index])
     ) {
       paragraph.push(lines[index]);
       index += 1;
     }
-    blocks.push({ type: 'paragraph', content: paragraph.join('\n') });
+    blocks.push({ type: 'paragraph', content: paragraph.join(' ') });
   }
 
   return blocks;
@@ -108,6 +163,28 @@ export const LightweightMarkdown = memo(function LightweightMarkdown({
                 <code>{block.content}</code>
               </pre>
             </div>
+          );
+        }
+
+        if (block.type === 'heading') {
+          const HeadingTag = `h${block.level}`;
+          return (
+            <HeadingTag key={index}>
+              {renderInline(block.content, linkClassName)}
+            </HeadingTag>
+          );
+        }
+
+        if (block.type === 'list') {
+          const ListTag = block.ordered ? 'ol' : 'ul';
+          return (
+            <ListTag key={index} className="md-list">
+              {block.items.map((item, itemIndex) => (
+                <li key={`${itemIndex}-${item.slice(0, 24)}`}>
+                  {renderInline(item, linkClassName)}
+                </li>
+              ))}
+            </ListTag>
           );
         }
 
