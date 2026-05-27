@@ -92,6 +92,34 @@ describe('DesktopStatusBar', () => {
     expect(screen.queryByRole('button', { name: 'Hide inline terminal panel' })).not.toBeInTheDocument();
   });
 
+  it('shows a segmented control for Codex UI and raw terminal mode', () => {
+    const onToggleTerminalViewMode = vi.fn();
+    render(<DesktopStatusBar {...buildProps({
+      showTerminalToggle: false,
+      showTerminalViewModeToggle: true,
+      terminalViewMode: 'codex',
+      onToggleTerminalViewMode
+    })} />);
+
+    expect(screen.getByRole('group', { name: 'Terminal view mode' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show Codex UI' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show Raw Terminal' }));
+
+    expect(onToggleTerminalViewMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the raw terminal mode option active', () => {
+    render(<DesktopStatusBar {...buildProps({
+      showTerminalToggle: false,
+      showTerminalViewModeToggle: true,
+      terminalViewMode: 'terminal'
+    })} />);
+
+    expect(screen.getByRole('button', { name: 'Show Raw Terminal' })).toHaveClass('active');
+    expect(screen.getByRole('button', { name: 'Show Raw Terminal' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('calls autocorrect toggle when autocorrect button is pressed', () => {
     render(<DesktopStatusBar {...buildProps()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Disable autocorrect' }));

@@ -10216,6 +10216,9 @@ textarea:focus-visible {
 /* Base message container */
 .cc-message {
   margin: 0.75rem 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* User message - centered card bubble */
@@ -10232,7 +10235,11 @@ textarea:focus-visible {
   color: var(--text-primary);
   font-size: 0.9375rem;
   line-height: 1.6;
+  box-sizing: border-box;
   max-width: 85%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Assistant message - full width with markdown */
@@ -10244,6 +10251,10 @@ textarea:focus-visible {
   color: var(--text-primary);
   font-size: 0.9375rem;
   line-height: 1.7;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* System message */
@@ -10254,6 +10265,8 @@ textarea:focus-visible {
   padding: 0.75rem;
   background: var(--bg-surface);
   border-radius: var(--radius-md);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .cc-message.cc-system.error {
@@ -10267,6 +10280,8 @@ textarea:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: 0.75rem;
   overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .cc-tool-card-header {
@@ -10337,6 +10352,8 @@ textarea:focus-visible {
 .cc-tool-card-body {
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--border-subtle);
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .cc-tool-summary {
@@ -10384,6 +10401,8 @@ textarea:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: 0.5rem;
   overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .cc-message.cc-tool-compact.error {
@@ -10398,6 +10417,7 @@ textarea:focus-visible {
   cursor: pointer;
   transition: background 0.15s ease;
   border-left: 3px solid var(--tool-color, var(--border-subtle));
+  min-width: 0;
 }
 
 .cc-tool-header:hover {
@@ -10445,7 +10465,11 @@ textarea:focus-visible {
   font-size: 0.75rem;
   color: var(--text-secondary);
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cc-tool-status-icon {
@@ -10477,7 +10501,8 @@ textarea:focus-visible {
   padding: 0.75rem;
   background: var(--bg-base);
   max-height: 400px;
-  overflow-y: auto;
+  overflow: auto;
+  min-width: 0;
 }
 
 .cc-tool-output {
@@ -10679,6 +10704,9 @@ textarea:focus-visible {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.8125rem;
   color: var(--accent-primary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Claude Code Input */
@@ -11299,10 +11327,17 @@ textarea:focus-visible {
 .code-block-wrapper {
   position: relative;
   margin: 0.5rem 0;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .code-block-wrapper pre {
   margin: 0 !important;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .copy-btn {
@@ -11455,6 +11490,17 @@ textarea:focus-visible {
   font-weight: 600;
 }
 
+.cc-assistant-content {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cc-assistant-content > * {
+  max-width: 100%;
+}
+
 .cc-assistant-content h1 { font-size: 1.25rem; }
 .cc-assistant-content h2 { font-size: 1.125rem; }
 .cc-assistant-content h3 { font-size: 1rem; }
@@ -11462,6 +11508,8 @@ textarea:focus-visible {
 
 .cc-assistant-content p {
   margin: 0.5rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cc-assistant-content ul,
@@ -11472,6 +11520,8 @@ textarea:focus-visible {
 
 .cc-assistant-content li {
   margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .cc-assistant-content strong {
@@ -11486,6 +11536,8 @@ textarea:focus-visible {
 .md-link {
   color: var(--accent-primary);
   text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .md-link:hover {
@@ -13824,6 +13876,7 @@ textarea:focus-visible {
   position: relative;
   z-index: 1;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   overflow: hidden;
@@ -13835,7 +13888,9 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   width: 100%;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--accent-primary) 14%, transparent), transparent 32%),
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 82%, transparent), var(--bg-base) 20%);
@@ -13854,6 +13909,7 @@ textarea:focus-visible {
   gap: 16px;
   padding: 14px 18px 16px;
   border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 96%, transparent), color-mix(in srgb, var(--bg-base) 88%, transparent));
 }
@@ -14020,7 +14076,9 @@ textarea:focus-visible {
 
 .desktop-thread {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 0;
@@ -14031,8 +14089,10 @@ textarea:focus-visible {
 }
 
 .desktop-thread-inner {
+  box-sizing: border-box;
   width: 100%;
-  max-width: 920px;
+  max-width: min(920px, 100%);
+  min-width: 0;
   margin: 0 auto;
   padding: 28px 20px 24px;
 }

@@ -52,6 +52,9 @@ export function DesktopStatusBar({
   isTerminalPanelOpen = false,
   showTerminalToggle = true,
   onToggleTerminalPanel,
+  terminalViewMode = 'codex',
+  showTerminalViewModeToggle = false,
+  onToggleTerminalViewMode,
   aiType = null,
   aiOptions = AI_TYPE_OPTIONS,
   customAiProviders = [],
@@ -101,7 +104,12 @@ export function DesktopStatusBar({
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: 'var(--accent-info)' } : null)
     ?? aiOptions[0]
     ?? AI_TYPE_OPTIONS[0];
-  const resolvedShowTopRow = typeof showTopRow === 'boolean' ? showTopRow : Boolean(showTerminalToggle);
+  const resolvedShowTopRow = typeof showTopRow === 'boolean'
+    ? showTopRow
+    : Boolean(showTerminalToggle || showTerminalViewModeToggle);
+  const resolvedTerminalViewMode = terminalViewMode === 'terminal' ? 'terminal' : 'codex';
+  const isCodexViewMode = resolvedTerminalViewMode === 'codex';
+  const isRawTerminalViewMode = resolvedTerminalViewMode === 'terminal';
   const resolvedShowComposerFooter = typeof showComposerFooter === 'boolean'
     ? showComposerFooter
     : Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
@@ -149,6 +157,11 @@ export function DesktopStatusBar({
     if (composerDisabled) return;
     if (!composerValue.trim() && composerAttachments.length === 0) return;
     onComposerSubmit?.(composerValue);
+  }
+
+  function handleTerminalViewModeSelect(nextMode) {
+    if (nextMode === resolvedTerminalViewMode) return;
+    onToggleTerminalViewMode?.();
   }
 
   function handleComposerTranscript(transcribedText) {
@@ -265,6 +278,36 @@ export function DesktopStatusBar({
           <div className="status-bar-left" />
 
           <div className="status-bar-top-actions">
+            {showTerminalViewModeToggle && (
+              <div
+                className="status-view-mode-toggle"
+                role="group"
+                aria-label="Terminal view mode"
+              >
+                <button
+                  type="button"
+                  className={`status-view-mode-option ${isCodexViewMode ? 'active' : ''}`}
+                  onClick={() => handleTerminalViewModeSelect('codex')}
+                  disabled={!onToggleTerminalViewMode}
+                  aria-pressed={isCodexViewMode ? 'true' : 'false'}
+                  aria-label="Show Codex UI"
+                  title="Show the Codex-style transcript"
+                >
+                  Codex UI
+                </button>
+                <button
+                  type="button"
+                  className={`status-view-mode-option ${isRawTerminalViewMode ? 'active' : ''}`}
+                  onClick={() => handleTerminalViewModeSelect('terminal')}
+                  disabled={!onToggleTerminalViewMode}
+                  aria-pressed={isRawTerminalViewMode ? 'true' : 'false'}
+                  aria-label="Show Raw Terminal"
+                  title="Show the interactive raw terminal"
+                >
+                  Raw Terminal
+                </button>
+              </div>
+            )}
             {showTerminalToggle && (
               <button
                 type="button"
@@ -551,10 +594,10 @@ export function DesktopStatusBar({
           align-items: center;
           justify-content: space-between;
           gap: 8px;
-          max-width: 880px;
+          max-width: 720px;
           width: 100%;
           margin: 0 auto;
-          padding-bottom: 4px;
+          padding-bottom: 2px;
           border-bottom: 1px solid color-mix(in srgb, var(--border-default) 20%, transparent);
         }
 
@@ -562,6 +605,7 @@ export function DesktopStatusBar({
           display: flex;
           align-items: center;
           gap: 8px;
+          min-width: 0;
         }
 
         .desktop-status-bar-shell .status-bar-left {
@@ -1197,6 +1241,56 @@ export function DesktopStatusBar({
           border-top: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
           margin-top: 6px;
           padding-top: 8px;
+        }
+
+        .status-view-mode-toggle {
+          display: inline-grid;
+          grid-template-columns: repeat(2, minmax(88px, 1fr));
+          align-items: center;
+          gap: 2px;
+          min-height: 28px;
+          padding: 2px;
+          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
+          border-radius: 10px;
+          background: color-mix(in srgb, var(--bg-base) 88%, transparent);
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent);
+        }
+
+        .status-view-mode-option {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 0;
+          min-height: 24px;
+          padding: 0 9px;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          background: transparent;
+          color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 1;
+          white-space: nowrap;
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+
+        .status-view-mode-option:hover:not(:disabled) {
+          border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
+          color: var(--text-primary);
+          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+        }
+
+        .status-view-mode-option.active {
+          border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
+          color: var(--text-primary);
+          background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
+          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
+        }
+
+        .status-view-mode-option:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
         }
 
         .status-terminal-toggle {

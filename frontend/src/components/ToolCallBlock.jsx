@@ -323,7 +323,9 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
     return (
       <div className="cc-message cc-assistant">
         <div className="cc-assistant-bubble">
-          <MarkdownContent content={item.content} />
+          <div className="cc-assistant-content">
+            <MarkdownContent content={item.content} />
+          </div>
         </div>
       </div>
     );

@@ -56,6 +56,7 @@ vi.mock('./DesktopStatusBar', () => ({
       data-testid="desktop-status-bar"
       data-connection-state={props.connectionState}
       data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
+      data-terminal-view-mode={props.terminalViewMode}
     >
       <textarea
         aria-label="Command composer"
@@ -71,6 +72,34 @@ vi.mock('./DesktopStatusBar', () => ({
         >
           {props.isTerminalPanelOpen ? 'Hide Terminal' : 'Open Terminal'}
         </button>
+      ) : null}
+      {props.showTerminalViewModeToggle ? (
+        <div role="group" aria-label="Terminal view mode">
+          <button
+            type="button"
+            aria-label="Show Codex UI"
+            aria-pressed={props.terminalViewMode === 'codex' ? 'true' : 'false'}
+            onClick={() => {
+              if (props.terminalViewMode !== 'codex') {
+                props.onToggleTerminalViewMode?.();
+              }
+            }}
+          >
+            Codex UI
+          </button>
+          <button
+            type="button"
+            aria-label="Show Raw Terminal"
+            aria-pressed={props.terminalViewMode === 'terminal' ? 'true' : 'false'}
+            onClick={() => {
+              if (props.terminalViewMode !== 'terminal') {
+                props.onToggleTerminalViewMode?.();
+              }
+            }}
+          >
+            Raw Terminal
+          </button>
+        </div>
       ) : null}
       {props.composerSecondaryAction}
     </div>
@@ -254,20 +283,26 @@ describe('TerminalPane', () => {
     expect(sendToSession).toHaveBeenCalledWith('ss-structured', '\r');
   });
 
-  it('defaults terminal-backed AI sessions into an interactive terminal-first desktop layout', () => {
+  it('defaults terminal-backed AI sessions into the Codex UI with read-only terminal transport', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
 
-    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
     expect(screen.queryByRole('button', { name: 'Show inline terminal panel' })).not.toBeInTheDocument();
-    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Show Raw Terminal' })).toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
   });
 
-  it('keeps the terminal interactive when direct input is allowed', () => {
+  it('switches terminal-backed AI sessions into interactive raw terminal mode', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: true })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show Raw Terminal' }));
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+    expect(screen.getByRole('button', { name: 'Show Codex UI' })).toHaveAttribute('aria-pressed', 'false');
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 
@@ -293,7 +328,7 @@ describe('TerminalPane', () => {
     expect(lastConversationViewProps?.allowPromptKeyboardCapture).toBe(false);
   });
 
-  it('does not show the chat view toggle even when the session has no saved AI metadata', () => {
+  it('keeps plain terminal sessions in raw terminal mode when there is no AI metadata', () => {
     render(<TerminalPane {...buildProps({
       sessions: [{
         id: 'session-1',
@@ -305,7 +340,11 @@ describe('TerminalPane', () => {
       sessionAiTypes: {}
     })} />);
 
-    expect(screen.queryByRole('button', { name: /chat view/i })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+    expect(screen.queryByRole('group', { name: 'Terminal view mode' })).not.toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 
   it('renders the command composer inside the desktop terminal stack', () => {

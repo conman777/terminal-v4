@@ -578,7 +578,7 @@ export function DesktopConversationView({
       ? `${assistantLabel} is paused on a terminal prompt. The live terminal is docked below so the exact screen state stays visible while you keep the conversation context above.`
       : `${assistantLabel} is paused on a terminal prompt. Choose an action here or open the raw terminal for full control.`)
     : liveSessionTitle || liveRuntimeLabel
-      ? `Live terminal attached. Chat View will show the transcript once ${assistantLabel} posts a full response turn.`
+      ? `Live terminal attached. Codex UI will show the transcript once ${assistantLabel} posts a full response turn.`
       : hasBackgroundOutput
         ? `${assistantLabel} launched in background. The transcript will appear here after the first full response turn.`
         : startupMessage;
@@ -586,7 +586,7 @@ export function DesktopConversationView({
   const headerSubtitle = isStructured
     ? 'Structured conversation view'
     : showInteractivePromptBlock
-      ? 'Live terminal prompt detected. Chat View keeps the session context visible while the terminal waits for input.'
+      ? 'Live terminal prompt detected. Codex UI keeps the session context visible while the terminal waits for input.'
       : liveRuntimeLabel
         ? 'Live terminal summary'
         : displayTurns.length > 0
@@ -816,7 +816,7 @@ export function DesktopConversationView({
                       onClick={onOpenTerminal}
                       disabled={!onOpenTerminal}
                     >
-                      Open Terminal
+                      Open Raw Terminal
                     </button>
                   )}
                 </div>

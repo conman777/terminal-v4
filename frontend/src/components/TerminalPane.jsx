@@ -107,6 +107,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
   const [interactivePromptEvent, setInteractivePromptEvent] = useState(null);
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
+  const [terminalViewMode, setTerminalViewMode] = useState('codex');
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
@@ -154,11 +155,14 @@ export const TerminalPane = memo(function TerminalPane({
   const aiOptions = getAiTypeOptions(customAiProviders);
   const showSessionSelector = canClose && selectableSessions.length > 0;
   const isStructuredSession = isStructuredSessionId(pane.sessionId);
-  const useConversationFirstLayout = isStructuredSession;
-  const useTerminalFirstLayout = !useConversationFirstLayout;
+  const isTerminalBackedSession = Boolean(pane.sessionId) && !isStructuredSession;
+  const supportsAgentInterface = isTerminalBackedSession && Boolean(currentAiType);
+  const isRawTerminalMode = isTerminalBackedSession && (!supportsAgentInterface || terminalViewMode === 'terminal');
+  const useConversationFirstLayout = isStructuredSession || (supportsAgentInterface && !isRawTerminalMode);
+  const useTerminalFirstLayout = isTerminalBackedSession && isRawTerminalMode;
   const shouldForcePromptDock = false;
   const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen;
-  const shouldRenderTerminalRuntime = useTerminalFirstLayout || isTerminalPanelOpen;
+  const shouldRenderTerminalRuntime = isTerminalBackedSession || isTerminalPanelOpen;
 
   const {
     turns,
@@ -205,6 +209,7 @@ export const TerminalPane = memo(function TerminalPane({
     setTerminalPreview('');
     setTerminalScreenSnapshot('');
     setInteractivePromptEvent(null);
+    setTerminalViewMode('codex');
     setViewModeNotice('');
     setIsNoticePersistent(false);
     setGitBranchInfo(null);
@@ -415,7 +420,23 @@ export const TerminalPane = memo(function TerminalPane({
   }, []);
 
   const handleOpenTerminalPanel = useCallback(() => {
+    if (!isStructuredSession) {
+      setTerminalViewMode('terminal');
+    }
     setIsTerminalPanelOpen(true);
+    conversationFallbackRef.current = false;
+    setIsNoticePersistent(false);
+    setViewModeNotice('');
+  }, [isStructuredSession]);
+
+  const handleToggleTerminalViewMode = useCallback(() => {
+    setTerminalViewMode((currentMode) => {
+      const nextMode = currentMode === 'terminal' ? 'codex' : 'terminal';
+      if (nextMode === 'codex') {
+        setIsTerminalPanelOpen(false);
+      }
+      return nextMode;
+    });
     conversationFallbackRef.current = false;
     setIsNoticePersistent(false);
     setViewModeNotice('');
@@ -756,7 +777,7 @@ export const TerminalPane = memo(function TerminalPane({
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
                     onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
-                    onOpenTerminal={isStructuredSession || desktopAllowTerminalInput ? handleOpenTerminalPanel : undefined}
+                    onOpenTerminal={isStructuredSession || isTerminalBackedSession ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
                     interactivePromptEvent={interactivePromptEvent}
@@ -785,7 +806,10 @@ export const TerminalPane = memo(function TerminalPane({
                     onUrlDetected={onUrlDetected}
                     fontSize={fontSize}
                     webglEnabled={webglEnabled}
-                    inputEnabled={useTerminalFirstLayout || desktopAllowTerminalInput || shouldForcePromptDock}
+                    inputEnabled={
+                      useTerminalFirstLayout
+                      || (isStructuredSession && (desktopAllowTerminalInput || shouldForcePromptDock))
+                    }
                     usesTmux={currentSession?.usesTmux}
                     viewMode="terminal"
                     isPrimary={isActive}
@@ -814,8 +838,11 @@ export const TerminalPane = memo(function TerminalPane({
                 isActive={shouldHighlightActiveChrome}
                 onImageUpload={handleImageUpload}
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
-                showTerminalToggle={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput)}
-                onToggleTerminalPanel={!useTerminalFirstLayout && !shouldForcePromptDock && (isStructuredSession || desktopAllowTerminalInput) ? handleToggleTerminalPanel : undefined}
+                showTerminalToggle={!useTerminalFirstLayout && !shouldForcePromptDock && isStructuredSession}
+                onToggleTerminalPanel={!useTerminalFirstLayout && !shouldForcePromptDock && isStructuredSession ? handleToggleTerminalPanel : undefined}
+                terminalViewMode={useTerminalFirstLayout ? 'terminal' : 'codex'}
+                showTerminalViewModeToggle={supportsAgentInterface}
+                onToggleTerminalViewMode={supportsAgentInterface ? handleToggleTerminalViewMode : undefined}
                 connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}
