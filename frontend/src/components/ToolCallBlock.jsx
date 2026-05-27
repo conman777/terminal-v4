@@ -352,9 +352,9 @@ const ACTIVITY_GROUPS = [
 
 const ACTIVITY_ACTION_PATTERNS = [
   /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Started|Stopped|Installed|Updated)\b/i,
-  /\b(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
+  /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
   /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
-  /\b(?:localhost|127\.0\.0\.1|playwright|screenshot)\b/i,
+  /^(?:Opened|Inspected|Captured|Took)\b.*\b(?:localhost|127\.0\.0\.1|playwright|screenshot|browser|viewport|page)\b/i,
 ];
 
 function normalizeActivityLine(line) {
@@ -425,9 +425,10 @@ function buildActivitySummary(content) {
 }
 
 function ActivitySummaryBlock({ content }) {
+  const [expanded, setExpanded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const [showRaw, setShowRaw] = useState(false);
-  const { groups, rawLines, eventCount, rawCount } = useMemo(
+  const { groups, rawLines, eventCount } = useMemo(
     () => buildActivitySummary(content),
     [content]
   );
@@ -449,59 +450,80 @@ function ActivitySummaryBlock({ content }) {
       <div className="cc-activity-card">
         <div className="cc-activity-header">
           <div>
-            <div className="cc-activity-title">Activity</div>
+            <div className="cc-activity-title">Terminal activity</div>
             <div className="cc-activity-subtitle">
-              {eventCount} terminal events grouped from {rawCount} raw lines.
+              {eventCount} events hidden from the main conversation.
             </div>
           </div>
-          <button
-            type="button"
-            className="cc-activity-raw-toggle"
-            onClick={() => setShowRaw((current) => !current)}
-            aria-expanded={showRaw}
-          >
-            {showRaw ? 'Hide Raw' : 'Raw'}
-          </button>
+          <div className="cc-activity-actions">
+            <button
+              type="button"
+              className="cc-activity-toggle"
+              onClick={() => setExpanded((current) => !current)}
+              aria-expanded={expanded}
+            >
+              {expanded ? 'Hide' : 'Details'}
+            </button>
+            <button
+              type="button"
+              className="cc-activity-toggle"
+              onClick={() => setShowRaw((current) => !current)}
+              aria-expanded={showRaw}
+            >
+              {showRaw ? 'Hide Raw' : 'Raw'}
+            </button>
+          </div>
         </div>
 
-        <div className="cc-activity-groups" aria-label="Grouped terminal activity">
-          {groups.map((group) => {
-            const expanded = expandedGroups.has(group.id);
-            const visibleItems = expanded ? group.items : group.items.slice(0, 3);
-            const hiddenCount = Math.max(group.items.length - visibleItems.length, 0);
+        <div className="cc-activity-summary-strip" aria-label="Terminal activity summary">
+          {groups.map((group) => (
+            <span key={group.id} className="cc-activity-chip">
+              <span className="cc-activity-chip-name">{group.label}</span>
+              <span className="cc-activity-count">{group.items.length}</span>
+            </span>
+          ))}
+        </div>
 
-            return (
-              <section key={group.id} className="cc-activity-group">
-                <button
-                  type="button"
-                  className="cc-activity-group-header"
-                  onClick={() => toggleGroup(group.id)}
-                  aria-expanded={expanded}
-                >
-                  <span className="cc-activity-group-name">{group.label}</span>
-                  <span className="cc-activity-count">{group.items.length}</span>
-                </button>
-                <div className="cc-activity-items">
-                  {visibleItems.map((line, index) => (
-                    <div key={`${group.id}-${index}-${line.slice(0, 24)}`} className="cc-activity-item">
-                      <span className="cc-activity-dot" aria-hidden="true" />
-                      <span className="cc-activity-item-text">{line}</span>
-                    </div>
-                  ))}
-                </div>
-                {group.items.length > 3 && (
+        {expanded && (
+          <div className="cc-activity-groups" aria-label="Grouped terminal activity">
+            {groups.map((group) => {
+              const groupExpanded = expandedGroups.has(group.id);
+              const visibleItems = groupExpanded ? group.items : group.items.slice(0, 3);
+              const hiddenCount = Math.max(group.items.length - visibleItems.length, 0);
+
+              return (
+                <section key={group.id} className="cc-activity-group">
                   <button
                     type="button"
-                    className="cc-activity-more"
+                    className="cc-activity-group-header"
                     onClick={() => toggleGroup(group.id)}
+                    aria-expanded={groupExpanded}
                   >
-                    {expanded ? 'Show less' : `${hiddenCount} more`}
+                    <span className="cc-activity-group-name">{group.label}</span>
+                    <span className="cc-activity-count">{group.items.length}</span>
                   </button>
-                )}
-              </section>
-            );
-          })}
-        </div>
+                  <div className="cc-activity-items">
+                    {visibleItems.map((line, index) => (
+                      <div key={`${group.id}-${index}-${line.slice(0, 24)}`} className="cc-activity-item">
+                        <span className="cc-activity-dot" aria-hidden="true" />
+                        <span className="cc-activity-item-text">{line}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {group.items.length > 3 && (
+                    <button
+                      type="button"
+                      className="cc-activity-more"
+                      onClick={() => toggleGroup(group.id)}
+                    >
+                      {groupExpanded ? 'Show less' : `${hiddenCount} more`}
+                    </button>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        )}
 
         {showRaw && (
           <pre className="cc-activity-raw" aria-label="Raw terminal transcript">

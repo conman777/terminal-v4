@@ -19,7 +19,7 @@ describe('ToolCallBlock', () => {
       />
     );
 
-    expect(screen.getByText('Activity')).toBeInTheDocument();
+    expect(screen.getByText('Terminal activity')).toBeInTheDocument();
     expect(screen.getByText('Tests & Build')).toBeInTheDocument();
     expect(screen.getByText('Files')).toBeInTheDocument();
     expect(screen.getByText('Browser Check')).toBeInTheDocument();

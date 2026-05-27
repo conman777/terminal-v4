@@ -215,6 +215,69 @@ function looksLikeRawTranscriptDump(content) {
   return markerHits >= 2 || commandishLines >= 6 || lineCount >= 28;
 }
 
+function normalizeTranscriptReplyLine(line) {
+  return String(line || '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\s*\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)\s*/ig, ' ')
+    .replace(/[┌┐└┘├┤─│╭╮╰╯═]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[●•]\s*/, '')
+    .trim();
+}
+
+function looksLikeTranscriptActivityLine(line) {
+  const trimmed = normalizeTranscriptReplyLine(line);
+  if (!trimmed) return true;
+  if (/^[A-Za-z]?\s*[✓✔□☐☑]\s+/.test(trimmed)) return true;
+  if (/^\d+\s+more\b/i.test(trimmed)) return true;
+  if (/^\+\d+\s+lines\b/i.test(trimmed)) return true;
+  if (/^⎿/.test(trimmed)) return true;
+  return [
+    /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Updated Plan)\b/i,
+    /^(?:Bash|Read|Search|Update|Write|Edit)\(/i,
+    /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
+    /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
+  ].some((pattern) => pattern.test(trimmed));
+}
+
+function looksLikeUsefulTranscriptReplyLine(line) {
+  const trimmed = normalizeTranscriptReplyLine(line);
+  if (trimmed.length < 12) return false;
+  if (looksLikeTranscriptActivityLine(line)) return false;
+  if (/^(?:Inspect|Clean generated artifacts|Run tests|Commit and push)\b/i.test(trimmed)) return false;
+
+  const letters = (trimmed.match(/[A-Za-z]/g) ?? []).length;
+  return letters / trimmed.length > 0.45;
+}
+
+function extractLatestAssistantReplyFromRawTranscript(content) {
+  if (typeof content !== 'string') return '';
+
+  const blocks = [];
+  let currentBlock = [];
+  for (const rawLine of content.split('\n')) {
+    if (looksLikeUsefulTranscriptReplyLine(rawLine)) {
+      currentBlock.push(normalizeTranscriptReplyLine(rawLine));
+      continue;
+    }
+
+    if (currentBlock.length > 0) {
+      blocks.push(currentBlock);
+      currentBlock = [];
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    blocks.push(currentBlock);
+  }
+
+  const latestBlock = [...blocks].reverse().find((block) => block.join(' ').length >= 36);
+  if (!latestBlock) return '';
+
+  return latestBlock.slice(-10).join('\n').trim();
+}
+
 function shouldHideMirrorScreenSnapshot(snapshot, aiType) {
   if (typeof snapshot !== 'string' || !snapshot.trim()) return false;
 
@@ -333,6 +396,10 @@ function buildVisibleTurns(turns, aiType) {
       if (!assistantContent) continue;
       if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
       if (looksLikeRawTranscriptDump(assistantContent)) {
+        const latestReply = extractLatestAssistantReplyFromRawTranscript(assistantContent);
+        if (latestReply) {
+          visibleTurns.push({ ...turn, role: 'assistant', content: latestReply });
+        }
         visibleTurns.push({ ...turn, role: 'assistant_activity', content: assistantContent });
         continue;
       }

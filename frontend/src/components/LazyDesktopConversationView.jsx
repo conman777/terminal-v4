@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, memo, Suspense } from 'react';
 
 const DesktopConversationViewImpl = lazy(() =>
   import('./DesktopConversationView').then((module) => ({
@@ -6,10 +6,10 @@ const DesktopConversationViewImpl = lazy(() =>
   }))
 );
 
-export function LazyDesktopConversationView(props) {
+export const LazyDesktopConversationView = memo(function LazyDesktopConversationView(props) {
   return (
     <Suspense fallback={<div className="conversation-loading">Loading conversation...</div>}>
       <DesktopConversationViewImpl {...props} />
     </Suspense>
   );
-}
+});

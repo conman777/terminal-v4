@@ -169,11 +169,12 @@ export function DesktopStatusBar({
     setIsAiMenuOpen(false);
   }
 
-  function handleComposerSubmit(event) {
+  function handleComposerSubmit(event, submittedValue = composerValue) {
     event?.preventDefault?.();
     if (composerDisabled) return;
-    if (!composerValue.trim() && composerAttachments.length === 0) return;
-    onComposerSubmit?.(composerValue);
+    const nextValue = typeof submittedValue === 'string' ? submittedValue : '';
+    if (!nextValue.trim() && composerAttachments.length === 0) return;
+    onComposerSubmit?.(nextValue);
   }
 
   function handleTerminalViewModeSelect(nextMode) {
@@ -256,7 +257,7 @@ export function DesktopStatusBar({
 
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      handleComposerSubmit(event);
+      handleComposerSubmit(event, event.currentTarget?.value ?? composerValue);
     }
   }
 

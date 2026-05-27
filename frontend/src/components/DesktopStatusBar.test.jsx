@@ -165,6 +165,18 @@ describe('DesktopStatusBar', () => {
     expect(onComposerSubmit).toHaveBeenCalledWith('Explain this repo');
   });
 
+  it('submits the live textarea value when parent state is behind', () => {
+    const onComposerSubmit = vi.fn();
+    render(<DesktopStatusBar {...buildProps({ composerValue: '', onComposerSubmit })} />);
+
+    const composer = screen.getByRole('textbox', { name: 'Command composer' });
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    valueSetter.call(composer, 'fast typed prompt');
+    fireEvent.keyDown(composer, { key: 'Enter' });
+
+    expect(onComposerSubmit).toHaveBeenCalledWith('fast typed prompt');
+  });
+
   it('autocorrects misspelled words in the Ask V4 composer on space', async () => {
     const onComposerChange = vi.fn();
     render(<DesktopStatusBar {...buildProps({ composerValue: 'teh', onComposerChange })} />);

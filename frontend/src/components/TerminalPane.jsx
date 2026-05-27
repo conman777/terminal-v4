@@ -517,6 +517,14 @@ export const TerminalPane = memo(function TerminalPane({
     setComposerAttachments((current) => current.filter((attachment) => attachment.path !== pathToRemove));
   }, []);
 
+  const handleRegisterImageUploadTrigger = useCallback((trigger) => {
+    imageInputRef.current = { click: trigger };
+  }, []);
+
+  const handleRegisterFocusTerminal = useCallback((focusFn) => {
+    focusTerminalRef.current = typeof focusFn === 'function' ? focusFn : null;
+  }, []);
+
   const handleSelectAiType = useCallback((nextAiType) => {
     if (!pane.sessionId) return;
     onSetSessionAiType?.(pane.sessionId, nextAiType);
@@ -814,16 +822,14 @@ export const TerminalPane = memo(function TerminalPane({
                     viewMode="terminal"
                     isPrimary={isActive}
                     fitSignal={fitSignal}
-                    onRegisterImageUpload={(trigger) => { imageInputRef.current = { click: trigger }; }}
+                    onRegisterImageUpload={handleRegisterImageUploadTrigger}
                     onConnectionChange={handleConnectionChange}
                     onCwdChange={handleCwdChange}
                     onActivityChange={handleActivityChange}
                     onOutputChunk={handleOutputChunk}
                     onScreenSnapshot={handleScreenSnapshot}
                     onCliEvent={handleCliEvent}
-                    onRegisterFocusTerminal={(focusFn) => {
-                      focusTerminalRef.current = typeof focusFn === 'function' ? focusFn : null;
-                    }}
+                    onRegisterFocusTerminal={handleRegisterFocusTerminal}
                     onRegisterSendText={handleRegisterSendText}
                     onTurn={handleTurn}
                   />

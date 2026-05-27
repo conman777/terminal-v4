@@ -10294,7 +10294,14 @@ textarea:focus-visible {
   line-height: 1.4;
 }
 
-.cc-activity-raw-toggle {
+.cc-activity-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.cc-activity-toggle {
   flex-shrink: 0;
   min-height: 24px;
   padding: 0 9px;
@@ -10308,10 +10315,40 @@ textarea:focus-visible {
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
-.cc-activity-raw-toggle:hover {
+.cc-activity-toggle:hover {
   border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
   background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
   color: var(--text-primary);
+}
+
+.cc-activity-summary-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px 10px;
+}
+
+.cc-activity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 170px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.cc-activity-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cc-activity-groups {
@@ -10438,7 +10475,7 @@ textarea:focus-visible {
     align-items: stretch;
   }
 
-  .cc-activity-raw-toggle {
+  .cc-activity-actions {
     align-self: flex-start;
   }
 }

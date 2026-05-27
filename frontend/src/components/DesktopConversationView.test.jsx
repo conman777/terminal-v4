@@ -79,6 +79,30 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('lifts the latest readable reply out of raw terminal transcript turns', () => {
+    const transcriptDump = [
+      ...Array.from({ length: 28 }, (_, index) => (
+        `Ran npm test ${index} lines (ctrl + t to view transcript)`
+      )),
+      'Found it. The desktop composer was using stale state when Enter was pressed.',
+      'I fixed the submit path so it reads the textarea value directly.'
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: 'why does enter need two presses', ts: 1 },
+            { role: 'assistant', content: transcriptDump, ts: 2 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByTestId('tool-call-assistant')).toHaveTextContent(/stale state when Enter was pressed/i);
+    expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
+  });
+
   it('does not render an inline composer (V4 status bar composer is the single input)', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();
