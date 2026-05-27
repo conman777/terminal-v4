@@ -8,6 +8,21 @@ import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
 
+const IMAGE_INPUT_ACCEPT = [
+  'image/*',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.heic',
+  '.heif',
+  '.avif',
+  '.tif',
+  '.tiff',
+  '.bmp'
+].join(',');
+
 function formatSessionSummary(summary) {
   if (typeof summary !== 'string') return '';
   const text = summary.trim();
@@ -93,6 +108,8 @@ export function DesktopStatusBar({
   );
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
+  const [isImageDragOver, setIsImageDragOver] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
   const aiMenuRef = useRef(null);
   const imageInputRef = useRef(null);
@@ -173,6 +190,34 @@ export function DesktopStatusBar({
     onComposerChange(`${composerValue}${needsSeparator ? ' ' : ''}${normalizedTranscript}`);
   }
 
+  async function attachImageFile(file, fallbackName = 'image.png') {
+    if (!file) return;
+
+    setUploadError('');
+    setIsPastingImage(true);
+    try {
+      const path = await uploadScreenshot(file);
+      if (!path) return;
+      onComposerAttachmentAdd?.({
+        name: file.name || fallbackName,
+        path
+      });
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Image upload failed';
+      setUploadError(message);
+      console.error('Failed to attach image from composer:', error);
+    } finally {
+      setIsPastingImage(false);
+    }
+  }
+
+  function hasFileDrag(dataTransfer) {
+    const types = Array.from(dataTransfer?.types || []);
+    return types.includes('Files') || types.includes('public.file-url');
+  }
+
   function handleGitBranchChange(event) {
     const nextBranch = typeof event === 'string' ? event : event?.target?.value;
     if (!nextBranch) return;
@@ -231,20 +276,7 @@ export function DesktopStatusBar({
 
     event.preventDefault();
     event.stopPropagation();
-    setIsPastingImage(true);
-
-    try {
-      const path = await uploadScreenshot(imageFile);
-      if (!path) return;
-      onComposerAttachmentAdd?.({
-        name: imageFile.name || 'image.png',
-        path
-      });
-    } catch (error) {
-      console.error('Failed to paste image into composer:', error);
-    } finally {
-      setIsPastingImage(false);
-    }
+    await attachImageFile(imageFile);
   }
 
   async function handleImageSelect(event) {
@@ -252,18 +284,47 @@ export function DesktopStatusBar({
     event.target.value = '';
     if (!file) return;
 
-    setIsPastingImage(true);
+    await attachImageFile(file);
+  }
+
+  function handleComposerDragOver(event) {
+    if (!hasFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setUploadError('');
+    setIsImageDragOver(true);
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy';
+    }
+  }
+
+  function handleComposerDragLeave(event) {
+    if (!isImageDragOver) return;
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsImageDragOver(false);
+  }
+
+  async function handleComposerDrop(event) {
+    if (!hasFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setIsImageDragOver(false);
+
     try {
-      const path = await uploadScreenshot(file);
-      if (!path) return;
-      onComposerAttachmentAdd?.({
-        name: file.name || 'image.png',
-        path
-      });
+      const imageFile = await getImageFileFromDataTransfer(event.dataTransfer);
+      if (!imageFile) {
+        setUploadError('Drop an image file to attach it.');
+        return;
+      }
+      await attachImageFile(imageFile);
     } catch (error) {
-      console.error('Failed to attach image from composer picker:', error);
-    } finally {
-      setIsPastingImage(false);
+      const message = error instanceof Error && error.message
+        ? error.message
+        : 'Image upload failed';
+      setUploadError(message);
+      console.error('Failed to drop image into composer:', error);
     }
   }
 
@@ -324,7 +385,13 @@ export function DesktopStatusBar({
         </div>
       )}
 
-      <form className={`status-composer-shell${composerDisabled ? ' disabled' : ''}`} onSubmit={handleComposerSubmit}>
+      <form
+        className={`status-composer-shell${composerDisabled ? ' disabled' : ''}${isImageDragOver ? ' image-drag-over' : ''}`}
+        onSubmit={handleComposerSubmit}
+        onDragOver={handleComposerDragOver}
+        onDragLeave={handleComposerDragLeave}
+        onDrop={handleComposerDrop}
+      >
         {composerAttachments.length > 0 && (
           <div className="status-composer-attachments" aria-label="Composer attachments">
             {composerAttachments.map((attachment, index) => (
@@ -341,6 +408,11 @@ export function DesktopStatusBar({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+        {uploadError && (
+          <div className="status-composer-upload-error" role="alert">
+            {uploadError}
           </div>
         )}
         {slashSuggestions.length > 0 && (
@@ -379,7 +451,7 @@ export function DesktopStatusBar({
         <input
           ref={imageInputRef}
           type="file"
-          accept="image/*"
+          accept={IMAGE_INPUT_ACCEPT}
           className="status-composer-image-input"
           onChange={handleImageSelect}
           tabIndex={-1}
@@ -644,6 +716,20 @@ export function DesktopStatusBar({
           opacity: 0.7;
         }
 
+        .status-composer-shell.image-drag-over {
+          border-color: color-mix(in srgb, var(--accent-primary) 52%, var(--border-default));
+          background:
+            linear-gradient(
+              180deg,
+              color-mix(in srgb, var(--accent-primary) 16%, var(--bg-surface)),
+              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
+            );
+          box-shadow:
+            var(--shadow-lg),
+            inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent),
+            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
+        }
+
         .status-composer-footer-row {
           display: flex;
           align-items: center;
@@ -697,7 +783,17 @@ export function DesktopStatusBar({
         }
 
         .status-composer-image-input {
-          display: none;
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          margin: -1px;
+          padding: 0;
+          border: 0;
+          opacity: 0;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          clip-path: inset(50%);
+          white-space: nowrap;
         }
 
         .status-composer-input:disabled {
@@ -709,6 +805,16 @@ export function DesktopStatusBar({
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
+        }
+
+        .status-composer-upload-error {
+          padding: 6px 8px;
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--error, #ef4444) 12%, transparent);
+          color: color-mix(in srgb, var(--error, #ef4444) 88%, var(--text-primary));
+          font-size: 11px;
+          font-weight: 650;
+          line-height: 1.35;
         }
 
         .status-slash-menu {

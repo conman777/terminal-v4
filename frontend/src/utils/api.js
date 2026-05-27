@@ -109,7 +109,7 @@ export async function uploadScreenshot(file) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-    throw new Error(error.error || error.message || 'Screenshot upload failed');
+    throw new Error(error.message || error.error || 'Screenshot upload failed');
   }
 
   const data = await response.json();

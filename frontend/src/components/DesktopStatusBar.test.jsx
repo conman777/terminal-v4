@@ -316,6 +316,50 @@ describe('DesktopStatusBar', () => {
     });
   });
 
+  it('uploads dropped images into the composer as file paths', async () => {
+    const onComposerAttachmentAdd = vi.fn();
+    const imageFile = new File(['image'], 'dropped.png', { type: 'image/png' });
+    getImageFileFromDataTransferMock.mockResolvedValue(imageFile);
+    uploadScreenshotMock.mockResolvedValue('/tmp/dropped-image.png');
+
+    const { container } = render(<DesktopStatusBar {...buildProps({ onComposerAttachmentAdd })} />);
+    const composerShell = container.querySelector('.status-composer-shell');
+
+    fireEvent.drop(composerShell, {
+      dataTransfer: {
+        types: ['Files'],
+        files: [imageFile],
+        items: []
+      }
+    });
+
+    await waitFor(() => {
+      expect(onComposerAttachmentAdd).toHaveBeenCalledWith({
+        name: 'dropped.png',
+        path: '/tmp/dropped-image.png'
+      });
+    });
+  });
+
+  it('shows image upload failures in the composer', async () => {
+    const imageFile = new File(['image'], 'too-large.png', { type: 'image/png' });
+    getImageFileFromDataTransferMock.mockResolvedValue(imageFile);
+    uploadScreenshotMock.mockRejectedValue(new Error('Maximum screenshot size is 10MB'));
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<DesktopStatusBar {...buildProps()} />);
+
+    fireEvent.paste(screen.getByRole('textbox', { name: 'Command composer' }), {
+      clipboardData: {
+        getData: () => '',
+        items: []
+      }
+    });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Maximum screenshot size is 10MB');
+    consoleErrorSpy.mockRestore();
+  });
+
   it('renders runtime info and lets the user switch git branches', () => {
     const onSelectGitBranch = vi.fn();
     render(<DesktopStatusBar {...buildProps({

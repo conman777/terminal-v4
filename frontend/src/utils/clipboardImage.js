@@ -242,6 +242,9 @@ export async function getImageFileFromDataTransfer(dataTransfer) {
     if (image) return image;
   }
 
+  const htmlImage = await extractImageFromHtmlDataTransfer(dataTransfer, items);
+  if (htmlImage) return htmlImage;
+
   return null;
 }
 
@@ -258,6 +261,40 @@ function imageFromDataUrl(dataUrl) {
   }
   const extension = getExtensionForMimeType(mimeType) || 'png';
   return new File([bytes], `pasted-image.${extension}`, { type: mimeType });
+}
+
+function getDataTransferString(item) {
+  return new Promise((resolve) => {
+    if (!item || typeof item.getAsString !== 'function') {
+      resolve('');
+      return;
+    }
+    item.getAsString((value) => resolve(value || ''));
+  });
+}
+
+async function extractImageFromHtmlDataTransfer(dataTransfer, items) {
+  const htmlCandidates = [];
+
+  if (typeof dataTransfer?.getData === 'function') {
+    const directHtml = dataTransfer.getData('text/html');
+    if (directHtml) htmlCandidates.push(directHtml);
+  }
+
+  for (const item of items) {
+    if (!item || item.kind !== 'string' || item.type !== 'text/html') continue;
+    const html = await getDataTransferString(item);
+    if (html) htmlCandidates.push(html);
+  }
+
+  for (const html of htmlCandidates) {
+    const dataUrlMatch = html.match(/src=["'](data:image\/[a-z0-9.+-]+;base64,[^"']+)["']/i);
+    if (!dataUrlMatch) continue;
+    const image = imageFromDataUrl(dataUrlMatch[1]);
+    if (image) return image;
+  }
+
+  return null;
 }
 
 async function extractImageFromHtmlClipboardItem(item) {

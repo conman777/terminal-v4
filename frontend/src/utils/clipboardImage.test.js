@@ -38,6 +38,26 @@ describe('clipboardImage', () => {
     expect(image?.type).toBe('image/png');
   });
 
+  it('extracts image from HTML data URL data transfer items', async () => {
+    const dataTransfer = {
+      files: [],
+      items: [{
+        kind: 'string',
+        type: 'text/html',
+        getAsString(callback) {
+          callback('<img src="data:image/png;base64,iVBORw0KGgoAAAAA">');
+        }
+      }],
+      getData: () => ''
+    };
+
+    const image = await getImageFileFromDataTransfer(dataTransfer);
+
+    expect(image).toBeInstanceOf(File);
+    expect(image?.type).toBe('image/png');
+    expect(image?.name).toBe('pasted-image.png');
+  });
+
   it('extracts image from async clipboard items with unknown MIME', async () => {
     const clipboardItems = [
       {
