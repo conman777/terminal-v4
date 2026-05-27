@@ -59,6 +59,26 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText('assistant reply')).toBeInTheDocument();
   });
 
+  it('collapses long raw terminal transcript turns', () => {
+    const transcriptDump = Array.from({ length: 34 }, (_, index) => (
+      `Ran npm test ${index} lines (ctrl + t to view transcript)`
+    )).join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: 'audit this app', ts: 1 },
+            { role: 'assistant', content: transcriptDump, ts: 2 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByText('audit this app')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-call-assistant_transcript')).toBeInTheDocument();
+  });
+
   it('does not render an inline composer (V4 status bar composer is the single input)', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();

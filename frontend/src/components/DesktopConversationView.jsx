@@ -193,6 +193,28 @@ function looksLikeCodexUpdatePrompt(content) {
   );
 }
 
+function looksLikeRawTranscriptDump(content) {
+  if (typeof content !== 'string') return false;
+  const trimmed = content.trim();
+  const lines = trimmed.split('\n').map((line) => line.trim()).filter(Boolean);
+  const lineCount = lines.length;
+  if (trimmed.length < 1200 && lineCount < 28) return false;
+  const markerHits = [
+    /\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)/i,
+    /\bRan\s+(?:git|npm|node|curl|ss|rg|cat|sed|cargo|python|pnpm|yarn)\b/i,
+    /\bRead\s+[^|\n]+(?:\+?\d+\s+lines|\d+\s+chars)/i,
+    /\bEdited\s+[^|\n]+\+?\d+\s+lines/i,
+    /\bCommit\s+[a-f0-9]{7,}/i,
+    /\bpushed?\s+to\s+(?:origin|github|https?:\/\/)/i,
+  ].reduce((count, pattern) => count + (pattern.test(trimmed) ? 1 : 0), 0);
+  const commandishLines = lines.filter((line) => (
+    /\b(?:Ran|Read|Edited|Wrote|Commit|Pushed|Opened|Searched)\b/.test(line)
+    || /\b(?:git|npm|node|curl|rg|sed)\s+/.test(line)
+  )).length;
+
+  return markerHits >= 2 || commandishLines >= 6 || lineCount >= 28;
+}
+
 function shouldHideMirrorScreenSnapshot(snapshot, aiType) {
   if (typeof snapshot !== 'string' || !snapshot.trim()) return false;
 
@@ -310,6 +332,10 @@ function buildVisibleTurns(turns, aiType) {
       const assistantContent = sanitizeAssistantTurnContent(turn.content, aiType);
       if (!assistantContent) continue;
       if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
+      if (looksLikeRawTranscriptDump(assistantContent)) {
+        visibleTurns.push({ ...turn, role: 'assistant_transcript', content: assistantContent });
+        continue;
+      }
       visibleTurns.push({ ...turn, content: assistantContent });
       continue;
     }

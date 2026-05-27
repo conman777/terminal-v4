@@ -302,6 +302,62 @@ const MarkdownContent = memo(function MarkdownContent({ content }) {
   );
 });
 
+function buildTranscriptPreview(content) {
+  const lines = String(content || '')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const previewLines = lines.slice(0, 5);
+  return {
+    lines,
+    previewLines,
+    hiddenCount: Math.max(lines.length - previewLines.length, 0)
+  };
+}
+
+function TranscriptSummaryBlock({ content }) {
+  const [expanded, setExpanded] = useState(false);
+  const { lines, previewLines, hiddenCount } = useMemo(
+    () => buildTranscriptPreview(content),
+    [content]
+  );
+  const visibleLines = expanded ? lines : previewLines;
+
+  return (
+    <div className="cc-message cc-transcript">
+      <div className="cc-transcript-card">
+        <div className="cc-transcript-header">
+          <div>
+            <div className="cc-transcript-title">Terminal transcript</div>
+            <div className="cc-transcript-subtitle">
+              Raw terminal history was collapsed to keep the conversation readable.
+            </div>
+          </div>
+          <button
+            type="button"
+            className="cc-transcript-toggle"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        <div className="cc-transcript-preview" aria-label="Terminal transcript preview">
+          {visibleLines.map((line, index) => (
+            <div key={`${index}-${line.slice(0, 32)}`} className="cc-transcript-line">
+              {line}
+            </div>
+          ))}
+        </div>
+        {!expanded && hiddenCount > 0 && (
+          <div className="cc-transcript-more">
+            {hiddenCount} more lines hidden
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default memo(function ToolCallBlock({ item, onFileClick }) {
   // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
@@ -329,6 +385,10 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
         </div>
       </div>
     );
+  }
+
+  if (item.type === 'assistant_transcript') {
+    return <TranscriptSummaryBlock content={item.content} />;
   }
 
   // Skip result type
