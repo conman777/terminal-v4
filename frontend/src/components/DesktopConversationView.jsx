@@ -333,7 +333,7 @@ function buildVisibleTurns(turns, aiType) {
       if (!assistantContent) continue;
       if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
       if (looksLikeRawTranscriptDump(assistantContent)) {
-        visibleTurns.push({ ...turn, role: 'assistant_transcript', content: assistantContent });
+        visibleTurns.push({ ...turn, role: 'assistant_activity', content: assistantContent });
         continue;
       }
       visibleTurns.push({ ...turn, content: assistantContent });

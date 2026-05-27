@@ -302,56 +302,211 @@ const MarkdownContent = memo(function MarkdownContent({ content }) {
   );
 });
 
-function buildTranscriptPreview(content) {
-  const lines = String(content || '')
+const ACTIVITY_GROUPS = [
+  {
+    id: 'tests',
+    label: 'Tests & Build',
+    patterns: [
+      /\b(?:npm|pnpm|yarn)\s+(?:--prefix\s+\S+\s+)?(?:run\s+)?(?:test|build|frontend:build)\b/i,
+      /\b(?:vitest|playwright|pytest|cargo\s+test)\b/i,
+      /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
+    ],
+  },
+  {
+    id: 'browser',
+    label: 'Browser Check',
+    patterns: [
+      /\b(?:playwright|screenshot|browser|viewport|page)\b/i,
+    ],
+  },
+  {
+    id: 'files',
+    label: 'Files',
+    patterns: [
+      /^(?:Read|Edited|Wrote|Opened|Searched)\b/i,
+      /\.(?:jsx?|tsx?|css|json|md|rs|py|toml|ya?ml|html)\b/i,
+    ],
+  },
+  {
+    id: 'server',
+    label: 'Server',
+    patterns: [
+      /\b(?:server|localhost|127\.0\.0\.1|listen|listening|port|vite)\b/i,
+    ],
+  },
+  {
+    id: 'git',
+    label: 'Git',
+    patterns: [
+      /\bgit\s+(?:status|diff|show|add|commit|push|log|branch)\b/i,
+      /^(?:Commit|Committed|Pushed)\b/i,
+      /\borigin\/?\b/i,
+    ],
+  },
+  {
+    id: 'terminal',
+    label: 'Terminal',
+    patterns: [],
+  },
+];
+
+const ACTIVITY_ACTION_PATTERNS = [
+  /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Started|Stopped|Installed|Updated)\b/i,
+  /\b(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
+  /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
+  /\b(?:localhost|127\.0\.0\.1|playwright|screenshot)\b/i,
+];
+
+function normalizeActivityLine(line) {
+  return String(line || '')
+    .replace(/\s*\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)\s*/ig, ' ')
     .split('\n')
-    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-*]\s+/, '')
+    .trim();
+}
+
+function isActivityLine(line) {
+  return ACTIVITY_ACTION_PATTERNS.some((pattern) => pattern.test(line));
+}
+
+function truncateActivityLine(line) {
+  if (line.length <= 180) return line;
+  return `${line.slice(0, 177)}...`;
+}
+
+function classifyActivityLine(line) {
+  return ACTIVITY_GROUPS.find((group) => (
+    group.id !== 'terminal' && group.patterns.some((pattern) => pattern.test(line))
+  )) || ACTIVITY_GROUPS[ACTIVITY_GROUPS.length - 1];
+}
+
+function buildActivitySummary(content) {
+  const rawLines = String(content || '')
+    .split('\n')
+    .map(normalizeActivityLine)
     .filter(Boolean);
-  const previewLines = lines.slice(0, 5);
+
+  const seen = new Set();
+  const activityLines = [];
+
+  for (const line of rawLines) {
+    if (!isActivityLine(line)) continue;
+    const normalized = line.toLowerCase();
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    activityLines.push(truncateActivityLine(line));
+  }
+
+  const sourceLines = activityLines.length > 0
+    ? activityLines
+    : rawLines.slice(0, 12).map(truncateActivityLine);
+
+  const groupsById = new Map(ACTIVITY_GROUPS.map((group) => [group.id, {
+    id: group.id,
+    label: group.label,
+    items: [],
+  }]));
+
+  sourceLines.slice(0, 80).forEach((line) => {
+    const group = classifyActivityLine(line);
+    groupsById.get(group.id).items.push(line);
+  });
+
   return {
-    lines,
-    previewLines,
-    hiddenCount: Math.max(lines.length - previewLines.length, 0)
+    groups: ACTIVITY_GROUPS
+      .map((group) => groupsById.get(group.id))
+      .filter((group) => group.items.length > 0),
+    rawLines,
+    eventCount: sourceLines.length,
+    rawCount: rawLines.length,
   };
 }
 
-function TranscriptSummaryBlock({ content }) {
-  const [expanded, setExpanded] = useState(false);
-  const { lines, previewLines, hiddenCount } = useMemo(
-    () => buildTranscriptPreview(content),
+function ActivitySummaryBlock({ content }) {
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
+  const [showRaw, setShowRaw] = useState(false);
+  const { groups, rawLines, eventCount, rawCount } = useMemo(
+    () => buildActivitySummary(content),
     [content]
   );
-  const visibleLines = expanded ? lines : previewLines;
+
+  const toggleGroup = (groupId) => {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
 
   return (
-    <div className="cc-message cc-transcript">
-      <div className="cc-transcript-card">
-        <div className="cc-transcript-header">
+    <div className="cc-message cc-activity">
+      <div className="cc-activity-card">
+        <div className="cc-activity-header">
           <div>
-            <div className="cc-transcript-title">Terminal transcript</div>
-            <div className="cc-transcript-subtitle">
-              Raw terminal history was collapsed to keep the conversation readable.
+            <div className="cc-activity-title">Activity</div>
+            <div className="cc-activity-subtitle">
+              {eventCount} terminal events grouped from {rawCount} raw lines.
             </div>
           </div>
           <button
             type="button"
-            className="cc-transcript-toggle"
-            onClick={() => setExpanded((current) => !current)}
+            className="cc-activity-raw-toggle"
+            onClick={() => setShowRaw((current) => !current)}
+            aria-expanded={showRaw}
           >
-            {expanded ? 'Hide' : 'Show'}
+            {showRaw ? 'Hide Raw' : 'Raw'}
           </button>
         </div>
-        <div className="cc-transcript-preview" aria-label="Terminal transcript preview">
-          {visibleLines.map((line, index) => (
-            <div key={`${index}-${line.slice(0, 32)}`} className="cc-transcript-line">
-              {line}
-            </div>
-          ))}
+
+        <div className="cc-activity-groups" aria-label="Grouped terminal activity">
+          {groups.map((group) => {
+            const expanded = expandedGroups.has(group.id);
+            const visibleItems = expanded ? group.items : group.items.slice(0, 3);
+            const hiddenCount = Math.max(group.items.length - visibleItems.length, 0);
+
+            return (
+              <section key={group.id} className="cc-activity-group">
+                <button
+                  type="button"
+                  className="cc-activity-group-header"
+                  onClick={() => toggleGroup(group.id)}
+                  aria-expanded={expanded}
+                >
+                  <span className="cc-activity-group-name">{group.label}</span>
+                  <span className="cc-activity-count">{group.items.length}</span>
+                </button>
+                <div className="cc-activity-items">
+                  {visibleItems.map((line, index) => (
+                    <div key={`${group.id}-${index}-${line.slice(0, 24)}`} className="cc-activity-item">
+                      <span className="cc-activity-dot" aria-hidden="true" />
+                      <span className="cc-activity-item-text">{line}</span>
+                    </div>
+                  ))}
+                </div>
+                {group.items.length > 3 && (
+                  <button
+                    type="button"
+                    className="cc-activity-more"
+                    onClick={() => toggleGroup(group.id)}
+                  >
+                    {expanded ? 'Show less' : `${hiddenCount} more`}
+                  </button>
+                )}
+              </section>
+            );
+          })}
         </div>
-        {!expanded && hiddenCount > 0 && (
-          <div className="cc-transcript-more">
-            {hiddenCount} more lines hidden
-          </div>
+
+        {showRaw && (
+          <pre className="cc-activity-raw" aria-label="Raw terminal transcript">
+            {rawLines.join('\n')}
+          </pre>
         )}
       </div>
     </div>
@@ -387,8 +542,8 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
     );
   }
 
-  if (item.type === 'assistant_transcript') {
-    return <TranscriptSummaryBlock content={item.content} />;
+  if (item.type === 'assistant_activity') {
+    return <ActivitySummaryBlock content={item.content} />;
   }
 
   // Skip result type
