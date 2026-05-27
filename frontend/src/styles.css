@@ -14387,6 +14387,7 @@ textarea:focus-visible {
 }
 
 .desktop-agent-status-card {
+  box-sizing: border-box;
   margin: 16px auto;
   padding: 18px;
   max-width: 760px;
@@ -14485,6 +14486,24 @@ textarea:focus-visible {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.desktop-agent-latest-reply {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, var(--border-subtle));
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+}
+
+.desktop-agent-latest-reply-copy {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .desktop-agent-status-row {
@@ -16619,7 +16638,9 @@ textarea:focus-visible {
 
 .mobile-shell-parity .mobile-shell-stage.mobile-shell-stage-parity {
   display: flex;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
   border-radius: 18px;
   border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent);
   background:
@@ -16632,25 +16653,45 @@ textarea:focus-visible {
 }
 
 .mobile-shell-parity .mobile-terminal-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
+  overflow: hidden;
 }
 
 .mobile-shell-parity .mobile-terminal-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
   min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 .mobile-shell-parity .mobile-conversation-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   padding-top: 0;
+}
+
+.mobile-shell-parity .mobile-terminal-runtime.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .mobile-shell-parity .mobile-terminal-runtime.inline-panel-open {
   flex: 0 0 min(34vh, 280px);
   border-top: 1px solid color-mix(in srgb, var(--border-default) 48%, transparent);
+  visibility: visible;
 }
 
 .mobile-shell-parity .mobile-terminal-runtime.terminal-first {
   flex: 1 1 0;
   border-top: none;
+  visibility: visible;
 }
 
 .mobile-shell-parity .desktop-conversation-view {
@@ -16672,11 +16713,56 @@ textarea:focus-visible {
   padding-bottom: 12px;
 }
 
+.mobile-shell-parity .desktop-thread-inner.live-session-layout {
+  max-width: 100%;
+  padding: 10px 8px 14px;
+}
+
 .mobile-shell-parity .desktop-agent-status-card,
 .mobile-shell-parity .cc-assistant-bubble,
 .mobile-shell-parity .cc-user-bubble,
 .mobile-shell-parity .cc-error-bubble {
   border-radius: 14px;
+}
+
+.mobile-shell-parity .desktop-agent-status-card.live-session-card {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 12px;
+  gap: 10px;
+  border-radius: 12px;
+}
+
+.mobile-shell-parity .desktop-agent-status-card.live-session-card .desktop-conversation-header-main {
+  gap: 8px;
+}
+
+.mobile-shell-parity .desktop-agent-status-card.live-session-card .desktop-conversation-header-meta {
+  gap: 8px;
+}
+
+.mobile-shell-parity .desktop-agent-status-card.live-session-card .desktop-conversation-path-block {
+  min-width: 0;
+  width: 100%;
+}
+
+.mobile-shell-parity .desktop-agent-latest-reply {
+  padding: 10px;
+}
+
+.mobile-shell-parity .desktop-agent-latest-reply-copy {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mobile-shell-parity .desktop-agent-actions-row {
+  width: 100%;
+}
+
+.mobile-shell-parity .desktop-agent-action {
+  flex: 1 1 auto;
+  min-height: 36px;
 }
 
 .mobile-shell-parity .desktop-conversation-composer {
@@ -16700,6 +16786,28 @@ textarea:focus-visible {
 .mobile-shell-parity .status-composer-shell,
 .mobile-shell-parity .status-composer-footer-row {
   max-width: none;
+}
+
+.mobile-shell-parity .status-bar-meta-row {
+  align-items: stretch;
+}
+
+.mobile-shell-parity .status-bar-left {
+  display: none;
+}
+
+.mobile-shell-parity .status-bar-top-actions {
+  width: 100%;
+}
+
+.mobile-shell-parity .status-view-mode-toggle {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mobile-shell-parity .status-view-mode-option {
+  min-height: 30px;
+  white-space: normal;
 }
 
 .mobile-shell-parity .status-composer-shell {

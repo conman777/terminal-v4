@@ -9,7 +9,7 @@ const CODEX_MODEL_SQUASHED_RE = /gpt-5(?:\.\d+)?/i;
 
 function looksLikeSourceCodeLine(line) {
   return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
-    || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
+    || /(?:=>|\.match\(|\.test\(|expect\(|screen\.|queryByText|getByText|toBeInTheDocument|toHaveTextContent|\/\*|\*\/)/.test(line);
 }
 
 function compactText(value) {
@@ -227,6 +227,8 @@ function normalizeTranscriptReplyLine(line) {
   return String(line || '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\(B/g, '')
     .replace(/\s*\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)\s*/ig, ' ')
     .replace(/[┌┐└┘├┤─│╭╮╰╯═]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -246,10 +248,24 @@ function looksLikeTranscriptActivityLine(line) {
   if (/^\d+\s+more\b/i.test(trimmed)) return true;
   if (/^\+\d+\s+lines\b/i.test(trimmed)) return true;
   if (/^⎿/.test(trimmed)) return true;
+  if (/^name:\s*['"]?TimeoutError/i.test(trimmed)) return true;
+  if (/\bTimeoutError\b/i.test(trimmed)) return true;
+  if (/^\(no output\)/i.test(trimmed)) return true;
+  if (/\bWorking\s*\(/i.test(trimmed)) return true;
+  if (/Use \/skills to list available skills/i.test(trimmed)) return true;
+  if (/\bgpt-5(?:\.\d+)?\b/i.test(trimmed) && /\bgoal achieved\b/i.test(trimmed)) return true;
+  if (/https?:\/\/\S+\/api\/client-build/i.test(trimmed)) return true;
+  if (/"buildId"\s*:\s*"\/assets\//i.test(trimmed)) return true;
+  if (/\/assets\/index-[A-Za-z0-9_-]+\.(?:js|css)/i.test(trimmed)) return true;
+  if (/^index-[A-Za-z0-9_-]+\.(?:js|css)\b/i.test(trimmed)) return true;
+  if (/index-\[A-Za-z0-9_-\]\+/i.test(trimmed)) return true;
+  if (/…\s*\+\d+\s+lines/i.test(trimmed)) return true;
+  if (/^\}\s*$/.test(trimmed)) return true;
   return [
     /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Updated Plan)\b/i,
     /^(?:Bash|Read|Search|Update|Write|Edit)\(/i,
-    /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
+    /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest|systemctl|sudo)\s+/i,
+    /\b\/bin\/systemctl\b/i,
     /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
   ].some((pattern) => pattern.test(trimmed));
 }
@@ -259,6 +275,9 @@ function looksLikeUsefulTranscriptReplyLine(line) {
   if (trimmed.length < 12) return false;
   if (looksLikeTranscriptActivityLine(line)) return false;
   if (/^(?:Inspect|Clean generated artifacts|Run tests|Commit and push)\b/i.test(trimmed)) return false;
+  const hasSentenceSignal = /[.!?]$/.test(trimmed)
+    || /\b(?:I|I've|I’m|I found|The fix|Done|Fixed|Verified|Committed|Pushed|Mobile changes|Latest-build behavior)\b/i.test(trimmed);
+  if (!hasSentenceSignal) return false;
 
   const letters = (trimmed.match(/[A-Za-z]/g) ?? []).length;
   return letters / trimmed.length > 0.45;
@@ -407,7 +426,6 @@ function buildVisibleTurns(turns, aiType) {
     if (turn.role === 'assistant') {
       const assistantContent = sanitizeAssistantTurnContent(turn.content, aiType);
       if (!assistantContent) continue;
-      if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
       if (looksLikeRawTranscriptDump(assistantContent)) {
         const latestReply = extractLatestAssistantReplyFromRawTranscript(assistantContent);
         if (latestReply) {
@@ -416,6 +434,7 @@ function buildVisibleTurns(turns, aiType) {
         visibleTurns.push({ ...turn, role: 'assistant_activity', content: assistantContent });
         continue;
       }
+      if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
       visibleTurns.push({ ...turn, content: assistantContent });
       continue;
     }
@@ -649,6 +668,9 @@ export function DesktopConversationView({
   const hasVisibleTurns = displayTurns.length > 0 || hasStructuredActivity;
   const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
   const showTerminalStartupCard = !isStructured && displayTurns.length === 0 && !isLoadingHistory;
+  const latestLiveTranscriptReply = !isStructured && !hasVisibleTurns && !isLoadingHistory && !interactivePrompt
+    ? extractLatestAssistantReplyFromRawTranscript(terminalPreview)
+    : '';
   const showInlineInteractivePrompt = showInteractivePromptBlock && !showTerminalStartupCard;
   const shouldRenderHeader = !showTerminalStartupCard;
   const showPromptCopyInStartupPanel = !(showTerminalStartupCard && isTerminalDockVisible);
@@ -890,6 +912,14 @@ export function DesktopConversationView({
                   )}
                 </>
               )}
+
+              {showTerminalStartupCard && latestLiveTranscriptReply && (
+                <div className="desktop-agent-latest-reply">
+                  <span className="desktop-cli-focus-section-label">Latest reply</span>
+                  <p className="desktop-agent-latest-reply-copy">{latestLiveTranscriptReply}</p>
+                </div>
+              )}
+
               {!showTerminalStartupCard && (
                 <pre className="dcv-startup-text">
                 <span className="dcv-startup-msg">{startupMessage}</span>

@@ -239,6 +239,19 @@ describe('MobileShell', () => {
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
   });
 
+  it('opens true raw terminal mode from the mobile Codex startup action', async () => {
+    renderMobileShell();
+
+    expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open terminal view' }));
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+  });
+
   it('switches into Codex UI when mobile detects a Codex runtime without saved metadata', async () => {
     renderMobileShell({ sessionAiTypes: {} });
 
@@ -319,5 +332,7 @@ describe('MobileShell', () => {
     expect(css).toMatch(/\.mobile-terminal-input\s*\{[\s\S]*font-size:\s*16px;/);
     expect(css).toMatch(/\.mobile-shell-parity \.desktop-conversation-input\s*\{[\s\S]*font-size:\s*16px;/);
     expect(css).toMatch(/\.mobile-shell-parity \.status-composer-input\s*\{[\s\S]*font-size:\s*16px;/);
+    expect(css).toMatch(/\.mobile-shell-parity \.status-view-mode-toggle\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
+    expect(css).toMatch(/\.mobile-shell-parity \.mobile-terminal-runtime\.is-hidden\s*\{[\s\S]*visibility:\s*hidden;/);
   });
 });

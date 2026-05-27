@@ -429,13 +429,17 @@ export const TerminalPane = memo(function TerminalPane({
     setViewModeNotice('');
   }, [isStructuredSession]);
 
-  const handleToggleTerminalViewMode = useCallback(() => {
+  const handleToggleTerminalViewMode = useCallback((nextMode) => {
     setTerminalViewMode((currentMode) => {
-      const nextMode = currentMode === 'terminal' ? 'codex' : 'terminal';
-      if (nextMode === 'codex') {
+      const resolvedNextMode = nextMode === 'terminal' || nextMode === 'codex'
+        ? nextMode
+        : currentMode === 'terminal'
+          ? 'codex'
+          : 'terminal';
+      if (resolvedNextMode === 'codex') {
         setIsTerminalPanelOpen(false);
       }
-      return nextMode;
+      return resolvedNextMode;
     });
     conversationFallbackRef.current = false;
     setIsNoticePersistent(false);

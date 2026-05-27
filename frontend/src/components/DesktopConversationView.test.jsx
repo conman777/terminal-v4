@@ -103,6 +103,36 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('lifts a readable reply from an initial Codex raw history dump', () => {
+    const transcriptDump = [
+      'OpenAI Codex (v0.110.0)',
+      'gpt-5.5 xhigh · 100% left · ~/terminal-v4',
+      ...Array.from({ length: 28 }, (_, index) => (
+        `Ran rg mobile ${index} lines (ctrl + t to view transcript)`
+      )),
+      'I found the mobile issue. The segmented control was not sending the selected mode.',
+      'I changed the handler so Raw Terminal and Codex UI switch cleanly.',
+      'https://127.0.0.1:3020/api/client-build {"buildId":"/assets/index-BDqSkRlS.js"}',
+      '/assets/index-BRRr3cFl.js /assets/index-3_XlP7SM.css',
+      '… +1 linesndex-[A-Za-z0-9_-]+\\.(js|css)',
+      '(no output)/bin/systemctl restart activeemctl is-active terminal-v4.service',
+      '200 expect(screen.queryByText(/Ran npm test/i)).not.toBeInTheDocument();'
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'assistant', content: transcriptDump, ts: 1 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByTestId('tool-call-assistant')).toHaveTextContent(/segmented control was not sending/i);
+    expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
+  });
+
   it('does not lift patch/source-code fragments as the latest Codex reply', () => {
     const transcriptDump = [
       ...Array.from({ length: 28 }, (_, index) => (
@@ -149,6 +179,31 @@ describe('DesktopConversationView', () => {
     render(<DesktopConversationView {...buildProps({ terminalPreview: 'line one\nline two' })} />);
     expect(screen.queryByText(/line one/)).not.toBeInTheDocument();
     expect(screen.queryByText(/line two/)).not.toBeInTheDocument();
+  });
+
+  it('shows a cleaned latest reply from live terminal output while waiting for turns', () => {
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          aiType: 'codex',
+          launchCommand: '',
+          terminalPreview: [
+            '• Ran npm test',
+            '  └ passed',
+            "name: 'TimeoutError'",
+            'Working(10m 46s esc to interrupt) · Use /skills to list available skills · gpt-5.5 xhigh · Goal achieved (11m)',
+            'I found the mobile control issue. The mode toggle was not passing its selected target.',
+            'The fix makes the status bar switch into raw terminal correctly.',
+            '─ Worked for 2m 02s ─'
+          ].join('\n')
+        })}
+      />
+    );
+
+    expect(screen.getByText('Latest reply')).toBeInTheDocument();
+    expect(screen.getByText(/mode toggle was not passing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Ran npm test/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/TimeoutError/i)).not.toBeInTheDocument();
   });
 
   it('does not render a live terminal screen snapshot inline by default', () => {

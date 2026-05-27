@@ -179,7 +179,7 @@ export function DesktopStatusBar({
 
   function handleTerminalViewModeSelect(nextMode) {
     if (nextMode === resolvedTerminalViewMode) return;
-    onToggleTerminalViewMode?.();
+    onToggleTerminalViewMode?.(nextMode);
   }
 
   function handleComposerTranscript(transcribedText) {

@@ -239,11 +239,20 @@ export function MobileShell({
   }, []);
 
   const handleOpenTerminalPanel = useCallback(() => {
+    if (!isStructuredSession) {
+      setTerminalViewMode('terminal');
+    }
     setIsTerminalPanelOpen(true);
-  }, []);
+  }, [isStructuredSession]);
 
   const handleTerminalViewModeSelect = useCallback((nextMode) => {
-    setTerminalViewMode(nextMode === 'terminal' ? 'terminal' : 'codex');
+    setTerminalViewMode((currentMode) => (
+      nextMode === 'terminal' || nextMode === 'codex'
+        ? nextMode
+        : currentMode === 'terminal'
+          ? 'codex'
+          : 'terminal'
+    ));
     setIsTerminalPanelOpen(false);
   }, []);
 

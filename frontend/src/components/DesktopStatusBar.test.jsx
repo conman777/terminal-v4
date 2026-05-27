@@ -106,7 +106,7 @@ describe('DesktopStatusBar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show Raw Terminal' }));
 
-    expect(onToggleTerminalViewMode).toHaveBeenCalledTimes(1);
+    expect(onToggleTerminalViewMode).toHaveBeenCalledWith('terminal');
   });
 
   it('marks the raw terminal mode option active', () => {
