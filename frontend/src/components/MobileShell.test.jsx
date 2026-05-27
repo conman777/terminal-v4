@@ -12,14 +12,23 @@ const mockCheckoutSessionGitBranch = vi.fn(() => Promise.resolve({ branches: [],
 vi.mock('./TerminalChat', () => ({
   TerminalChat(props) {
     return (
-      <div
-        data-testid="terminal-chat"
-        data-session-id={props.sessionId}
-        data-surface={props.surface}
-        data-input-enabled={props.inputEnabled === false ? 'false' : 'true'}
-      />
-    );
-  },
+	  <div
+	    data-testid="terminal-chat"
+	    data-session-id={props.sessionId}
+	    data-surface={props.surface}
+	    data-input-enabled={props.inputEnabled === false ? 'false' : 'true'}
+	  >
+	    <button
+	      type="button"
+	      onClick={() => props.onScreenSnapshot?.({
+	        text: 'OpenAI Codex (v0.110.0)\ngpt-5.5 xhigh · 100% left · ~/terminal-v4'
+	      })}
+	    >
+	      mark-codex-screen
+	    </button>
+	  </div>
+	);
+      },
 }));
 
 vi.mock('./DesktopConversationView', () => ({
@@ -228,6 +237,20 @@ describe('MobileShell', () => {
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+  });
+
+  it('switches into Codex UI when mobile detects a Codex runtime without saved metadata', async () => {
+    renderMobileShell({ sessionAiTypes: {} });
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'mark-codex-screen' }));
+
+    expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'true');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
   });
 
   it('uses the desktop structured-session flow and can open the inline terminal', async () => {

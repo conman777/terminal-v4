@@ -84,18 +84,19 @@ export function MobileShell({
     [activeSessionId, sessions]
   );
   const isStructuredSession = isStructuredSessionId(currentSession?.id);
-  const currentAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
+  const inferredAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
   const aiOptions = useMemo(
     () => getAiTypeOptions(customAiProviders),
     [customAiProviders]
   );
+  const runtimeInfo = useMemo(
+    () => parseTerminalRuntimeInfo(terminalScreenSnapshot || terminalPreview, inferredAiType),
+    [inferredAiType, terminalPreview, terminalScreenSnapshot]
+  );
+  const currentAiType = inferredAiType ?? runtimeInfo?.providerId ?? null;
   const launchCommand = useMemo(
     () => getAiInitialCommand(currentAiType, customAiProviders),
     [currentAiType, customAiProviders]
-  );
-  const runtimeInfo = useMemo(
-    () => parseTerminalRuntimeInfo(terminalScreenSnapshot || terminalPreview, currentAiType),
-    [currentAiType, terminalPreview, terminalScreenSnapshot]
   );
   const isTerminalBackedSession = Boolean(currentSession?.id) && !isStructuredSession;
   const supportsAgentInterface = isTerminalBackedSession && Boolean(currentAiType);
