@@ -35,6 +35,7 @@ import { apiFetch } from './utils/api';
 import {
   createCustomAiProvider,
   getNewTabAiOptions,
+  normalizeAiType,
   shouldCreateStructuredSession
 } from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
@@ -575,10 +576,49 @@ function AppContent() {
     try { return JSON.parse(localStorage.getItem('sessionAiTypes') || '{}'); }
     catch { return {}; }
   });
+  const migratedSessionAiTypesRef = useRef(new Set());
   const [customAiProviders, setCustomAiProviders] = useState(() => {
     try { return JSON.parse(localStorage.getItem('customAiProviders') || '[]'); }
     catch { return []; }
   });
+
+  useEffect(() => {
+    if (!Array.isArray(sessions) || sessions.length === 0) return;
+
+    const serverAiTypes = {};
+    const localMigrations = [];
+
+    sessions.forEach((session) => {
+      const sessionId = session?.id;
+      if (!sessionId || String(sessionId).startsWith('ss-')) return;
+
+      const serverAiType = normalizeAiType(session.thread?.aiType);
+      const localAiType = normalizeAiType(sessionAiTypes?.[sessionId]);
+
+      if (serverAiType && sessionAiTypes?.[sessionId] !== serverAiType) {
+        serverAiTypes[sessionId] = serverAiType;
+      }
+
+      if (!serverAiType && localAiType && !migratedSessionAiTypesRef.current.has(sessionId)) {
+        localMigrations.push({ sessionId, aiType: localAiType });
+      }
+    });
+
+    if (Object.keys(serverAiTypes).length > 0) {
+      setSessionAiTypes((current) => {
+        const next = { ...current, ...serverAiTypes };
+        localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+        return next;
+      });
+    }
+
+    localMigrations.forEach(({ sessionId, aiType }) => {
+      migratedSessionAiTypesRef.current.add(sessionId);
+      updateThreadMetadata(sessionId, { aiType }).catch(() => {
+        migratedSessionAiTypesRef.current.delete(sessionId);
+      });
+    });
+  }, [sessions, sessionAiTypes, updateThreadMetadata]);
 
   // Tab reorder state - stores session IDs in user-defined order, persisted server-side
   const [tabOrder, setTabOrder] = useState([]);
@@ -1068,23 +1108,26 @@ function AppContent() {
             localStorage.setItem('sessionAiTypes', JSON.stringify(next));
             return next;
           });
+          void updateThreadMetadata(session.id, { aiType: aiOptionId }).catch(() => {});
         }
       }
     } catch { /* createSession already logs */ }
-  }, [addSessionToDesktop, addSidebarProject, createSession, createStructuredSession, customAiProviders]);
+  }, [addSessionToDesktop, addSidebarProject, createSession, createStructuredSession, customAiProviders, updateThreadMetadata]);
 
   const handleSetSessionAiType = useCallback((sessionId, aiType) => {
+    const normalizedAiType = normalizeAiType(aiType);
     setSessionAiTypes(prev => {
       const next = { ...prev };
-      if (aiType) {
-        next[sessionId] = aiType;
+      if (normalizedAiType) {
+        next[sessionId] = normalizedAiType;
       } else {
         delete next[sessionId];
       }
       localStorage.setItem('sessionAiTypes', JSON.stringify(next));
       return next;
     });
-  }, []);
+    void updateThreadMetadata(sessionId, { aiType: normalizedAiType }).catch(() => {});
+  }, [updateThreadMetadata]);
 
   const handleAddCustomAiProvider = useCallback((label, command) => {
     const provider = createCustomAiProvider(label, command, customAiProviders);

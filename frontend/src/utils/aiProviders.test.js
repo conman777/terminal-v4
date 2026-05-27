@@ -81,6 +81,7 @@ describe('aiProviders', () => {
 
   it('infers a provider from session shell or title when explicit aiType is missing', () => {
     expect(inferSessionAiType({ shell: 'claude', title: 'Terminal 1' })).toBe('claude');
+    expect(inferSessionAiType({ shell: 'bash', thread: { aiType: 'codex' } })).toBe('codex');
     expect(inferSessionAiType({ title: 'OpenAI Codex' })).toBe('codex');
     expect(inferSessionAiType({ shell: 'pwsh', title: 'Gemini CLI' })).toBe('gemini');
   });

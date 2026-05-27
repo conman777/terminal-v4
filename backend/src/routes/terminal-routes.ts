@@ -11,6 +11,7 @@ import { isValidIdentifier } from '../utils/path-security';
 import type { CoreRouteDependencies, TerminalIdParams } from './types';
 import { verifyAccessToken, isAllowedUsername } from '../auth/auth-service';
 import { getUserSandboxDefaultMode } from './settings-routes';
+import { captureTmuxPane } from '../terminal/tmux-manager';
 
 const TERMINAL_WS_MAX_BUFFERED_BYTES = (() => {
   const parsed = Number.parseInt(process.env.TERMINAL_WS_MAX_BUFFERED_BYTES || '', 10);
@@ -179,8 +180,8 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
     const snapshot = deps.terminalManager.getSession(userId, request.params.id, {
-      historyChars: 5_000_000,
-      historyEvents: 20_000,
+      maxHistoryChars: 5_000_000,
+      maxHistoryEvents: 20_000,
       includeHistory: true
     });
     if (!snapshot) {
@@ -188,7 +189,13 @@ export async function registerTerminalRoutes(app: FastifyInstance, deps: CoreRou
       return;
     }
     const { buildTurnsFromHistory } = await import('../terminal/turn-detector.js');
-    const turns = buildTurnsFromHistory(snapshot.history || []);
+    let turns = buildTurnsFromHistory(snapshot.history || []);
+    if (turns.length === 0 && snapshot.usesTmux) {
+      const tmuxCapture = captureTmuxPane(request.params.id);
+      if (tmuxCapture) {
+        turns = buildTurnsFromHistory([{ text: tmuxCapture, ts: Date.now() }]);
+      }
+    }
     reply.send({ turns });
   });
 

@@ -9,11 +9,11 @@ describe('ToolCallBlock', () => {
         item={{
           type: 'assistant_activity',
           content: [
-            'Ran npm --prefix frontend test -- --run (ctrl + t to view transcript)',
-            'Read frontend/src/styles.css +120 lines',
-            'Opened screenshot-2026-05-27T19-03-56.png in browser',
-            'Started Vite dev server on http://127.0.0.1:5173',
-            'Ran git status -sb',
+            '• Ran npm --prefix frontend test -- --run (ctrl + t to view transcript)',
+            '• Read frontend/src/styles.css +120 lines',
+            '• Opened screenshot-2026-05-27T19-03-56.png in browser',
+            '• Started Vite dev server on http://127.0.0.1:5173',
+            '• Ran git status -sb',
           ].join('\n'),
         }}
       />

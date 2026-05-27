@@ -4,6 +4,14 @@ function compactText(value) {
     .trim();
 }
 
+const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;
+const CODEX_EFFORT_RE = /\b(xhigh|high|medium|low)\b/i;
+
+function looksLikeSourceCodeLine(line) {
+  return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
+    || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
+}
+
 function parseClaudeRuntimeInfo(lines) {
   const statusLine = lines.find((line) => (
     /\bCtx:\s*\d+%/i.test(line)
@@ -24,11 +32,18 @@ function parseClaudeRuntimeInfo(lines) {
 }
 
 function parseCodexRuntimeInfo(lines) {
-  const statusLine = lines.find((line) => /\bgpt-5\.4\b/i.test(line) && /\b\d+%\s+left\b/i.test(line))
-    || lines.find((line) => /\bmodel:\b/i.test(line) && /\b\d+%\s+left\b/i.test(line));
+  const statusLine = lines.find((line) => (
+    !looksLikeSourceCodeLine(line)
+    && CODEX_MODEL_RE.test(line)
+    && (
+      /\b\d+%\s+left\b/i.test(line)
+      || CODEX_EFFORT_RE.test(line)
+      || /(?:^|\s|·)\s*(?:~[\\/]|\/|[A-Za-z]:[\\/])/.test(line)
+    )
+  )) || lines.find((line) => !looksLikeSourceCodeLine(line) && /\bmodel:\b/i.test(line) && CODEX_MODEL_RE.test(line));
   if (!statusLine) return null;
 
-  const modelMatch = statusLine.match(/\b(gpt-5\.4(?:\s+(?!\d+%)[a-z0-9.-]+)*)/i);
+  const modelMatch = statusLine.match(/\b(gpt-5(?:\.\d+)?(?:\s+(?:xhigh|high|medium|low))?)/i);
   const leftMatch = statusLine.match(/\b(\d+%\s+left)\b/i);
 
   return {

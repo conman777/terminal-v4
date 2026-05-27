@@ -103,6 +103,35 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('does not lift patch/source-code fragments as the latest Codex reply', () => {
+    const transcriptDump = [
+      ...Array.from({ length: 28 }, (_, index) => (
+        `Ran npm test ${index} lines (ctrl + t to view transcript)`
+      )),
+      'I found the broken Codex card. The live pane backfill was showing terminal output instead of the reply.',
+      'The fix keeps terminal activity out of the main conversation.',
+      '377 +    if (hasCodexCompletionBoundary(stripped)) {',
+      '488    flush();',
+      '489 +  if (turns.length === 0 && hasCodexSessionEvidence(stripped)) {',
+      '490 +    const content = extractContent(combined);'
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: 'why does the codex ui look broken', ts: 1 },
+            { role: 'assistant', content: transcriptDump, ts: 2 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByTestId('tool-call-assistant')).toHaveTextContent(/broken Codex card/i);
+    expect(screen.getByTestId('tool-call-assistant')).not.toHaveTextContent(/extractContent\(combined\)/i);
+    expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
+  });
+
   it('does not render an inline composer (V4 status bar composer is the single input)', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();
@@ -116,10 +145,10 @@ describe('DesktopConversationView', () => {
     expect(onLaunchAgent).toHaveBeenCalledTimes(1);
   });
 
-  it('renders background preview output in startup card', () => {
+  it('keeps raw terminal preview output out of the agent startup card', () => {
     render(<DesktopConversationView {...buildProps({ terminalPreview: 'line one\nline two' })} />);
-    expect(screen.getByText(/line one/)).toBeInTheDocument();
-    expect(screen.getByText(/line two/)).toBeInTheDocument();
+    expect(screen.queryByText(/line one/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/line two/)).not.toBeInTheDocument();
   });
 
   it('does not render a live terminal screen snapshot inline by default', () => {

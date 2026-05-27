@@ -329,3 +329,17 @@ export function getTmuxSessionCwd(sessionId: string): string | null {
     return null;
   }
 }
+
+export function captureTmuxPane(sessionId: string, lines = 240): string | null {
+  const sessionName = getTmuxSessionName(sessionId);
+  const safeLines = Number.isFinite(lines) && lines > 0 ? Math.min(Math.floor(lines), 2000) : 240;
+  try {
+    const output = execFileSync('tmux', ['capture-pane', '-t', sessionName, '-p', '-S', `-${safeLines}`], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    return output.trim() || null;
+  } catch {
+    return null;
+  }
+}

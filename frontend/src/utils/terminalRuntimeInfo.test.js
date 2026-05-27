@@ -23,6 +23,17 @@ describe('parseTerminalRuntimeInfo', () => {
     });
   });
 
+  it('auto-detects current Codex status lines without percent-left text', () => {
+    expect(parseTerminalRuntimeInfo('gpt-5.5 xhigh · ~/terminal-v4 Goal achieved (2s)')).toEqual({
+      providerId: 'codex',
+      label: 'gpt-5.5 xhigh'
+    });
+  });
+
+  it('ignores source code lines that contain Codex model regexes', () => {
+    expect(parseTerminalRuntimeInfo('31 - const modelMatch = statusLine.match(/\\b(gpt-5(?:\\.\\d+)?(?:\\s+(?:xhigh|high|medium|low))?)/i);')).toBeNull();
+  });
+
   it('returns null when no recognizable runtime info exists', () => {
     expect(parseTerminalRuntimeInfo('C:\\repo>', 'codex')).toBeNull();
   });

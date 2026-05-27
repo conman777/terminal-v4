@@ -363,7 +363,7 @@ function normalizeActivityLine(line) {
     .split('\n')
     .join(' ')
     .replace(/\s+/g, ' ')
-    .replace(/^[-*]\s+/, '')
+    .replace(/^[-*•●]\s+/, '')
     .trim();
 }
 

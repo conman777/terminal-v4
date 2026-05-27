@@ -303,6 +303,7 @@ export function inferSessionAiType(session, explicitAiType = null) {
 
   return (
     inferAiTypeFromText(session.aiType)
+    || inferAiTypeFromText(session.thread?.aiType)
     || inferAiTypeFromText(session.shell)
     || inferAiTypeFromText(session.title)
     || inferAiTypeFromText(session.thread?.topic)

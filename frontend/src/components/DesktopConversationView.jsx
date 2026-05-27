@@ -4,6 +4,14 @@ import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../u
 import { useConversationScroll } from '../hooks/useConversationScroll';
 import { parseInteractivePromptSnapshot, parseInteractivePromptEvent } from '../utils/interactivePrompt';
 
+const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;
+const CODEX_MODEL_SQUASHED_RE = /gpt-5(?:\.\d+)?/i;
+
+function looksLikeSourceCodeLine(line) {
+  return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
+    || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
+}
+
 function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
 }
@@ -147,7 +155,7 @@ function looksLikeCodexStartupLine(line, squashed) {
     || squashed.includes('bootingmcpserver')
     || squashed.includes('improvedocumentationin@filename')
     || squashed.includes('new2xrationlimitsuntil')
-    || ((squashed.includes('gpt-5.4high') || squashed.includes('gpt-5.4defalt')) && squashed.includes('100%left'))
+    || (CODEX_MODEL_SQUASHED_RE.test(squashed) && (squashed.includes('100%left') || /(?:xhigh|high|medium|low)/.test(squashed)))
     || (squashed.includes('model:') && squashed.includes('/modeltochange') && squashed.includes('100%left'))
   );
   return hasCodexStartupMarker && (/[^\x00-\x7F]/.test(line) || /\|/.test(line) || line.includes('\n') || squashed.includes('100%left'));
@@ -159,7 +167,7 @@ function looksLikeModelStatusFooter(line, squashed) {
     squashed.includes('opus4.6')
     || squashed.includes('sonnet4.6')
     || squashed.includes('claudemax')
-    || squashed.includes('gpt-5.4')
+    || CODEX_MODEL_SQUASHED_RE.test(squashed)
     || squashed.includes('session/')
     || squashed.includes('today/')
     || squashed.includes('/hr')
@@ -170,7 +178,7 @@ function looksLikeModelStatusFooter(line, squashed) {
 
 function stripModelStatusFooter(line) {
   return line
-    .replace(/\s+(?:[|│]\s*)?(?:[🪟💰🔥🧠]\s*)?(?:Opus 4\.6|Sonnet 4\.6|gpt-5\.4)\b[\s\S]*$/i, '')
+    .replace(/\s+(?:[|│]\s*)?(?:[🪟💰🔥🧠]\s*)?(?:Opus 4\.6|Sonnet 4\.6|gpt-5(?:\.\d+)?)\b[\s\S]*$/i, '')
     .trim();
 }
 
@@ -229,7 +237,12 @@ function normalizeTranscriptReplyLine(line) {
 function looksLikeTranscriptActivityLine(line) {
   const trimmed = normalizeTranscriptReplyLine(line);
   if (!trimmed) return true;
+  if (looksLikeSourceCodeLine(trimmed)) return true;
   if (/^[A-Za-z]?\s*[✓✔□☐☑]\s+/.test(trimmed)) return true;
+  if (/^\d+\s+[+-]\s/.test(trimmed)) return true;
+  if (/^[+-]\s*(?:const|let|var|function|return|export|import|if|else|for|while|try|catch)\b/.test(trimmed)) return true;
+  if (/^\d+\s{2,}.*[{}();=]/.test(trimmed)) return true;
+  if (/^(?:@@|[⋮│])/.test(trimmed)) return true;
   if (/^\d+\s+more\b/i.test(trimmed)) return true;
   if (/^\+\d+\s+lines\b/i.test(trimmed)) return true;
   if (/^⎿/.test(trimmed)) return true;
@@ -463,12 +476,12 @@ function extractLiveRuntimeLabel(lines, aiType) {
   const runtimePatterns = aiType === 'claude'
     ? [/\b(Opus 4\.6|Sonnet 4\.6|Claude Max)\b/i]
     : aiType === 'codex'
-      ? [/\bgpt-5\.4\b/i, /\b\d+%\s+left\b/i]
+      ? [CODEX_MODEL_RE]
       : aiType === 'gemini'
         ? [/\bGemini\b/i, /\b(context|ctx|token)\b/i]
-        : [/\b(Opus 4\.6|Sonnet 4\.6|Claude Max|gpt-5\.4|Gemini)\b/i];
+        : [/\b(Opus 4\.6|Sonnet 4\.6|Claude Max|gpt-5(?:\.\d+)?|Gemini)\b/i];
 
-  return lines.find((line) => runtimePatterns.every((pattern) => pattern.test(line))) || '';
+  return lines.find((line) => !looksLikeSourceCodeLine(line) && runtimePatterns.every((pattern) => pattern.test(line))) || '';
 }
 
 function extractLiveSessionIssues(lines, interactivePrompt) {
@@ -639,7 +652,9 @@ export function DesktopConversationView({
   const showInlineInteractivePrompt = showInteractivePromptBlock && !showTerminalStartupCard;
   const shouldRenderHeader = !showTerminalStartupCard;
   const showPromptCopyInStartupPanel = !(showTerminalStartupCard && isTerminalDockVisible);
-  const showTerminalPreviewInStartupCard = Boolean(terminalPreview) && !(showTerminalStartupCard && isTerminalDockVisible);
+  const showTerminalPreviewInStartupCard = Boolean(terminalPreview)
+    && !(showTerminalStartupCard && isTerminalDockVisible)
+    && !(showTerminalStartupCard && aiType);
   const showLaunchButton = Boolean(launchCommand && (!showTerminalStartupCard || !hasLiveSessionEvidence));
   const showOpenTerminalButton = Boolean(!isStructured && onOpenTerminal && !isTerminalDockVisible);
   const hasStartupActions = showLaunchButton || showOpenTerminalButton;

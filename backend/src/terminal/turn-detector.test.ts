@@ -191,4 +191,61 @@ describe('buildTurnsFromHistory', () => {
     detector.dispose();
     vi.useRealTimers();
   });
+
+  it('flushes completed Codex output when the idle status footer appears', () => {
+    vi.useFakeTimers();
+    const turns = [];
+    const detector = new TurnDetector((turn) => turns.push(turn));
+
+    detector.onPtyOutput([
+      'Verified:',
+      '- Service is active.',
+      '- Live frontend now serves /assets/index-CY94_W2u.js.',
+      'gpt-5.5 xhigh · ~/terminal-v4 Goal achieved (2s)'
+    ].join('\n'), 13_000);
+
+    vi.advanceTimersByTime(600);
+
+    expect(turns).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          'Verified:',
+          '- Service is active.',
+          '- Live frontend now serves /assets/index-CY94_W2u.js.'
+        ].join('\n'),
+        ts: 13_000
+      }
+    ]);
+
+    detector.dispose();
+    vi.useRealTimers();
+  });
+
+  it('backfills Codex screen captures without leaking status footer chrome', () => {
+    const turns = buildTurnsFromHistory([
+      {
+        text: [
+          'Verified:',
+          '- Service is active.',
+          '- Live frontend now serves /assets/index-CY94_W2u.js.',
+          '› Use /skills to list available skills',
+          'gpt-5.5 xhigh · ~/terminal-v4 Goal achieved (2s)'
+        ].join('\n'),
+        ts: 14_000
+      }
+    ]);
+
+    expect(turns).toEqual([
+      {
+        role: 'assistant',
+        content: [
+          'Verified:',
+          '- Service is active.',
+          '- Live frontend now serves /assets/index-CY94_W2u.js.'
+        ].join('\n'),
+        ts: 14_000
+      }
+    ]);
+  });
 });

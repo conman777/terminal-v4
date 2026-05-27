@@ -20,6 +20,8 @@ export interface ChatTurn {
 
 // A line that consists only of Claude Code's prompt character signals end-of-response.
 const PROMPT_ONLY_LINE_RE = /^\s*[>❯]\s*$/m;
+const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;
+const CODEX_EFFORT_RE = /\b(?:xhigh|high|medium|low)\b/i;
 
 // Debounce interval before checking for the prompt after PTY output stops.
 const IDLE_TIMEOUT_MS = 500;
@@ -60,6 +62,9 @@ function isUiChrome(line: string): boolean {
   if (/^(Waiting…|Running…)\s*$/.test(t)) return true;
   if (/^Added \d+ lines?$/.test(t)) return true;
   if (/^Next: /.test(t)) return true;
+  if (/^Use \/skills to list available skills$/i.test(t)) return true;
+  if (/^›\s*Use \/skills to list available skills$/i.test(t)) return true;
+  if (looksLikeCodexStatusLine(t)) return true;
   if (/^\s*[>❯]\s*$/.test(t)) return true;
   if (/^\s*[>❯]\s+/.test(t)) return true;
   if (/^\s*[>❯]\s*[─\-]{10,}/.test(t)) return true;
@@ -75,7 +80,7 @@ function isUiChrome(line: string): boolean {
       squashed.includes('opus4.6')
       || squashed.includes('sonnet4.6')
       || squashed.includes('claudemax')
-      || squashed.includes('gpt-5.4')
+      || CODEX_MODEL_RE.test(t)
       || squashed.includes('session/')
       || squashed.includes('today/')
       || squashed.includes('/hr')
@@ -88,6 +93,35 @@ function isUiChrome(line: string): boolean {
 
 function squash(value: string): string {
   return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function looksLikeSourceCodeLine(line: string): boolean {
+  return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
+    || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
+}
+
+function looksLikeCodexStatusLine(line: string): boolean {
+  if (looksLikeSourceCodeLine(line)) return false;
+  if (!CODEX_MODEL_RE.test(line)) return false;
+  if (!CODEX_EFFORT_RE.test(line) && !/\b\d+%\s+left\b/i.test(line)) return false;
+  return (
+    /[·|]/.test(line)
+    || /(?:^|\s)(?:~[\\/]|\/|[A-Za-z]:[\\/])/.test(line)
+    || /\b(goal achieved|worked for|esc to interrupt)\b/i.test(line)
+  );
+}
+
+function hasCodexCompletionBoundary(text: string): boolean {
+  return text
+    .split('\n')
+    .map(applyCarriageReturns)
+    .some((line) => looksLikeCodexStatusLine(line) && !/\besc to interrupt\b/i.test(line));
+}
+
+function hasCodexSessionEvidence(text: string): boolean {
+  return /\bOpenAI Codex\b/i.test(text)
+    || /\bcodex\b/i.test(text)
+    || hasCodexCompletionBoundary(text);
 }
 
 function fingerprint(value: string): string {
@@ -340,7 +374,11 @@ export class TurnDetector {
   private checkAndFlush(): void {
     if (!this.outputBuffer) return;
     const stripped = stripAnsi(this.outputBuffer);
-    if (PROMPT_ONLY_LINE_RE.test(stripped) || buildInteractivePromptEvent(extractContent(this.outputBuffer, this.recentUserInputs), this.lastOutputTs)) {
+    if (
+      PROMPT_ONLY_LINE_RE.test(stripped)
+      || hasCodexCompletionBoundary(stripped)
+      || buildInteractivePromptEvent(extractContent(this.outputBuffer, this.recentUserInputs), this.lastOutputTs)
+    ) {
       this.flushAssistant();
     }
   }
@@ -448,5 +486,11 @@ export function buildTurnsFromHistory(
   }
 
   flush();
+  if (turns.length === 0 && hasCodexSessionEvidence(stripped)) {
+    const content = extractContent(combined);
+    if (content && !isInteractiveSafetyPrompt(content)) {
+      turns.push({ role: 'assistant', content, ts: lastTs });
+    }
+  }
   return turns;
 }
