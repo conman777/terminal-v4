@@ -7,6 +7,7 @@ const PUBLIC_ROUTES = [
   '/api/auth/login',
   '/api/auth/refresh',
   '/api/health',
+  '/api/client-build',
   '/api/auth/passkey/authenticate/begin',
   '/api/auth/passkey/authenticate/complete'
 ];

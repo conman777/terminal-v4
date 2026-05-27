@@ -37,12 +37,14 @@ vi.mock('./DesktopConversationView', () => ({
 vi.mock('./DesktopStatusBar', () => ({
   DesktopStatusBar(props) {
     return (
-      <div
-        data-testid="desktop-status-bar"
-        data-connection-state={props.connectionState}
-        data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
-        data-show-terminal-toggle={props.showTerminalToggle ? 'true' : 'false'}
-      >
+	  <div
+	    data-testid="desktop-status-bar"
+	    data-connection-state={props.connectionState}
+	    data-terminal-open={props.isTerminalPanelOpen ? 'true' : 'false'}
+	    data-show-terminal-toggle={props.showTerminalToggle ? 'true' : 'false'}
+	    data-show-terminal-view-mode-toggle={props.showTerminalViewModeToggle ? 'true' : 'false'}
+	    data-terminal-view-mode={props.terminalViewMode}
+	  >
         <textarea
           aria-label="Command composer"
           placeholder={props.composerPlaceholder}
@@ -52,12 +54,22 @@ vi.mock('./DesktopStatusBar', () => ({
         <button type="button" onClick={() => props.onComposerSubmit?.(props.composerValue)}>
           Send composer
         </button>
-        {props.showTerminalToggle ? (
-          <button type="button" onClick={() => props.onToggleTerminalPanel?.()}>
-            Toggle terminal
-          </button>
-        ) : null}
-      </div>
+	    {props.showTerminalToggle ? (
+	      <button type="button" onClick={() => props.onToggleTerminalPanel?.()}>
+	        Toggle terminal
+	      </button>
+	    ) : null}
+	    {props.showTerminalViewModeToggle ? (
+	      <>
+	        <button type="button" onClick={() => props.onToggleTerminalViewMode?.('codex')}>
+	          Codex UI
+	        </button>
+	        <button type="button" onClick={() => props.onToggleTerminalViewMode?.('terminal')}>
+	          Raw Terminal
+	        </button>
+	      </>
+	    ) : null}
+	  </div>
     );
   },
 }));
@@ -183,17 +195,21 @@ describe('MobileShell', () => {
     mockCheckoutSessionGitBranch.mockClear();
   });
 
-  it('uses the desktop composer flow for terminal-first mobile sessions', async () => {
+  it('uses the Codex conversation flow for mobile AI sessions and keeps the raw terminal hidden', async () => {
     const mobileChatState = createMobileChatTurnsState();
     mockUseMobileChatTurns.mockReturnValue(mobileChatState);
 
     renderMobileShell();
 
-    expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'session-a', chatMode: true });
-    const terminalChat = await screen.findByTestId('terminal-chat');
-    expect(terminalChat).toHaveAttribute('data-session-id', 'session-a');
-    expect(terminalChat).toHaveAttribute('data-surface', 'mobile');
-    expect(screen.getByPlaceholderText('Ask V4 anything')).toBeInTheDocument();
+	expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'session-a', chatMode: true });
+	expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
+	const terminalChat = await screen.findByTestId('terminal-chat');
+	expect(terminalChat).toHaveAttribute('data-session-id', 'session-a');
+	expect(terminalChat).toHaveAttribute('data-surface', 'mobile');
+	expect(terminalChat).toHaveAttribute('data-input-enabled', 'false');
+	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'true');
+	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
+	expect(screen.getByPlaceholderText('Ask V4 anything')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Command composer'), {
       target: { value: 'Fix the mobile composer layout' },
@@ -201,6 +217,17 @@ describe('MobileShell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send composer' }));
 
     expect(mobileChatState.handleChatSend).toHaveBeenCalledWith('Fix the mobile composer layout');
+  });
+
+  it('can switch a mobile AI session back to the raw terminal view', async () => {
+    renderMobileShell();
+
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Raw Terminal' }));
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
   });
 
   it('uses the desktop structured-session flow and can open the inline terminal', async () => {
@@ -254,6 +281,7 @@ describe('MobileShell', () => {
       accessoryOpen: true,
       onViewChange,
       onChatModeChange,
+      sessionAiTypes: {},
     });
 
     expect(onViewChange).not.toHaveBeenCalled();

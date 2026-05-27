@@ -5,8 +5,11 @@ import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { apiFetch } from '../utils/api';
 import { useConversationScroll } from '../hooks/useConversationScroll';
+import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
 import { quoteTerminalPath } from '../utils/mobileTerminalInput';
 import './MobileChatView.css';
+
+const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;
 
 function SparkleIcon({ size = 14 }) {
   return (
@@ -14,6 +17,192 @@ function SparkleIcon({ size = 14 }) {
       <path d="M12 2L9.5 9.5 2 12l7.5 2.5L12 22l2.5-7.5L22 12l-7.5-2.5z" />
     </svg>
   );
+}
+
+function compactText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '');
+}
+
+function looksLikeSourceCodeLine(line) {
+  return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
+    || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
+}
+
+function isLaunchCommand(content, aiType) {
+  const normalized = String(content || '').trim().toLowerCase();
+  if (!normalized) return false;
+
+  const firstToken = normalized.split(/\s+/, 1)[0];
+  if (COMMON_LAUNCH_PREFIXES.includes(firstToken)) return true;
+
+  const normalizedAiType = normalizeAiType(aiType);
+  return Boolean(normalizedAiType && (normalized === normalizedAiType || normalized.startsWith(`${normalizedAiType} `)));
+}
+
+function isSlashCommandOnlyTurn(content) {
+  return /^\/[a-z0-9._:-]+$/i.test(String(content || '').trim());
+}
+
+function isShortFragmentTurn(content) {
+  return /^[a-z]{1,2}$/i.test(String(content || '').trim());
+}
+
+function looksLikeCodexStartupLine(line, squashed) {
+  return (
+    squashed.includes('openaicodex(v')
+    || squashed.includes('bootingmcpserver')
+    || squashed.includes('new2xrationlimitsuntil')
+    || (CODEX_MODEL_RE.test(line) && (squashed.includes('100%left') || /\b(?:xhigh|high|medium|low)\b/i.test(line)))
+    || (squashed.includes('model:') && squashed.includes('/modeltochange') && squashed.includes('100%left'))
+  );
+}
+
+function looksLikeModelStatusFooter(line, squashed) {
+  return (
+    (line.includes('|') || /[🪟💰🔥🧠]/u.test(line))
+    && (
+      squashed.includes('opus4.6')
+      || squashed.includes('sonnet4.6')
+      || squashed.includes('claudemax')
+      || CODEX_MODEL_RE.test(line)
+      || squashed.includes('session/')
+      || squashed.includes('today/')
+      || squashed.includes('/hr')
+      || squashed.includes('%left')
+      || /\$\d/.test(line)
+    )
+  );
+}
+
+function stripModelStatusFooter(line) {
+  return line
+    .replace(/\s+(?:[|│]\s*)?(?:[🪟💰🔥🧠]\s*)?(?:Opus 4\.6|Sonnet 4\.6|gpt-5(?:\.\d+)?)\b[\s\S]*$/i, '')
+    .trim();
+}
+
+function sanitizeAssistantContent(content, aiType) {
+  const lines = String(content || '').split('\n');
+  const normalizedLines = [];
+
+  for (const rawLine of lines) {
+    let trimmed = rawLine.trim();
+    if (!trimmed) continue;
+
+    trimmed = stripModelStatusFooter(trimmed);
+    if (!trimmed) continue;
+
+    const squashed = compactText(trimmed);
+    if (/^\s*[>❯]\s*$/.test(trimmed)) continue;
+    if (squashed.includes('microsoftwindows[version')) continue;
+    if (squashed.includes('microsoftcorporation.allrightsreserved')) continue;
+    if (squashed.includes('use/skillstolistavailableskills')) continue;
+    if (looksLikeModelStatusFooter(trimmed, squashed)) continue;
+
+    if (aiType === 'codex') {
+      if (/^codex\s+--yolo\b/i.test(trimmed)) continue;
+      if (looksLikeCodexStartupLine(trimmed, squashed)) continue;
+    }
+
+    normalizedLines.push(trimmed);
+  }
+
+  const deduped = [];
+  for (const line of normalizedLines) {
+    if (deduped[deduped.length - 1] !== line) deduped.push(line);
+  }
+  return deduped.join('\n').trim();
+}
+
+function normalizeTranscriptLine(line) {
+  return String(line || '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\s*\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)\s*/ig, ' ')
+    .replace(/[┌┐└┘├┤─│╭╮╰╯═]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[●•]\s*/, '')
+    .trim();
+}
+
+function looksLikeTranscriptActivityLine(line) {
+  const trimmed = normalizeTranscriptLine(line);
+  if (!trimmed) return true;
+  if (looksLikeSourceCodeLine(trimmed)) return true;
+  if (/^\d+\s+[+-]\s/.test(trimmed)) return true;
+  if (/^\d+\s{2,}.*[{}();=]/.test(trimmed)) return true;
+  if (/^(?:@@|[⋮│])/.test(trimmed)) return true;
+  if (/^\d+\s+more\b/i.test(trimmed)) return true;
+  if (/^\+\d+\s+lines\b/i.test(trimmed)) return true;
+  return [
+    /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Updated Plan)\b/i,
+    /^(?:Bash|Read|Search|Update|Write|Edit)\(/i,
+    /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest)\s+/i,
+    /\b(?:tests?\s+passed|tests?\s+failed|passed|failed)\b/i,
+  ].some((pattern) => pattern.test(trimmed));
+}
+
+function looksLikeRawTranscriptDump(content) {
+  const trimmed = String(content || '').trim();
+  const lines = trimmed.split('\n').map((line) => line.trim()).filter(Boolean);
+  if (trimmed.length < 1200 && lines.length < 28) return false;
+  const commandishLines = lines.filter((line) => (
+    /\b(?:Ran|Read|Edited|Wrote|Commit|Pushed|Opened|Searched)\b/.test(line)
+    || /\b(?:git|npm|node|curl|rg|sed)\s+/.test(line)
+  )).length;
+  return /\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)/i.test(trimmed)
+    || commandishLines >= 6
+    || lines.length >= 28;
+}
+
+function extractLatestReply(content) {
+  const blocks = [];
+  let currentBlock = [];
+
+  for (const line of String(content || '').split('\n')) {
+    if (!looksLikeTranscriptActivityLine(line)) {
+      currentBlock.push(normalizeTranscriptLine(line));
+      continue;
+    }
+    if (currentBlock.length > 0) {
+      blocks.push(currentBlock);
+      currentBlock = [];
+    }
+  }
+
+  if (currentBlock.length > 0) blocks.push(currentBlock);
+  const latestBlock = [...blocks].reverse().find((block) => block.join(' ').length >= 36);
+  return latestBlock ? latestBlock.slice(-8).join('\n').trim() : '';
+}
+
+function buildVisibleTurns(turns, aiType) {
+  const visibleTurns = [];
+
+  for (const turn of turns) {
+    const content = String(turn?.content || '').trim();
+    if (!content) continue;
+
+    if (turn.role === 'user') {
+      if (isLaunchCommand(content, aiType)) continue;
+      if (isSlashCommandOnlyTurn(content)) continue;
+      if (isShortFragmentTurn(content)) continue;
+      visibleTurns.push({ ...turn, content });
+      continue;
+    }
+
+    if (turn.role === 'assistant') {
+      const assistantContent = sanitizeAssistantContent(content, aiType);
+      if (!assistantContent) continue;
+
+      if (looksLikeRawTranscriptDump(assistantContent)) {
+        const latestReply = extractLatestReply(assistantContent);
+        if (latestReply) visibleTurns.push({ ...turn, content: latestReply });
+        continue;
+      }
+
+      visibleTurns.push({ ...turn, content: assistantContent });
+    }
+  }
+
+  return visibleTurns;
 }
 
 /**
@@ -71,11 +260,39 @@ export function MobileChatView({
   sessionId,
   isLoadingHistory = false,
   onViewportStateChange,
+  aiType = null,
+  runtimeInfo = null,
+  connectionState = 'connecting',
+  isSendReady = false,
+  terminalPreview = '',
+  terminalScreenSnapshot = '',
+  customAiProviders = [],
 }) {
   const { theme } = useTheme();
   const [inputValue, setInputValue] = useState('');
   const [isMicRecording, setIsMicRecording] = useState(false);
   const textareaRef = useRef(null);
+  const assistantLabel = getAiDisplayLabel(aiType, customAiProviders) || 'Assistant';
+  const visibleTurns = buildVisibleTurns(turns, aiType);
+  const hasTerminalEvidence = Boolean(
+    runtimeInfo?.label
+    || String(terminalPreview || '').trim()
+    || String(terminalScreenSnapshot || '').trim()
+  );
+  const statusLabel = connectionState === 'offline'
+    ? 'offline'
+    : connectionState === 'connecting'
+      ? 'connecting'
+      : isStreaming
+        ? 'running'
+        : !isSendReady
+          ? 'starting'
+          : 'ready';
+  const emptyCopy = isLoadingHistory
+    ? 'Loading session history...'
+    : hasTerminalEvidence
+      ? `Live terminal attached. ${assistantLabel} replies will appear here as clean chat turns.`
+      : `Send a message to start this ${assistantLabel} session.`;
   const {
     containerRef,
     bottomRef,
@@ -84,7 +301,7 @@ export function MobileChatView({
     jumpToBottom,
     markShouldStickToBottom,
   } = useConversationScroll({
-    deps: [turns, isStreaming],
+    deps: [visibleTurns, isStreaming],
     followBehavior: 'auto',
     onViewportStateChange,
   });
@@ -142,22 +359,28 @@ export function MobileChatView({
         className="chat-messages"
         onScroll={handleScroll}
       >
-        {turns.length === 0 && !isStreaming && isLoadingHistory && (
-          <div className="chat-empty-state">
+        {visibleTurns.length === 0 && !isStreaming && (
+          <div className={`chat-empty-state${aiType ? ' agent-session-card' : ''}`}>
             <div className="chat-empty-icon"><SparkleIcon size={22} /></div>
-            <p>Loading session history…</p>
+            <div className="chat-agent-card-body">
+              <div className="chat-agent-card-top">
+                <span className={`chat-provider-pill${aiType ? ` ai-${aiType}` : ''}`}>{assistantLabel}</span>
+                <span className={`chat-agent-status status-${statusLabel}`}>{statusLabel}</span>
+              </div>
+              <div className="chat-agent-title">{assistantLabel} session</div>
+              <p>{emptyCopy}</p>
+              {(runtimeInfo?.label || hasTerminalEvidence) && (
+                <div className="chat-agent-meta">
+                  {runtimeInfo?.label && <span className="chat-agent-chip">{runtimeInfo.label}</span>}
+                  {hasTerminalEvidence && <span className="chat-agent-chip">terminal attached</span>}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {turns.length === 0 && !isStreaming && !isLoadingHistory && (
-          <div className="chat-empty-state">
-            <div className="chat-empty-icon"><SparkleIcon size={22} /></div>
-            <p>Send a message — Claude will respond here.</p>
-          </div>
-        )}
-
-        {turns.map((msg) => (
-          <div key={msg.ts} className={`chat-message-row ${msg.role}`}>
+        {visibleTurns.map((msg, index) => (
+          <div key={`${msg.ts ?? index}-${msg.role}-${index}`} className={`chat-message-row ${msg.role}`}>
             {msg.role === 'assistant' && (
               <div className="chat-avatar"><SparkleIcon size={13} /></div>
             )}
@@ -172,7 +395,6 @@ export function MobileChatView({
           </div>
         ))}
 
-        {/* Typing indicator while Claude is streaming */}
         {isStreaming && (
           <div className="chat-message-row assistant">
             <div className="chat-avatar"><SparkleIcon size={13} /></div>
@@ -211,7 +433,7 @@ export function MobileChatView({
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder="Message Claude…"
+            placeholder={`Message ${assistantLabel}...`}
             rows={1}
           />
         )}

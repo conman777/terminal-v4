@@ -84,6 +84,25 @@
   color: var(--chat-bubble-assistant-color);
 }
 
+.chat-empty-state.agent-session-card {
+  align-items: stretch;
+  width: calc(100% - 20px);
+  max-width: 420px;
+  margin: auto 10px;
+  padding: 14px;
+  gap: 12px;
+  opacity: 1;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--border-default) 34%, transparent);
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg-surface) 96%, transparent),
+    color-mix(in srgb, var(--bg-base) 94%, transparent)
+  );
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+}
+
 .chat-empty-icon {
   width: 48px;
   height: 48px;
@@ -95,6 +114,103 @@
   justify-content: center;
   font-weight: 700;
   font-size: 20px;
+}
+
+.chat-empty-state.agent-session-card .chat-empty-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.chat-agent-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.chat-agent-card-top,
+.chat-agent-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.chat-provider-pill,
+.chat-agent-status,
+.chat-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  border: 1px solid color-mix(in srgb, var(--border-default) 32%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
+}
+
+.chat-provider-pill.ai-codex {
+  border-color: color-mix(in srgb, #3b82f6 42%, var(--border-default));
+  color: color-mix(in srgb, #93c5fd 82%, var(--text-primary));
+}
+
+.chat-provider-pill.ai-claude {
+  border-color: color-mix(in srgb, #ff6b2b 42%, var(--border-default));
+  color: color-mix(in srgb, #ffb08a 82%, var(--text-primary));
+}
+
+.chat-provider-pill.ai-gemini {
+  border-color: color-mix(in srgb, #22c55e 42%, var(--border-default));
+  color: color-mix(in srgb, #86efac 82%, var(--text-primary));
+}
+
+.chat-agent-status {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.chat-agent-status.status-ready {
+  color: color-mix(in srgb, #4ade80 82%, var(--text-primary));
+}
+
+.chat-agent-status.status-running,
+.chat-agent-status.status-connecting,
+.chat-agent-status.status-starting {
+  color: color-mix(in srgb, #fbbf24 82%, var(--text-primary));
+}
+
+.chat-agent-status.status-offline {
+  color: color-mix(in srgb, var(--error) 82%, var(--text-primary));
+}
+
+.chat-agent-title {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.chat-empty-state.agent-session-card p {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.chat-agent-meta {
+  gap: 6px;
+}
+
+.chat-agent-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
 }
 
 /* ── Message row ── */

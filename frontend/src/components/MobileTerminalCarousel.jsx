@@ -312,6 +312,7 @@ export function MobileTerminalCarousel({
   const {
     turns,
     isLoading: isChatHistoryLoading,
+    isSendReady: isChatSendReady,
     handleTurn,
     handleRegisterSendText,
     handleChatSend,
@@ -430,6 +431,13 @@ export function MobileTerminalCarousel({
           onImageUpload={triggerImageUpload ?? undefined}
           sessionId={currentSession?.id ?? null}
           onViewportStateChange={handleChatViewportStateChange}
+          aiType={currentAiType}
+          runtimeInfo={runtimeInfo}
+          connectionState={connectionState}
+          isSendReady={isChatSendReady}
+          terminalPreview={terminalPreview}
+          terminalScreenSnapshot={terminalScreenSnapshot}
+          customAiProviders={customAiProviders}
         />
       )}
 
