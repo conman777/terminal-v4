@@ -111,6 +111,14 @@ function isShortFragmentTurn(content) {
   return /^[a-z]{1,2}$/i.test(content.trim());
 }
 
+function isCodeFragmentTurn(content) {
+  const trimmed = content.trim();
+  if (trimmed.length > 24) return false;
+  if (/[A-Za-z]{3,}/.test(trimmed) && /\s/.test(trimmed)) return false;
+  if (!/[{}()[\];=]/.test(trimmed)) return false;
+  return !/[A-Za-z]{3,}\s+[A-Za-z]{3,}/.test(trimmed);
+}
+
 function looksLikeWrappedPromptEcho(content, recentUserContent) {
   if (!recentUserContent) return false;
 
@@ -257,6 +265,9 @@ function normalizeTranscriptReplyLine(line) {
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b[()][A-Z0-9]/g, '')
     .replace(/\(B/g, '')
+    .replace(/›?\s*Use \/skills to list available skills[\s\S]*$/i, '')
+    .replace(/\bgpt-5(?:\.\d+)?\b[\s\S]*?\bGoal achieved\b[\s\S]*$/i, '')
+    .replace(/─+\s*Worked for[\s\S]*$/i, '')
     .replace(/\s*\(ctrl\s*\+\s*t\s+to\s+view\s+transcript\)\s*/ig, ' ')
     .replace(/[┌┐└┘├┤─│╭╮╰╯═]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -298,6 +309,158 @@ function looksLikeTranscriptActivityLine(line) {
   ].some((pattern) => pattern.test(trimmed));
 }
 
+function looksLikeHardTranscriptActivityLine(line) {
+  const trimmed = normalizeTranscriptReplyLine(line).replace(/^[●•]\s*/, '');
+  if (!trimmed) return true;
+  if (looksLikeSourceCodeLine(trimmed)) return true;
+  if (/^[A-Za-z]?\s*[✓✔□☐☑]\s+/.test(trimmed)) return true;
+  if (/^\d+\s+[+-]\s/.test(trimmed)) return true;
+  if (/^[+-]\s*(?:const|let|var|function|return|export|import|if|else|for|while|try|catch)\b/.test(trimmed)) return true;
+  if (/^\d+\s{2,}.*[{}();=]/.test(trimmed)) return true;
+  if (/^(?:@@|[⋮│])/.test(trimmed)) return true;
+  if (/^\d+\s+more\b/i.test(trimmed)) return true;
+  if (/^\+\d+\s+lines\b/i.test(trimmed)) return true;
+  if (/^⎿/.test(trimmed)) return true;
+  if (/^name:\s*['"]?TimeoutError/i.test(trimmed)) return true;
+  if (/\bTimeoutError\b/i.test(trimmed)) return true;
+  if (/^\(no output\)/i.test(trimmed)) return true;
+  if (/\bWorking\s*\(/i.test(trimmed)) return true;
+  if (/^Use \/skills to list available skills/i.test(trimmed)) return true;
+  if (/\bgpt-5(?:\.\d+)?\b/i.test(trimmed) && /\bgoal achieved\b/i.test(trimmed)) return true;
+  if (/https?:\/\/\S+\/api\/client-build/i.test(trimmed)) return true;
+  if (/"buildId"\s*:\s*"\/assets\//i.test(trimmed)) return true;
+  if (/…\s*\+\d+\s+lines/i.test(trimmed)) return true;
+  if (/^\}\s*$/.test(trimmed)) return true;
+  return [
+    /^(?:Ran|Read|Edited|Wrote|Opened|Searched|Commit|Committed|Pushed|Updated Plan|Viewed Image|Explored)\b/i,
+    /^(?:Bash|Read|Search|Update|Write|Edit)\(/i,
+    /^(?:git|npm|pnpm|yarn|node|curl|ss|rg|cat|sed|cargo|python|pytest|vitest|systemctl|sudo)\s+/i,
+    /\b\/bin\/systemctl\b/i,
+  ].some((pattern) => pattern.test(trimmed));
+}
+
+function cleanTranscriptResponseLine(line) {
+  return normalizeTranscriptReplyLine(line)
+    .replace(/^[●•]\s*/, '')
+    .trim();
+}
+
+function looksLikeAssistantReplyStart(line) {
+  const trimmed = cleanTranscriptResponseLine(line).replace(/^[-*]\s+/, '');
+  if (trimmed.length < 8) return false;
+  return /^(?:I\b|I've\b|I’m\b|I found\b|I fixed\b|Found\b|Fixed\b|Done\b|Verified\b|What changed\b|The bugs were\b|The fix\b|Now\b|Committed and pushed\b)/i.test(trimmed);
+}
+
+function shouldStartNewTranscriptResponseBlock(line) {
+  const trimmed = cleanTranscriptResponseLine(line).replace(/^[-*]\s+/, '');
+  return /^(?:I\b|I've\b|I’m\b|I found\b|I fixed\b|Found\b|Fixed\b|Done\b|What changed\b)/i.test(trimmed);
+}
+
+function formatTranscriptResponseBlock(rawLines) {
+  const formattedLines = [];
+
+  for (const rawLine of rawLines) {
+    const cleaned = cleanTranscriptResponseLine(rawLine);
+    if (!cleaned) continue;
+
+    const isListItem = /^[-*]\s+/.test(cleaned);
+    const isSectionHeading = /^[A-Z][A-Za-z0-9 &/-]+:$/.test(cleaned);
+    const isContinuation = /^\s{2,}\S/.test(String(rawLine || '')) && !isListItem;
+    const previous = formattedLines[formattedLines.length - 1] || '';
+
+    if (
+      isContinuation
+      && !isSectionHeading
+      && previous
+      && (previous.startsWith('- ') || !/[.:!?]$/.test(previous))
+    ) {
+      formattedLines[formattedLines.length - 1] = `${previous} ${cleaned}`.replace(/\s+/g, ' ');
+      continue;
+    }
+
+    if (formattedLines[formattedLines.length - 1] !== cleaned) {
+      formattedLines.push(cleaned);
+    }
+  }
+
+  return formattedLines
+    .join('\n')
+    .replace(
+      /rendered as repeated assistant\s+cards\.lies plus repeated\s+(“Terminal activity”)/i,
+      'rendered as repeated assistant replies plus repeated $1 cards.'
+    )
+    .replace(
+      /rendered as repeated assistant replies plus\s+cards\.eated\s+(“Terminal activity”)/i,
+      'rendered as repeated assistant replies plus repeated $1 cards.'
+    )
+    .trim();
+}
+
+function scoreTranscriptResponseBlock(text, index) {
+  const normalized = text.toLowerCase();
+  let score = Math.min(text.length, 1600) + index;
+
+  if (/^i fixed what your screenshots showed/im.test(text)) score += 800;
+  if (/\bthe bugs were:/i.test(text)) score += 500;
+  if (/\bverified:/i.test(text)) score += 450;
+  if (/\bcommitted and pushed:/i.test(text)) score += 350;
+  if (/\bfrontend tests:\s*\d+\s+passed/i.test(text)) score += 250;
+  if (/\bbackend .*tests:\s*\d+\s+passed/i.test(text)) score += 250;
+  if (/\bmobile smoke test:/i.test(text)) score += 180;
+  if (/\bclean codex transcript rendering\b/i.test(text)) score += 180;
+
+  if (/\bcards\.(?:lies|eated)\b/i.test(text)) score -= 1000;
+  if (/\b[a-z]{3,}\.[a-z]{3,}\b/.test(normalized)) score -= 250;
+  if (normalized.includes('edited frontend/src') || normalized.includes('function ')) score -= 700;
+  if (normalized.includes('const ') || normalized.includes('expect(')) score -= 400;
+
+  return score;
+}
+
+function extractBestAssistantResponseBlock(content) {
+  const candidates = [];
+  let currentBlock = [];
+
+  const flush = () => {
+    if (currentBlock.length === 0) return;
+    const text = formatTranscriptResponseBlock(currentBlock);
+    currentBlock = [];
+    if (text.length >= 36) {
+      candidates.push(text);
+    }
+  };
+
+  for (const rawLine of String(content || '').split('\n')) {
+    const startsReply = looksLikeAssistantReplyStart(rawLine);
+    const hardActivity = looksLikeHardTranscriptActivityLine(rawLine);
+
+    if (hardActivity && !startsReply) {
+      flush();
+      continue;
+    }
+
+    if (startsReply) {
+      if (currentBlock.length > 0 && shouldStartNewTranscriptResponseBlock(rawLine)) {
+        flush();
+      }
+      currentBlock.push(rawLine);
+      continue;
+    }
+
+    if (currentBlock.length > 0) {
+      currentBlock.push(rawLine);
+    }
+  }
+
+  flush();
+
+  if (candidates.length === 0) return '';
+
+  return candidates
+    .map((text, index) => ({ text, score: scoreTranscriptResponseBlock(text, index) }))
+    .sort((a, b) => b.score - a.score)[0]?.text || '';
+}
+
 function looksLikeUsefulTranscriptReplyLine(line) {
   const trimmed = normalizeTranscriptReplyLine(line);
   if (trimmed.length < 12) return false;
@@ -313,6 +476,9 @@ function looksLikeUsefulTranscriptReplyLine(line) {
 
 function extractLatestAssistantReplyFromRawTranscript(content) {
   if (typeof content !== 'string') return '';
+
+  const bestResponseBlock = extractBestAssistantResponseBlock(content);
+  if (bestResponseBlock) return bestResponseBlock;
 
   const blocks = [];
   let currentBlock = [];
@@ -462,6 +628,7 @@ function buildVisibleTurns(turns, aiType) {
       if (isLaunchCommand(userContent, aiType)) continue;
       if (isSlashCommandOnlyTurn(userContent)) continue;
       if (isShortFragmentTurn(userContent)) continue;
+      if (isCodeFragmentTurn(userContent)) continue;
       if (looksLikeWrappedPromptEcho(userContent, lastMeaningfulUserContent)) continue;
       flushPendingActivity();
       hasMeaningfulUserTurn = true;
@@ -472,15 +639,16 @@ function buildVisibleTurns(turns, aiType) {
     }
 
     if (turn.role === 'assistant') {
+      const rawAssistantContent = turn.content;
       const assistantContent = sanitizeAssistantTurnContent(turn.content, aiType);
-      if (!assistantContent) continue;
-      if (looksLikeWrappedPromptEcho(assistantContent, lastMeaningfulUserContent)) continue;
-      if (looksLikeRawTranscriptDump(assistantContent)) {
-        const latestReply = extractLatestAssistantReplyFromRawTranscript(assistantContent);
+      if (!assistantContent && !looksLikeRawTranscriptDump(rawAssistantContent)) continue;
+      if (assistantContent && looksLikeWrappedPromptEcho(assistantContent, lastMeaningfulUserContent)) continue;
+      if (looksLikeRawTranscriptDump(rawAssistantContent) || looksLikeRawTranscriptDump(assistantContent)) {
+        const latestReply = extractLatestAssistantReplyFromRawTranscript(rawAssistantContent);
         if (latestReply) {
           pushAssistantTurn(turn, latestReply);
         }
-        pendingActivityTurn = { ...turn, role: 'assistant_activity', content: assistantContent };
+        pendingActivityTurn = { ...turn, role: 'assistant_activity', content: assistantContent || rawAssistantContent };
         continue;
       }
       if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;

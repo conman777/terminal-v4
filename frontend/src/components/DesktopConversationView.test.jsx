@@ -242,6 +242,104 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('preserves the full Codex final answer block from tmux transcript history', () => {
+    const transcriptDump = [
+      ...Array.from({ length: 32 }, (_, index) => (
+        `Ran npm test ${index} lines (ctrl + t to view transcript)`
+      )),
+      'm patching the detector to record the submitted prompt before filtering terminal echo, and adding UI guards for already-stored bad history.',
+      '• I fixed what your screenshots showed.›Use /skills to list available skillsgpt-5.5 xhigh · ~/terminal-v4Goal achieved (11m)',
+      '  The bugs were:',
+      '  - Repeated raw transcript chunks were being',
+      '    rendered as repeated assistant replies',
+      '    plus repeated “Terminal activity” cards.',
+      '  - Wrapped terminal echo from your prompt',
+      '    was being misread as assistant text,',
+      '    which is why you saw fragments like ~/sc,',
+      '    reen, shot, tha, mom.',
+      '  - If only terminal activity was parsed, the',
+      '    UI could hide the latest readable reply.',
+      '  Now the Codex UI collapses repeated',
+      '  transcript dumps, filters wrapped prompt',
+      '  echoes, keeps one activity summary, and',
+      '  still shows the latest readable response',
+      '  when activity is the only parsed turn.',
+      '  Verified:',
+      '  - Frontend tests: 102 passed',
+      '  - Backend turn-detector tests: 11 passed',
+      '  - Build passed',
+      '  - Service restarted and healthy',
+      '  - Live bundle: /assets/index-D-BdO7u4.js',
+      '  - Mobile smoke test: one assistant block,',
+      '    one activity card, no wrapped fragments',
+      '  Committed and pushed:',
+      '  18425f3 Clean Codex transcript rendering',
+      '─ Worked for 8m 52s ─────────────────────────',
+      '• I fixed what your screenshots showed.',
+      '  The bugs were:',
+      '  - Repeated raw transcript chunks were being rendered as repeated assistant',
+      '  cards.lies plus repeated “Terminal activity”',
+      '  Verified:',
+      '  - Frontend tests: 102 passed',
+      '  Committed and pushed:',
+      '  18425f3 Clean Codex transcript rendering',
+      '─ Worked for 8m 52s ─────────────────────────',
+      'Edited frontend/src/components/DesktopConversationView.jsx (+55 -3)'
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'assistant', content: transcriptDump, ts: 1 },
+            { role: 'user', content: '= 2);', ts: 2 }
+          ]
+        })}
+      />
+    );
+
+    const assistant = screen.getByTestId('tool-call-assistant');
+    expect(assistant).toHaveTextContent(/I fixed what your screenshots showed/i);
+    expect(assistant).toHaveTextContent(/The bugs were:/i);
+    expect(assistant).toHaveTextContent(/Frontend tests:\s*102 passed/i);
+    expect(assistant).toHaveTextContent(/Backend turn-detector tests:\s*11 passed/i);
+    expect(assistant).toHaveTextContent(/18425f3 Clean Codex transcript rendering/i);
+    expect(assistant).not.toHaveTextContent(/before filtering terminal echo/i);
+    expect(assistant).not.toHaveTextContent(/cards\.lies/i);
+    expect(assistant.textContent).toMatch(/no wrapped fragments\nCommitted and pushed:/i);
+    expect(screen.queryByTestId('tool-call-user')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
+  });
+
+  it('repairs tmux-overwritten words inside a Codex final answer block', () => {
+    const transcriptDump = [
+      ...Array.from({ length: 28 }, (_, index) => (
+        `Ran npm test ${index} lines (ctrl + t to view transcript)`
+      )),
+      '• I fixed what your screenshots showed.',
+      '  The bugs were:',
+      '  - Repeated raw transcript chunks were being rendered as repeated assistant',
+      '  cards.lies plus repeated “Terminal activity”',
+      '  Verified:',
+      '  - Frontend tests: 102 passed',
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'assistant', content: transcriptDump, ts: 1 }
+          ]
+        })}
+      />
+    );
+
+    const assistant = screen.getByTestId('tool-call-assistant');
+    expect(assistant).toHaveTextContent(/repeated assistant replies plus repeated/i);
+    expect(assistant).toHaveTextContent(/Terminal activity.*cards/i);
+    expect(assistant).not.toHaveTextContent(/cards\.lies/i);
+  });
+
   it('does not render an inline composer (V4 status bar composer is the single input)', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();
