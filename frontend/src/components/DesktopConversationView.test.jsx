@@ -79,6 +79,31 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('renders terminal activity in the right activity window instead of the main thread', () => {
+    const transcriptDump = Array.from({ length: 34 }, (_, index) => (
+      `Ran npm test ${index} lines (ctrl + t to view transcript)`
+    )).join('\n');
+
+    const { container } = render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: 'audit this app', ts: 1 },
+            { role: 'assistant', content: transcriptDump, ts: 2 }
+          ]
+        })}
+      />
+    );
+
+    const activityWindow = container.querySelector('.desktop-activity-window');
+    const mainThread = container.querySelector('.desktop-thread');
+    const activityBlock = screen.getByTestId('tool-call-assistant_activity');
+
+    expect(activityWindow).toBeInTheDocument();
+    expect(activityWindow).toContainElement(activityBlock);
+    expect(mainThread).not.toContainElement(activityBlock);
+  });
+
   it('lifts the latest readable reply out of raw terminal transcript turns', () => {
     const transcriptDump = [
       ...Array.from({ length: 28 }, (_, index) => (

@@ -14149,6 +14149,96 @@ textarea:focus-visible {
     linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 76%, transparent), var(--bg-base) 18%);
 }
 
+.desktop-conversation-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.desktop-conversation-body.has-activity-window .desktop-thread {
+  flex: 1 1 auto;
+}
+
+.desktop-activity-window {
+  flex: 0 0 clamp(270px, 24vw, 360px);
+  min-width: 250px;
+  max-width: 380px;
+  min-height: 0;
+  padding: 12px;
+  border-left: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-surface) 70%, transparent),
+      color-mix(in srgb, var(--bg-base) 96%, transparent)
+    );
+  overflow: hidden;
+}
+
+.desktop-activity-window-scroll {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.desktop-activity-window .cc-message.cc-activity {
+  margin: 0;
+}
+
+.desktop-activity-window .cc-activity-card {
+  border-radius: 9px;
+}
+
+.desktop-activity-window .cc-activity-header {
+  gap: 8px;
+  padding: 10px;
+}
+
+.desktop-activity-window .cc-activity-actions {
+  gap: 4px;
+}
+
+.desktop-activity-window .cc-activity-toggle {
+  min-height: 24px;
+  padding: 0 7px;
+  font-size: 10px;
+}
+
+.desktop-activity-window .cc-activity-summary-strip {
+  padding: 8px 10px 10px;
+}
+
+.desktop-activity-window .cc-activity-chip {
+  max-width: 132px;
+  min-height: 23px;
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .desktop-conversation-body {
+    flex-direction: column;
+  }
+
+  .desktop-activity-window {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: none;
+    min-width: 0;
+    max-height: min(34vh, 280px);
+    padding: 10px;
+    border-left: none;
+    border-top: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
+  }
+}
+
 .desktop-conversation-header {
   display: flex;
   justify-content: space-between;

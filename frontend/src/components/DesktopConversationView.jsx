@@ -852,6 +852,8 @@ export function DesktopConversationView({
   const showInteractivePromptBlock = Boolean(interactivePrompt && interactivePrompt.actions?.length > 0);
   const shouldShowMirrorScreen = false;
   const displayTurns = isStructured ? [] : visibleTurns;
+  const activityTurns = isStructured ? [] : displayTurns.filter((turn) => turn.role === 'assistant_activity');
+  const conversationTurns = isStructured ? [] : displayTurns.filter((turn) => turn.role !== 'assistant_activity');
   const isConnected = connectionState === 'online';
   const isOffline = connectionState === 'offline';
   const statusLabel = getStatusLabel({
@@ -885,7 +887,7 @@ export function DesktopConversationView({
     || structuredToolCalls.length > 0
     || Boolean(pendingApproval)
   );
-  const hasVisibleConversationTurns = displayTurns.some((turn) => turn.role !== 'assistant_activity');
+  const hasVisibleConversationTurns = conversationTurns.length > 0;
   const hasVisibleTurns = displayTurns.length > 0 || hasStructuredActivity;
   const showStartupCard = !hasVisibleConversationTurns && !hasStructuredActivity && !isLoadingHistory;
   const showTerminalStartupCard = !isStructured && !hasVisibleConversationTurns && !isLoadingHistory;
@@ -940,7 +942,7 @@ export function DesktopConversationView({
       ? 'Live terminal prompt detected. Codex UI keeps the session context visible while the terminal waits for input.'
       : liveRuntimeLabel
         ? 'Live terminal summary'
-        : displayTurns.length > 0
+        : hasVisibleConversationTurns
           ? 'Conversation transcript'
           : startupMessage;
   const statusTone = getStatusTone(statusLabel);
@@ -1021,8 +1023,9 @@ export function DesktopConversationView({
         </div>
       )}
 
-      <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
-        <div className={`desktop-thread-inner${showTerminalStartupCard ? ' live-session-layout' : ''}`}>
+      <div className={`desktop-conversation-body${activityTurns.length > 0 ? ' has-activity-window' : ''}`}>
+        <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
+          <div className={`desktop-thread-inner${showTerminalStartupCard ? ' live-session-layout' : ''}`}>
           {conversationNotice && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
@@ -1189,7 +1192,7 @@ export function DesktopConversationView({
             </div>
           )}
 
-          {displayTurns.map((turn, index) => (
+          {conversationTurns.map((turn, index) => (
             <ToolCallBlock
               key={`${turn.ts ?? index}-${turn.role}-${index}`}
               item={{ type: turn.role, content: turn.content }}
@@ -1288,8 +1291,22 @@ export function DesktopConversationView({
               </div>
             </div>
           )}
+          </div>
+          <div ref={bottomRef} />
         </div>
-        <div ref={bottomRef} />
+
+        {activityTurns.length > 0 && (
+          <aside className="desktop-activity-window" aria-label="Terminal activity">
+            <div className="desktop-activity-window-scroll">
+              {activityTurns.map((turn, index) => (
+                <ToolCallBlock
+                  key={`activity-${turn.ts ?? index}-${index}`}
+                  item={{ type: turn.role, content: turn.content }}
+                />
+              ))}
+            </div>
+          </aside>
+        )}
       </div>
 
       {showScrollBtn && (
