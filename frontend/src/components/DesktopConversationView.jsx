@@ -16,6 +16,17 @@ function compactText(value) {
   return value.toLowerCase().replace(/\s+/g, '');
 }
 
+function visibleContentFingerprint(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[`'"“”‘’]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function echoChunkFingerprint(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '');
+}
+
 function getSnapshotLines(...sources) {
   return sources
     .filter((source) => typeof source === 'string' && source.trim())
@@ -98,6 +109,23 @@ function isSlashCommandOnlyTurn(content) {
 
 function isShortFragmentTurn(content) {
   return /^[a-z]{1,2}$/i.test(content.trim());
+}
+
+function looksLikeWrappedPromptEcho(content, recentUserContent) {
+  if (!recentUserContent) return false;
+
+  const lines = String(content || '')
+    .split('\n')
+    .map((line) => normalizeTranscriptReplyLine(line))
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+
+  const allChunky = lines.every((line) => line.length <= 8 && !/[.!?]$/.test(line));
+  if (!allChunky) return false;
+
+  const promptFingerprint = echoChunkFingerprint(recentUserContent);
+  const echoFingerprint = echoChunkFingerprint(lines.join(''));
+  return echoFingerprint.length >= 3 && promptFingerprint.length >= 8 && promptFingerprint.includes(echoFingerprint);
 }
 
 function looksLikeBootstrapNoiseText(text) {
@@ -408,6 +436,22 @@ function sanitizeAssistantTurnContent(content, aiType) {
 function buildVisibleTurns(turns, aiType) {
   const visibleTurns = [];
   let hasMeaningfulUserTurn = false;
+  let lastMeaningfulUserContent = '';
+  let pendingActivityTurn = null;
+  let assistantFingerprintsForCurrentUser = new Set();
+
+  const flushPendingActivity = () => {
+    if (!pendingActivityTurn) return;
+    visibleTurns.push(pendingActivityTurn);
+    pendingActivityTurn = null;
+  };
+
+  const pushAssistantTurn = (turn, content) => {
+    const fingerprint = visibleContentFingerprint(content);
+    if (fingerprint.length >= 16 && assistantFingerprintsForCurrentUser.has(fingerprint)) return;
+    if (fingerprint.length >= 16) assistantFingerprintsForCurrentUser.add(fingerprint);
+    visibleTurns.push({ ...turn, role: 'assistant', content });
+  };
 
   for (const turn of turns) {
     if (!turn || typeof turn.content !== 'string') continue;
@@ -418,7 +462,11 @@ function buildVisibleTurns(turns, aiType) {
       if (isLaunchCommand(userContent, aiType)) continue;
       if (isSlashCommandOnlyTurn(userContent)) continue;
       if (isShortFragmentTurn(userContent)) continue;
+      if (looksLikeWrappedPromptEcho(userContent, lastMeaningfulUserContent)) continue;
+      flushPendingActivity();
       hasMeaningfulUserTurn = true;
+      lastMeaningfulUserContent = userContent;
+      assistantFingerprintsForCurrentUser = new Set();
       visibleTurns.push({ ...turn, content: userContent });
       continue;
     }
@@ -426,22 +474,26 @@ function buildVisibleTurns(turns, aiType) {
     if (turn.role === 'assistant') {
       const assistantContent = sanitizeAssistantTurnContent(turn.content, aiType);
       if (!assistantContent) continue;
+      if (looksLikeWrappedPromptEcho(assistantContent, lastMeaningfulUserContent)) continue;
       if (looksLikeRawTranscriptDump(assistantContent)) {
         const latestReply = extractLatestAssistantReplyFromRawTranscript(assistantContent);
         if (latestReply) {
-          visibleTurns.push({ ...turn, role: 'assistant', content: latestReply });
+          pushAssistantTurn(turn, latestReply);
         }
-        visibleTurns.push({ ...turn, role: 'assistant_activity', content: assistantContent });
+        pendingActivityTurn = { ...turn, role: 'assistant_activity', content: assistantContent };
         continue;
       }
       if (!hasMeaningfulUserTurn && looksLikeBootstrapNoiseText(assistantContent)) continue;
-      visibleTurns.push({ ...turn, content: assistantContent });
+      flushPendingActivity();
+      pushAssistantTurn(turn, assistantContent);
       continue;
     }
 
+    flushPendingActivity();
     visibleTurns.push(turn);
   }
 
+  flushPendingActivity();
   return visibleTurns;
 }
 
@@ -665,10 +717,11 @@ export function DesktopConversationView({
     || structuredToolCalls.length > 0
     || Boolean(pendingApproval)
   );
+  const hasVisibleConversationTurns = displayTurns.some((turn) => turn.role !== 'assistant_activity');
   const hasVisibleTurns = displayTurns.length > 0 || hasStructuredActivity;
-  const showStartupCard = !hasVisibleTurns && !isLoadingHistory;
-  const showTerminalStartupCard = !isStructured && displayTurns.length === 0 && !isLoadingHistory;
-  const latestLiveTranscriptReply = !isStructured && !hasVisibleTurns && !isLoadingHistory && !interactivePrompt
+  const showStartupCard = !hasVisibleConversationTurns && !hasStructuredActivity && !isLoadingHistory;
+  const showTerminalStartupCard = !isStructured && !hasVisibleConversationTurns && !isLoadingHistory;
+  const latestLiveTranscriptReply = !isStructured && !hasVisibleConversationTurns && !isLoadingHistory && !interactivePrompt
     ? extractLatestAssistantReplyFromRawTranscript(terminalPreview)
     : '';
   const showInlineInteractivePrompt = showInteractivePromptBlock && !showTerminalStartupCard;

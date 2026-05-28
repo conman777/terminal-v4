@@ -23,6 +23,17 @@ function compactText(value) {
   return String(value || '').toLowerCase().replace(/\s+/g, '');
 }
 
+function visibleContentFingerprint(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[`'"“”‘’]/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function echoChunkFingerprint(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '');
+}
+
 function looksLikeSourceCodeLine(line) {
   return /\b(?:const|let|var|function|return|export|import|if)\b/.test(line)
     || /(?:=>|\.match\(|\.test\(|\/\*|\*\/)/.test(line);
@@ -45,6 +56,23 @@ function isSlashCommandOnlyTurn(content) {
 
 function isShortFragmentTurn(content) {
   return /^[a-z]{1,2}$/i.test(String(content || '').trim());
+}
+
+function looksLikeWrappedPromptEcho(content, recentUserContent) {
+  if (!recentUserContent) return false;
+
+  const lines = String(content || '')
+    .split('\n')
+    .map((line) => normalizeTranscriptLine(line))
+    .filter(Boolean);
+  if (lines.length === 0) return false;
+
+  const allChunky = lines.every((line) => line.length <= 8 && !/[.!?]$/.test(line));
+  if (!allChunky) return false;
+
+  const promptFingerprint = echoChunkFingerprint(recentUserContent);
+  const echoFingerprint = echoChunkFingerprint(lines.join(''));
+  return echoFingerprint.length >= 3 && promptFingerprint.length >= 8 && promptFingerprint.includes(echoFingerprint);
 }
 
 function looksLikeCodexStartupLine(line, squashed) {
@@ -175,6 +203,15 @@ function extractLatestReply(content) {
 
 function buildVisibleTurns(turns, aiType) {
   const visibleTurns = [];
+  let lastMeaningfulUserContent = '';
+  let assistantFingerprintsForCurrentUser = new Set();
+
+  const pushAssistantTurn = (turn, content) => {
+    const fingerprint = visibleContentFingerprint(content);
+    if (fingerprint.length >= 16 && assistantFingerprintsForCurrentUser.has(fingerprint)) return;
+    if (fingerprint.length >= 16) assistantFingerprintsForCurrentUser.add(fingerprint);
+    visibleTurns.push({ ...turn, content });
+  };
 
   for (const turn of turns) {
     const content = String(turn?.content || '').trim();
@@ -184,6 +221,9 @@ function buildVisibleTurns(turns, aiType) {
       if (isLaunchCommand(content, aiType)) continue;
       if (isSlashCommandOnlyTurn(content)) continue;
       if (isShortFragmentTurn(content)) continue;
+      if (looksLikeWrappedPromptEcho(content, lastMeaningfulUserContent)) continue;
+      lastMeaningfulUserContent = content;
+      assistantFingerprintsForCurrentUser = new Set();
       visibleTurns.push({ ...turn, content });
       continue;
     }
@@ -191,14 +231,15 @@ function buildVisibleTurns(turns, aiType) {
     if (turn.role === 'assistant') {
       const assistantContent = sanitizeAssistantContent(content, aiType);
       if (!assistantContent) continue;
+      if (looksLikeWrappedPromptEcho(assistantContent, lastMeaningfulUserContent)) continue;
 
       if (looksLikeRawTranscriptDump(assistantContent)) {
         const latestReply = extractLatestReply(assistantContent);
-        if (latestReply) visibleTurns.push({ ...turn, content: latestReply });
+        if (latestReply) pushAssistantTurn(turn, latestReply);
         continue;
       }
 
-      visibleTurns.push({ ...turn, content: assistantContent });
+      pushAssistantTurn(turn, assistantContent);
     }
   }
 

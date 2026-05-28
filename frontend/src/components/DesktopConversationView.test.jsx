@@ -162,6 +162,86 @@ describe('DesktopConversationView', () => {
     expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
   });
 
+  it('collapses repeated raw transcript dumps into one visible reply and one activity card', () => {
+    const buildTranscriptDump = (extraLine) => [
+      ...Array.from({ length: 28 }, (_, index) => (
+        `Ran npm test ${index} lines (ctrl + t to view transcript)`
+      )),
+      'Mobile smoke test confirmed Codex UI -> Raw Terminal -> Codex UI buttons work.',
+      extraLine
+    ].join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: 'show me the current mobile state', ts: 1 },
+            { role: 'assistant', content: buildTranscriptDump('Read file one'), ts: 2 },
+            { role: 'assistant', content: buildTranscriptDump('Read file two'), ts: 3 },
+            { role: 'assistant', content: buildTranscriptDump('Read file three'), ts: 4 },
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getAllByTestId('tool-call-assistant')).toHaveLength(1);
+    expect(screen.getByTestId('tool-call-assistant')).toHaveTextContent(/Mobile smoke test confirmed Codex UI/i);
+    expect(screen.getAllByTestId('tool-call-assistant_activity')).toHaveLength(1);
+  });
+
+  it('hides wrapped terminal echo fragments that match the latest sent prompt', () => {
+    const prompt = '~/screenshots/screenshot-2026-05-28T08-01-46.png thats what i see at the moment';
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: prompt, ts: 1 },
+            { role: 'assistant', content: '~/sc', ts: 2 },
+            { role: 'assistant', content: 'reen', ts: 3 },
+            { role: 'assistant', content: 'shot', ts: 4 },
+            { role: 'assistant', content: '-202', ts: 5 },
+            { role: 'assistant', content: '08-0', ts: 6 },
+            { role: 'assistant', content: 'tha', ts: 7 },
+            { role: 'assistant', content: 'mom', ts: 8 },
+            { role: 'assistant', content: 'I see the screenshot. The prompt echo should not appear in the thread.', ts: 9 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByText(prompt)).toBeInTheDocument();
+    expect(screen.getByText(/prompt echo should not appear/i)).toBeInTheDocument();
+    expect(screen.queryByText('~/sc')).not.toBeInTheDocument();
+    expect(screen.queryByText('reen')).not.toBeInTheDocument();
+    expect(screen.queryByText('tha')).not.toBeInTheDocument();
+  });
+
+  it('shows the latest reply fallback when the only parsed turn is terminal activity', () => {
+    const transcriptDump = Array.from({ length: 34 }, (_, index) => (
+      `Ran npm test ${index} lines (ctrl + t to view transcript)`
+    )).join('\n');
+
+    render(
+      <DesktopConversationView
+        {...buildProps({
+          terminalPreview: [
+            'Ran npm test',
+            'I found the display issue. Activity-only history was hiding the latest assistant reply.',
+            'The fix keeps the readable response visible above the terminal activity.'
+          ].join('\n'),
+          turns: [
+            { role: 'assistant', content: transcriptDump, ts: 1 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByText('Latest reply')).toBeInTheDocument();
+    expect(screen.getByText(/Activity-only history was hiding/i)).toBeInTheDocument();
+    expect(screen.getByTestId('tool-call-assistant_activity')).toBeInTheDocument();
+  });
+
   it('does not render an inline composer (V4 status bar composer is the single input)', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.queryByPlaceholderText(/Message/i)).not.toBeInTheDocument();

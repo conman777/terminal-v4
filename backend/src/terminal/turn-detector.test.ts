@@ -174,6 +174,56 @@ describe('buildTurnsFromHistory', () => {
     detector.dispose();
   });
 
+  it('filters wrapped prompt echo before emitting the next assistant turn', () => {
+    vi.useFakeTimers();
+    const turns = [];
+    const detector = new TurnDetector((turn) => turns.push(turn));
+
+    const prompt = '~/screenshots/screenshot-2026-05-28T08-01-46.png thats what i see at the moment';
+    detector.onUserInput(prompt);
+    detector.onPtyOutput([
+      '> ~/sc',
+      'reen',
+      'shot',
+      's/sc',
+      'reen',
+      'shot',
+      '-202',
+      '6-05',
+      '-28T',
+      '08-0',
+      '1-46',
+      '.png',
+      'tha',
+      'tsw',
+      'hat',
+      'ise',
+      'eat',
+      'the',
+      'mom',
+      'ent',
+    ].join('\n'), 12_500);
+    detector.onUserInput('\r');
+
+    detector.onPtyOutput([
+      'I see the wrapped input echo. I will keep that out of the conversation.',
+      'gpt-5.5 xhigh · ~/terminal-v4 Goal achieved (2s)'
+    ].join('\n'), 12_600);
+    vi.advanceTimersByTime(600);
+
+    expect(turns).toEqual([
+      { role: 'user', content: prompt, ts: expect.any(Number) },
+      {
+        role: 'assistant',
+        content: 'I see the wrapped input echo. I will keep that out of the conversation.',
+        ts: 12_600
+      }
+    ]);
+
+    detector.dispose();
+    vi.useRealTimers();
+  });
+
   it('filters assistant status footer noise from PTY output', () => {
     vi.useFakeTimers();
     const turns = [];

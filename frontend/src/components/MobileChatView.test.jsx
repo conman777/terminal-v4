@@ -70,4 +70,32 @@ describe('MobileChatView', () => {
     expect(screen.getByText(/old Claude-only shell/i)).toBeInTheDocument();
     expect(screen.queryByText(/hasCodexCompletionBoundary/i)).not.toBeInTheDocument();
   });
+
+  it('deduplicates repeated transcript replies and hides wrapped prompt echo chunks', () => {
+    const prompt = '~/screenshots/screenshot-2026-05-28T08-01-46.png thats what i see at the moment';
+    const transcriptDump = [
+      ...Array.from({ length: 28 }, (_, index) => `• Ran npm test ${index} (ctrl + t to view transcript)`),
+      'I found the mobile issue. The clean Codex view was rendering repeated terminal history.',
+    ].join('\n');
+
+    render(
+      <MobileChatView
+        {...buildProps({
+          turns: [
+            { role: 'user', content: prompt, ts: 1 },
+            { role: 'assistant', content: '~/sc', ts: 2 },
+            { role: 'assistant', content: 'reen', ts: 3 },
+            { role: 'assistant', content: 'tha', ts: 4 },
+            { role: 'assistant', content: transcriptDump, ts: 5 },
+            { role: 'assistant', content: transcriptDump, ts: 6 }
+          ]
+        })}
+      />
+    );
+
+    expect(screen.getByText(prompt)).toBeInTheDocument();
+    expect(screen.getAllByText(/rendering repeated terminal history/i)).toHaveLength(1);
+    expect(screen.queryByText('~/sc')).not.toBeInTheDocument();
+    expect(screen.queryByText('reen')).not.toBeInTheDocument();
+  });
 });

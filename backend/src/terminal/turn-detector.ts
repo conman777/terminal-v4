@@ -131,6 +131,21 @@ function fingerprint(value: string): string {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function echoChunkFingerprint(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function isPromptEchoFragment(line: string, recentUserEchoes: string[]): boolean {
+  const trimmed = line.trim();
+  if (!trimmed || recentUserEchoes.length === 0) return false;
+  if (trimmed.length > 10) return false;
+  if (/[.!?]$/.test(trimmed)) return false;
+
+  const echoFingerprint = echoChunkFingerprint(trimmed);
+  if (echoFingerprint.length < 3) return false;
+  return recentUserEchoes.some((userEcho) => userEcho.length >= 8 && userEcho.includes(echoFingerprint));
+}
+
 function isClaudeBootstrapNoise(line: string): boolean {
   const t = line.trim();
   if (!t) return true;
@@ -168,6 +183,9 @@ function extractContent(rawBuffer: string, recentUserInputs: string[] = []): str
       .map(fingerprint)
       .filter(fp => fp.length >= 4),
   );
+  const recentUserEchoes = recentUserInputs
+    .map(echoChunkFingerprint)
+    .filter(fp => fp.length >= 8);
 
   let lastFingerprint = '';
 
@@ -179,6 +197,7 @@ function extractContent(rawBuffer: string, recentUserInputs: string[] = []): str
       if (isClaudeBootstrapNoise(line)) return false;
       const fp = fingerprint(line);
       if (fp && userFingerprints.has(fp)) return false;
+      if (isPromptEchoFragment(line, recentUserEchoes)) return false;
       if (fp && fp === lastFingerprint) return false;
       lastFingerprint = fp;
       return true;
@@ -315,8 +334,6 @@ export class TurnDetector {
   }
 
   onUserInput(text: string): void {
-    // Flush any pending assistant output before recording user input.
-    this.flushAssistant();
     const cleaned = stripAnsi(text);
     if (!cleaned) return;
 
@@ -349,15 +366,25 @@ export class TurnDetector {
 
     this.inputBuffer = nextBuffer;
 
-    for (const committed of committedLines) {
+    const validCommittedLines = committedLines.filter((committed) => committed.length >= 2);
+    if (validCommittedLines.length > 0) {
+      for (const committed of validCommittedLines) {
+        this.recentUserInputs.push(committed);
+        if (this.recentUserInputs.length > 5) {
+          this.recentUserInputs.shift();
+        }
+      }
+
+      // Flush after we know the submitted prompt so terminal echo/wrapped input
+      // can be filtered out instead of becoming an assistant turn.
+      this.flushAssistant();
+    }
+
+    for (const committed of validCommittedLines) {
       if (committed.length < 2) continue;
       const turn: ChatTurn = { role: 'user', content: committed, ts: Date.now() };
       this.onTurn(turn);
       this.onCliEvent?.(buildCliTurnEvent(turn));
-      this.recentUserInputs.push(committed);
-      if (this.recentUserInputs.length > 5) {
-        this.recentUserInputs.shift();
-      }
     }
   }
 
