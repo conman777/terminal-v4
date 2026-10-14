@@ -65,16 +65,34 @@ export function tmuxSessionExists(sessionId: string): boolean {
 /**
  * List all terminal app tmux sessions
  */
+export function isForeignRuntimeProcess(pid: string): boolean {
+  const markers = (process.env.TERMINAL_V4_FOREIGN_PROCESS_MARKERS || '')
+    .split(',')
+    .map(marker => marker.trim().toLowerCase())
+    .filter(Boolean);
+  if (markers.length === 0) return false;
+  try {
+    const commandLine = execFileSync('ps', ['-p', pid, '-o', 'command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).toLowerCase();
+    return markers.some(marker => commandLine.includes(marker));
+  } catch {
+    return false;
+  }
+}
+
 export function listTmuxSessions(): string[] {
   try {
-    const output = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}'], {
+    const output = execFileSync('tmux', ['list-sessions', '-F', '#{session_name}\t#{pane_pid}'], {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe']
     });
     return output
       .split('\n')
-      .filter(name => name.startsWith(TMUX_SESSION_PREFIX))
-      .map(name => name.replace(TMUX_SESSION_PREFIX, ''));
+      .map(line => line.trim().split('\t'))
+      .filter(([name, pid]) => Boolean(name) && name.startsWith(TMUX_SESSION_PREFIX) && Boolean(pid) && !isForeignRuntimeProcess(pid))
+      .map(([name]) => name.replace(TMUX_SESSION_PREFIX, ''));
   } catch (error) {
     if (!isIgnorableTmuxListError(error)) {
       console.warn('[tmux] Error listing sessions:', error);

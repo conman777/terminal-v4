@@ -1,3 +1,9 @@
+const DEFAULT_AI_CAPABILITIES = {
+  prefersStructuredUi: false,
+  supportsStructuredEvents: false,
+  supportsPromptEvents: false
+};
+
 const KNOWN_AI_PROVIDERS = [
   {
     id: 'claude',
@@ -30,7 +36,7 @@ const KNOWN_AI_PROVIDERS = [
       { cmd: '/model', desc: 'Change AI model' },
     ],
     capabilities: {
-      prefersStructuredUi: true,
+      prefersStructuredUi: false,
       supportsStructuredEvents: true,
       supportsPromptEvents: true
     }
@@ -42,13 +48,113 @@ const KNOWN_AI_PROVIDERS = [
     launchCommand: 'gemini',
     initialCommand: 'gemini --yolo',
     color: '#22c55e',
+    slashCommands: [],
     capabilities: {
-      prefersStructuredUi: true,
+      prefersStructuredUi: false,
       supportsStructuredEvents: true,
       supportsPromptEvents: true
     }
   },
+  {
+    id: 'anthropic-api',
+    label: 'Anthropic API',
+    title: 'Anthropic API',
+    launchCommand: 'terminal-v4-api',
+    initialCommand: 'terminal-v4-api',
+    color: '#f97316',
+    slashCommands: [],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
+  {
+    id: 'xai',
+    label: 'xAI / Grok',
+    title: 'xAI / Grok',
+    launchCommand: 'terminal-v4-api',
+    initialCommand: 'terminal-v4-api',
+    color: '#111827',
+    slashCommands: [],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
+  {
+    id: 'copilot',
+    label: 'GitHub Copilot',
+    title: 'GitHub Copilot',
+    launchCommand: 'terminal-v4-api',
+    initialCommand: 'terminal-v4-api',
+    color: '#8b5cf6',
+    slashCommands: [],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    title: 'DeepSeek',
+    launchCommand: 'terminal-v4-api',
+    initialCommand: 'terminal-v4-api',
+    color: '#06b6d4',
+    slashCommands: [],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
+  {
+    id: 'moa',
+    label: 'Mixture of Agents',
+    title: 'Mixture of Agents',
+    launchCommand: 'terminal-v4-api',
+    initialCommand: 'terminal-v4-api',
+    color: '#d6a84b',
+    slashCommands: [],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
 ];
+
+const ADDITIONAL_AI_PROVIDERS = [
+  ['openrouter', 'OpenRouter', '#f97316'],
+  ['nous', 'Nous', '#14b8a6'],
+  ['qwen-oauth', 'Qwen', '#0ea5e9'],
+  ['minimax-oauth', 'MiniMax OAuth/API', '#f43f5e'],
+  ['xai-oauth', 'xAI / Grok OAuth profile (API fallback)', '#0f172a'],
+  ['openai-api', 'OpenAI API', '#10a37f'],
+  ['actual', 'Actual Computer', '#f97316'],
+  ['copilot-acp', 'GitHub Copilot ACP', '#7c3aed'],
+  ['lmstudio', 'LM Studio', '#64748b'],
+  ['tencent-tokenhub', 'Tencent TokenHub', '#ef4444'],
+  ['zai', 'Zai / GLM', '#2563eb'],
+  ['minimax', 'MiniMax', '#e11d48'],
+  ['minimax-cn', 'MiniMax China', '#be123c'],
+  ['kimi-coding', 'Kimi Coding', '#0f766e'],
+  ['kimi-coding-cn', 'Kimi Coding China', '#115e59'],
+  ['alibaba', 'Alibaba / DashScope', '#f59e0b'],
+  ['alibaba-coding-plan', 'Alibaba Coding Plan', '#d97706'],
+  ['xiaomi', 'Xiaomi MiMo', '#dc2626'],
+  ['huggingface', 'Hugging Face', '#eab308'],
+  ['fireworks', 'Fireworks AI', '#ef4444'],
+  ['novita', 'Novita AI', '#8b5cf6'],
+  ['nvidia', 'NVIDIA NIM', '#76b900'],
+  ['deepinfra', 'DeepInfra', '#0891b2'],
+  ['gmi', 'GMI Serving', '#4f46e5'],
+  ['arcee', 'Arcee AI', '#9333ea'],
+  ['stepfun', 'StepFun', '#16a34a'],
+  ['upstage', 'Upstage Solar', '#ea580c'],
+  ['kilocode', 'KiloCode', '#64748b'],
+  ['ai-gateway', 'AI Gateway', '#0f172a'],
+  ['opencode-zen', 'OpenCode Zen', '#475569'],
+  ['opencode-go', 'OpenCode Go', '#334155'],
+  ['ollama-cloud', 'Ollama Cloud', '#111827'],
+  ['bedrock', 'AWS Bedrock', '#f59e0b'],
+  ['vertex', 'Google Vertex AI', '#4285f4'],
+  ['azure-foundry', 'Azure AI Foundry', '#0078d4'],
+].map(([id, label, color]) => ({
+  id,
+  label,
+  title: label,
+  launchCommand: id === 'copilot-acp' ? 'copilot' : 'terminal-v4-api',
+  initialCommand: id === 'copilot-acp' ? 'copilot' : 'terminal-v4-api',
+  color,
+  slashCommands: [],
+  capabilities: { ...DEFAULT_AI_CAPABILITIES },
+}));
+
+KNOWN_AI_PROVIDERS.push(...ADDITIONAL_AI_PROVIDERS);
 
 const KNOWN_PROVIDER_MAP = new Map(KNOWN_AI_PROVIDERS.map((provider) => [provider.id, provider]));
 const AGENT_SLASH_ALIASES = new Map([
@@ -57,11 +163,6 @@ const AGENT_SLASH_ALIASES = new Map([
 const AI_TYPE_ID_RE = /^[a-z][a-z0-9_-]*$/;
 // Warm palette for user-defined AIs (cohesive with canonical theme tokens).
 const CUSTOM_AI_COLORS = ['#d97706', '#fbbf24', '#e6875b', '#10b981', '#fb3654', '#92400e'];
-const DEFAULT_AI_CAPABILITIES = {
-  prefersStructuredUi: false,
-  supportsStructuredEvents: false,
-  supportsPromptEvents: false
-};
 
 function normalizeSlashCommands(slashCommands) {
   if (!Array.isArray(slashCommands)) return [];
@@ -223,6 +324,57 @@ export function getAiLaunchCommand(aiType, customProviders = []) {
 
 export function getAiInitialCommand(aiType, customProviders = []) {
   return getAiProvider(aiType, customProviders)?.initialCommand ?? '';
+}
+
+const AGENT_REASONING_LEVELS = {
+  codex: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+  claude: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
+};
+
+function quoteAgentArgument(value, label) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized || /[\0\r\n]/.test(normalized)) {
+    throw new Error(`Invalid agent ${label}`);
+  }
+  return `'${normalized.replaceAll("'", "'\\''")}'`;
+}
+
+const API_AGENT_IDS = new Set([
+  'anthropic-api', 'xai', 'xai-oauth', 'openai-api', 'actual', 'copilot', 'deepseek', 'moa', 'openrouter', 'nous',
+  'qwen-oauth', 'minimax-oauth', 'zai', 'minimax', 'minimax-cn', 'kimi-coding',
+  'kimi-coding-cn', 'alibaba', 'alibaba-coding-plan', 'xiaomi', 'huggingface',
+  'fireworks', 'novita', 'nvidia', 'deepinfra', 'gmi', 'arcee', 'stepfun',
+  'upstage', 'kilocode', 'ai-gateway', 'opencode-zen', 'opencode-go',
+  'ollama-cloud', 'lmstudio', 'tencent-tokenhub', 'bedrock', 'vertex', 'azure-foundry',
+]);
+const NATIVE_AGENT_COMMANDS = { codex: 'codex', claude: 'claude', gemini: 'gemini', 'copilot-acp': 'copilot' };
+
+export function buildAgentLaunchCommand({ agent, model, reasoning = '', launchCommand = '' }) {
+  const normalizedAgent = normalizeAiType(agent);
+  if (normalizedAgent === 'copilot-acp') return NATIVE_AGENT_COMMANDS['copilot-acp'];
+  if (API_AGENT_IDS.has(normalizedAgent)) {
+    const runner = typeof launchCommand === 'string' && /^[a-zA-Z0-9_./ -]+$/.test(launchCommand.trim())
+      ? launchCommand.trim()
+      : 'node backend/dist/api-agent-runner.js';
+    const parts = [runner, '--provider', quoteAgentArgument(normalizedAgent, 'provider'), '--model', quoteAgentArgument(model, 'model')];
+    if (reasoning && normalizedAgent !== 'copilot') parts.push('--reasoning', quoteAgentArgument(reasoning, 'reasoning level'));
+    return parts.join(' ');
+  }
+  const nativeCommand = NATIVE_AGENT_COMMANDS[normalizedAgent];
+  if (!nativeCommand) throw new Error('Invalid native agent');
+  const parts = [nativeCommand, '--model', quoteAgentArgument(model, 'model')];
+  const normalizedReasoning = typeof reasoning === 'string' ? reasoning.trim().toLowerCase() : '';
+  if (normalizedReasoning) {
+    if (!AGENT_REASONING_LEVELS[normalizedAgent]?.has(normalizedReasoning)) {
+      throw new Error('Invalid agent reasoning level');
+    }
+    if (normalizedAgent === 'codex') {
+      parts.push('--config', quoteAgentArgument(`model_reasoning_effort=\"${normalizedReasoning}\"`, 'reasoning level'));
+    } else if (normalizedAgent === 'claude') {
+      parts.push('--effort', quoteAgentArgument(normalizedReasoning, 'reasoning level'));
+    }
+  }
+  return parts.join(' ');
 }
 
 export function resolveSlashAgentCommand(text) {

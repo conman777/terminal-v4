@@ -11,7 +11,7 @@ describe('isPublicApiRoute', () => {
     expect(isPublicApiRoute('/api/auth/register-passkey')).toBe(false);
   });
 
-  it('matches public route patterns', () => {
-    expect(isPublicApiRoute('/api/browser/snapshot')).toBe(true);
+  it('does not expose browser automation routes publicly', () => {
+    expect(isPublicApiRoute('/api/browser/snapshot')).toBe(false);
   });
 });

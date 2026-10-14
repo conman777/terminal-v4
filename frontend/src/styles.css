@@ -1896,6 +1896,32 @@ button {
   background: var(--terminal-bg, var(--bg-surface, #1c1814));
 }
 
+/* stable-terminal terminal surface: inset padding so glyphs don't kiss the edge,
+   stable background tokens for both canvas and DOM renderers. */
+.xterm-container.xterm-container-terminal-v4 {
+  padding: 6px 8px 8px;
+  box-sizing: border-box;
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--accent-primary) 8%, transparent), transparent 55%),
+    var(--terminal-bg, var(--bg-surface, #1c1814));
+  border-top: 1px solid color-mix(in srgb, var(--border-default, #3a3228) 55%, transparent);
+}
+
+.xterm-container.xterm-container-terminal-v4 .xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.xterm-container.xterm-container-terminal-v4 .xterm-screen,
+.xterm-container.xterm-container-terminal-v4 .xterm-viewport {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+.terminal-chat[data-terminal-engine="terminal-v4-stable"] {
+  isolation: isolate;
+}
+
 .xterm {
   height: 100%;
   width: 100%;
@@ -13913,6 +13939,66 @@ textarea:focus-visible {
   z-index: 4;
 }
 
+/*
+ * stable-terminal terminal host:
+ * - Layout size lives on `.desktop-terminal-slot` (flex sibling).
+ * - xterm/WebGL stays on an absolute host INSIDE the slot so we never flip
+ *   position:absolute ↔ relative on the renderer host (that detaches WebGL).
+ * - Collapsing the slot hides the terminal without unmounting a latched runtime.
+ */
+.terminal-with-status .desktop-terminal-slot {
+  position: relative;
+  flex: 0 0 0;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.terminal-with-status .desktop-terminal-slot.is-open {
+  flex: 0 0 clamp(180px, 34vh, 360px);
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
+  overflow: hidden;
+  border-top: none;
+  background: transparent;
+}
+
+.terminal-with-status .desktop-terminal-slot.is-open.prompt-docked {
+  flex-basis: clamp(220px, 42vh, 420px);
+  border-top: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 94%, transparent), color-mix(in srgb, var(--bg-base) 90%, transparent));
+}
+
+.terminal-with-status.terminal-first .desktop-terminal-stack,
+.terminal-with-status .desktop-terminal-stack.terminal-first {
+  min-height: 0;
+}
+
+.terminal-with-status.terminal-first .desktop-terminal-slot,
+.terminal-with-status .desktop-terminal-slot.terminal-first {
+  flex: 1 1 0;
+  min-height: 0;
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
+  overflow: hidden;
+  border-top: none;
+  background: transparent;
+}
+
+.terminal-with-status .desktop-terminal-runtime-host {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Back-compat: older class names map onto the slot host behaviour. */
 .terminal-with-status .desktop-terminal-runtime {
   position: absolute;
   inset: 0;
@@ -13924,27 +14010,21 @@ textarea:focus-visible {
 }
 
 .terminal-with-status .desktop-terminal-runtime.inline-panel-open {
-  position: relative;
-  inset: auto;
+  position: absolute;
+  inset: auto 0 0 0;
+  height: clamp(180px, 34vh, 360px);
   z-index: 2;
   opacity: 1;
   pointer-events: auto;
-  flex: 0 0 clamp(180px, 34vh, 360px);
-  height: auto;
   overflow: hidden;
   border-top: none;
   background: transparent;
 }
 
 .terminal-with-status .desktop-terminal-runtime.inline-panel-open.prompt-docked {
-  flex-basis: clamp(220px, 42vh, 420px);
+  height: clamp(220px, 42vh, 420px);
   border-top: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
   background: linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 94%, transparent), color-mix(in srgb, var(--bg-base) 90%, transparent));
-}
-
-.terminal-with-status.terminal-first .desktop-terminal-stack,
-.terminal-with-status .desktop-terminal-stack.terminal-first {
-  min-height: 0;
 }
 
 .cli-activity-strip {
@@ -14086,10 +14166,9 @@ textarea:focus-visible {
 
 .terminal-with-status.terminal-first .desktop-terminal-runtime,
 .terminal-with-status .desktop-terminal-runtime.terminal-first {
-  position: relative;
-  inset: auto;
+  position: absolute;
+  inset: 0;
   z-index: 1;
-  flex: 1 1 0;
   min-height: 0;
   opacity: 1;
   pointer-events: auto;
@@ -14099,23 +14178,27 @@ textarea:focus-visible {
 }
 
 .terminal-with-status.terminal-first .terminal-chat-desktop,
-.terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat-desktop {
+.terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat-desktop,
+.terminal-with-status .desktop-terminal-slot.terminal-first .terminal-chat-desktop {
   --terminal-readable-width: 100%;
 }
 
-.terminal-with-status .desktop-terminal-runtime .terminal-chat {
+.terminal-with-status .desktop-terminal-runtime .terminal-chat,
+.terminal-with-status .desktop-terminal-runtime-host .terminal-chat {
   flex: 1;
   min-height: 0;
   width: 100%;
 }
 
 .terminal-with-status.terminal-first .desktop-terminal-runtime .terminal-chat,
-.terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat {
+.terminal-with-status .desktop-terminal-runtime.terminal-first .terminal-chat,
+.terminal-with-status .desktop-terminal-slot.terminal-first .terminal-chat {
   height: auto;
   min-height: 0;
 }
 
-.terminal-with-status .desktop-terminal-runtime.is-hidden {
+.terminal-with-status .desktop-terminal-runtime.is-hidden,
+.terminal-with-status .desktop-terminal-slot.is-collapsed {
   border-top: none;
 }
 
@@ -16777,18 +16860,21 @@ textarea:focus-visible {
   padding-top: 0;
 }
 
-.mobile-shell-parity .mobile-terminal-runtime.is-hidden {
+.mobile-shell-parity .mobile-terminal-runtime.is-hidden,
+.mobile-shell-parity .mobile-terminal-slot.is-collapsed {
   visibility: hidden;
   pointer-events: none;
 }
 
-.mobile-shell-parity .mobile-terminal-runtime.inline-panel-open {
+.mobile-shell-parity .mobile-terminal-runtime.inline-panel-open,
+.mobile-shell-parity .mobile-terminal-slot.is-open {
   flex: 0 0 min(34vh, 280px);
   border-top: 1px solid color-mix(in srgb, var(--border-default) 48%, transparent);
   visibility: visible;
 }
 
-.mobile-shell-parity .mobile-terminal-runtime.terminal-first {
+.mobile-shell-parity .mobile-terminal-runtime.terminal-first,
+.mobile-shell-parity .mobile-terminal-slot.terminal-first {
   flex: 1 1 0;
   border-top: none;
   visibility: visible;

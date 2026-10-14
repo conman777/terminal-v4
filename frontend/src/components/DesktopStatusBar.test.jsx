@@ -126,9 +126,9 @@ describe('DesktopStatusBar', () => {
     expect(toggleAutocorrectMock).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a fallback AI label for unknown providers', () => {
+  it('shows the DeepSeek API provider label in the footer', () => {
     render(<DesktopStatusBar {...buildProps({ aiType: 'deepseek' })} />);
-    expect(screen.getByRole('button', { name: 'Choose AI coder' })).toHaveAttribute('title', 'Assistant: Deepseek');
+    expect(screen.getByRole('button', { name: 'Choose AI coder' })).toHaveAttribute('title', 'Assistant: DeepSeek');
   });
 
   it('lets the user choose a different AI coder from the footer menu', () => {

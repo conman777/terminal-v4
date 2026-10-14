@@ -436,6 +436,101 @@
   border-top-color: var(--border-subtle) !important;
 }
 
+.status-ai-menu-auth {
+  border-top: 1px solid var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+}
+
+.tv4-provider-auth-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+}
+
+.tv4-provider-auth-subtitle,
+.tv4-provider-auth-model-count {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.tv4-provider-auth-list {
+  display: grid;
+  gap: 10px;
+}
+
+.tv4-provider-auth-card {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.tv4-provider-auth-card-header,
+.tv4-provider-auth-key-row,
+.tv4-provider-auth-oauth {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tv4-provider-auth-card-header {
+  justify-content: space-between;
+}
+
+.tv4-provider-auth-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.tv4-provider-auth-status-ready { color: #4ade80; }
+.tv4-provider-auth-status-auth-required { color: #fbbf24; }
+.tv4-provider-auth-status-not-installed { color: #fb7185; }
+
+.tv4-provider-auth-key-row {
+  margin-top: 10px;
+}
+
+.tv4-provider-auth-key-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.tv4-provider-auth-oauth {
+  flex-wrap: wrap;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.tv4-provider-auth-oauth small {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.tv4-provider-auth-method-label {
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.tv4-provider-auth-oauth code {
+  padding: 4px 7px;
+  border-radius: 4px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.tv4-provider-auth-error,
+.tv4-provider-auth-notice {
+  margin-bottom: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.tv4-provider-auth-error { color: #fecaca; background: color-mix(in srgb, #ef4444 14%, transparent); }
+.tv4-provider-auth-notice { color: #bbf7d0; background: color-mix(in srgb, #22c55e 14%, transparent); }
+
 /* ===========================================
    Mobile Overrides
    =========================================== */

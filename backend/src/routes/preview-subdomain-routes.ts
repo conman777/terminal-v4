@@ -10,7 +10,8 @@ import { logWebSocketConnection, logWebSocketMessage } from '../preview/websocke
 import {
   buildPreviewTokenCookie,
   getPreviewAuthToken,
-  getPreviewScopeIdOrAnonymous
+  getPreviewScopeIdOrAnonymous,
+  resolvePreviewScopeId
 } from '../preview/preview-scope.js';
 
 const PREVIEW_SUBDOMAIN_BASES = (process.env.PREVIEW_SUBDOMAIN_BASES || process.env.PREVIEW_SUBDOMAIN_BASE || 'conordart.com,localhost')
@@ -244,6 +245,72 @@ const PREVIEW_DEBUG_SCRIPT = `
   const COMPAT_PATH_MODE = !!PREVIEW_BASE_PATH;
   var lastReportedLocation = null;
   var trustedParentOrigin = '';
+
+  // Auth token from the page URL (appended by the Terminal UI to the preview
+  // iframe src). Used to keep sandboxed-iframe XHR/fetch working through the
+  // auth-gated proxy: sandboxed frames cannot send cookies or headers, so we
+  // rewrite same-origin requests to carry the token as a query parameter.
+  var PREVIEW_TOKEN = '';
+  try {
+    var urlParams = new URLSearchParams(window.location.search);
+    PREVIEW_TOKEN = urlParams.get('token') || '';
+  } catch (e) {}
+
+  function previewUrlWithToken(url) {
+    if (!PREVIEW_TOKEN) return url;
+    try {
+      var parsed = new URL(url, PREVIEW_ORIGIN);
+      if (parsed.origin !== PREVIEW_ORIGIN) return url;
+      if (!parsed.searchParams.has('token')) {
+        parsed.searchParams.set('token', PREVIEW_TOKEN);
+      }
+      return parsed.toString();
+    } catch (e) {
+      return url;
+    }
+  }
+
+  if (PREVIEW_TOKEN) {
+    try {
+      var originalFetch = window.fetch;
+      if (originalFetch) {
+        window.fetch = function(input, init) {
+          if (typeof input === 'string') {
+            input = previewUrlWithToken(input);
+          } else if (input instanceof Request) {
+            var rewritten = previewUrlWithToken(input.url);
+            if (rewritten !== input.url) {
+              input = new Request(rewritten, input);
+            }
+          }
+          return originalFetch(input, init);
+        };
+      }
+      var originalXHROpen = XMLHttpRequest.prototype.open;
+      if (originalXHROpen) {
+        XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
+          return originalXHROpen.call(this, method, previewUrlWithToken(url), async, user, pass);
+        };
+      }
+
+      // Keep the token across internal navigations (path-based preview mode):
+      // rewrite same-origin link hrefs to carry ?token= so the next page load
+      // also passes the auth gate and can keep rewriting its own requests.
+      document.addEventListener('click', function(e) {
+        try {
+          var link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+          if (!link) return;
+          var href = link.getAttribute('href');
+          if (!href || href.indexOf('token=') !== -1) return;
+          var resolved = new URL(href, PREVIEW_ORIGIN);
+          if (resolved.origin !== PREVIEW_ORIGIN) return;
+          if (resolved.searchParams.has('token')) return;
+          resolved.searchParams.set('token', PREVIEW_TOKEN);
+          link.setAttribute('href', resolved.toString());
+        } catch (err) {}
+      }, true);
+    } catch (e) {}
+  }
 
   function getExpectedParentOrigin() {
     if (PREVIEW_BASE_PATH || MAIN_IS_LOCAL) {
@@ -2101,6 +2168,12 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
 
   // WebSocket proxy for preview subdomains (HMR, dev tooling, etc.)
   app.get('/*', { websocket: true, constraints: { host: getPreviewHostConstraint() } }, (socket, request) => {
+    // Security: require a valid auth token (cookie or query param) for preview WS proxying.
+    if (!resolvePreviewScopeId(request)) {
+      socket.close(4401, 'Unauthorized');
+      return;
+    }
+
     const port = getPreviewPort(request.headers.host);
     if (!port) {
       socket.close(1008, 'Preview port not found');
@@ -2155,6 +2228,7 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
       }
     }
     if (!port) return; // Not a preview request, continue to other routes
+
     if (!previewHost) {
       previewHost = getPreviewHost(rawHost) || getPreviewHost(originHost) || request.headers.host?.split(':')[0] || null;
     }
@@ -2193,6 +2267,14 @@ export async function registerPreviewSubdomainRoutes(app: FastifyInstance): Prom
           : 'authorization, content-type, x-csrftoken, x-csrf-token'
       );
       reply.code(204).send();
+      return reply;
+    }
+
+    // Security: preview proxying exposes localhost services — require a valid
+    // auth token (query param, cookie, or Authorization header) before proxying.
+    // (Checked after the OPTIONS preflight block since preflights carry no credentials.)
+    if (!resolvePreviewScopeId(request)) {
+      reply.code(401).send({ error: 'Unauthorized' });
       return reply;
     }
 

@@ -69,7 +69,7 @@ export function MobileShell({
   const [terminalPreview, setTerminalPreview] = useState('');
   const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
-  const [terminalViewMode, setTerminalViewMode] = useState('codex');
+  const [terminalRuntimeLatched, setTerminalRuntimeLatched] = useState(false);
   const [isTerminalBusy, setIsTerminalBusy] = useState(false);
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
@@ -99,12 +99,21 @@ export function MobileShell({
     [currentAiType, customAiProviders]
   );
   const isTerminalBackedSession = Boolean(currentSession?.id) && !isStructuredSession;
-  const supportsAgentInterface = isTerminalBackedSession && Boolean(currentAiType);
-  const isRawTerminalMode = isTerminalBackedSession && (!supportsAgentInterface || terminalViewMode === 'terminal');
-  const useConversationFirstLayout = isStructuredSession || (supportsAgentInterface && !isRawTerminalMode);
-  const useTerminalFirstLayout = isTerminalBackedSession && isRawTerminalMode;
+  // Terminal v4 stable: terminal-backed sessions always show the full PTY.
+  const useConversationFirstLayout = isStructuredSession;
+  const useTerminalFirstLayout = isTerminalBackedSession;
   const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen;
-  const shouldRenderTerminalRuntime = isTerminalBackedSession || isTerminalPanelOpen;
+  const shouldRenderTerminalRuntime = (
+    isTerminalBackedSession
+    || isTerminalPanelOpen
+    || terminalRuntimeLatched
+  );
+
+  useEffect(() => {
+    if (isTerminalBackedSession || isTerminalPanelOpen) {
+      setTerminalRuntimeLatched(true);
+    }
+  }, [isTerminalBackedSession, isTerminalPanelOpen]);
 
   const {
     turns,
@@ -147,7 +156,7 @@ export function MobileShell({
     setTerminalPreview('');
     setTerminalScreenSnapshot('');
     setIsTerminalPanelOpen(false);
-    setTerminalViewMode('codex');
+    setTerminalRuntimeLatched(false);
     setIsTerminalBusy(false);
     setGitBranchInfo(null);
     setIsLoadingGitBranches(false);
@@ -239,21 +248,7 @@ export function MobileShell({
   }, []);
 
   const handleOpenTerminalPanel = useCallback(() => {
-    if (!isStructuredSession) {
-      setTerminalViewMode('terminal');
-    }
     setIsTerminalPanelOpen(true);
-  }, [isStructuredSession]);
-
-  const handleTerminalViewModeSelect = useCallback((nextMode) => {
-    setTerminalViewMode((currentMode) => (
-      nextMode === 'terminal' || nextMode === 'codex'
-        ? nextMode
-        : currentMode === 'terminal'
-          ? 'codex'
-          : 'terminal'
-    ));
-    setIsTerminalPanelOpen(false);
   }, []);
 
   const handleComposerSubmit = useCallback((text) => {
@@ -379,34 +374,37 @@ export function MobileShell({
               ) : null}
 
               <div
-                className={`desktop-terminal-runtime mobile-terminal-runtime${isTerminalDockVisible ? ' inline-panel-open' : ' is-hidden'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
+                className={`desktop-terminal-slot mobile-terminal-slot${isTerminalDockVisible ? ' is-open' : ' is-collapsed'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
                 aria-hidden={!isTerminalDockVisible ? 'true' : undefined}
               >
-                {shouldRenderTerminalRuntime ? (
-                  <LazyTerminalChat
-                    key={`${currentSession.id}-${refreshToken}`}
-                    surface="mobile"
-                    sessionId={currentSession.id}
-                    keybarOpen={accessoryOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={onUrlDetected}
-                    fontSize={fontSize}
-                    webglEnabled={webglEnabled}
-                    inputEnabled={useTerminalFirstLayout || (isStructuredSession && isTerminalPanelOpen)}
-                    usesTmux={currentSession?.usesTmux}
-                    onRegisterImageUpload={(trigger) => {
-                      imageInputRef.current = { click: trigger };
-                    }}
-                    onRegisterFocusTerminal={onRegisterFocusTerminal}
-                    onConnectionChange={handleConnectionChange}
-                    onCwdChange={setCurrentCwd}
-                    onActivityChange={handleActivityChange}
-                    onOutputChunk={handleOutputChunk}
-                    onScreenSnapshot={handleScreenSnapshot}
-                    onRegisterSendText={handleRegisterSendText}
-                    onTurn={handleTurn}
-                  />
-                ) : null}
+                <div className="desktop-terminal-runtime-host" data-persistent-terminal="">
+                  {shouldRenderTerminalRuntime ? (
+                    <LazyTerminalChat
+                      key={`${currentSession.id}-${refreshToken}`}
+                      surface="mobile"
+                      sessionId={currentSession.id}
+                      keybarOpen={accessoryOpen}
+                      viewportHeight={viewportHeight}
+                      onUrlDetected={onUrlDetected}
+                      fontSize={fontSize}
+                      webglEnabled={webglEnabled}
+                      inputEnabled={useTerminalFirstLayout || (isStructuredSession && isTerminalPanelOpen)}
+                      usesTmux={currentSession?.usesTmux}
+                      isPrimary={isTerminalDockVisible}
+                      onRegisterImageUpload={(trigger) => {
+                        imageInputRef.current = { click: trigger };
+                      }}
+                      onRegisterFocusTerminal={onRegisterFocusTerminal}
+                      onConnectionChange={handleConnectionChange}
+                      onCwdChange={setCurrentCwd}
+                      onActivityChange={handleActivityChange}
+                      onOutputChunk={handleOutputChunk}
+                      onScreenSnapshot={handleScreenSnapshot}
+                      onRegisterSendText={handleRegisterSendText}
+                      onTurn={handleTurn}
+                    />
+                  ) : null}
+                </div>
               </div>
 
               <DesktopStatusBar
@@ -419,9 +417,9 @@ export function MobileShell({
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
                 showTerminalToggle={!useTerminalFirstLayout && isStructuredSession}
                 onToggleTerminalPanel={!useTerminalFirstLayout && isStructuredSession ? handleToggleTerminalPanel : undefined}
-                terminalViewMode={useTerminalFirstLayout ? 'terminal' : 'codex'}
-                showTerminalViewModeToggle={supportsAgentInterface}
-                onToggleTerminalViewMode={supportsAgentInterface ? handleTerminalViewModeSelect : undefined}
+                terminalViewMode="terminal"
+                showTerminalViewModeToggle={false}
+                onToggleTerminalViewMode={undefined}
                 connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}

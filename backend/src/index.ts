@@ -4,6 +4,7 @@ import cors from '@fastify/cors';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import rateLimit from '@fastify/rate-limit';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
@@ -63,8 +64,29 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     ...(httpsOptions ? { https: httpsOptions } : {})
   });
 
+  // CORS: reflect only trusted origins instead of echoing any origin with credentials.
+  // Same-origin requests don't need CORS; cross-origin consumers are the preview
+  // iframes (sandboxed -> opaque 'null' origin), dev servers on localhost/LAN,
+  // and the configured domain. Public websites get no ACAO header.
+  const CORS_EXTRA_ORIGINS = (process.env.CORS_EXTRA_ORIGINS || '')
+    .split(',').map((o) => o.trim()).filter(Boolean);
+  const corsOriginRegex = new RegExp(
+    '^(?:' + [
+      'null',
+      'https?://(?:localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0|\\[::1\\])(?::\\d+)?$',
+      'https?://192\\.168\\.1\\.199(?::\\d+)?$',
+      'https?://100\\.123\\.255\\.87(?::\\d+)?$',
+      'https?://[^/]*\\.nip\\.io(?::\\d+)?$',
+      'https?://[^/]*\\.conordart\\.com(?::\\d+)?$',
+      ...CORS_EXTRA_ORIGINS.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    ].join('|') + ')$',
+    'i'
+  );
   await app.register(cors, {
-    origin: true,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      return cb(null, corsOriginRegex.test(origin));
+    },
     credentials: true
   });
   // Compression is handled by Cloudflare - don't double-compress
@@ -74,6 +96,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     limits: {
       fileSize: 100 * 1024 * 1024 // 100MB max for file uploads
     }
+  });
+
+  // Rate limiting: opt-in per route via { config: { rateLimit: {...} } }.
+  // Applied to auth endpoints to slow brute-force attempts.
+  await app.register(rateLimit, {
+    global: false,
+    max: 10,
+    timeWindow: '1 minute'
   });
 
   // Note: COEP/COOP headers removed - they break cross-origin preview iframe
@@ -136,15 +166,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     prefix: '/',
     // Disable default caching so our setHeaders takes full control
     cacheControl: false,
-    setHeaders: (res, path) => {
+    setHeaders: (reply, path) => {
       // HTML files: never cache (always revalidate)
       if (path.endsWith('.html')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
+        reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+        reply.header('Pragma', 'no-cache');
+        reply.header('Expires', '0');
       } else {
         // JS/CSS/assets with hashes: cache for 1 year
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       }
     }
   });

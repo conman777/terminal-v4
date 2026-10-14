@@ -152,7 +152,7 @@ const DEV_PROXY_SCRIPT = `
         level: level,
         message: serialize(args).join(' '),
         timestamp: Date.now()
-      }, '*');
+      }, window.location.origin);
     } catch {}
   }
 

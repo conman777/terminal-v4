@@ -11,6 +11,7 @@ vi.mock('../utils/api', () => ({
 describe('FolderBrowserModal', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    localStorage.clear();
   });
 
   it('renders the modal overlay at the document root when opened', async () => {
@@ -89,6 +90,58 @@ describe('FolderBrowserModal', () => {
       expect(screen.getByRole('button', { name: 'Open here' })).toBeInTheDocument();
     });
     expect(apiFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes the selected native agent, model, and reasoning into session creation', async () => {
+    apiFetchMock.mockImplementation(async url => {
+      if (String(url).startsWith('/api/agent/catalog')) {
+        return {
+          ok: true,
+          json: async () => ({
+            defaultAgent: 'codex',
+            agents: [
+              { id: 'codex', label: 'Codex', status: 'ready', models: [{ id: 'gpt-5.6-sol', label: 'GPT-5.6-Sol', default: true }, { id: 'gpt-5.5', label: 'GPT-5.5' }], reasoningLevels: ['low', 'high'] },
+              { id: 'claude', label: 'Claude Code', status: 'ready', models: [{ id: 'sonnet', label: 'Sonnet' }], reasoningLevels: ['low', 'high'] },
+            ],
+          }),
+        };
+      }
+      return { ok: true, json: async () => ({ path: '/home/conor/terminal-v4', folders: [], parent: '/home/conor' }) };
+    });
+    const onSelect = vi.fn();
+
+    render(
+      <FolderBrowserModal
+        isOpen
+        onClose={vi.fn()}
+        currentPath="/home/conor/terminal-v4"
+        recentFolders={[]}
+        onSelect={onSelect}
+        showAiSelector
+        aiOptions={[
+          { id: 'cli', label: 'CLI' },
+          { id: 'codex', label: 'Codex', title: 'Codex', command: 'codex' },
+        ]}
+      />
+    );
+
+    fireEvent.click(document.querySelector('.pro-fb-select-trigger'));
+    fireEvent.click(screen.getByText('Codex'));
+    fireEvent.click(await screen.findByRole('button', { name: /Codex model GPT-5\.6-Sol/i }));
+    fireEvent.click(screen.getByRole('button', { name: /GPT-5\.5/i }));
+    fireEvent.change(screen.getByLabelText('Agent reasoning effort'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
+
+    expect(onSelect).toHaveBeenCalledWith(
+      '/home/conor/terminal-v4',
+      'codex',
+      'Codex',
+      { model: 'gpt-5.5', reasoning: 'high' },
+    );
+    expect(JSON.parse(localStorage.getItem('terminalV4AgentModels')).codex).toEqual({
+      model: 'gpt-5.5',
+      reasoning: 'high',
+    });
   });
 
   it('selects and closes immediately when a recent folder chip is clicked', async () => {

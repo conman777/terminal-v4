@@ -2732,7 +2732,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
               )}
               <iframe
                 ref={iframeRef}
-                src={iframeSrc}
+                src={withAuthToken(iframeSrc)}
                 className="preview-iframe"
                 onLoad={handleLoad}
                 onError={handleError}
@@ -3678,7 +3678,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
                 )}
                 <iframe
                   ref={iframeRef}
-                  src={iframeSrc}
+                  src={withAuthToken(iframeSrc)}
                   className="preview-iframe"
                   onLoad={handleLoad}
                   onError={handleError}

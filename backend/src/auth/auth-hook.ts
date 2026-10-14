@@ -13,9 +13,7 @@ const PUBLIC_ROUTES = [
 ];
 
 // Route patterns that don't require authentication (for dynamic routes)
-const PUBLIC_ROUTE_PATTERNS = [
-  /^\/api\/browser\//            // Browser automation API
-];
+const PUBLIC_ROUTE_PATTERNS: RegExp[] = [];
 
 // Extend Fastify request type
 declare module 'fastify' {
@@ -60,12 +58,20 @@ export function registerAuthHook(app: FastifyInstance): void {
       return;
     }
 
-    // Skip auth for non-API routes (like health checks, static files)
-    if (!request.url.startsWith('/api/')) {
+    // Skip auth for non-API routes (like health checks, static files),
+    // except preview proxy paths which are sensitive (they proxy localhost services).
+    if (!request.url.startsWith('/api/') && !request.url.startsWith('/preview/')) {
       return;
     }
 
-    // Get token from Authorization header or query parameter (for SSE/EventSource)
+    // CORS preflights carry no credentials and reveal nothing — let the preview
+    // hook respond to them so proxied apps' cross-origin fetches keep working.
+    if (request.method === 'OPTIONS') {
+      return;
+    }
+
+    // Get token from Authorization header, query parameter (for SSE/EventSource),
+    // or the preview token cookie (set by the backend when a valid token was seen).
     let token: string | null = null;
 
     const authHeader = request.headers.authorization;
@@ -78,6 +84,21 @@ export function registerAuthHook(app: FastifyInstance): void {
       const query = request.query as Record<string, string>;
       if (query.token) {
         token = query.token;
+      }
+    }
+
+    // Fall back to the httpOnly preview cookie (validated JWT set by this backend)
+    if (!token) {
+      const rawCookie = request.headers.cookie;
+      if (rawCookie) {
+        const match = rawCookie.match(/(?:^|;\s*)terminal_preview_token=([^;]+)/);
+        if (match?.[1]) {
+          try {
+            token = decodeURIComponent(match[1]);
+          } catch {
+            token = match[1];
+          }
+        }
       }
     }
 

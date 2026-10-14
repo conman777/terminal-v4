@@ -34,11 +34,17 @@ export function assertAuthConfig(): void {
   if (!process.env.STORAGE_DATABASE_URL) {
     console.warn('STORAGE_DATABASE_URL not set - login will not work');
   }
+  if (!process.env.ALLOWED_USERNAME) {
+    console.warn('ALLOWED_USERNAME not set - access control is DISABLED (any signed-in username is accepted)');
+  }
 }
 
 export function isAllowedUsername(username: string): boolean {
   const allowed = process.env.ALLOWED_USERNAME?.trim();
-  if (!allowed) return true;
+  // Fail closed in production: a missing allowlist must never widen access.
+  // In non-production (dev/test), a missing allowlist is a convenience for
+  // local development — but assertAuthConfig() warns loudly about it.
+  if (!allowed) return process.env.NODE_ENV !== 'production';
   return username === allowed;
 }
 

@@ -744,7 +744,7 @@ describe('DesktopConversationView', () => {
     expect(screen.getByText(/No Codex response yet/i)).toBeInTheDocument();
   });
 
-  it('supports unknown CLI providers with fallback label and launch filtering', () => {
+  it('shows a known API provider label and launch filtering', () => {
     render(
       <DesktopConversationView
         {...buildProps({
@@ -758,7 +758,7 @@ describe('DesktopConversationView', () => {
       />
     );
 
-    expect(screen.getByText('Deepseek')).toBeInTheDocument();
+    expect(screen.getByText('DeepSeek')).toBeInTheDocument();
     expect(screen.queryByText(/deepseek --model r1/i)).not.toBeInTheDocument();
     expect(screen.getByText('Ready.')).toBeInTheDocument();
   });

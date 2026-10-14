@@ -81,6 +81,15 @@ export async function apiDelete(url) {
   return response.status === 204 ? null : response.json();
 }
 
+export async function apiPut(url, body) {
+  const response = await apiFetch(url, { method: 'PUT', body });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(error.error || 'Request failed');
+  }
+  return response.json();
+}
+
 export async function apiPatch(url, body) {
   const response = await apiFetch(url, {
     method: 'PATCH',

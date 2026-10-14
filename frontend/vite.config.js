@@ -53,13 +53,15 @@ export default defineConfig({
     ],
     proxy: {
       '/api': {
-        target: 'http://localhost:3020',
+        target: 'https://localhost:3020',
         changeOrigin: true,
+        secure: false,
         ws: true
       },
       '/preview': {
-        target: 'http://localhost:3020',
+        target: 'https://localhost:3020',
         changeOrigin: true,
+        secure: false,
         ws: true
       }
     }

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '../utils/api';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
+import { AgentModelPicker } from './AgentModelPicker';
 import './FolderBrowserModal.css';
 
 function resolveInitialAiOptionId(options, preferredId) {
@@ -15,6 +16,19 @@ function buildAiOptionsSignature(options) {
   return options
     .map((option) => `${option.id}:${option.label}:${option.title ?? ''}:${option.command ?? ''}`)
     .join('|');
+}
+
+const AGENT_SELECTION_STORAGE_KEY = 'terminalV4AgentModels';
+
+function loadSavedAgentSelection(agentId) {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
+    const value = values?.[agentId];
+    return typeof value?.model === 'string' ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 export function FolderBrowserModal({
@@ -44,6 +58,7 @@ export function FolderBrowserModal({
   const [selectedAiOptionId, setSelectedAiOptionId] = useState(() => (
     resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)
   ));
+  const [agentSelection, setAgentSelection] = useState(() => loadSavedAgentSelection(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)));
   const [tabName, setTabName] = useState('');
 
   const loadDirectory = useCallback(async (dirPath) => {
@@ -74,7 +89,9 @@ export function FolderBrowserModal({
       loadDirectory(currentPath);
       setQuery('');
       setTabName('');
-      setSelectedAiOptionId(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId));
+      const nextAiOptionId = resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
+      setSelectedAiOptionId(nextAiOptionId);
+      setAgentSelection(loadSavedAgentSelection(nextAiOptionId));
     }
   }, [isOpen, currentPath, loadDirectory, aiOptionsSignature, defaultAiOptionId]);
 
@@ -92,17 +109,37 @@ export function FolderBrowserModal({
   };
 
   const handleSelect = () => {
-    onSelect(path, showAiSelector ? selectedAiOptionId : undefined, showAiSelector ? tabName.trim() : undefined);
+    const args = [
+      path,
+      showAiSelector ? selectedAiOptionId : undefined,
+      showAiSelector ? tabName.trim() : undefined,
+    ];
+    if (showAiSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
+    onSelect(...args);
     onClose();
   };
 
   const handleRecentClick = (recentPath) => {
-    onSelect(
+    const args = [
       recentPath,
       showAiSelector ? selectedAiOptionId : undefined,
-      showAiSelector ? tabName.trim() : undefined
-    );
+      showAiSelector ? tabName.trim() : undefined,
+    ];
+    if (showAiSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
+    onSelect(...args);
     onClose();
+  };
+
+  const handleAgentSelectionChange = (selection) => {
+    setAgentSelection(selection);
+    if (typeof localStorage !== 'undefined' && selectedAiOptionId !== 'cli') {
+      try {
+        const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
+        localStorage.setItem(AGENT_SELECTION_STORAGE_KEY, JSON.stringify({ ...values, [selectedAiOptionId]: selection }));
+      } catch {
+        // Ignore storage failures; the current selection remains usable for this launch.
+      }
+    }
   };
 
   if (!isOpen) return null;
@@ -187,6 +224,7 @@ export function FolderBrowserModal({
                         className={`pro-fb-option ${option.id === selectedAiOptionId ? 'selected' : ''}`}
                         onClick={() => {
                           setSelectedAiOptionId(option.id);
+                          setAgentSelection(loadSavedAgentSelection(option.id));
                           setTabName(option.label || '');
                           document.getElementById('folder-browser-ai-options')?.classList.remove('open');
                         }}
@@ -209,6 +247,16 @@ export function FolderBrowserModal({
                   maxLength={60}
                 />
               </div>
+            </div>
+          )}
+
+          {showAiSelector && selectedAiOptionId !== 'cli' && (
+            <div className="pro-fb-agent-config">
+              <AgentModelPicker
+                agentId={selectedAiOptionId}
+                value={agentSelection}
+                onChange={handleAgentSelectionChange}
+              />
             </div>
           )}
 

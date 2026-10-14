@@ -1,8 +1,11 @@
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
+import { observeActiveTerminalResize } from '../utils/observeActiveTerminalResize';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
 import {
@@ -187,6 +190,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   });
   const [showCopiedBanner, setShowCopiedBanner] = useState(false);
   const [windowActive, setWindowActive] = useState(() => isWindowActive());
+  // Bumped after xterm.open so the active-resize observer can attach to a live host.
+  const [hostReadyVersion, setHostReadyVersion] = useState(0);
   const copiedBannerTimerRef = useRef(null);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
   const [readerLines, setReaderLines] = useState(null);
@@ -1382,8 +1387,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     // recorded at the PTY's original width. Resizing xterm mid-playback misaligns
     // cursor positions and causes severe content garbling. fit() will be triggered
     // explicitly once loadInitialHistory() completes.
+    // stable terminal: inactive split panes keep last geometry — skip fit churn.
+    const allowFit = fit && (isPrimaryRef.current || isMobile);
     let handledByAuthoritativeResize = false;
-    if (fit && canRender && !historyReloadingRef.current && requestAuthoritativeResizeRef.current) {
+    if (allowFit && canRender && !historyReloadingRef.current && requestAuthoritativeResizeRef.current) {
       try {
         handledByAuthoritativeResize = requestAuthoritativeResizeRef.current() === true;
       } catch {
@@ -1391,7 +1398,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     }
 
-    if (fit && fitAddonRef.current && canRender && !historyReloadingRef.current && !handledByAuthoritativeResize) {
+    if (allowFit && fitAddonRef.current && canRender && !historyReloadingRef.current && !handledByAuthoritativeResize) {
       let wasAtBottom = true;
       if (preserveBottom) {
         const buffer = term.buffer?.active;
@@ -1421,7 +1428,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         // Ignore transient refresh failures during rapid mount/unmount.
       }
     }
-  }, [MIN_FIT_CONTAINER_HEIGHT, MIN_FIT_CONTAINER_WIDTH]);
+  }, [MIN_FIT_CONTAINER_HEIGHT, MIN_FIT_CONTAINER_WIDTH, isMobile]);
 
   const scheduleViewportRefresh = useCallback(({
     delay,
@@ -1604,7 +1611,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let hasOpened = false;
     let socketConnectInFlight = false;
     let rafId = null;
-    let resizeObserver = null;
     let openRetryCount = 0;
     let openRetryTimeout = null;
     let iosRefreshRaf = null;
@@ -1632,6 +1638,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       : '"JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace';
 
     const term = new Terminal({
+      // Terminal v4 stable defaults: stable glyph metrics, readable contrast, no blink.
+      allowProposedApi: true,
+      allowTransparency: false,
+      convertEol: true,
       cursorBlink: false,
       cols: 250,
       fontSize: defaultTerminalFontSize,
@@ -1639,11 +1649,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       fontWeight: '400',
       fontWeightBold: '600',
       letterSpacing: 0,
-      lineHeight: 1.2,
+      lineHeight: isMobile ? 1.2 : 1.12,
+      minimumContrastRatio: 4.5,
       scrollback,
       disableStdin: inputEnabled === false,
       theme: getTerminalTheme(theme),
-      allowProposedApi: true,
       windowOptions: {
         setWinSizePixels: false, raiseWin: false, lowerWin: false, refreshWin: false,
         restoreWin: false, minimizeWin: false, setWinPosition: false, setWinSizeChars: false,
@@ -2116,6 +2126,25 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
+    try {
+      const unicode11 = new Unicode11Addon();
+      term.loadAddon(unicode11);
+      term.unicode.activeVersion = '11';
+    } catch (error) {
+      console.warn('[Terminal] Unicode11 addon unavailable:', error);
+    }
+    try {
+      // ⌘/Ctrl-click opens links (VS Code / stable terminal). Bare click stays selection.
+      term.loadAddon(new WebLinksAddon((_event, uri) => {
+        const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform || '');
+        const activate = isMac ? _event.metaKey : _event.ctrlKey;
+        if (activate && typeof uri === 'string') {
+          window.open(uri, '_blank', 'noopener,noreferrer');
+        }
+      }));
+    } catch (error) {
+      console.warn('[Terminal] WebLinks addon unavailable:', error);
+    }
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -2159,6 +2188,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         container.removeChild(container.firstChild);
       }
       term.open(container);
+      setHostReadyVersion((version) => version + 1);
 
       // Pre-block fit() until loadInitialHistory() finishes.
       // xterm is initialised at cols=250 so that ANSI cursor-positioning sequences
@@ -2704,11 +2734,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const debouncedFit = (delay = 120) => {
         if (disposed) return;
+        // stable terminal: only the active surface drives fit/PTY size. Inactive split
+        // panes stay mounted with their last geometry.
+        if (!isPrimaryRef.current && !isMobile) return;
         scheduleViewportRefresh({ delay, fit: true, preserveBottom: true });
       };
 
-      resizeObserver = new ResizeObserver(() => debouncedFit());
-      resizeObserver.observe(container);
+      // ResizeObserver is owned by the isPrimary effect (observeActiveTerminalResize)
+      // so inactive tabs don't thrash FitAddon / WebGL.
 
       const handleFocus = () => debouncedFit();
       const STALE_SOCKET_THRESHOLD = 25000;
@@ -3720,7 +3753,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       cleanupIdle();
       cleanupScrolling();
       reconnectController.dispose();
-      if (resizeObserver) resizeObserver.disconnect();
       if (openWhenReady.cleanup) openWhenReady.cleanup();
       if (socketRef.current) {
         socketRef.current.close();
@@ -3807,10 +3839,39 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [platformConfig.fontSize, scheduleViewportRefresh]);
 
+  // Terminal v4 stable: only the active surface observes resize / fits. Inactive split
+  // panes keep their xterm+socket mounted without FitAddon thrash or WebGL atlas
+  // churn. Re-activation fits once and clears the texture atlas.
+  useEffect(() => {
+    if (!isPrimary && !isMobile) return undefined;
+    const host = terminalRef.current;
+    if (!host || !xtermRef.current?.element) return undefined;
+
+    return observeActiveTerminalResize(host, {
+      fitOnActivate: true,
+      onActivate: () => {
+        scheduleViewportRefresh({
+          immediate: true,
+          fit: false,
+          preserveBottom: true,
+          clearAtlas: true,
+        });
+      },
+      onFit: () => {
+        scheduleViewportRefresh({
+          immediate: true,
+          fit: true,
+          preserveBottom: true,
+        });
+      },
+    });
+  }, [isPrimary, isMobile, sessionId, hostReadyVersion, scheduleViewportRefresh]);
+
   // Handle keybar/viewport changes with debounced fit
   // Use shorter debounce on mobile for faster keyboard response
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
+    if (!isPrimary && !isMobile) return;
     const debounceTime = 100;
     scheduleViewportRefresh({ delay: debounceTime, fit: true, preserveBottom: true });
     // Second fit after any CSS transitions settle (300ms max transition + buffer)
@@ -3818,14 +3879,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       scheduleViewportRefresh({ delay: 0, fit: true, preserveBottom: true });
     }, 350);
     return () => clearTimeout(safetyFit);
-  }, [keybarOpen, viewportHeight, isMobile, scheduleViewportRefresh]);
+  }, [keybarOpen, viewportHeight, isMobile, isPrimary, scheduleViewportRefresh]);
 
   // External fit signal (e.g., preview split resize)
   useEffect(() => {
     if (fitSignal === undefined || fitSignal === null) return;
     if (!fitAddonRef.current || !xtermRef.current) return;
+    if (!isPrimary && !isMobile) return;
     scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
-  }, [fitSignal, scheduleViewportRefresh]);
+  }, [fitSignal, isPrimary, isMobile, scheduleViewportRefresh]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3931,6 +3993,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   return (
     <div
       className={`terminal-chat ${platformConfig.rootClassName}${isScrollMode ? ' scroll-mode' : ''}`}
+      data-terminal-engine="terminal-v4-stable"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleImageDrop}
@@ -3942,7 +4005,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     >
       <div
         ref={terminalRef}
-        className="xterm-container"
+        className="xterm-container xterm-container-terminal-v4"
+        data-terminal=""
         style={{
           opacity: viewMode === 'terminal' ? 1 : 0,
           pointerEvents: viewMode === 'terminal' ? 'auto' : 'none'

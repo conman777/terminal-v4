@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import supertest from 'supertest';
+import jwt from 'jsonwebtoken';
 import { EventEmitter } from 'node:events';
 import type { TerminalProcess, TerminalSpawnOptions } from '../src/terminal/terminal-types';
 import { createServer } from '../src/index';
@@ -19,6 +20,13 @@ const PREVIEW_BASE_DOMAIN = (
   .split(',')[0]
   ?.trim() || 'conordart.com';
 const PREVIEW_HOST = `preview-5173.${PREVIEW_BASE_DOMAIN}`;
+
+// Preview proxying now requires a valid auth token (security hardening).
+const TEST_JWT = jwt.sign(
+  { sub: 'test-user-id', username: 'preview-test-user' },
+  process.env.JWT_SECRET || 'dev-jwt-secret-change-in-production',
+  { expiresIn: '1h' }
+);
 
 async function withApp<T>(fn: (app: Awaited<ReturnType<typeof createServer>>) => Promise<T>): Promise<T> {
   const spawnMock = (_options: TerminalSpawnOptions) => new FakeTerminalProcess();
@@ -94,12 +102,13 @@ describe('preview subdomain proxy', () => {
 
     await withApp(async (app) => {
       const res = await supertest(app.server)
-        .get('/dashboard')
+        .get(`/dashboard?token=${TEST_JWT}`)
         .set('Host', PREVIEW_HOST)
         .set('x-forwarded-proto', 'https')
         .expect(200);
 
       expect(res.headers['set-cookie']).toEqual([
+        expect.stringMatching(/^terminal_preview_token=eyJ/),
         `gb_session=abc; Domain=${PREVIEW_HOST}; Path=/; SameSite=Lax`
       ]);
     });
@@ -122,7 +131,7 @@ describe('preview subdomain proxy', () => {
 
     await withApp(async (app) => {
       const res = await supertest(app.server)
-        .get('/login')
+        .get(`/login?token=${TEST_JWT}`)
         .set('Host', PREVIEW_HOST)
         .set('x-forwarded-proto', 'https')
         .expect(200);

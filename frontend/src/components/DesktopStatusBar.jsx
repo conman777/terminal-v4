@@ -7,6 +7,7 @@ import { AI_TYPE_OPTIONS, getAiDisplayLabel } from '../utils/aiProviders';
 import { uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
+import { ProviderAuthModal } from './ProviderAuthModal';
 
 const IMAGE_INPUT_ACCEPT = [
   'image/*',
@@ -107,6 +108,7 @@ export function DesktopStatusBar({
     autocorrectEnabled
   );
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
+  const [isProviderAuthOpen, setIsProviderAuthOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [isImageDragOver, setIsImageDragOver] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -335,7 +337,7 @@ export function DesktopStatusBar({
 
   return (
     <div className={`desktop-status-bar desktop-status-bar-shell${isActive ? ' pane-active' : ''}`}>
-      {resolvedShowTopRow && (
+      <ProviderAuthModal isOpen={isProviderAuthOpen} onClose={() => setIsProviderAuthOpen(false)} sessionId={sessionId} />      {resolvedShowTopRow && (
         <div className="status-bar-meta-row">
           <div className="status-bar-left" />
 
@@ -523,6 +525,15 @@ export function DesktopStatusBar({
                     </button>
                   );
                 })}
+                <button
+                  type="button"
+                  className="status-ai-menu-item status-ai-menu-auth"
+                  onClick={() => { setIsProviderAuthOpen(true); setIsAiMenuOpen(false); }}
+                  role="menuitem"
+                >
+                  <span className="status-ai-menu-plus" aria-hidden="true">⚿</span>
+                  <span className="status-ai-menu-label">Provider authentication</span>
+                </button>
                 <button
                   type="button"
                   className="status-ai-menu-item status-ai-menu-add"

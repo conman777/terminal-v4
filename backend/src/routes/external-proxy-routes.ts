@@ -60,7 +60,7 @@ const EXTERNAL_DEBUG_SCRIPT = `
     entry.session = SESSION;
     pendingLogs.push(entry);
     try {
-      window.parent.postMessage({ type: 'preview-' + entry.type, ...entry }, '*');
+      window.parent.postMessage({ type: 'preview-' + entry.type, ...entry }, window.location.origin);
     } catch {}
     if (flushTimeout) clearTimeout(flushTimeout);
     flushTimeout = setTimeout(flushLogs, 100);

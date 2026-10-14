@@ -8,6 +8,8 @@ import { registerProjectsRoutes } from './projects-routes';
 import { registerPreviewApiRoutes } from './preview-api-routes';
 import { registerThreadRoutes } from './thread-routes';
 import { registerStructuredRoutes } from '../structured/structured-routes';
+import { registerAgentCatalogRoutes } from './agent-catalog-routes';
+import { registerAgentAuthRoutes } from './agent-auth-routes';
 import type { CoreRouteDependencies } from './types';
 
 // Re-export types for backward compatibility
@@ -87,4 +89,6 @@ export async function registerCoreRoutes(app: FastifyInstance, deps: CoreRouteDe
   await registerPreviewApiRoutes(app);
   await registerThreadRoutes(app, deps);
   await registerStructuredRoutes(app, deps.structuredSessionManager);
+  await registerAgentCatalogRoutes(app);
+  await registerAgentAuthRoutes(app);
 }

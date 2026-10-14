@@ -9,8 +9,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     reply.status(403).send({ error: 'Registration is disabled. Users are managed externally.' });
   });
 
-  // Login
-  app.post<{ Body: { username?: string; email?: string; password: string } }>('/api/auth/login', async (request, reply) => {
+  // Login (rate-limited to slow brute-force attempts)
+  app.post<{ Body: { username?: string; email?: string; password: string } }>(
+    '/api/auth/login',
+    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    async (request, reply) => {
     try {
       const input = loginSchema.parse(request.body);
       const result = await login(input.username, input.password);
@@ -31,8 +34,11 @@ export function registerAuthRoutes(app: FastifyInstance): void {
     }
   });
 
-  // Refresh tokens
-  app.post<{ Body: { refreshToken: string } }>('/api/auth/refresh', async (request, reply) => {
+  // Refresh tokens (rate-limited)
+  app.post<{ Body: { refreshToken: string } }>(
+    '/api/auth/refresh',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
     try {
       const input = refreshSchema.parse(request.body);
       const result = await refreshTokens(input.refreshToken);

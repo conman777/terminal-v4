@@ -33,6 +33,7 @@ import './ProTerminalEmpty.css';
 import './ProUI.css';
 import { apiFetch } from './utils/api';
 import {
+  buildAgentLaunchCommand,
   createCustomAiProvider,
   getNewTabAiOptions,
   normalizeAiType,
@@ -1076,7 +1077,12 @@ function AppContent() {
     setShowNewSessionModal(false);
   }, []);
 
-  const handleCreateSessionFromFolder = useCallback(async (path, aiOptionId = 'cli', tabName = '') => {
+  const handleCreateSessionFromFolder = useCallback(async (
+    path,
+    aiOptionId = 'cli',
+    tabName = '',
+    agentSelection = null,
+  ) => {
     setShowNewSessionModal(false);
     if (!path) return;
     const newTabAiOptions = getNewTabAiOptions(customAiProviders);
@@ -1085,7 +1091,14 @@ function AppContent() {
     const useStructuredCreation = aiOptionId !== 'cli'
       && shouldCreateStructuredSession(aiOptionId, customAiProviders);
     const request = { cwd: path };
-    if (selectedAi.command) {
+    if (aiOptionId !== 'cli' && agentSelection?.model) {
+      request.initialCommand = buildAgentLaunchCommand({
+        agent: aiOptionId,
+        model: agentSelection.model,
+        reasoning: agentSelection.reasoning,
+        launchCommand: agentSelection.launchCommand,
+      });
+    } else if (selectedAi.command) {
       request.initialCommand = selectedAi.command;
     }
     request.title = title;
@@ -1494,7 +1507,7 @@ function AppContent() {
         onSelect={handleCreateSessionFromFolder}
         showAiSelector={true}
         aiOptions={getNewTabAiOptions(customAiProviders)}
-        defaultAiOptionId="cli"
+        defaultAiOptionId="codex"
       />
       <AddScanFolderModal
         isOpen={showAddScanFolderModal}

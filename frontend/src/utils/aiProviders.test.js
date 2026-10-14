@@ -3,6 +3,7 @@ import {
   AI_TYPE_OPTIONS,
   COMMON_LAUNCH_PREFIXES,
   NEW_TAB_AI_OPTIONS,
+  buildAgentLaunchCommand,
   createCustomAiProvider,
   getAiCapabilities,
   getAiComposerSlashCommands,
@@ -40,8 +41,8 @@ describe('aiProviders', () => {
   });
 
   it('falls back for unknown providers', () => {
-    expect(getAiDisplayLabel('deepseek')).toBe('Deepseek');
-    expect(getAiLaunchCommand('deepseek')).toBe('deepseek');
+    expect(getAiDisplayLabel('deepseek')).toBe('DeepSeek');
+    expect(getAiLaunchCommand('deepseek')).toBe('terminal-v4-api');
     expect(getAiCapabilities('deepseek').supportsStructuredEvents).toBe(false);
   });
 
@@ -62,16 +63,63 @@ describe('aiProviders', () => {
     expect(getAiTypeOptions([customProvider]).some((option) => option.id === 'qwen-3')).toBe(true);
   });
 
+  it('exposes the full provider catalog in new tabs and builds API launchers for every provider', () => {
+    const expectedProviders = [
+      'anthropic-api', 'xai', 'xai-oauth', 'openai-api', 'actual', 'copilot', 'deepseek', 'moa', 'openrouter', 'nous',
+      'qwen-oauth', 'minimax-oauth', 'copilot-acp', 'lmstudio', 'tencent-tokenhub', 'zai', 'minimax', 'minimax-cn',
+      'kimi-coding', 'kimi-coding-cn', 'alibaba', 'alibaba-coding-plan', 'xiaomi',
+      'huggingface', 'fireworks', 'novita', 'nvidia', 'deepinfra', 'gmi', 'arcee',
+      'stepfun', 'upstage', 'kilocode', 'ai-gateway', 'opencode-zen', 'opencode-go',
+      'ollama-cloud', 'bedrock', 'vertex', 'azure-foundry',
+    ];
+    for (const provider of expectedProviders) {
+      expect(NEW_TAB_AI_OPTIONS.some(option => option.id === provider)).toBe(true);
+      if (provider !== 'copilot-acp') {
+        expect(buildAgentLaunchCommand({ agent: provider, model: 'default-model' })).toContain(`--provider '${provider}'`);
+      }
+    }
+    expect(buildAgentLaunchCommand({ agent: 'copilot-acp', model: 'default' })).toBe('copilot');
+  });
+
   it('exposes extended provider options for new tabs and context menus', () => {
     expect(NEW_TAB_AI_OPTIONS.some((option) => option.id === 'codex')).toBe(true);
+    expect(NEW_TAB_AI_OPTIONS.some((option) => option.id === 'legacy-agent')).toBe(false);
     expect(AI_TYPE_OPTIONS.some((option) => option.id === 'claude')).toBe(true);
     expect(COMMON_LAUNCH_PREFIXES).toContain('gemini');
   });
 
+  it('builds native agent model launch commands with shell-safe arguments', () => {
+    expect(buildAgentLaunchCommand({
+      agent: 'codex',
+      model: 'gpt-5.6-sol',
+      reasoning: 'xhigh',
+    })).toBe("codex --model 'gpt-5.6-sol' --config 'model_reasoning_effort=\"xhigh\"'");
+
+    expect(buildAgentLaunchCommand({
+      agent: 'claude',
+      model: 'sonnet',
+      reasoning: 'high',
+    })).toBe("claude --model 'sonnet' --effort 'high'");
+
+    expect(buildAgentLaunchCommand({ agent: 'gemini', model: 'gemini-3-flash-preview' }))
+      .toBe("gemini --model 'gemini-3-flash-preview'");
+
+    expect(buildAgentLaunchCommand({
+      agent: 'copilot',
+      model: 'gpt-4o',
+      reasoning: 'low',
+    })).toBe("node backend/dist/api-agent-runner.js --provider 'copilot' --model 'gpt-4o'");
+
+    expect(() => buildAgentLaunchCommand({
+      agent: 'codex',
+      model: 'gpt-5.6-sol\nrm -rf /',
+    })).toThrow(/invalid/i);
+  });
+
   it('exposes capability matrix for supported providers', () => {
     expect(getAiCapabilities('claude').supportsPromptEvents).toBe(true);
-    expect(getAiCapabilities('codex').prefersStructuredUi).toBe(true);
-    expect(shouldCreateStructuredSession('gemini')).toBe(true);
+    expect(getAiCapabilities('codex').supportsStructuredEvents).toBe(true);
+    expect(shouldCreateStructuredSession('gemini')).toBe(false);
     expect(shouldCreateStructuredSession('cli')).toBe(false);
     expect(getAiComposerSlashCommands('claude')).toContainEqual({
       cmd: '/help',

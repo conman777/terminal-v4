@@ -1,4 +1,5 @@
 import { apiFetch } from './api';
+import { getAccessToken } from './auth';
 
 const PREVIEW_SUBDOMAIN_BASE_KEY = 'terminal_preview_subdomain_base';
 const PREVIEW_SUBDOMAIN_BASES_KEY = 'terminal_preview_subdomain_bases';
@@ -199,10 +200,27 @@ function isResolvableLoopbackSubdomainBase(base) {
 }
 
 /**
- * Add auth token to URL as query parameter
+ * Add auth token to URL as query parameter.
+ *
+ * The preview proxy is auth-gated: /preview/:port/* and preview-<port>.*
+ * requests require a valid token (query param, cookie, or Authorization
+ * header). Sandboxed preview iframes cannot send headers, so the token is
+ * carried in the URL; the backend sets an httpOnly preview cookie on the
+ * first proxied response so subsequent navigations keep working.
  */
 export function withAuthToken(url) {
-  return url;
+  if (!url) return url;
+  const token = getAccessToken();
+  if (!token) return url;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (!parsed.searchParams.has('token')) {
+      parsed.searchParams.set('token', token);
+    }
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 /**

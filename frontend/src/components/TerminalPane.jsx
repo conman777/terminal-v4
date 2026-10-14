@@ -107,7 +107,11 @@ export const TerminalPane = memo(function TerminalPane({
   const [terminalScreenSnapshot, setTerminalScreenSnapshot] = useState('');
   const [interactivePromptEvent, setInteractivePromptEvent] = useState(null);
   const [isTerminalPanelOpen, setIsTerminalPanelOpen] = useState(false);
-  const [terminalViewMode, setTerminalViewMode] = useState('codex');
+  // Terminal v4 stable: PTY is always the primary surface for terminal-backed sessions.
+  // Codex dual-mode UI has been removed.
+  // VS Code parity: once the terminal host has mounted for this session,
+  // keep it alive while the dock is collapsed so WebGL/xterm aren't torn down.
+  const [terminalRuntimeLatched, setTerminalRuntimeLatched] = useState(false);
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
@@ -156,13 +160,23 @@ export const TerminalPane = memo(function TerminalPane({
   const showSessionSelector = canClose && selectableSessions.length > 0;
   const isStructuredSession = isStructuredSessionId(pane.sessionId);
   const isTerminalBackedSession = Boolean(pane.sessionId) && !isStructuredSession;
-  const supportsAgentInterface = isTerminalBackedSession && Boolean(currentAiType);
-  const isRawTerminalMode = isTerminalBackedSession && (!supportsAgentInterface || terminalViewMode === 'terminal');
-  const useConversationFirstLayout = isStructuredSession || (supportsAgentInterface && !isRawTerminalMode);
-  const useTerminalFirstLayout = isTerminalBackedSession && isRawTerminalMode;
+  // Terminal v4 stable: terminal-backed sessions are always full-bleed PTY.
+  // Structured (non-PTY) agent sessions keep the conversation surface.
+  const useConversationFirstLayout = isStructuredSession;
+  const useTerminalFirstLayout = isTerminalBackedSession;
   const shouldForcePromptDock = false;
   const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen;
-  const shouldRenderTerminalRuntime = isTerminalBackedSession || isTerminalPanelOpen;
+  const shouldRenderTerminalRuntime = (
+    isTerminalBackedSession
+    || isTerminalPanelOpen
+    || terminalRuntimeLatched
+  );
+
+  useEffect(() => {
+    if (isTerminalBackedSession || isTerminalPanelOpen) {
+      setTerminalRuntimeLatched(true);
+    }
+  }, [isTerminalBackedSession, isTerminalPanelOpen]);
 
   const {
     turns,
@@ -202,6 +216,7 @@ export const TerminalPane = memo(function TerminalPane({
   useEffect(() => {
     setIsSessionBusy(false);
     setIsTerminalPanelOpen(false);
+    setTerminalRuntimeLatched(false);
     setConnectionState('connecting');
     setLaunchQueued(false);
     setComposerValue('');
@@ -209,7 +224,6 @@ export const TerminalPane = memo(function TerminalPane({
     setTerminalPreview('');
     setTerminalScreenSnapshot('');
     setInteractivePromptEvent(null);
-    setTerminalViewMode('codex');
     setViewModeNotice('');
     setIsNoticePersistent(false);
     setGitBranchInfo(null);
@@ -420,34 +434,17 @@ export const TerminalPane = memo(function TerminalPane({
   }, []);
 
   const handleOpenTerminalPanel = useCallback(() => {
-    if (!isStructuredSession) {
-      setTerminalViewMode('terminal');
-    }
     setIsTerminalPanelOpen(true);
-    conversationFallbackRef.current = false;
-    setIsNoticePersistent(false);
-    setViewModeNotice('');
-  }, [isStructuredSession]);
-
-  const handleToggleTerminalViewMode = useCallback((nextMode) => {
-    setTerminalViewMode((currentMode) => {
-      const resolvedNextMode = nextMode === 'terminal' || nextMode === 'codex'
-        ? nextMode
-        : currentMode === 'terminal'
-          ? 'codex'
-          : 'terminal';
-      if (resolvedNextMode === 'codex') {
-        setIsTerminalPanelOpen(false);
-      }
-      return resolvedNextMode;
-    });
     conversationFallbackRef.current = false;
     setIsNoticePersistent(false);
     setViewModeNotice('');
   }, []);
 
   useEffect(() => {
-    if (!desktopAllowTerminalInput && !isStructuredSession) {
+    // Structured sessions may start without a terminal dock; terminal-backed
+    // sessions always own the full surface so this flag is irrelevant there.
+    if (!isStructuredSession) return;
+    if (!desktopAllowTerminalInput) {
       setIsTerminalPanelOpen(false);
     }
   }, [desktopAllowTerminalInput, isStructuredSession]);
@@ -770,7 +767,7 @@ export const TerminalPane = memo(function TerminalPane({
           <div className={`terminal-with-status${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
             <div className={`desktop-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
               {/* CliActivityStrip removed — interactive prompts handled in terminal directly */}
-              {!useTerminalFirstLayout && (
+              {!useTerminalFirstLayout && useConversationFirstLayout && (
                 <div className="desktop-conversation-surface">
                   <LazyDesktopConversationView
                     turns={turns}
@@ -789,7 +786,7 @@ export const TerminalPane = memo(function TerminalPane({
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
                     onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
-                    onOpenTerminal={isStructuredSession || isTerminalBackedSession ? handleOpenTerminalPanel : undefined}
+                    onOpenTerminal={isStructuredSession ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
                     interactivePromptEvent={interactivePromptEvent}
@@ -805,39 +802,41 @@ export const TerminalPane = memo(function TerminalPane({
               )}
 
               <div
-                className={`desktop-terminal-runtime${isTerminalDockVisible ? ' inline-panel-open' : ' is-hidden'}${useTerminalFirstLayout ? ' terminal-first' : ''}${shouldForcePromptDock ? ' prompt-docked' : ''}`}
+                className={`desktop-terminal-slot${isTerminalDockVisible ? ' is-open' : ' is-collapsed'}${useTerminalFirstLayout ? ' terminal-first' : ''}${shouldForcePromptDock ? ' prompt-docked' : ''}`}
                 aria-hidden={!isTerminalDockVisible ? 'true' : undefined}
               >
-                {shouldRenderTerminalRuntime ? (
-                  <LazyTerminalChat
-                    key={`${pane.sessionId}-${refreshToken}`}
-                    surface="desktop"
-                    sessionId={pane.sessionId}
-                    keybarOpen={keybarOpen}
-                    viewportHeight={viewportHeight}
-                    onUrlDetected={onUrlDetected}
-                    fontSize={fontSize}
-                    webglEnabled={webglEnabled}
-                    inputEnabled={
-                      useTerminalFirstLayout
-                      || (isStructuredSession && (desktopAllowTerminalInput || shouldForcePromptDock))
-                    }
-                    usesTmux={currentSession?.usesTmux}
-                    viewMode="terminal"
-                    isPrimary={isActive}
-                    fitSignal={fitSignal}
-                    onRegisterImageUpload={handleRegisterImageUploadTrigger}
-                    onConnectionChange={handleConnectionChange}
-                    onCwdChange={handleCwdChange}
-                    onActivityChange={handleActivityChange}
-                    onOutputChunk={handleOutputChunk}
-                    onScreenSnapshot={handleScreenSnapshot}
-                    onCliEvent={handleCliEvent}
-                    onRegisterFocusTerminal={handleRegisterFocusTerminal}
-                    onRegisterSendText={handleRegisterSendText}
-                    onTurn={handleTurn}
-                  />
-                ) : null}
+                <div className="desktop-terminal-runtime-host" data-persistent-terminal="">
+                  {shouldRenderTerminalRuntime ? (
+                    <LazyTerminalChat
+                      key={`${pane.sessionId}-${refreshToken}`}
+                      surface="desktop"
+                      sessionId={pane.sessionId}
+                      keybarOpen={keybarOpen}
+                      viewportHeight={viewportHeight}
+                      onUrlDetected={onUrlDetected}
+                      fontSize={fontSize}
+                      webglEnabled={webglEnabled}
+                      inputEnabled={
+                        useTerminalFirstLayout
+                        || (isStructuredSession && (desktopAllowTerminalInput || shouldForcePromptDock))
+                      }
+                      usesTmux={currentSession?.usesTmux}
+                      viewMode="terminal"
+                      isPrimary={isActive && isTerminalDockVisible}
+                      fitSignal={fitSignal}
+                      onRegisterImageUpload={handleRegisterImageUploadTrigger}
+                      onConnectionChange={handleConnectionChange}
+                      onCwdChange={handleCwdChange}
+                      onActivityChange={handleActivityChange}
+                      onOutputChunk={handleOutputChunk}
+                      onScreenSnapshot={handleScreenSnapshot}
+                      onCliEvent={handleCliEvent}
+                      onRegisterFocusTerminal={handleRegisterFocusTerminal}
+                      onRegisterSendText={handleRegisterSendText}
+                      onTurn={handleTurn}
+                    />
+                  ) : null}
+                </div>
               </div>
               <DesktopStatusBar
                 sessionId={pane.sessionId}
@@ -848,11 +847,11 @@ export const TerminalPane = memo(function TerminalPane({
                 isActive={shouldHighlightActiveChrome}
                 onImageUpload={handleImageUpload}
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
-                showTerminalToggle={!useTerminalFirstLayout && !shouldForcePromptDock && isStructuredSession}
-                onToggleTerminalPanel={!useTerminalFirstLayout && !shouldForcePromptDock && isStructuredSession ? handleToggleTerminalPanel : undefined}
-                terminalViewMode={useTerminalFirstLayout ? 'terminal' : 'codex'}
-                showTerminalViewModeToggle={supportsAgentInterface}
-                onToggleTerminalViewMode={supportsAgentInterface ? handleToggleTerminalViewMode : undefined}
+                showTerminalToggle={!useTerminalFirstLayout && isStructuredSession}
+                onToggleTerminalPanel={!useTerminalFirstLayout && isStructuredSession ? handleToggleTerminalPanel : undefined}
+                terminalViewMode="terminal"
+                showTerminalViewModeToggle={false}
+                onToggleTerminalViewMode={undefined}
                 connectionState={resolvedConnectionState}
                 aiType={currentAiType}
                 aiOptions={aiOptions}

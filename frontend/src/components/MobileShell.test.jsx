@@ -204,20 +204,20 @@ describe('MobileShell', () => {
     mockCheckoutSessionGitBranch.mockClear();
   });
 
-  it('uses the Codex conversation flow for mobile AI sessions and keeps the raw terminal hidden', async () => {
+  it('uses Terminal v4 stable full terminal for mobile AI sessions (no Codex dual UI)', async () => {
     const mobileChatState = createMobileChatTurnsState();
     mockUseMobileChatTurns.mockReturnValue(mobileChatState);
 
     renderMobileShell();
 
 	expect(mockUseMobileChatTurns).toHaveBeenCalledWith({ sessionId: 'session-a', chatMode: true });
-	expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
+	expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
 	const terminalChat = await screen.findByTestId('terminal-chat');
 	expect(terminalChat).toHaveAttribute('data-session-id', 'session-a');
 	expect(terminalChat).toHaveAttribute('data-surface', 'mobile');
-	expect(terminalChat).toHaveAttribute('data-input-enabled', 'false');
-	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'true');
-	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
+	expect(terminalChat).toHaveAttribute('data-input-enabled', 'true');
+	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'false');
+	expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
 	expect(screen.getByPlaceholderText('Ask V4 anything')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Command composer'), {
@@ -228,31 +228,29 @@ describe('MobileShell', () => {
     expect(mobileChatState.handleChatSend).toHaveBeenCalledWith('Fix the mobile composer layout');
   });
 
-  it('can switch a mobile AI session back to the raw terminal view', async () => {
+  it('keeps mobile AI sessions in full terminal mode', async () => {
     renderMobileShell();
 
-    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
-    fireEvent.click(screen.getByRole('button', { name: 'Raw Terminal' }));
-
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+    expect(screen.queryByRole('button', { name: 'Raw Terminal' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Codex UI' })).not.toBeInTheDocument();
   });
 
-  it('opens true raw terminal mode from the mobile Codex startup action', async () => {
+  it('stays in full terminal mode even when Codex runtime is detected on screen', async () => {
     renderMobileShell();
 
-    expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open terminal view' }));
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'mark-codex-screen' }));
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'false');
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
   });
 
-  it('switches into Codex UI when mobile detects a Codex runtime without saved metadata', async () => {
+  it('does not switch into Codex UI when mobile detects a Codex runtime without saved metadata', async () => {
     renderMobileShell({ sessionAiTypes: {} });
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
@@ -260,10 +258,10 @@ describe('MobileShell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'mark-codex-screen' }));
 
-    expect(await screen.findByTestId('desktop-conversation-view')).toBeInTheDocument();
-    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'true');
-    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
-    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'false');
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-show-terminal-view-mode-toggle', 'false');
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
+    expect(screen.getByTestId('terminal-chat')).toHaveAttribute('data-input-enabled', 'true');
   });
 
   it('uses the desktop structured-session flow and can open the inline terminal', async () => {
@@ -333,6 +331,6 @@ describe('MobileShell', () => {
     expect(css).toMatch(/\.mobile-shell-parity \.desktop-conversation-input\s*\{[\s\S]*font-size:\s*16px;/);
     expect(css).toMatch(/\.mobile-shell-parity \.status-composer-input\s*\{[\s\S]*font-size:\s*16px;/);
     expect(css).toMatch(/\.mobile-shell-parity \.status-view-mode-toggle\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
-    expect(css).toMatch(/\.mobile-shell-parity \.mobile-terminal-runtime\.is-hidden\s*\{[\s\S]*visibility:\s*hidden;/);
+    expect(css).toMatch(/\.mobile-shell-parity \.mobile-terminal-slot\.is-collapsed\s*\{[\s\S]*visibility:\s*hidden;/);
   });
 });

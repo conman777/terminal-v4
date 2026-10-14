@@ -283,26 +283,23 @@ describe('TerminalPane', () => {
     expect(sendToSession).toHaveBeenCalledWith('ss-structured', '\r');
   });
 
-  it('defaults terminal-backed AI sessions into the Codex UI with read-only terminal transport', () => {
+  it('defaults terminal-backed sessions to Terminal v4 stable full terminal (no Codex dual UI)', () => {
     render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: false })} />);
-
-    expect(screen.getByTestId('desktop-conversation-view')).toBeInTheDocument();
-    expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
-    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'codex');
-    expect(screen.queryByRole('button', { name: 'Show inline terminal panel' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Show Raw Terminal' })).toBeInTheDocument();
-    expect(lastTerminalChatProps?.inputEnabled).toBe(false);
-  });
-
-  it('switches terminal-backed AI sessions into interactive raw terminal mode', () => {
-    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: true })} />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show Raw Terminal' }));
 
     expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
     expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
-    expect(screen.getByRole('button', { name: 'Show Codex UI' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByRole('button', { name: 'Show Codex UI' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show Raw Terminal' })).not.toBeInTheDocument();
+    expect(lastTerminalChatProps?.inputEnabled).toBe(true);
+  });
+
+  it('keeps terminal-backed sessions in terminal mode even when AI metadata is present', () => {
+    render(<TerminalPane {...buildProps({ desktopAllowTerminalInput: true })} />);
+
+    expect(screen.queryByTestId('desktop-conversation-view')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-chat')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-status-bar')).toHaveAttribute('data-terminal-view-mode', 'terminal');
     expect(lastTerminalChatProps?.inputEnabled).toBe(true);
   });
 

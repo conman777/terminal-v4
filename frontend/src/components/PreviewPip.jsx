@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { toPreviewUrl } from '../utils/previewUrl';
+import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
 
 /**
  * Picture-in-Picture preview window.
@@ -203,7 +203,7 @@ export function PreviewPip({
             </div>
           )}
           <iframe
-            src={iframeSrc}
+            src={withAuthToken(iframeSrc)}
             className="pip-iframe"
             onLoad={handleLoad}
             title="Preview"
