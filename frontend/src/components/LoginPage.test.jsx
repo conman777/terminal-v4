@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LoginPage from './LoginPage';
 
 const login = vi.fn();
@@ -60,6 +60,38 @@ describe('LoginPage', () => {
 
     expect(await screen.findByText('Enter your username first to use Passkey')).toBeInTheDocument();
     expect(authenticateWithPasskey).not.toHaveBeenCalled();
+  });
+
+  describe('test account button', () => {
+    const testUsername = 'hermes-test';
+    const testPassword = 'local-only-password';
+    const buttonName = 'Log in as test user';
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('signs in with the configured test account in one click', async () => {
+      vi.stubEnv('VITE_TEST_LOGIN_USERNAME', testUsername);
+      vi.stubEnv('VITE_TEST_LOGIN_PASSWORD', testPassword);
+      login.mockResolvedValue({ id: 'user-1', username: testUsername });
+
+      render(<LoginPage />);
+      fireEvent.click(screen.getByRole('button', { name: buttonName }));
+
+      await waitFor(() => {
+        expect(login).toHaveBeenCalledWith(testUsername, testPassword);
+      });
+    });
+
+    it('is hidden when no test account is configured', () => {
+      vi.stubEnv('VITE_TEST_LOGIN_USERNAME', '');
+      vi.stubEnv('VITE_TEST_LOGIN_PASSWORD', '');
+
+      render(<LoginPage />);
+
+      expect(screen.queryByRole('button', { name: buttonName })).not.toBeInTheDocument();
+    });
   });
 
   it('uses keyboard-safe mobile login styles for iPhone Safari', () => {

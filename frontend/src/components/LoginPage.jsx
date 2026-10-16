@@ -52,6 +52,23 @@ export default function LoginPage() {
     }
   };
 
+  // Security: only set in a gitignored local env file for a local-only test account.
+  const testLoginUsername = import.meta.env.VITE_TEST_LOGIN_USERNAME;
+  const testLoginPassword = import.meta.env.VITE_TEST_LOGIN_PASSWORD;
+  const hasTestLogin = Boolean(testLoginUsername && testLoginPassword);
+
+  const handleTestLogin = async () => {
+    setLocalError('');
+    setIsSubmitting(true);
+    try {
+      await login(testLoginUsername, testLoginPassword);
+    } catch (err) {
+      // Error is set in auth context
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const error = localError || authError;
 
   return (
@@ -163,6 +180,17 @@ export default function LoginPage() {
               </svg>
               {isPasskeySubmitting ? 'Awaiting Device...' : 'Authenticate with Passkey'}
             </button>
+
+            {hasTestLogin && (
+              <button
+                type="button"
+                className="pro-passkey-btn"
+                onClick={handleTestLogin}
+                disabled={isSubmitting || isPasskeySubmitting}
+              >
+                Log in as test user
+              </button>
+            )}
           </form>
         </section>
 
