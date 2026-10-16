@@ -2,6 +2,7 @@ import { resolveApiUrl } from '../utils/apiBase';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiGet, apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
+import '../ProFileManager.css';
 
 export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const [currentPath, setCurrentPath] = useState('~');
