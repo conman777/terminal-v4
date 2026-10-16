@@ -392,6 +392,7 @@ pub fn app(state: AppState) -> Router {
         .merge(collaboration::public_routes())
         .merge(remote_tunnels::public_routes())
         .route("/api/health", get(health))
+        .route("/api/client-build", get(client_build))
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
         .route("/api/auth/refresh", post(refresh))
@@ -570,6 +571,63 @@ fn find_frontend_dist_from_ancestors(start_dir: &FsPath) -> Option<PathBuf> {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse::ok())
+}
+
+async fn client_build(State(state): State<AppState>) -> axum::response::Response {
+    let no_cache = [
+        (
+            axum::http::header::CACHE_CONTROL,
+            "no-cache, no-store, must-revalidate",
+        ),
+        (axum::http::header::PRAGMA, "no-cache"),
+        (axum::http::header::EXPIRES, "0"),
+    ];
+    match client_build_info(&resolve_frontend_dir(&state.config().data_dir)) {
+        Ok(info) => (no_cache, Json(info)).into_response(),
+        Err(error) => (no_cache, error).into_response(),
+    }
+}
+
+fn client_build_info(frontend_dir: &FsPath) -> Result<Value, ApiError> {
+    let index_path = frontend_dir.join("index.html");
+    let html = std::fs::read_to_string(&index_path).map_err(|_| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: "Client build unavailable".to_string(),
+    })?;
+    let index_mtime_ms = std::fs::metadata(&index_path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis() as u64);
+    let (main_script, main_stylesheet) = client_build_assets(&html);
+    let build_id = main_script
+        .clone()
+        .or_else(|| index_mtime_ms.map(|ms| ms.to_string()))
+        .unwrap_or_default();
+    let checked_at = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
+
+    Ok(json!({
+        "buildId": build_id,
+        "mainScript": main_script,
+        "mainStylesheet": main_stylesheet,
+        "indexMtimeMs": index_mtime_ms,
+        "checkedAt": checked_at,
+    }))
+}
+
+fn client_build_assets(index_html: &str) -> (Option<String>, Option<String>) {
+    let main_script =
+        regex_lite::Regex::new(r#"<script\b[^>]*\bsrc="([^"]*/assets/index-[^"]+\.js)""#)
+            .expect("static client script expression");
+    let main_stylesheet =
+        regex_lite::Regex::new(r#"<link\b[^>]*\bhref="([^"]*/assets/index-[^"]+\.css)""#)
+            .expect("static client stylesheet expression");
+    let first_capture = |expression: &regex_lite::Regex| {
+        expression
+            .captures(index_html)
+            .map(|captures| captures[1].to_string())
+    };
+    (first_capture(&main_script), first_capture(&main_stylesheet))
 }
 
 async fn preview_host_middleware(
@@ -5303,8 +5361,8 @@ async fn send_ws_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        app, normalize_filesystem_path, resolve_frontend_dir_with_current_dir,
-        validate_sandbox_mode, ApiState,
+        app, client_build_assets, client_build_info, normalize_filesystem_path,
+        resolve_frontend_dir_with_current_dir, validate_sandbox_mode, ApiState,
     };
     use crate::auth::issue_access_token;
     use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser};
@@ -5456,6 +5514,84 @@ mod tests {
             .to_bytes();
         let html = String::from_utf8(body.to_vec()).expect("html should decode");
         assert!(html.contains("<title>terminal-v4</title>"));
+    }
+
+    #[test]
+    fn client_build_assets_reads_main_script_and_stylesheet_from_index_html() {
+        let main_script = "/assets/index-AbC123.js";
+        let main_stylesheet = "/assets/index-DeF456.css";
+        let html = format!(
+            r#"<script type="module" crossorigin src="{main_script}"></script><link rel="modulepreload" href="/assets/vendor-react-x.js"><link rel="stylesheet" crossorigin href="{main_stylesheet}">"#
+        );
+
+        assert_eq!(
+            client_build_assets(&html),
+            (
+                Some(main_script.to_string()),
+                Some(main_stylesheet.to_string())
+            )
+        );
+        assert_eq!(
+            client_build_assets("<title>no bundle</title>"),
+            (None, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn client_build_route_reports_the_served_bundle_without_auth() {
+        let main_script = "/assets/index-Build42.js";
+        let temp_root = tempdir().expect("temp dir should create");
+        let frontend_dist = temp_root.path().join("frontend").join("dist");
+        fs::create_dir_all(&frontend_dist).expect("frontend dist should create");
+        fs::write(
+            frontend_dist.join("index.html"),
+            format!(r#"<script type="module" src="{main_script}"></script>"#),
+        )
+        .expect("index html should write");
+
+        let state = test_state_with_data_dir(temp_root.path().join("app").join("data"));
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/client-build?t=1")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("cache-control")
+                .and_then(|value| value.to_str().ok()),
+            Some("no-cache, no-store, must-revalidate")
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body should collect")
+            .to_bytes();
+        let payload: Value = serde_json::from_slice(&body).expect("payload should decode");
+        assert_eq!(payload["buildId"], main_script);
+        assert_eq!(payload["mainScript"], main_script);
+        assert_eq!(payload["mainStylesheet"], Value::Null);
+        assert!(payload["indexMtimeMs"].is_u64());
+        assert!(payload["checkedAt"].is_u64());
+    }
+
+    #[test]
+    fn client_build_info_reports_unavailable_without_a_frontend_bundle() {
+        let temp_root = tempdir().expect("temp dir should create");
+        let missing_frontend_dir = temp_root.path().join("frontend").join("dist");
+
+        let status = client_build_info(&missing_frontend_dir)
+            .map(|_| ())
+            .map_err(|error| error.status);
+
+        assert_eq!(status, Err(StatusCode::SERVICE_UNAVAILABLE));
     }
 
     #[tokio::test]
