@@ -1,3 +1,4 @@
+import { setActiveEnvironment, getEnvironmentSignal } from './remoteEnvironments';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./auth', () => ({
@@ -17,6 +18,7 @@ describe('apiFetch', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    setActiveEnvironment(null);
   });
 
   it('does not mutate the caller body when serializing json requests', async () => {
@@ -64,4 +66,32 @@ describe('apiFetch', () => {
 
     expect(clearTokens).toHaveBeenCalledWith(true);
   });
+  it('sends home credentials only to the home proxy and aborts requests from the previous environment', async () => {
+    setActiveEnvironment({ id: 'remote-a' });
+    const oldSignal = getEnvironmentSignal();
+    await apiFetch('/api/terminal');
+    expect(global.fetch).toHaveBeenCalledWith('/api/environments/remote-a/proxy/api/terminal', expect.objectContaining({ signal: oldSignal, headers: { Authorization: 'Bearer token-1' } }));
+    setActiveEnvironment(null);
+    expect(oldSignal.aborted).toBe(true);
+    await expect(apiFetch('https://untrusted.example.test/api/terminal')).rejects.toThrow('API requests must use the home server');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+  it('does not retry an old-host request after token refresh completes during an environment switch', async () => {
+    setActiveEnvironment({ id: 'remote-a' });
+    global.fetch.mockResolvedValueOnce({ status: 401, ok: false });
+    refreshTokens.mockImplementationOnce(async () => {
+      setActiveEnvironment({ id: 'remote-b' });
+      return { accessToken: 'token-2' };
+    });
+    await expect(apiFetch('/api/terminal')).rejects.toThrow();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(clearTokens).not.toHaveBeenCalled();
+  });
+
+  it('keeps explicit home account settings on the home server while working remotely', async () => {
+    setActiveEnvironment({ id: 'remote-a' });
+    await apiFetch('/api/settings', { home: true });
+    expect(global.fetch).toHaveBeenCalledWith('/api/settings', expect.not.objectContaining({ home: true }));
+  });
+
 });

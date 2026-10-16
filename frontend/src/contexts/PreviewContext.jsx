@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { getEnvironmentStorage, getActiveEnvironment } from '../utils/remoteEnvironments';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
 import { extractPortFromUrl, getActivePortsInfo } from '../utils/previewUrl';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
@@ -14,12 +15,14 @@ const PREVIEW_COOKIE_POLICY_KEY = 'terminal_preview_cookie_policy';
 const PREVIEW_REWRITE_SCOPE_KEY = 'terminal_preview_rewrite_scope';
 
 export function PreviewProvider({ children }) {
+  const storage = useMemo(() => getEnvironmentStorage(), []);
+  const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   function sanitizePreviewUrl(value) {
     if (!value || typeof value !== 'string') return null;
     try {
       const parsed = new URL(value, window.location.origin);
-      const isPreviewPath = parsed.pathname.startsWith('/preview/');
-      const isApiPreview = parsed.pathname.startsWith('/api/preview');
+      const isPreviewPath = parsed.pathname.startsWith('/preview/') || /^\/api\/environments\/[^/]+\/proxy\/preview\//.test(parsed.pathname);
+      const isApiPreview = parsed.pathname.startsWith('/api/preview') || /^\/api\/environments\/[^/]+\/proxy\/api\/preview/.test(parsed.pathname);
       const isSameOrigin = parsed.origin === window.location.origin;
       const uiPort = window.location.port;
       const isLoopbackHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
@@ -38,7 +41,7 @@ export function PreviewProvider({ children }) {
   // Initialize from localStorage for immediate display
   const initialPreviewUrl = (() => {
     try {
-      return sanitizePreviewUrl(localStorage.getItem(PREVIEW_URL_KEY)) || null;
+      return sanitizePreviewUrl(storage.getItem(PREVIEW_URL_KEY)) || null;
     } catch {
       return null;
     }
@@ -71,7 +74,7 @@ export function PreviewProvider({ children }) {
           previewUrlSourceRef.current = 'auto';
           setPreviewUrl(null);
           try {
-            localStorage.removeItem(PREVIEW_URL_KEY);
+            storage.removeItem(PREVIEW_URL_KEY);
           } catch {}
         }
       }
@@ -179,6 +182,7 @@ export function PreviewProvider({ children }) {
 
   // Fetch preview URL from server on mount - use it only if localStorage is empty
   useEffect(() => {
+    if (remotePreferences) { initialFetchDoneRef.current = true; lastSavedUrlRef.current = previewUrlRef.current; return; }
     const fetchSettings = async () => {
       try {
         const response = await apiFetch('/api/settings');
@@ -193,7 +197,7 @@ export function PreviewProvider({ children }) {
               lastSavedUrlRef.current = null;
               previewUrlSourceRef.current = 'auto';
               try {
-                localStorage.removeItem(PREVIEW_URL_KEY);
+                storage.removeItem(PREVIEW_URL_KEY);
               } catch {}
               return;
             }
@@ -201,14 +205,14 @@ export function PreviewProvider({ children }) {
             setPreviewUrl(sanitized);
             lastSavedUrlRef.current = sanitized;
             try {
-              localStorage.setItem(PREVIEW_URL_KEY, sanitized);
+              storage.setItem(PREVIEW_URL_KEY, sanitized);
             } catch {}
           } else if (!data.previewUrl && !hasLocal) {
             setPreviewUrl(null);
             lastSavedUrlRef.current = null;
             previewUrlSourceRef.current = 'auto';
             try {
-              localStorage.removeItem(PREVIEW_URL_KEY);
+              storage.removeItem(PREVIEW_URL_KEY);
             } catch {}
           }
         }
@@ -224,6 +228,10 @@ export function PreviewProvider({ children }) {
 
   // Fetch preview proxy configuration (subdomain base) for URL generation
   useEffect(() => {
+    if (remotePreferences) {
+      try { storage.setItem(PREVIEW_PREFER_PATH_BASED_KEY, 'true'); storage.setItem(PREVIEW_DEFAULT_MODE_KEY, 'path-first'); } catch {}
+      return;
+    }
     const fetchPreviewConfig = async () => {
       try {
         const response = await apiFetch('/api/system/preview-config');
@@ -231,37 +239,37 @@ export function PreviewProvider({ children }) {
         const data = await response.json();
         if (data?.subdomainBase) {
           try {
-            localStorage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, data.subdomainBase);
+            storage.setItem(PREVIEW_SUBDOMAIN_BASE_KEY, data.subdomainBase);
           } catch {}
         }
         if (Array.isArray(data?.subdomainBases)) {
           try {
-            localStorage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(data.subdomainBases));
+            storage.setItem(PREVIEW_SUBDOMAIN_BASES_KEY, JSON.stringify(data.subdomainBases));
           } catch {}
         }
         if (Array.isArray(data?.proxyHosts)) {
           try {
-            localStorage.setItem(PREVIEW_PROXY_HOSTS_KEY, JSON.stringify(data.proxyHosts));
+            storage.setItem(PREVIEW_PROXY_HOSTS_KEY, JSON.stringify(data.proxyHosts));
           } catch {}
         }
         if (typeof data?.preferPathBased === 'boolean') {
           try {
-            localStorage.setItem(PREVIEW_PREFER_PATH_BASED_KEY, data.preferPathBased ? 'true' : 'false');
+            storage.setItem(PREVIEW_PREFER_PATH_BASED_KEY, data.preferPathBased ? 'true' : 'false');
           } catch {}
         }
         if (typeof data?.defaultMode === 'string') {
           try {
-            localStorage.setItem(PREVIEW_DEFAULT_MODE_KEY, data.defaultMode);
+            storage.setItem(PREVIEW_DEFAULT_MODE_KEY, data.defaultMode);
           } catch {}
         }
         if (typeof data?.cookiePolicy === 'string') {
           try {
-            localStorage.setItem(PREVIEW_COOKIE_POLICY_KEY, data.cookiePolicy);
+            storage.setItem(PREVIEW_COOKIE_POLICY_KEY, data.cookiePolicy);
           } catch {}
         }
         if (typeof data?.rewriteScope === 'string') {
           try {
-            localStorage.setItem(PREVIEW_REWRITE_SCOPE_KEY, data.rewriteScope);
+            storage.setItem(PREVIEW_REWRITE_SCOPE_KEY, data.rewriteScope);
           } catch {}
         }
       } catch {
@@ -276,14 +284,14 @@ export function PreviewProvider({ children }) {
     // Save to localStorage immediately
     try {
       if (previewUrl) {
-        localStorage.setItem(PREVIEW_URL_KEY, previewUrl);
+        storage.setItem(PREVIEW_URL_KEY, previewUrl);
       } else {
-        localStorage.removeItem(PREVIEW_URL_KEY);
+        storage.removeItem(PREVIEW_URL_KEY);
       }
     } catch {}
 
     // Don't save to server until initial fetch is done (to avoid overwriting server with stale localStorage)
-    if (!initialFetchDoneRef.current) return;
+    if (!initialFetchDoneRef.current || remotePreferences || getActiveEnvironment()) return;
 
     // Debounce server save
     if (previewUrl === lastSavedUrlRef.current) return;

@@ -25,6 +25,7 @@ export function ThemeProvider({ children }) {
 
     // Persist to server
     apiFetch('/api/settings', {
+      home: true,
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ theme: newTheme })

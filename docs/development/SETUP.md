@@ -261,3 +261,64 @@ not run the legacy Fastify backend tests by default; use
 
 1. Read `docs/architecture/SYSTEM_ARCHITECTURE.md` for system context.
 2. Follow `docs/development/TESTING_GUIDE.md` before pushing changes.
+
+
+## Optional Hermes runtime
+
+Terminal v4 can launch the real Hermes agent alongside native coding agents.
+See [Hermes runtime setup](../features/HERMES_RUNTIME.md) for the isolated
+Windows installer, verified executable override, and Linux/macOS source setup.
+
+Set HERMES_EXECUTABLE in the environment that starts the Rust host, then restart
+that host to refresh its catalog. Native Hermes configuration belongs to the
+server operator. App-managed API-provider credentials belong to the current
+app account and remain in the encrypted vault. Loading a catalog does not
+perform a provider login or model call.
+
+The workspace task worker starts with the Rust API. It supports three distinct
+workspace paths concurrently; use managed worktrees for parallel changes to one
+repository. Graceful Ctrl+C/SIGTERM shutdown stops child process trees and saves
+interrupted status. Scheduling depends on the server remaining running.
+
+
+## Optional paired hosts and rewind runtimes
+
+Run the same Rust API on both hosts and sign in to each independently. Use the
+Environments panel's one-use code to pair the destination; do not copy JWT secrets
+between hosts. Use a reachable HTTPS origin and valid certificate. An explicit
+HTTP opt-in exists for trusted private networks. Each host keeps its own data
+folder, provider installation and credentials. Restarting the app is unnecessary
+for switching an already paired environment.
+
+Coordinated rewind needs a managed Git worktree and existing files checkpoint.
+Install the native provider and its supported SDK/runtime on the server where the
+conversation lives. Run `npm install` at the repository root to install the pinned
+Claude Agent SDK. Codex uses its app-server protocol; Hermes uses its configured
+Python runtime and native SessionDB. Set `HERMES_PYTHON` to the absolute Python
+executable in the Hermes environment, or set `HERMES_EXECUTABLE` so the adjacent
+Python executable can be resolved. Hermes history uses `HERMES_HOME/state.db`.
+
+A packaged server must include the `scripts/provider-rewind-*` runtime helpers
+and the root Node dependencies. Set `TERMINAL_V4_RUNTIME_ROOT` to that application
+directory when it differs from the source checkout. Native provider binaries,
+credentials and histories must be configured on the owning host.
+Provider-specific failures remain visible and do not spend model tokens during
+source discovery or planning. See [pairing and rewind workflow](../features/PAIRED_ENVIRONMENTS_AND_REWIND.md).
+
+## Remote workspace setup
+
+Use Environments to pair and organise devices; Workspace tools exposes transfers,
+sharing and replay. New remote-control capabilities are opt-in through the
+destination's Custom pairing profile. Preserve each host's signing secret and
+data directory across restarts. The Windows background launcher can capture
+TERMINAL_V4_DESKTOP_ACCESS, TERMINAL_V4_RELAY_URL, TERMINAL_V4_RELAY_KEY and
+TERMINAL_V4_RELAY_SERVER_KEY at initialization, along with native-provider roots.
+
+Desktop viewing/control requires TERMINAL_V4_DESKTOP_ACCESS=view or control on
+an interactive Windows host. Other platforms and disabled hosts report unavailable.
+A service tunnel's local listener belongs to the home API computer. The optional
+broker requires trusted HTTPS hosting; no relay is deployed by these changes.
+
+See [Remote workspace](../features/REMOTE_WORKSPACE.md),
+[Background host](../features/BACKGROUND_HOST.md), and
+[Device relay](../features/DEVICE_RELAY.md) for setup commands and limits.

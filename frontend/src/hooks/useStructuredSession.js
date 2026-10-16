@@ -1,3 +1,7 @@
+import { environmentAllows } from '../utils/runtimePermissions';
+import { getActiveEnvironment, getEnvironmentSignal } from '../utils/remoteEnvironments';
+import { createTerminalReconnectController, isPermanentSocketClose } from '../utils/terminalSocketReconnect';
+import { resolveWebSocketUrl } from '../utils/apiBase';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../utils/api';
 import { getAccessToken, isAccessTokenExpired, refreshTokens } from '../utils/auth';
@@ -15,7 +19,8 @@ export function useStructuredSession({ sessionId, active = true }) {
   const [connectionState, setConnectionState] = useState('connecting');
   const [windowActive, setWindowActive] = useState(() => isWindowActive());
   const wsRef = useRef(null);
-  const reconnectTimerRef = useRef(null);
+  const reconnectControllerRef = useRef(null);
+  const environmentSignalRef = useRef(getEnvironmentSignal());
   const connectRef = useRef(null);
   const isConnectingRef = useRef(false);
   const windowActiveRef = useRef(windowActive);
@@ -29,9 +34,6 @@ export function useStructuredSession({ sessionId, active = true }) {
 
   // Process a single canonical event into our rendering model
   const processEvent = useCallback((event) => {
-    if (event.seq != null) {
-      lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
-    }
     switch (event.type) {
       case 'session_started':
         setIsStreaming(true);
@@ -171,150 +173,140 @@ export function useStructuredSession({ sessionId, active = true }) {
     }
   }, []);
 
-  // WebSocket connection
   useEffect(() => {
     if (!sessionId || !active) return;
     let disposed = false;
-
-    // Reset state on session change (fresh connect, not reconnect)
+    const environmentSignal = environmentSignalRef.current;
+    const remote = Boolean(getActiveEnvironment());
     lastSeqRef.current = 0;
     isReconnectRef.current = false;
-    setMessages([]);
-    setCurrentToolCalls([]);
-    setPendingApproval(null);
-    setIsStreaming(false);
+    const resetModel = () => {
+      lastSeqRef.current = 0;
+      isReconnectRef.current = false;
+      setMessages([]);
+      setCurrentToolCalls([]);
+      setPendingApproval(null);
+      setIsStreaming(false);
+    };
+    resetModel();
     setConnectionState('connecting');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    async function getFreshAccessToken() {
-      const accessToken = getAccessToken();
-      if (!accessToken || !isAccessTokenExpired(accessToken)) {
-        return accessToken;
-      }
-
-      const refreshed = await refreshTokens();
-      return refreshed.accessToken;
-    }
+    const controller = createTerminalReconnectController(() => { void connect(); });
+    reconnectControllerRef.current = controller;
+    const stop = () => {
+      controller.stop();
+      isConnectingRef.current = false;
+      const socket = wsRef.current;
+      wsRef.current = null;
+      socket?.close();
+      if (!disposed) setConnectionState('unavailable');
+    };
+    environmentSignal.addEventListener('abort', stop, { once: true });
 
     async function connect() {
-      if (disposed || !windowActiveRef.current || isConnectingRef.current) {
+      if (disposed || environmentSignal.aborted || controller.isStopped() || !windowActiveRef.current
+        || isConnectingRef.current || wsRef.current) return;
+      if (navigator.onLine === false) {
+        controller.scheduleReconnect();
         return;
       }
+      const attempt = controller.beginAttempt();
       isConnectingRef.current = true;
-      let accessToken = null;
+      let accessToken = getAccessToken();
       try {
-        accessToken = await getFreshAccessToken();
-      } catch {
-        accessToken = getAccessToken();
+        if (accessToken && isAccessTokenExpired(accessToken)) {
+          accessToken = (await refreshTokens()).accessToken;
+        }
+      } catch (error) {
+        if (!disposed && controller.isCurrentAttempt(attempt)) {
+          isConnectingRef.current = false;
+          if (['Token refresh failed', 'No refresh token', 'Invalid token response'].includes(error?.message)) stop();
+          else controller.scheduleReconnect();
+        }
+        return;
       }
-      if (disposed || !windowActiveRef.current) {
+      if (disposed || environmentSignal.aborted || !controller.isCurrentAttempt(attempt)) return;
+      if (!windowActiveRef.current || navigator.onLine === false) {
         isConnectingRef.current = false;
         return;
       }
-      const wsBaseUrl = `${protocol}//${window.location.host}/api/structured/sessions/${sessionId}/ws`;
       const params = new URLSearchParams();
       if (accessToken) params.set('token', accessToken);
-      if (isReconnectRef.current && lastSeqRef.current > 0) {
-        params.set('last_seq', String(lastSeqRef.current));
-      }
-      const wsUrl = `${wsBaseUrl}?${params.toString()}`;
-      const ws = new WebSocket(wsUrl);
+      if (isReconnectRef.current && lastSeqRef.current > 0) params.set('last_seq', String(lastSeqRef.current));
+      const ws = new WebSocket(resolveWebSocketUrl('/api/structured/sessions/' + encodeURIComponent(sessionId) + '/ws') + '?' + params.toString());
       wsRef.current = ws;
       isConnectingRef.current = false;
-
+      const current = () => !disposed && !environmentSignal.aborted && wsRef.current === ws && controller.isCurrentAttempt(attempt);
       ws.onopen = () => {
-        if (disposed || wsRef.current !== ws) {
-          return;
-        }
+        if (!current()) return;
+        controller.markConnected();
         setConnectionState('online');
       };
-
-      ws.onmessage = (event) => {
-        if (disposed || wsRef.current !== ws) {
-          return;
-        }
+      ws.onmessage = event => {
+        if (!current()) return;
         try {
           const data = JSON.parse(event.data);
           if (data.__terminal_meta && data.type === 'events_lost') {
-            // Broadcast buffer overflow — trigger full resync
-            lastSeqRef.current = 0;
-            isReconnectRef.current = false;
-            setMessages([]);
-            setCurrentToolCalls([]);
-            setPendingApproval(null);
-            setIsStreaming(false);
+            resetModel();
             ws.close();
             return;
           }
           if (data.__terminal_meta && data.type === 'structured_event' && data.event) {
+            const seq = data.event.seq;
+            if (Number.isSafeInteger(seq) && seq > 0) {
+              if (seq <= lastSeqRef.current) return;
+              if (lastSeqRef.current > 0 && seq > lastSeqRef.current + 1) {
+                resetModel();
+                ws.close();
+                return;
+              }
+              lastSeqRef.current = seq;
+            }
             processEvent(data.event);
           }
-        } catch {
-          // Invalid JSON
-        }
+        } catch { /* Ignore malformed transport events. */ }
       };
-
-      ws.onclose = () => {
+      ws.onclose = (event = {}) => {
+        if (!current()) return;
+        wsRef.current = null;
         isConnectingRef.current = false;
-        if (wsRef.current === ws) {
-          wsRef.current = null;
-        }
-        if (disposed || wsRef.current !== null) {
+        if (isPermanentSocketClose(event, remote)) {
+          stop();
           return;
         }
         setConnectionState('offline');
         isReconnectRef.current = true;
-        if (!windowActiveRef.current) {
-          return;
-        }
-        // Auto-reconnect after 3s
-        const reconnectTimer = setTimeout(() => {
-          if (reconnectTimerRef.current === reconnectTimer) {
-            reconnectTimerRef.current = null;
-          }
-          connect();
-        }, 3000);
-        reconnectTimerRef.current = reconnectTimer;
+        controller.scheduleReconnect();
       };
-
-      ws.onerror = () => {
-        ws.close();
-      };
+      ws.onerror = () => { if (current()) ws.close(); };
     }
 
+    const offline = () => { wsRef.current?.close(); };
+    window.addEventListener('offline', offline);
     connectRef.current = connect;
-    connect();
+    void connect();
 
     return () => {
       disposed = true;
+      environmentSignal.removeEventListener('abort', stop);
+      window.removeEventListener('offline', offline);
+      controller.dispose();
+      if (reconnectControllerRef.current === controller) reconnectControllerRef.current = null;
       connectRef.current = null;
       isConnectingRef.current = false;
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-      if (wsRef.current) {
-        const currentSocket = wsRef.current;
-        wsRef.current = null;
-        currentSocket.close();
-      }
+      const socket = wsRef.current;
+      wsRef.current = null;
+      socket?.close();
     };
   }, [sessionId, active, processEvent]);
 
   useEffect(() => {
-    if (!windowActive || !active || !sessionId) {
-      return;
-    }
-    if (wsRef.current || reconnectTimerRef.current || isConnectingRef.current) {
-      return;
-    }
-    connectRef.current?.();
+    if (windowActive && active && sessionId) void connectRef.current?.();
   }, [active, sessionId, windowActive]);
 
   const sendMessage = useCallback(
     async (text) => {
-      if (!sessionId || !text?.trim()) return;
+      if (!sessionId || !text?.trim() || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return;
       const message = text.trim();
 
       // Add user message to local state immediately
@@ -336,7 +328,7 @@ export function useStructuredSession({ sessionId, active = true }) {
   );
 
   const interrupt = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return;
     try {
       await apiFetch(`/api/structured/sessions/${sessionId}/interrupt`, {
         method: 'POST',
@@ -348,7 +340,7 @@ export function useStructuredSession({ sessionId, active = true }) {
 
   const approve = useCallback(
     async (approved) => {
-      if (!sessionId) return;
+      if (!sessionId || environmentSignalRef.current.aborted || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return;
       setPendingApproval(null);
       try {
         await apiFetch(`/api/structured/sessions/${sessionId}/approve`, {

@@ -1,4 +1,4 @@
-import { resolveApiUrl } from './apiBase';
+import { resolveHomeApiUrl } from './apiBase';
 
 const ACCESS_TOKEN_KEY = 'terminal_access_token';
 const REFRESH_TOKEN_KEY = 'terminal_refresh_token';
@@ -96,7 +96,7 @@ export async function refreshTokens() {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(resolveApiUrl('/api/auth/refresh'), {
+      const response = await fetch(resolveHomeApiUrl('/api/auth/refresh'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken })
@@ -118,7 +118,7 @@ export async function refreshTokens() {
       if (data.user) {
         setUser(data.user);
       }
-      await fetch(resolveApiUrl('/api/preview/session'), {
+      await fetch(resolveHomeApiUrl('/api/preview/session'), {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${tokens.accessToken}` }
       }).catch(() => {});

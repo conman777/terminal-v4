@@ -23,3 +23,18 @@ export function getHistoryReplayObserverText(historyText, maxChars = DEFAULT_HIS
   const normalizedMaxChars = Math.floor(normalizePositiveNumber(maxChars, DEFAULT_HISTORY_REPLAY_OBSERVER_CHARS));
   return historyText.slice(-normalizedMaxChars);
 }
+
+export function unseenTerminalEvents(events, afterSeq = 0) {
+  let cursor = Number.isSafeInteger(afterSeq) ? afterSeq : 0;
+  return events.filter(event => {
+    if (!Number.isSafeInteger(event?.seq) || event.seq <= 0) return true;
+    if (event.seq <= cursor) return false;
+    cursor = event.seq;
+    return true;
+  });
+}
+
+export function hasTerminalHistoryGap(events, afterSeq) {
+  const first = events.find(event => Number.isSafeInteger(event?.seq) && event.seq > afterSeq);
+  return afterSeq > 0 && first?.seq > afterSeq + 1;
+}

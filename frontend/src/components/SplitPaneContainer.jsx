@@ -28,6 +28,8 @@ function LayoutNode({
   customAiProviders,
   onSetSessionAiType,
   onAddCustomAiProvider,
+  onStartWorkspaceTask,
+  onSelectHistorySession,
   paneCount,
   currentDesktopId,
   fitSignal
@@ -64,6 +66,8 @@ function LayoutNode({
         customAiProviders={customAiProviders}
         onSetSessionAiType={onSetSessionAiType}
         onAddCustomAiProvider={onAddCustomAiProvider}
+        onStartWorkspaceTask={onStartWorkspaceTask}
+        onSelectHistorySession={onSelectHistorySession}
         currentDesktopId={currentDesktopId}
         fitSignal={fitSignal}
       />
@@ -111,6 +115,8 @@ function LayoutNode({
             customAiProviders={customAiProviders}
             onSetSessionAiType={onSetSessionAiType}
             onAddCustomAiProvider={onAddCustomAiProvider}
+            onStartWorkspaceTask={onStartWorkspaceTask}
+            onSelectHistorySession={onSelectHistorySession}
             paneCount={paneCount}
             currentDesktopId={currentDesktopId}
             fitSignal={fitSignal}
@@ -147,6 +153,8 @@ export function SplitPaneContainer({
   customAiProviders,
   onSetSessionAiType,
   onAddCustomAiProvider,
+  onStartWorkspaceTask,
+  onSelectHistorySession,
   paneLayout,
   currentDesktopId,
   fitSignal
@@ -211,6 +219,8 @@ export function SplitPaneContainer({
             customAiProviders={customAiProviders}
             onSetSessionAiType={onSetSessionAiType}
             onAddCustomAiProvider={onAddCustomAiProvider}
+            onStartWorkspaceTask={onStartWorkspaceTask}
+            onSelectHistorySession={onSelectHistorySession}
             currentDesktopId={currentDesktopId}
             fitSignal={fitSignal}
           />
@@ -248,6 +258,8 @@ export function SplitPaneContainer({
           customAiProviders={customAiProviders}
           onSetSessionAiType={onSetSessionAiType}
           onAddCustomAiProvider={onAddCustomAiProvider}
+          onStartWorkspaceTask={onStartWorkspaceTask}
+          onSelectHistorySession={onSelectHistorySession}
           paneCount={paneCount}
           currentDesktopId={currentDesktopId}
           fitSignal={fitSignal}
@@ -293,6 +305,8 @@ export function SplitPaneContainer({
           customAiProviders={customAiProviders}
           onSetSessionAiType={onSetSessionAiType}
           onAddCustomAiProvider={onAddCustomAiProvider}
+          onStartWorkspaceTask={onStartWorkspaceTask}
+          onSelectHistorySession={onSelectHistorySession}
           fitSignal={fitSignal}
         />
       ))}

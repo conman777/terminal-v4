@@ -3,6 +3,7 @@ use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -33,10 +34,11 @@ pub async fn require_auth(
 ) -> Response {
     let user = match access_token(&request)
         .and_then(|token| {
-            authenticate_token(
-                &state.config().jwt_secret,
-                state.config().allowed_username.as_deref(),
+            authenticate_runtime_request(
+                &state,
                 token,
+                request.method().as_str(),
+                request.uri().path(),
             )
             .ok()
         })
@@ -55,9 +57,106 @@ pub async fn require_auth(
         None => return auth_error(StatusCode::UNAUTHORIZED, "Unauthorized"),
     };
 
+    let delegated = access_token(&request)
+        .filter(|token| token.starts_with("tv4pair."))
+        .map(str::to_owned);
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
     request.extensions_mut().insert(user);
+    let response = next.run(request).await;
+    if let Some(token) = delegated {
+        if response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+        {
+            return guard_paired_event_stream(state, token, method, path, response);
+        }
+    }
+    response
+}
 
-    next.run(request).await
+fn guard_paired_event_stream(
+    state: AppState,
+    token: String,
+    method: String,
+    path: String,
+    response: Response,
+) -> Response {
+    let (parts, body) = response.into_parts();
+    let (sender, receiver) = tokio::sync::mpsc::channel(4);
+    tokio::spawn(async move {
+        let mut stream = body.into_data_stream();
+        let mut pending = None;
+        let mut authorization_check = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            tokio::select! {
+                _=sender.closed()=>break,
+                _=authorization_check.tick()=>{
+                    if authenticate_runtime_request(&state,&token,&method,&path).is_err(){break;}
+                },
+                permit=sender.reserve(),if pending.is_some()=>{
+                    match permit {Ok(permit)=>permit.send(pending.take().expect("Pending body chunk exists")),Err(_)=>break,}
+                },
+                chunk=stream.next(),if pending.is_none()=>{
+                    match chunk {Some(chunk)=>pending=Some(chunk),None=>break,}
+                },
+            }
+        }
+    });
+    Response::from_parts(
+        parts,
+        Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(receiver)),
+    )
+}
+
+pub(crate) fn authenticate_runtime_request(
+    state: &AppState,
+    token: &str,
+    method: &str,
+    path: &str,
+) -> Result<AuthenticatedUser, String> {
+    authenticate_token(
+        &state.config().jwt_secret,
+        state.config().allowed_username.as_deref(),
+        token,
+    )
+    .or_else(|_| {
+        crate::paired_environments::authorize_request(state, token, method, path)
+            .ok_or_else(|| "Invalid, expired, revoked or unauthorized token".into())
+    })
+}
+pub(crate) fn authenticate_runtime_token(
+    state: &AppState,
+    token: &str,
+    path: &str,
+) -> Result<AuthenticatedUser, String> {
+    authenticate_runtime_request(state, token, "GET", path)
+}
+pub(crate) fn runtime_message_allowed(
+    state: &AppState,
+    token: &str,
+    structured: bool,
+    kind: &str,
+) -> bool {
+    if token.starts_with("tv4pair.") {
+        return crate::paired_environments::capabilities_for_token(state, token).is_some_and(
+            |caps| {
+                if structured {
+                    caps.allows_structured_message(kind)
+                } else {
+                    caps.allows_terminal_message(kind)
+                }
+            },
+        );
+    }
+    authenticate_token(
+        &state.config().jwt_secret,
+        state.config().allowed_username.as_deref(),
+        token,
+    )
+    .is_ok()
 }
 
 pub fn authenticate_token(

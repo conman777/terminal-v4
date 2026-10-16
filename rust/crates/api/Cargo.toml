@@ -20,7 +20,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 portable-pty.workspace = true
 rand = "0.9"
 regex-lite = "0.1"
-reqwest = { version = "0.12", features = ["json", "multipart"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
 sysinfo = "0.33"
 url = "2"
 # webauthn-rs requires OpenSSL; enable on Linux deployment
@@ -33,9 +33,9 @@ serde_json.workspace = true
 sha2.workspace = true
 terminal-v4-core = { path = "../core" }
 time.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
 tokio-stream = "0.1"
-tokio-tungstenite = "0.28"
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tokio-postgres.workspace = true
 tracing.workspace = true
@@ -49,6 +49,10 @@ zip = "2"
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 http-body-util.workspace = true

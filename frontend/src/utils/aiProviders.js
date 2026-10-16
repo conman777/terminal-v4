@@ -6,6 +6,21 @@ const DEFAULT_AI_CAPABILITIES = {
 
 const KNOWN_AI_PROVIDERS = [
   {
+    id: 'hermes',
+    label: 'Hermes',
+    title: 'Hermes Agent',
+    launchCommand: 'hermes',
+    initialCommand: 'hermes',
+    color: '#d6a84b',
+    slashCommands: [
+      { cmd: '/model', desc: 'Change AI model' },
+      { cmd: '/skills', desc: 'Manage Hermes skills' },
+      { cmd: '/memory', desc: 'Review Hermes memory' },
+      { cmd: '/help', desc: 'Show available commands' },
+    ],
+    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
+  },
+  {
     id: 'claude',
     label: 'Claude Code',
     title: 'Claude Code',
@@ -327,14 +342,19 @@ export function getAiInitialCommand(aiType, customProviders = []) {
 }
 
 const AGENT_REASONING_LEVELS = {
+  hermes: new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
   codex: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
   claude: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
 };
 
-function quoteAgentArgument(value, label) {
+function quoteAgentArgument(value, label, hostShell = 'posix') {
   const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized || /[\0\r\n]/.test(normalized)) {
+  if (!normalized || /[\x00-\x1f\x7f]/.test(normalized)) {
     throw new Error(`Invalid agent ${label}`);
+  }
+  if (hostShell === 'cmd') {
+    if (/["%!^&|<>()]/.test(normalized)) throw new Error('Invalid agent ' + label);
+    return '"' + normalized + '"';
   }
   return `'${normalized.replaceAll("'", "'\\''")}'`;
 }
@@ -347,31 +367,38 @@ const API_AGENT_IDS = new Set([
   'upstage', 'kilocode', 'ai-gateway', 'opencode-zen', 'opencode-go',
   'ollama-cloud', 'lmstudio', 'tencent-tokenhub', 'bedrock', 'vertex', 'azure-foundry',
 ]);
-const NATIVE_AGENT_COMMANDS = { codex: 'codex', claude: 'claude', gemini: 'gemini', 'copilot-acp': 'copilot' };
+const NATIVE_AGENT_COMMANDS = { codex: 'codex', claude: 'claude', gemini: 'gemini', hermes: 'hermes', 'copilot-acp': 'copilot' };
 
-export function buildAgentLaunchCommand({ agent, model, reasoning = '', launchCommand = '' }) {
+export function buildAgentLaunchCommand({ agent, model = '', reasoning = '', launchCommand = '', hostShell = 'posix', available }) {
+  if (available === false) throw new Error('Agent runtime is unavailable on this host');
+  const quote = (value, label) => quoteAgentArgument(value, label, hostShell);
   const normalizedAgent = normalizeAiType(agent);
-  if (normalizedAgent === 'copilot-acp') return NATIVE_AGENT_COMMANDS['copilot-acp'];
+  if (normalizedAgent === 'copilot-acp') return launchCommand || NATIVE_AGENT_COMMANDS['copilot-acp'];
   if (API_AGENT_IDS.has(normalizedAgent)) {
-    const runner = typeof launchCommand === 'string' && /^[a-zA-Z0-9_./ -]+$/.test(launchCommand.trim())
+    const runner = typeof launchCommand === 'string' && launchCommand.trim() && !/[\x00-\x1f\x7f]/.test(launchCommand) && (hostShell !== 'cmd' || !/[%!^&|<>]/.test(launchCommand))
       ? launchCommand.trim()
       : 'node backend/dist/api-agent-runner.js';
-    const parts = [runner, '--provider', quoteAgentArgument(normalizedAgent, 'provider'), '--model', quoteAgentArgument(model, 'model')];
-    if (reasoning && normalizedAgent !== 'copilot') parts.push('--reasoning', quoteAgentArgument(reasoning, 'reasoning level'));
+    const parts = [runner, '--provider', quote(normalizedAgent, 'provider'), '--model', quote(model, 'model')];
+    if (reasoning && normalizedAgent !== 'copilot') parts.push('--reasoning', quote(reasoning, 'reasoning level'));
     return parts.join(' ');
   }
   const nativeCommand = NATIVE_AGENT_COMMANDS[normalizedAgent];
   if (!nativeCommand) throw new Error('Invalid native agent');
-  const parts = [nativeCommand, '--model', quoteAgentArgument(model, 'model')];
+  const prefix = launchCommand.trim() || nativeCommand;
+  if (/[\x00-\x1f\x7f]/.test(prefix) || (hostShell === 'cmd' && /[%!^&|<>]/.test(prefix))) throw new Error('Invalid agent launcher');
+  const parts = [prefix];
+  if (model) parts.push('--model', quote(model, 'model'));
   const normalizedReasoning = typeof reasoning === 'string' ? reasoning.trim().toLowerCase() : '';
   if (normalizedReasoning) {
     if (!AGENT_REASONING_LEVELS[normalizedAgent]?.has(normalizedReasoning)) {
       throw new Error('Invalid agent reasoning level');
     }
     if (normalizedAgent === 'codex') {
-      parts.push('--config', quoteAgentArgument(`model_reasoning_effort=\"${normalizedReasoning}\"`, 'reasoning level'));
+      parts.push('--config', quote(hostShell === 'cmd' ? "model_reasoning_effort='" + normalizedReasoning + "'" : `model_reasoning_effort=\"${normalizedReasoning}\"`, 'reasoning level'));
+    } else if (normalizedAgent === 'hermes') {
+      parts.push('--reasoning', quote(normalizedReasoning, 'reasoning level'));
     } else if (normalizedAgent === 'claude') {
-      parts.push('--effort', quoteAgentArgument(normalizedReasoning, 'reasoning level'));
+      parts.push('--effort', quote(normalizedReasoning, 'reasoning level'));
     }
   }
   return parts.join(' ');

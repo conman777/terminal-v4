@@ -1,0 +1,16 @@
+.workspace-git-panel { display: grid; gap: 12px; color: var(--text-primary, #e2e8f0); min-width: 0; }
+.workspace-git-panel h3, .workspace-git-panel p { margin: 0; }
+.workspace-git-panel p, .workspace-git-panel small { color: var(--text-secondary, #94a3b8); font-size: 13px; }
+.workspace-git-panel [role="alert"] { color: #fda4af; }
+.workspace-git-panel button, .workspace-git-panel input, .workspace-git-panel select { font: inherit; color: inherit; background: var(--bg-secondary, #17202d); border: 1px solid var(--border-color, #354154); border-radius: 6px; padding: 8px 10px; min-height: 36px; }
+.workspace-git-panel button { cursor: pointer; }.workspace-git-panel button:disabled { cursor: default; opacity: .5; }
+.workspace-git-panel input { min-width: 0; max-width: 100%; }.workspace-git-panel button:focus-visible, .workspace-git-panel input:focus-visible, .workspace-git-panel select:focus-visible { outline: 2px solid var(--accent-primary, #60a5fa); outline-offset: 2px; }
+.workspace-git-toolbar, .workspace-git-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.workspace-git-review { display: grid; grid-template-columns: minmax(150px, 30%) minmax(0, 1fr); border: 1px solid var(--border-color, #354154); border-radius: 8px; overflow: hidden; }
+.workspace-git-review nav { overflow: auto; max-height: 360px; border-right: 1px solid var(--border-color, #354154); padding: 8px; }
+.workspace-git-review nav button { display: flex; flex-direction: column; width: 100%; text-align: left; margin-bottom: 6px; overflow-wrap: anywhere; }
+.workspace-git-review nav button[aria-pressed="true"] { border-color: var(--accent-primary, #60a5fa); }
+.workspace-git-patch { min-width: 0; padding: 10px; }.workspace-git-patch pre { max-width: 100%; max-height: 360px; overflow: auto; margin: 8px 0 0; font-size: 12px; line-height: 1.55; white-space: pre; }
+.workspace-git-list { padding: 0; margin: 0; list-style: none; display: grid; gap: 8px; }.workspace-git-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid var(--border-color, #354154); padding-bottom: 8px; }
+.workspace-git-list li > div { min-width: 0; flex: 1; }.workspace-git-list small { display: block; overflow-wrap: anywhere; }.workspace-git-confirm { border: 1px solid #d97706; border-radius: 6px; padding: 12px; display: flex; flex-wrap: wrap; gap: 8px; }.workspace-git-confirm p { flex-basis: 100%; }
+@media (max-width: 600px) { .workspace-git-review { grid-template-columns: 1fr; }.workspace-git-review nav { max-height: 160px; border-right: 0; border-bottom: 1px solid var(--border-color, #354154); }.workspace-git-inline input { flex: 1 1 160px; }.workspace-git-panel button { min-height: 44px; } }

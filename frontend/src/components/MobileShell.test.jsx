@@ -1,3 +1,4 @@
+import { setActiveEnvironment } from '../utils/remoteEnvironments';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -56,6 +57,7 @@ vi.mock('./DesktopStatusBar', () => ({
 	  >
         <textarea
           aria-label="Command composer"
+          disabled={props.composerDisabled}
           placeholder={props.composerPlaceholder}
           value={props.composerValue}
           onChange={(event) => props.onComposerChange?.(event.target.value)}
@@ -198,6 +200,7 @@ function renderMobileShell(overrides = {}) {
 
 describe('MobileShell', () => {
   beforeEach(() => {
+    setActiveEnvironment(null);
     mockUseMobileChatTurns.mockReturnValue(createMobileChatTurnsState());
     mockUseStructuredSession.mockReturnValue(createStructuredSessionState());
     mockListSessionGitBranches.mockClear();
@@ -333,4 +336,20 @@ describe('MobileShell', () => {
     expect(css).toMatch(/\.mobile-shell-parity \.status-view-mode-toggle\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/);
     expect(css).toMatch(/\.mobile-shell-parity \.mobile-terminal-slot\.is-collapsed\s*\{[\s\S]*visibility:\s*hidden;/);
   });
+  it('disables the phone composer and terminal input for an observer device', async () => {
+    setActiveEnvironment({id:'observer',capabilities:{}});
+    renderMobileShell();
+    expect(await screen.findByTestId('terminal-chat')).toHaveAttribute('data-input-enabled','false');
+    expect(screen.getByRole('textbox',{name:'Command composer'})).toBeDisabled();
+  });
+  it('submits the phone structured composer through its structured agent', async () => {
+    const structured=createStructuredSessionState();mockUseStructuredSession.mockReturnValue(structured);
+    const terminal=createMobileChatTurnsState();mockUseMobileChatTurns.mockReturnValue(terminal);
+    renderMobileShell({sessions:[{...BASE_SESSIONS[0],id:'ss-structured'}],activeSessionId:'ss-structured'});
+    fireEvent.change(screen.getByRole('textbox',{name:'Command composer'}),{target:{value:'Explain this file'}});
+    fireEvent.click(screen.getByRole('button',{name:'Send composer'}));
+    expect(structured.sendMessage).toHaveBeenCalledWith('Explain this file');
+    expect(terminal.handleChatSend).not.toHaveBeenCalled();
+  });
+
 });

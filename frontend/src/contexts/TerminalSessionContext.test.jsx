@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { setEnvironmentIdentity, setActiveEnvironment, getEnvironmentStorage } from '../utils/remoteEnvironments';
 import { TerminalSessionProvider, useTerminalSession } from './TerminalSessionContext';
 
 const { addRecentFolder, apiFetch, recentFolders } = vi.hoisted(() => ({
@@ -21,13 +22,15 @@ vi.mock('../utils/api', () => ({
 }));
 
 function TestConsumer() {
-  const { loadingSessions, projectInfo, selectSession, sessions } = useTerminalSession();
+  const { loadingSessions, projectInfo, selectSession, sessions, activeSessionId, createSession } = useTerminalSession();
 
   return (
     <>
       <span data-testid="loading-state">{loadingSessions ? 'loading' : 'idle'}</span>
       <span data-testid="project-cwd">{projectInfo?.cwd ?? 'none'}</span>
       <span data-testid="session-ids">{sessions.map((session) => session.id).join(',')}</span>
+      <span data-testid="active-session-id">{activeSessionId}</span>
+      <button type="button" onClick={() => createSession()}>create terminal</button>
       <button type="button" onClick={() => selectSession('session-2')}>
         switch
       </button>
@@ -184,6 +187,8 @@ describe('TerminalSessionContext', () => {
   });
 
   afterEach(() => {
+    setEnvironmentIdentity(null);
+    setActiveEnvironment(null);
     vi.clearAllMocks();
   });
 
@@ -875,4 +880,58 @@ describe('TerminalSessionContext', () => {
     expect(screen.getByTestId('archived-count')).toHaveTextContent('1');
     expect(screen.getByTestId('thread-session-ids')).toHaveTextContent('session-1');
   });
+  it('keeps the selected remote session through an offline reload instead of deleting it after a failed list request', async () => {
+    setEnvironmentIdentity('alice');
+    setActiveEnvironment({ id: 'remote-host' });
+    const storage = getEnvironmentStorage();
+    storage.setItem('lastActiveSession', 'selected-remote-session');
+    apiFetch.mockRejectedValue(new TypeError('Network unavailable'));
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { unmount } = render(<TerminalSessionProvider><TestConsumer /></TerminalSessionProvider>);
+    await waitFor(() => expect(screen.getByTestId('loading-state')).toHaveTextContent('idle'));
+    expect([screen.getByTestId('active-session-id').textContent, storage.getItem('lastActiveSession')])
+      .toEqual(['selected-remote-session', 'selected-remote-session']);
+    unmount();
+    log.mockRestore();
+  });
+  it('persists a newly created terminal as the selected session within its owner and environment', async () => {
+    setEnvironmentIdentity('alice');
+    setActiveEnvironment({ id: 'remote-host', capabilities: { terminalInput: true } });
+    const original = apiFetch.getMockImplementation();
+    apiFetch.mockImplementation((url, options) => options?.method === 'POST' && url === '/api/terminal'
+      ? Promise.resolve({ ok: true, json: async () => ({ session: { id: 'created-terminal', isActive: true } }) })
+      : original(url, options));
+    render(<TerminalSessionProvider><TestConsumer /></TerminalSessionProvider>);
+    await waitFor(() => expect(screen.getByTestId('loading-state')).toHaveTextContent('idle'));
+    await act(async () => screen.getByRole('button', { name: 'create terminal' }).click());
+    expect(getEnvironmentStorage().getItem('lastActiveSession')).toBe('created-terminal');
+  });
+
+  it('blocks creating and sending to remote sessions without explicit capabilities', async () => {
+    setActiveEnvironment({id:'observer',label:'Observer host',capabilities:{}});
+    let api;
+    function PermissionsConsumer(){api=useTerminalSession();return null;}
+    render(<TerminalSessionProvider><PermissionsConsumer /></TerminalSessionProvider>);
+    await waitFor(()=>expect(api.loadingSessions).toBe(false));
+    await expect(api.createSession()).rejects.toThrow('does not allow');
+    await expect(api.createStructuredSession({cwd:'/work',provider:'claude'})).rejects.toThrow('does not allow');
+    const sender=vi.fn();api.registerTerminalSender('session-1',sender);
+    await api.sendToSession('session-1','echo blocked');
+    await api.sendToSession('ss-structured','blocked');
+    expect(sender).not.toHaveBeenCalled();
+    expect(apiFetch.mock.calls.filter(([,options])=>options?.method==='POST')).toEqual([]);
+  });
+
+  it('rejects stale creation and input callbacks after switching environments', async () => {
+    let api;
+    function PermissionsConsumer(){api=useTerminalSession();return null;}
+    render(<TerminalSessionProvider><PermissionsConsumer /></TerminalSessionProvider>);
+    await waitFor(()=>expect(api.loadingSessions).toBe(false));
+    const previous=api;
+    setActiveEnvironment({id:'new-host',capabilities:{terminalInput:true,agentExecute:true}});
+    await expect(previous.createSession()).rejects.toThrow('environment changed');
+    await previous.sendToSession('session-1','must not reach new host');
+    expect(apiFetch.mock.calls.filter(([,options])=>options?.method==='POST')).toEqual([]);
+  });
+
 });

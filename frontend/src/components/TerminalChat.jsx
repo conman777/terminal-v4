@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { environmentAllows } from '../utils/runtimePermissions';
+import { useEffect, useRef, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -42,15 +43,16 @@ import {
 } from '../utils/terminalExternalInput';
 import { focusElementWithoutScroll } from '../utils/focusElementWithoutScroll';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
-import { resolveApiBase } from '../utils/apiBase';
+import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { resolveWebSocketUrl } from '../utils/apiBase';
 import { resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
-import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite } from '../utils/terminalHistoryReplay';
+import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite, unseenTerminalEvents, hasTerminalHistoryGap } from '../utils/terminalHistoryReplay';
 import { getTerminalPlatformConfig, resolveTerminalSurface } from '../utils/terminalSurface';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 import { shouldCheckHistoryAtTopOnWheel } from '../utils/terminalWheelHistory';
 import {
   createTerminalReconnectController,
-  shouldReuseTerminalSocket
+  shouldReuseTerminalSocket, isPermanentSocketClose
 } from '../utils/terminalSocketReconnect';
 
 // Static ANSI 256-colour palette — built once at module load, not per render frame.
@@ -130,7 +132,10 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
   return lines;
 }
 
-export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize = true, surface, inputEnabled = true }) {
+export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize: requestedSyncPtySize = true, surface, inputEnabled: requestedInputEnabled = true }) {
+  const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
+  const inputEnabled = requestedInputEnabled !== false && environmentAllows(environment, 'terminalInput');
+  const syncPtySize = requestedSyncPtySize !== false && environmentAllows(environment, 'terminalInput');
   const terminalRef = useRef(null);
   const xtermRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -1625,6 +1630,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     let activePendingWriteFrame = null;
     let activeMessageQueue = null;
     let connectSocket = () => {};
+    const environmentSignal = getEnvironmentSignal();
+    const remoteEnvironment = Boolean(getActiveEnvironment());
     const reconnectController = createTerminalReconnectController((options = {}) => {
       connectSocket(options);
     });
@@ -1906,8 +1913,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       });
     };
 
+    const discardUnsentInput = () => {
+      preAuthSocketInputRef.current = '';
+      inputBufferRef.current = '';
+      pendingExternalInputRef.current = [];
+      externalInputFramesRef.current = [];
+      if (inputFlushRef.current) clearTimeout(inputFlushRef.current);
+      inputFlushRef.current = null;
+      if (externalInputTimerRef.current) clearTimeout(externalInputTimerRef.current);
+      externalInputTimerRef.current = null;
+    };
+
     const sendTerminalInput = (text) => {
-      if (!text || disposed) return;
+      if (!text || disposed || !environmentAllows(getActiveEnvironment(), 'terminalInput') || environmentSignal.aborted || reconnectController.isStopped()) return;
       const resolvedText = rewriteTerminalAgentInput(text);
       capturePreviewFromInput(resolvedText);
       if (sendSocketInputRef.current?.(resolvedText)) {
@@ -1924,6 +1942,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const flushQueuedSocketInput = () => {
+      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) { preAuthSocketInputRef.current = ''; return false; }
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN || !socketReadyForInputRef.current) {
         return false;
@@ -1940,6 +1959,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const sendSocketInput = (payload) => {
+      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         return false;
@@ -2030,7 +2050,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
     const enqueueExternalInput = (text) => {
       const frames = createExternalInputFrames(text);
-      if (disposed || frames.length === 0) return false;
+      if (disposed || frames.length === 0 || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
       externalInputFramesRef.current.push(...frames);
       scheduleExternalInputDrain();
       drainExternalInput();
@@ -2436,9 +2456,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         const pending = pendingSocketDataRef.current;
         pendingSocketDataRef.current = [];
         if (pending.length === 0) return;
-        const pendingChunks = pending
+        const pendingChunks = unseenTerminalEvents(pending
           .map((item) => (typeof item === 'string' ? { text: item } : item))
-          .filter((item) => item && typeof item.text === 'string' && item.text.length > 0);
+          .filter((item) => item && typeof item.text === 'string' && item.text.length > 0),
+          historyStateRef.current.newestSeq || 0);
         if (pendingChunks.length === 0) return;
         const pendingText = pendingChunks.map((item) => item.text).join('');
         reflectIdlePromptState(pendingText);
@@ -2495,6 +2516,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             setIsLoadingHistory(false);
             return;
           }
+          if (disposed || environmentSignal.aborted) return;
           const history = historyPage.history;
           setHistoryEntries(history);
           state.exhausted = history.length === 0;
@@ -2617,8 +2639,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               ? { afterSeq: state.newestSeq }
               : { afterTs: state.newestTs }
           );
-          const history = historyPage?.history || null;
-          if (!history || history.length === 0) return;
+          if (disposed || environmentSignal.aborted) return;
+          const history = unseenTerminalEvents(historyPage?.history || [], state.newestSeq || 0);
+          if (hasTerminalHistoryGap(history, state.newestSeq || 0)) {
+            state.loading = false;
+            await loadInitialHistory();
+            return;
+          }
+          if (history.length === 0) return;
             history.forEach((entry) => appendHistoryEntry(entry));
             const combined = history.map((entry) => entry.text || '').join('');
             if (combined) {
@@ -2788,8 +2816,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       window.addEventListener('offline', handleOffline);
 
       const buildSocketUrl = () => {
-        const base = resolveApiBase(import.meta.env.VITE_API_URL || window.location.origin) || window.location.origin;
-        const url = new URL(`/api/terminal/${sessionId}/ws`, base);
+        const url = new URL(resolveWebSocketUrl(`/api/terminal/${sessionId}/ws`));
         url.searchParams.set('history', '0');
         if (USE_FRAMED_PROTOCOL) url.searchParams.set('framed', '1');
         url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -2840,7 +2867,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       connectSocket = (options = {}) => {
         reconnectSocketRef.current = connectSocket;
         reconnectController.clearScheduledReconnect();
-        if (disposed) return () => {};
+        if (disposed || environmentSignal.aborted || reconnectController.isStopped()) return () => {};
         // Skip reconnect if we're offline
         if (pausedForOfflineRef.current || !windowActiveRef.current) {
           historyReloadingRef.current = false;
@@ -2857,6 +2884,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           force: forceReconnect
         })) {
           return () => {};
+        }
+        if (activePendingWriteFrame) {
+          cancelAnimationFrame(activePendingWriteFrame);
+          activePendingWriteFrame = null;
         }
         const connectAttemptId = reconnectController.beginAttempt();
         socketConnectInFlight = true;
@@ -2894,6 +2925,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const markDisconnected = () => {
           socketReadyForInputRef.current = false;
+          discardUnsentInput();
           onConnectionChange?.(false);
           if (!didOpen) {
             setIsLoadingHistory(false);
@@ -2906,6 +2938,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         const handleAuthFailure = (message) => {
           shouldReconnect = false;
+          reconnectController.stop();
+          discardUnsentInput();
           settleConnectAttempt();
           setIsLoadingHistory(false);
           onConnectionChange?.(false);
@@ -2961,8 +2995,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               clearTimeout(connectTimeout);
               connectTimeout = null;
             }
-            wsRetryCount = 0;
-            authRetryCount = 0;
             resetUserInput();
             // onConnectionChange(true) is deferred until the server confirms auth
             // by sending the clientId message — prevents premature input before auth
@@ -3004,10 +3036,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               }
             } else {
               // Reconnect after silent disconnect — fetch any output missed during the gap.
-              scheduleIncrementalResync(0);
+              historyReloadingRef.current = true;
+              void loadIncrementalHistory();
             }
           };
 
+          let lastOutputSeq = historyStateRef.current.newestSeq || 0;
           const socketDecoder = new TextDecoder();
           const decodeSocketData = async (payload) => {
             const decodeBuffer = (buffer) => {
@@ -3038,7 +3072,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           let pendingWriteFrame = null;
           let parserRecoveryNeeded = false;
           const flushPendingWrites = () => {
-            if (disposed) return;
+            if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
             pendingWriteFrame = null;
             activePendingWriteFrame = null;
             if (parserRecoveryNeeded) {
@@ -3171,6 +3205,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
             if (msg.type === 'clientId' && msg.clientId && isValidClientId(msg.clientId)) {
               clientIdRef.current = msg.clientId;
+              reconnectController.markConnected();
+              wsRetryCount = 0;
+              authRetryCount = 0;
               socketReadyForInputRef.current = true;
               flushQueuedSocketInput();
               flushPendingTrackedResize(msg.clientId);
@@ -3215,12 +3252,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             if (processingQueue) return;
             processingQueue = true;
 
-            while (messageQueue.length > 0 && !disposed) {
+            while (messageQueue.length > 0 && !disposed && reconnectController.isCurrentAttempt(connectAttemptId)) {
               const event = messageQueue.shift();
               if (!event) break;
 
               const decoded = await decodeSocketData(event.data);
-              if (disposed) break;
+              if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) break;
 
               lastServerPingAtRef.current = Date.now();
               if (decoded.type === 'meta') {
@@ -3251,6 +3288,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
                 } catch { /* Not valid JSON */ }
               }
 
+              const outputSeq = pendingServerSeqRef.current;
+              if (Number.isSafeInteger(outputSeq) && outputSeq <= Math.max(lastOutputSeq, historyStateRef.current.newestSeq || 0)) {
+                pendingServerSeqRef.current = null;
+                continue;
+              }
+              if (Number.isSafeInteger(outputSeq)) {
+                const previousSeq = Math.max(lastOutputSeq, historyStateRef.current.newestSeq || 0);
+                if (previousSeq > 0 && outputSeq > previousSeq + 1) {
+                  historyReloadingRef.current = true;
+                  scheduleIncrementalResync(0);
+                }
+                lastOutputSeq = Math.max(lastOutputSeq, outputSeq);
+              }
               if (historyReloadingRef.current) {
                 pendingSocketDataRef.current.push({
                   text: data,
@@ -3268,7 +3318,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           };
 
           socket.onmessage = (event) => {
-            if (disposed) return;
+            if (disposed || environmentSignal.aborted || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
             messageQueue.push(event);
             if (messageQueue.length > MAX_MESSAGE_QUEUE) {
               const overflow = messageQueue.length - MAX_MESSAGE_QUEUE;
@@ -3282,7 +3332,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           };
 
           socket.onerror = () => {
-            if (disposed) return;
+            if (disposed || !reconnectController.isCurrentAttempt(connectAttemptId)) return;
             if (socketRef.current === socket) {
               socketRef.current = null;
             }
@@ -3301,6 +3351,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           socket.onclose = (event) => {
             if (disposed) return;
             const isCurrentAttempt = reconnectController.isCurrentAttempt(connectAttemptId);
+            if (!isCurrentAttempt) return;
             if (socketRef.current === socket) {
               socketRef.current = null;
             }
@@ -3315,7 +3366,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
               heartbeatTimer = null;
             }
             messageQueue.length = 0;
-            if (!isCurrentAttempt) {
+            if (isPermanentSocketClose(event, remoteEnvironment)) {
+              handleAuthFailure(remoteEnvironment ? 'Remote access is unavailable or revoked. Return to Home to reconnect.' : 'Terminal access was denied.');
               return;
             }
             if (event.reason === 'Session ended') {
@@ -3417,9 +3469,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             }
             if (shouldReconnect && !pausedForOfflineRef.current && windowActiveRef.current) {
               wsRetryCount++;
-              const baseDelay = Math.min(1000 * Math.pow(2, wsRetryCount - 1), MAX_WS_RETRY_DELAY);
-              const jitter = Math.random() * 500;
-              scheduleSocketReconnect(baseDelay + jitter, { reason: 'Socket closed retry' });
+              reconnectController.scheduleReconnect(undefined, { reason: 'Socket closed retry' });
             }
           };
         };
@@ -3428,6 +3478,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
         return () => {
           shouldReconnect = false;
+          reconnectController.stop();
+          discardUnsentInput();
           settleConnectAttempt();
           if (skipUrlTimeout) clearTimeout(skipUrlTimeout);
           if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -3445,6 +3497,15 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       };
 
       const closeSocket = connectSocket();
+      const stopEnvironmentSocket = () => {
+        reconnectController.stop();
+        discardUnsentInput();
+        pendingSocketDataRef.current = [];
+        socketReadyForInputRef.current = false;
+        socketRef.current?.close();
+        onConnectionChange?.(false);
+      };
+      environmentSignal.addEventListener('abort', stopEnvironmentSocket, { once: true });
 
       const dataDisposer = term.onData((data) => {
         if (disposed) return;
@@ -3657,6 +3718,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         document.removeEventListener('visibilitychange', handleVisibility);
         window.removeEventListener('online', handleOnline);
         window.removeEventListener('offline', handleOffline);
+        environmentSignal.removeEventListener('abort', stopEnvironmentSocket);
         container.removeEventListener('contextmenu', handleContextMenu);
         container.removeEventListener('paste', handlePasteEvent, true);
         if (textarea) {
@@ -4013,7 +4075,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         }}
       ></div>
       {/* Mobile keyboard input overlay - always visible and tappable for iOS */}
-      {isMobile && viewMode === 'terminal' && (
+      {isMobile && inputEnabled && viewMode === 'terminal' && (
         <input
           ref={mobileInputRef}
           type="text"
@@ -4074,6 +4136,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         onClick={triggerFileInput}
         title="Upload image"
         aria-label="Upload image"
+        disabled={!inputEnabled || !environmentAllows(environment, 'fileWrite') || !environmentAllows(environment, 'transfer')}
       >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />

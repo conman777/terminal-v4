@@ -194,7 +194,7 @@ export function DesktopStatusBar({
   }
 
   async function attachImageFile(file, fallbackName = 'image.png') {
-    if (!file) return;
+    if (!file || composerDisabled) return;
 
     setUploadError('');
     setIsPastingImage(true);

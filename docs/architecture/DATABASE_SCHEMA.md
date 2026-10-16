@@ -81,3 +81,22 @@ These are JSON files stored under `backend/data/users/<userId>/`:
 - Preview logs (`/api/preview/:port/logs`)
 - Proxy request logs (`/api/preview/:port/proxy-logs`)
 - Process logs (`/api/process-logs`)
+
+## Remote workspace persistence
+
+The active Rust runtime uses AppConfig.data_dir/terminal.db (TERMINAL_DATA_DIR or DATA_DIR can override the platform application-data default). Legacy backend/data locations above describe the previous backend.
+
+| Table | Scope and data |
+| --- | --- |
+| paired_device | Persistent server UUID |
+| paired_codes | Hash, owner, username, label, expiry, profile and capabilities; one-use transaction |
+| paired_grants | Grant UUID and credential hash, owner identity, label, timestamps, profile/capabilities |
+| paired_environments | Owner connection metadata and encrypted remote credential; device UUID/hostname/OS, favourite/tags, recent workspace, last-seen/used |
+| collaboration_invitations | Owner, canonical workspace, terminal ID, role, secret hash, expiry, bounded use counters and revocation |
+| collaboration_guests | Invitation foreign identity, guest credential hash, display name, join/last-seen times |
+| relay_devices | Broker-pinned device UUID and registration-secret hash |
+| relay_host_secret | Host-only persistent registration secret; its broker counterpart is stored as a hash |
+
+Feature initialization applies additive idempotent schema changes. Existing paired records receive operator permissions without newly introduced desktop/tunnel authority. Preserve the signing secret and SQLite data when moving a host so encrypted credentials and device identities remain usable. Raw pairing codes/invitation secrets are returned at creation and are not retained as plaintext database credentials.
+
+Transfers store owner-hashed JSON records and staging bytes in the application data tree; completed uploads publish into the requested workspace. Recordings store owner-hashed bounded JSON tapes and status receipts. Rewind uses owner/workspace journal records with file fingerprints, provider branches and recovery checkpoint IDs. TCP listeners, desktop viewing sessions and relay stream registries are process-local and expire/stop rather than being silently recreated after restart. Browser device selection and download chunk caches are additionally partitioned by home identity/environment.

@@ -1,0 +1,22 @@
+.workspace-tools-button { border: 1px solid var(--border-color, #374151); background: transparent; color: inherit; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.workspace-tools-button:disabled { opacity: .5; cursor: default; }
+.workspace-tools-overlay { z-index: 1200; padding: 20px; }
+.workspace-tools-dialog { width: min(100%, 1050px); max-height: min(90dvh, 900px); display: flex; flex-direction: column; overflow: hidden; color: var(--text-primary, #e5e7eb); background: var(--bg-primary, #111827); border: 1px solid var(--border-color, #374151); border-radius: 12px; box-shadow: 0 20px 80px #0008; }
+.workspace-tools-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; }
+.workspace-tools-dialog > header > div { min-width: 0; }
+.workspace-tools-dialog h2 { margin: 0; font-size: 20px; }
+.workspace-tools-dialog > header p { margin: 6px 0 0; color: var(--text-secondary, #9ca3af); overflow-wrap: anywhere; font-size: 12px; }
+.workspace-tools-dialog > header button { background: transparent; color: inherit; border: 0; min-width: 40px; min-height: 40px; font-size: 24px; }
+.workspace-tools-tabs { display: flex; gap: 4px; overflow-x: auto; flex-shrink: 0; padding: 0 16px 12px; border-bottom: 1px solid var(--border-color, #374151); }
+.workspace-tools-tabs > button { flex-shrink: 0; border: 0; background: transparent; color: var(--text-secondary, #9ca3af); padding: 10px 12px; border-radius: 6px; cursor: pointer; }
+.workspace-tools-tabs > button[aria-selected=true] { color: var(--text-primary, #e5e7eb); background: var(--bg-secondary, #1f2937); }
+.workspace-tools-content { padding: 18px; min-height: 160px; overflow: auto; overscroll-behavior: contain; }
+@media (max-width: 600px) { .workspace-tools-overlay { padding: 8px; } .workspace-tools-dialog { max-height: calc(100dvh - 16px); } .workspace-tools-content { padding: 12px; } .workspace-tools-dialog > header { padding: 12px; } .workspace-tools-tabs { padding-inline: 8px; } }
+
+@media (max-width: 600px) {
+  .workspace-tools-dialog button, .workspace-tools-content input:not([type=checkbox]):not([type=range]), .workspace-tools-content select { min-height: 44px; }
+  .workspace-tools-content input[type=checkbox] { width: 18px; height: 18px; }
+  .session-replay-output { box-sizing: border-box; }
+}
+
+@media (max-width: 600px) { .workspace-tools-dialog > header button { min-height: 44px; min-width: 44px; } }

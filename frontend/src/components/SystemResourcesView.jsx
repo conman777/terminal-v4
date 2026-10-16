@@ -1,3 +1,4 @@
+import { resolveWebSocketUrl } from '../utils/apiBase';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiGet } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
@@ -190,10 +191,8 @@ export function SystemResourcesView() {
       return undefined;
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.host;
     const token = getAccessToken();
-    const wsUrl = `${protocol}//${host}/api/latency/ws?token=${token}`;
+    const wsUrl = resolveWebSocketUrl(`/api/latency/ws?token=${encodeURIComponent(token)}`);
     setWsTarget(wsUrl);
 
     let ws;

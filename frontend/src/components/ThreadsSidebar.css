@@ -1,26 +1,24 @@
 .pro-sidebar {
-  width: 324px;
-  min-width: 324px;
+  width: 292px;
+  min-width: 292px;
   height: 100%;
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr);
-  border: 1px solid color-mix(in srgb, var(--border-default) 34%, transparent);
-  border-radius: 28px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  border: none;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
   overflow: hidden;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-surface) 92%, black 8%), color-mix(in srgb, var(--bg-base) 96%, black 4%)),
-    radial-gradient(circle at top center, color-mix(in srgb, var(--accent-primary) 10%, transparent), transparent 42%);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.32);
+  background: var(--bg-surface);
   color: var(--text-primary);
   font-family: var(--font-ui);
   flex-shrink: 0;
-  transition: width var(--transition-base), min-width var(--transition-base), grid-template-columns var(--transition-base);
+  transition: width var(--transition-base), min-width var(--transition-base);
 }
 
 .pro-sidebar.collapsed {
-  width: 56px;
-  min-width: 56px;
-  grid-template-columns: 56px;
+  width: 48px;
+  min-width: 48px;
+  grid-template-columns: 48px;
 }
 
 .pro-sidebar-rail {
@@ -28,7 +26,7 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding: 12px 8px 10px;
+  padding: 10px 4px;
   background: color-mix(in srgb, var(--bg-base) 88%, black 12%);
   border-right: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
 }
@@ -39,7 +37,7 @@
   min-width: 40px;
   height: 40px;
   border: none;
-  border-radius: 12px;
+  border-radius: 7px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -126,7 +124,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 16px 18px 10px;
+  padding: 18px 14px 16px;
 }
 
 .pro-sidebar-brand {
@@ -203,15 +201,15 @@
 .pro-sidebar-toolbar {
   display: flex;
   gap: 8px;
-  padding: 0 18px 12px;
+  padding: 0 12px 10px;
 }
 
 .pro-toolbar-btn {
   height: 34px;
-  padding: 0 12px;
+  padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
   align-items: center;
@@ -234,7 +232,7 @@
 }
 
 .pro-sidebar-search {
-  margin: 0 18px 14px;
+  margin: 0 12px 18px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -264,7 +262,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 10px 16px 14px;
+  padding: 0 8px 16px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--border-default) 70%, transparent) transparent;
 }

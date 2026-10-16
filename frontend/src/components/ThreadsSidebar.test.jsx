@@ -38,6 +38,7 @@ function buildSession(id, title, overrides = {}) {
 function buildProps(overrides = {}) {
   return {
     isCollapsed: false,
+    workspacePath: 'C:/repo',
     onToggle: vi.fn(),
     sessionsGroupedByProject: [
       {
@@ -87,6 +88,18 @@ describe('ThreadsSidebar', () => {
     expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New' })).toBeInTheDocument();
     expect(screen.getByText('PROJECTS')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Workspace tools' })).toBeEnabled();
+  });
+
+  it('opens the workspace composer from home and new thread without launching a shell', () => {
+    const onOpenWorkspaceStart = vi.fn();
+    const onCreateSession = vi.fn();
+    render(<ThreadsSidebar {...buildProps({ onOpenWorkspaceStart, onCreateSession })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Terminal v4 home' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New thread' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    expect(onOpenWorkspaceStart).toHaveBeenCalledTimes(3);
+    expect(onCreateSession).not.toHaveBeenCalled();
   });
 
   it('opens sidebar utility actions above new thread', () => {

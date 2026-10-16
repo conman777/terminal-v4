@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { setActiveEnvironment, getEnvironmentStorage } from '../utils/remoteEnvironments';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FolderProvider, useFolders } from './FolderContext';
 
@@ -30,6 +31,7 @@ function TestConsumer() {
 
 describe('FolderContext', () => {
   beforeEach(() => {
+    setActiveEnvironment(null);
     localStorage.clear();
     apiFetch.mockReset();
   });
@@ -126,4 +128,17 @@ describe('FolderContext', () => {
       }));
     });
   });
+  it('keeps remote folder preferences local without hydrating or updating home account settings', async () => {
+    localStorage.setItem('recentFolders',JSON.stringify(['/home-only']));
+    setActiveEnvironment({id:'remote'});
+    const storage=getEnvironmentStorage();storage.setItem('recentFolders',JSON.stringify(['/remote-only']));
+    let folders;
+    function Consumer(){folders=useFolders();return <TestConsumer />;}
+    apiFetch.mockResolvedValue({ok:true,json:async()=>({projects:[],recentFolders:['/wrong-server']})});
+    render(<FolderProvider><Consumer /></FolderProvider>);
+    await waitFor(()=>expect(apiFetch).toHaveBeenCalledWith('/api/projects/scan'));
+    await act(async()=>folders.addRecentFolder('/new-remote'));
+    expect([folders.recentFolders,JSON.parse(localStorage.getItem('recentFolders')),JSON.parse(storage.getItem('recentFolders')),apiFetch.mock.calls.filter(([url])=>url==='/api/settings')]).toEqual([['/new-remote','/remote-only'],['/home-only'],['/new-remote','/remote-only'],[]]);
+  });
+
 });

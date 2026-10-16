@@ -1,5 +1,11 @@
-import { useRef, useState, useCallback, useEffect, useMemo, memo } from 'react';
+import { environmentAllows } from '../utils/runtimePermissions';
+import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { resolveAgentLaunchCommand } from '../utils/agentLauncher';
+import { useRef, useState, useCallback, useEffect, useMemo, memo, useSyncExternalStore } from 'react';
 import { LazyTerminalChat } from './LazyTerminalChat';
+import { WorkspaceToolsButton } from './WorkspaceToolsButton';
+import { latestWorkspaceResponse } from '../utils/workspaceResponse';
+import { WorkspaceProfileButton } from './WorkspaceProfileButton';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
@@ -82,12 +88,17 @@ export const TerminalPane = memo(function TerminalPane({
   customAiProviders = [],
   onSetSessionAiType,
   onAddCustomAiProvider,
+  onStartWorkspaceTask,
+  onSelectHistorySession,
   desktopAllowTerminalInput = false,
   onCwdChange,
   onSessionBusyChange,
   currentDesktopId,
   fitSignal
 }) {
+  const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
+  const terminalInputAllowed = environmentAllows(environment, 'terminalInput');
+  const agentExecutionAllowed = environmentAllows(environment, 'agentExecute');
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
   const menuRef = useRef(null);
@@ -159,6 +170,7 @@ export const TerminalPane = memo(function TerminalPane({
   const aiOptions = getAiTypeOptions(customAiProviders);
   const showSessionSelector = canClose && selectableSessions.length > 0;
   const isStructuredSession = isStructuredSessionId(pane.sessionId);
+  const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const isTerminalBackedSession = Boolean(pane.sessionId) && !isStructuredSession;
   // Terminal v4 stable: terminal-backed sessions are always full-bleed PTY.
   // Structured (non-PTY) agent sessions keep the conversation surface.
@@ -449,21 +461,24 @@ export const TerminalPane = memo(function TerminalPane({
     }
   }, [desktopAllowTerminalInput, isStructuredSession]);
 
-  const launchAiType = useCallback((aiTypeToLaunch, commandOverride = null) => {
-    const nextLaunchCommand = commandOverride || getAiInitialCommand(aiTypeToLaunch, customAiProviders);
-    if (!nextLaunchCommand) return;
-    interactivePromptRef.current = null;
-    setInteractivePromptEvent(null);
-    const result = handleChatSend(nextLaunchCommand);
-    if (result?.queued) {
-      setLaunchQueued(true);
+  const launchAiType = useCallback(async (aiTypeToLaunch, commandOverride = null) => {
+    if (!environmentAllows(getActiveEnvironment(), 'terminalInput') || !environmentAllows(getActiveEnvironment(), 'agentExecute')) return;
+    try {
+      const nextLaunchCommand = commandOverride || await resolveAgentLaunchCommand(aiTypeToLaunch, null, customAiProviders);
+      if (!nextLaunchCommand) return;
+      interactivePromptRef.current = null;
+      setInteractivePromptEvent(null);
+      const result = handleChatSend(nextLaunchCommand);
+      if (result?.queued) {
+        setLaunchQueued(true);
+        setIsNoticePersistent(false);
+        setViewModeNotice('Terminal is still connecting. Launch command queued.');
+        return;
+      }
+      setLaunchQueued(false);
       setIsNoticePersistent(false);
-      setViewModeNotice('Terminal is still connecting. Launch command queued.');
-      return;
-    }
-    setLaunchQueued(false);
-    setIsNoticePersistent(false);
-    setViewModeNotice('');
+      setViewModeNotice('');
+    } catch (error) { setIsNoticePersistent(true); setViewModeNotice(error.message || 'Unable to start this agent'); }
   }, [customAiProviders, handleChatSend]);
 
   const handleLaunchAgent = useCallback(() => {
@@ -471,7 +486,7 @@ export const TerminalPane = memo(function TerminalPane({
   }, [currentAiType, launchAiType]);
 
   const handleComposerSubmit = useCallback((text) => {
-    if (!pane.sessionId) return;
+    if (!pane.sessionId || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
     const trimmed = typeof text === 'string' ? text.trim() : '';
     const attachmentPaths = composerAttachments
       .map((attachment) => attachment?.path)
@@ -763,6 +778,7 @@ export const TerminalPane = memo(function TerminalPane({
       </div>
 
       <div className="pane-content">
+        {!sessionInputAllowed && <p role="status" className="remote-readonly-notice">Read-only access: this device can view this session. Ask its owner to grant input permission.</p>}
         {pane.sessionId ? (
           <div className={`terminal-with-status${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
             <div className={`desktop-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
@@ -773,10 +789,10 @@ export const TerminalPane = memo(function TerminalPane({
                     turns={turns}
                     isStreaming={isStructuredSession ? structuredIsStreaming : isSessionBusy}
                     isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
-                    onSend={isStructuredSession ? structuredSendMessage : handleChatSend}
-                    onSendRaw={isStructuredSession ? handleStructuredRawSend : handleRawSend}
-                    onInterrupt={isStructuredSession ? structuredInterrupt : handleInterrupt}
-                    onImageUpload={handleImageUpload}
+                    onSend={sessionInputAllowed ? (isStructuredSession ? structuredSendMessage : handleChatSend) : undefined}
+                    onSendRaw={sessionInputAllowed ? (isStructuredSession ? handleStructuredRawSend : handleRawSend) : undefined}
+                    onInterrupt={sessionInputAllowed ? (isStructuredSession ? structuredInterrupt : handleInterrupt) : undefined}
+                    onImageUpload={sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
                     sessionId={pane.sessionId}
                     aiType={currentAiType}
                     connectionState={resolvedConnectionState}
@@ -785,7 +801,7 @@ export const TerminalPane = memo(function TerminalPane({
                     terminalScreenSnapshot={terminalScreenSnapshot}
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
-                    onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
+                    onLaunchAgent={!isStructuredSession && terminalInputAllowed && agentExecutionAllowed ? handleLaunchAgent : undefined}
                     onOpenTerminal={isStructuredSession ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
@@ -795,8 +811,8 @@ export const TerminalPane = memo(function TerminalPane({
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
-                    onApprove={structuredApprove}
-                    allowPromptKeyboardCapture={desktopAllowTerminalInput === true}
+                    onApprove={agentExecutionAllowed ? structuredApprove : undefined}
+                    allowPromptKeyboardCapture={terminalInputAllowed && desktopAllowTerminalInput === true}
                   />
                 </div>
               )}
@@ -816,10 +832,7 @@ export const TerminalPane = memo(function TerminalPane({
                       onUrlDetected={onUrlDetected}
                       fontSize={fontSize}
                       webglEnabled={webglEnabled}
-                      inputEnabled={
-                        useTerminalFirstLayout
-                        || (isStructuredSession && (desktopAllowTerminalInput || shouldForcePromptDock))
-                      }
+                      inputEnabled={terminalInputAllowed && (useTerminalFirstLayout || (isStructuredSession && (desktopAllowTerminalInput || shouldForcePromptDock)))}
                       usesTmux={currentSession?.usesTmux}
                       viewMode="terminal"
                       isPrimary={isActive && isTerminalDockVisible}
@@ -845,7 +858,7 @@ export const TerminalPane = memo(function TerminalPane({
                 cwd={currentCwd || projectInfo?.cwd}
                 gitBranch={projectInfo?.gitBranch}
                 isActive={shouldHighlightActiveChrome}
-                onImageUpload={handleImageUpload}
+                onImageUpload={sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
                 showTerminalToggle={!useTerminalFirstLayout && isStructuredSession}
                 onToggleTerminalPanel={!useTerminalFirstLayout && isStructuredSession ? handleToggleTerminalPanel : undefined}
@@ -865,16 +878,30 @@ export const TerminalPane = memo(function TerminalPane({
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
-                composerPlaceholder="Ask V4 anything"
-                composerDisabled={!pane.sessionId}
+                composerPlaceholder={sessionInputAllowed ? "Ask V4 anything" : "Read-only remote session"}
+                composerDisabled={!pane.sessionId || !sessionInputAllowed}
                 runtimeInfo={runtimeInfo}
                 gitBranches={gitBranchInfo?.branches || []}
                 currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
                 isLoadingGitBranches={isLoadingGitBranches}
                 isSwitchingGitBranch={isSwitchingGitBranch}
-                onSelectGitBranch={handleSelectGitBranch}
+                onSelectGitBranch={environmentAllows(environment, 'fileWrite') ? handleSelectGitBranch : undefined}
                 composerSecondaryAction={(
                   <div className="status-permission-picker">
+                    <WorkspaceToolsButton
+                      workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
+                      currentSessionId={pane.sessionId}
+                      latestAssistantText={latestWorkspaceResponse(isStructuredSession ? structuredMessages : turns, isStructuredSession ? structuredIsStreaming : isSessionBusy)}
+                      onStartTask={onStartWorkspaceTask}
+                      onSelectSession={onSelectHistorySession ? id => onSelectHistorySession(id, pane.id) : undefined}
+                      onInsertPrompt={currentAiType || isStructuredSession ? prompt => setComposerValue(prompt) : undefined}
+                    />
+                    <WorkspaceProfileButton
+                      workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
+                      aiOptions={aiOptions}
+                      onInsertContext={currentAiType || isStructuredSession ? context => setComposerValue(value =>
+                        context + (value.trim() ? '\n\nTask:\n' + value : '')) : undefined}
+                    />
                     <button
                       type="button"
                       className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}

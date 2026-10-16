@@ -1,0 +1,11 @@
+.workspace-proposals { border-top: 1px solid var(--border-color, #3b3733); padding-top: 18px; margin-top: 18px; min-width: 0; }
+.workspace-proposals h4 { margin: 0 0 8px; font-size: 14px; }
+.workspace-proposal { padding: 14px 0; border-bottom: 1px solid var(--border-color, #3b3733); }
+.workspace-proposal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.workspace-proposal-changes { padding-left: 20px; font-size: 12px; }
+.workspace-proposal-changes li { margin-bottom: 12px; }
+.workspace-proposal-changes strong { display: block; margin-bottom: 8px; }
+.workspace-proposal-changes pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; padding: 10px; border: 1px solid var(--border-color, #3b3733); border-radius: 6px; background: var(--bg-secondary, #25211c); max-height: 220px; overflow-y: auto; }
+.workspace-proposals .workspace-proposal-error { color: #ff9d92; }
+.workspace-proposals summary { cursor: pointer; font-size: 12px; }
+@media (max-width: 600px) { .workspace-proposal-actions button { flex: 1; min-height: 44px; } }

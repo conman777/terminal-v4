@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
@@ -411,6 +412,8 @@ export function MobileDrawer({
                   key={item.label}
                   type="button"
                   className="md-action-item"
+                  disabled={Boolean(getActiveEnvironment())}
+                  title={getActiveEnvironment() ? "Available on the owning server directly" : undefined}
                   onClick={item.onClick}
                 >
                   {item.icon}

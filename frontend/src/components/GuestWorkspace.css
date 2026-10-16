@@ -1,0 +1,6 @@
+.guest-workspace{box-sizing:border-box;max-width:1200px;margin:0 auto;padding:24px;color:var(--text-primary,#e8e8ee);background:var(--bg-primary,#171920);min-height:100dvh}.guest-workspace header{margin-bottom:24px}.guest-workspace h1{font-size:28px}.guest-workspace form{display:flex;flex-wrap:wrap;gap:12px;align-items:end}.guest-workspace label{display:grid;gap:6px;flex:1;min-width:180px}.guest-workspace input{min-height:40px;background:#20242d;color:inherit;border:1px solid #606675;border-radius:4px;padding:8px}.guest-workspace button{min-height:44px;padding:10px 16px}.guest-workspace pre{height:60dvh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;background:#0b0d12;border:1px solid #505564;font:14px/1.5 monospace}.guest-workspace p{line-height:1.5}@media(max-width:600px){.guest-workspace{padding:12px}.guest-workspace form{display:grid}.guest-workspace pre{padding:10px}}
+
+.guest-terminal-output { width: 100%; height: clamp(280px, 58dvh, 640px); min-width: 0; box-sizing: border-box; padding: 10px; background: #111318; border: 1px solid var(--border-color, #444); border-radius: 8px; overflow: hidden; }
+.guest-terminal-host { width: 100%; height: 100%; min-width: 0; }
+.guest-terminal-host .xterm { height: 100%; }
+.guest-workspace button, .guest-workspace input { min-height: 44px; }

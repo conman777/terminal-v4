@@ -29,5 +29,8 @@
   "type": "commonjs",
   "devDependencies": {
     "@playwright/test": "^1.56.1"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.276"
   }
 }

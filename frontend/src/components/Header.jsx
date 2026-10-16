@@ -92,11 +92,7 @@ export function Header({
     return (
       <header className="desktop-header">
         <div className="desktop-titlebar">
-          <div className="desktop-titlebar-traffic" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
+          <span className="desktop-workspace-label">Workspace</span>
 
           <div className="desktop-titlebar-path" title={projectInfo?.cwd || 'Workspace'}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

@@ -1,3 +1,4 @@
+import { apiFetch } from '../utils/api';
 /**
  * WebContainerPreview Component
  *
@@ -138,7 +139,7 @@ export function WebContainerPreview({
           addLog(`Fetching files from ${projectPath}...`);
 
           try {
-            const response = await fetch(`/api/webcontainer/files?path=${encodeURIComponent(projectPath)}`);
+            const response = await apiFetch(`/api/webcontainer/files?path=${encodeURIComponent(projectPath)}`);
             if (!response.ok) {
               throw new Error(`Failed to fetch files: ${response.statusText}`);
             }

@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '../utils/api';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
+import { loadWorkspaceProfile, resolveWorkspaceDefaults } from '../utils/workspaceProfile';
+import { WorkspaceProfileButton } from './WorkspaceProfileButton';
 import { AgentModelPicker } from './AgentModelPicker';
 import './FolderBrowserModal.css';
 
@@ -25,7 +27,7 @@ function loadSavedAgentSelection(agentId) {
   try {
     const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
     const value = values?.[agentId];
-    return typeof value?.model === 'string' ? value : null;
+    return typeof value?.model === 'string' ? { model: value.model, reasoning: typeof value.reasoning === 'string' ? value.reasoning : '' } : null;
   } catch {
     return null;
   }
@@ -60,8 +62,18 @@ export function FolderBrowserModal({
   ));
   const [agentSelection, setAgentSelection] = useState(() => loadSavedAgentSelection(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)));
   const [tabName, setTabName] = useState('');
+  const [loadingDefaults, setLoadingDefaults] = useState(false);
+  const [loadingRecent, setLoadingRecent] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [defaultsError, setDefaultsError] = useState('');
+  const manualAgentPathRef = useRef(null);
+  const directoryRequestRef = useRef(0);
+  const recentRequestRef = useRef(null);
+
+  useEffect(() => () => recentRequestRef.current?.abort(), [isOpen, path]);
 
   const loadDirectory = useCallback(async (dirPath) => {
+    const requestId = ++directoryRequestRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -74,18 +86,20 @@ export function FolderBrowserModal({
         throw new Error(data.message || data.error || 'Failed to load directory');
       }
       const data = await res.json();
+      if (requestId !== directoryRequestRef.current) return;
       setPath(data.path);
       setFolders(data.folders);
       setParent(data.parent);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (requestId === directoryRequestRef.current) setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (requestId === directoryRequestRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (isOpen) {
+      manualAgentPathRef.current = null;
       loadDirectory(currentPath);
       setQuery('');
       setTabName('');
@@ -94,6 +108,31 @@ export function FolderBrowserModal({
       setAgentSelection(loadSavedAgentSelection(nextAiOptionId));
     }
   }, [isOpen, currentPath, loadDirectory, aiOptionsSignature, defaultAiOptionId]);
+
+  useEffect(() => {
+    if (!isOpen || !showAiSelector || !path) return undefined;
+    const controller = new AbortController();
+    const initialId = resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
+    setLoadingDefaults(true);
+    setDefaultsError('');
+    if (manualAgentPathRef.current !== path) {
+      setSelectedAiOptionId(initialId);
+      setAgentSelection(loadSavedAgentSelection(initialId));
+    }
+    loadWorkspaceProfile(path, { signal: controller.signal }).then(profile => {
+      if (controller.signal.aborted || manualAgentPathRef.current === path) return;
+      const defaults = resolveWorkspaceDefaults(profile, resolvedAiOptions);
+      if (defaults) {
+        setSelectedAiOptionId(defaults.agentId);
+        setAgentSelection(defaults.selection || loadSavedAgentSelection(defaults.agentId));
+      }
+    }).catch(loadError => {
+      if (!controller.signal.aborted) setDefaultsError(loadError.message);
+    }).finally(() => {
+      if (!controller.signal.aborted) setLoadingDefaults(false);
+    });
+    return () => controller.abort();
+  }, [isOpen, path, showAiSelector, aiOptionsSignature, defaultAiOptionId]);
 
   const handleFolderClick = (folderName) => {
     const separator = path.includes('\\') ? '\\' : '/';
@@ -108,26 +147,60 @@ export function FolderBrowserModal({
     }
   };
 
-  const handleSelect = () => {
+  const handleSelect = async () => {
+    if (selectedAiOptionId !== 'cli' && agentSelection?.available === false) return;
+    setDefaultsError('');
+    setOpening(true);
     const args = [
       path,
       showAiSelector ? selectedAiOptionId : undefined,
       showAiSelector ? tabName.trim() : undefined,
     ];
     if (showAiSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
-    onSelect(...args);
-    onClose();
+    try {
+      await onSelect(...args);
+      onClose();
+    } catch (failure) {
+      setDefaultsError(failure.message || 'Unable to start this agent');
+    } finally { setOpening(false); }
   };
 
-  const handleRecentClick = (recentPath) => {
-    const args = [
-      recentPath,
-      showAiSelector ? selectedAiOptionId : undefined,
-      showAiSelector ? tabName.trim() : undefined,
-    ];
-    if (showAiSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
-    onSelect(...args);
-    onClose();
+  const handleRecentClick = async (recentPath) => {
+    recentRequestRef.current?.abort();
+    const controller = new AbortController();
+    recentRequestRef.current = controller;
+    setLoadingRecent(showAiSelector);
+    setDefaultsError('');
+    try {
+      const useProjectDefault = showAiSelector && manualAgentPathRef.current !== path;
+      const defaults = useProjectDefault
+        ? resolveWorkspaceDefaults(await loadWorkspaceProfile(recentPath, { signal: controller.signal }), resolvedAiOptions)
+        : null;
+      if (controller.signal.aborted) return;
+      const agentId = defaults?.agentId || selectedAiOptionId;
+      let selection = defaults ? defaults.selection || loadSavedAgentSelection(agentId) : agentSelection;
+      if (showAiSelector && agentId !== 'cli') {
+        const response = await apiFetch('/api/agent/catalog', { signal: controller.signal });
+        const catalog = await response.json();
+        if (controller.signal.aborted) return;
+        if (!response.ok) throw new Error(catalog?.error || 'Unable to load agent launcher');
+        const liveAgent = catalog.agents?.find(agent => agent.id === agentId);
+        if (liveAgent) {
+          if (liveAgent.available === false) throw new Error(liveAgent.label + ' runtime is unavailable on this host');
+          const model = selection?.model ?? liveAgent.models?.find(model => model.default)?.id ?? liveAgent.models?.[0]?.id ?? '';
+          selection = { model, reasoning: selection?.reasoning || '', ...(liveAgent.launchCommand ? { launchCommand: liveAgent.launchCommand } : {}),
+            ...(liveAgent.hostShell ? { hostShell: liveAgent.hostShell } : {}), ...(typeof liveAgent.available === 'boolean' ? { available: liveAgent.available } : {}) };
+        }
+      }
+      const args = [recentPath, showAiSelector ? agentId : undefined, showAiSelector ? tabName.trim() : undefined];
+      if (showAiSelector && agentId !== 'cli') args.push(selection);
+      await onSelect(...args);
+      onClose();
+    } catch (loadError) {
+      if (!controller.signal.aborted) setDefaultsError(loadError.message);
+    } finally {
+      if (recentRequestRef.current === controller) setLoadingRecent(false);
+    }
   };
 
   const handleAgentSelectionChange = (selection) => {
@@ -135,7 +208,7 @@ export function FolderBrowserModal({
     if (typeof localStorage !== 'undefined' && selectedAiOptionId !== 'cli') {
       try {
         const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
-        localStorage.setItem(AGENT_SELECTION_STORAGE_KEY, JSON.stringify({ ...values, [selectedAiOptionId]: selection }));
+        localStorage.setItem(AGENT_SELECTION_STORAGE_KEY, JSON.stringify({ ...values, [selectedAiOptionId]: { model: selection.model, reasoning: selection.reasoning } }));
       } catch {
         // Ignore storage failures; the current selection remains usable for this launch.
       }
@@ -223,6 +296,7 @@ export function FolderBrowserModal({
                         key={option.id} 
                         className={`pro-fb-option ${option.id === selectedAiOptionId ? 'selected' : ''}`}
                         onClick={() => {
+                          manualAgentPathRef.current = path;
                           setSelectedAiOptionId(option.id);
                           setAgentSelection(loadSavedAgentSelection(option.id));
                           setTabName(option.label || '');
@@ -250,7 +324,7 @@ export function FolderBrowserModal({
             </div>
           )}
 
-          {showAiSelector && selectedAiOptionId !== 'cli' && (
+          {showAiSelector && selectedAiOptionId !== 'cli' && !loadingDefaults && (
             <div className="pro-fb-agent-config">
               <AgentModelPicker
                 agentId={selectedAiOptionId}
@@ -259,6 +333,18 @@ export function FolderBrowserModal({
               />
             </div>
           )}
+
+          {showAiSelector && <div className="pro-fb-agent-config">
+            <WorkspaceProfileButton workspacePath={path} aiOptions={resolvedAiOptions} onSaved={profile => {
+              const defaults = resolveWorkspaceDefaults(profile, resolvedAiOptions);
+              manualAgentPathRef.current = null;
+              const agentId = defaults?.agentId || resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
+              setSelectedAiOptionId(agentId);
+              setAgentSelection(defaults?.selection || loadSavedAgentSelection(agentId));
+            }} />
+            {loadingDefaults && <small role="status">Loading project defaults…</small>}
+            {defaultsError && <p role="alert">{defaultsError}</p>}
+          </div>}
 
           {/* Search with icon */}
           <div className="pro-fb-search">
@@ -324,6 +410,7 @@ export function FolderBrowserModal({
                       key={idx}
                       className="pro-fb-recent-chip"
                       onClick={() => handleRecentClick(recent)}
+                      disabled={loadingRecent}
                       title={recent}
                     >
                       {shortName}
@@ -345,7 +432,7 @@ export function FolderBrowserModal({
           </div>
           <div className="pro-fb-actions">
             <button type="button" className="pro-fb-btn-cancel" onClick={onClose}>Cancel</button>
-            <button type="button" className="pro-fb-btn-select" onClick={handleSelect}>
+            <button type="button" className="pro-fb-btn-select" onClick={handleSelect} disabled={loading || loadingDefaults || loadingRecent || opening || (showAiSelector && selectedAiOptionId !== 'cli' && agentSelection?.available === false)}>
               Open here
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M2 7H12M8 3L12 7L8 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>

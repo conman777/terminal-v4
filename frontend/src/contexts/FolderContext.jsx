@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { getEnvironmentStorage, getActiveEnvironment } from '../utils/remoteEnvironments';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
 import { normalizeProjectPath } from '../utils/projectPaths';
 import { useAuth } from './AuthContext';
@@ -18,18 +19,18 @@ function appendSidebarProject(prev, folderPath) {
   return [...prev, { path: folderPath, name: getProjectNameFromPath(folderPath) }];
 }
 
-function readStoredJson(key, fallback) {
+function readStoredJson(storage, key, fallback) {
   try {
-    const stored = localStorage.getItem(key);
+    const stored = storage.getItem(key);
     return stored ? JSON.parse(stored) : fallback;
   } catch {
     return fallback;
   }
 }
 
-function writeStoredJson(key, value) {
+function writeStoredJson(storage, key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    storage.setItem(key, JSON.stringify(value));
   } catch (error) {
     console.error(`Failed to save ${key}`, error);
   }
@@ -62,23 +63,25 @@ function sanitizeSidebarProjects(value) {
 }
 
 export function FolderProvider({ children }) {
+  const storage = useMemo(() => getEnvironmentStorage(), []);
+  const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   const { isAuthenticated } = useAuth();
   const settingsHydratedRef = useRef(false);
 
   // Folder state
-  const [recentFolders, setRecentFolders] = useState(() => sanitizeStringList(readStoredJson('recentFolders', []), 10));
+  const [recentFolders, setRecentFolders] = useState(() => sanitizeStringList(readStoredJson(storage, 'recentFolders', []), 10));
 
-  const [pinnedFolders, setPinnedFolders] = useState(() => sanitizeStringList(readStoredJson('pinnedFolders', []), 20));
+  const [pinnedFolders, setPinnedFolders] = useState(() => sanitizeStringList(readStoredJson(storage, 'pinnedFolders', []), 20));
 
   // Projects state (from scanner)
   const [projects, setProjects] = useState([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
 
   // Sidebar projects - user-curated list of folders shown in sidebar
-  const [sidebarProjects, setSidebarProjects] = useState(() => sanitizeSidebarProjects(readStoredJson('sidebarProjects', [])));
+  const [sidebarProjects, setSidebarProjects] = useState(() => sanitizeSidebarProjects(readStoredJson(storage, 'sidebarProjects', [])));
 
   const syncFolderSettings = useCallback(async (updates) => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || remotePreferences || getActiveEnvironment()) return;
     try {
       const response = await apiFetch('/api/settings', {
         method: 'PATCH',
@@ -98,7 +101,7 @@ export function FolderProvider({ children }) {
     setRecentFolders(prev => {
       const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
       const updated = sanitizeStringList([folder, ...filtered], 10);
-      writeStoredJson('recentFolders', updated);
+      writeStoredJson(storage, 'recentFolders', updated);
       void syncFolderSettings({ recentFolders: updated });
       return updated;
     });
@@ -112,7 +115,7 @@ export function FolderProvider({ children }) {
         return prev;
       }
       const updated = sanitizeStringList([...prev, folder], 20);
-      writeStoredJson('pinnedFolders', updated);
+      writeStoredJson(storage, 'pinnedFolders', updated);
       void syncFolderSettings({ pinnedFolders: updated });
       return updated;
     });
@@ -125,7 +128,7 @@ export function FolderProvider({ children }) {
         prev.filter(f => f.toLowerCase() !== folder.toLowerCase()),
         20
       );
-      writeStoredJson('pinnedFolders', updated);
+      writeStoredJson(storage, 'pinnedFolders', updated);
       void syncFolderSettings({ pinnedFolders: updated });
       return updated;
     });
@@ -136,7 +139,7 @@ export function FolderProvider({ children }) {
     if (!folderPath) return;
     setSidebarProjects(prev => {
       const updated = appendSidebarProject(prev, folderPath);
-      writeStoredJson('sidebarProjects', updated);
+      writeStoredJson(storage, 'sidebarProjects', updated);
       void syncFolderSettings({ sidebarProjects: updated });
       return updated;
     });
@@ -147,7 +150,7 @@ export function FolderProvider({ children }) {
     setSidebarProjects(prev => {
       const normalizedPath = normalizeProjectPath(folderPath);
       const updated = prev.filter(p => normalizeProjectPath(p.path) !== normalizedPath);
-      writeStoredJson('sidebarProjects', updated);
+      writeStoredJson(storage, 'sidebarProjects', updated);
       void syncFolderSettings({ sidebarProjects: updated });
       return updated;
     });
@@ -188,7 +191,7 @@ export function FolderProvider({ children }) {
         }
         setSidebarProjects(prev => {
           const updated = appendSidebarProject(prev, normalizedPath);
-          writeStoredJson('sidebarProjects', updated);
+          writeStoredJson(storage, 'sidebarProjects', updated);
           void syncFolderSettings({ sidebarProjects: updated });
           return updated;
         });
@@ -213,7 +216,7 @@ export function FolderProvider({ children }) {
   }, [syncFolderSettings]);
 
   useEffect(() => {
-    if (!isAuthenticated || settingsHydratedRef.current) {
+    if (!isAuthenticated || remotePreferences || getActiveEnvironment() || settingsHydratedRef.current) {
       return;
     }
     settingsHydratedRef.current = true;
@@ -244,9 +247,9 @@ export function FolderProvider({ children }) {
         setRecentFolders(nextRecentFolders);
         setPinnedFolders(nextPinnedFolders);
         setSidebarProjects(nextSidebarProjects);
-        writeStoredJson('recentFolders', nextRecentFolders);
-        writeStoredJson('pinnedFolders', nextPinnedFolders);
-        writeStoredJson('sidebarProjects', nextSidebarProjects);
+        writeStoredJson(storage, 'recentFolders', nextRecentFolders);
+        writeStoredJson(storage, 'pinnedFolders', nextPinnedFolders);
+        writeStoredJson(storage, 'sidebarProjects', nextSidebarProjects);
 
         const migrationPayload = {};
         if (!Array.isArray(data.recentFolders) && recentFolders.length > 0) {

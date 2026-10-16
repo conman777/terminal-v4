@@ -1,3 +1,5 @@
+import { environmentAllows, requireEnvironmentCapability } from '../utils/runtimePermissions';
+import { getEnvironmentStorage, getActiveEnvironment, getEnvironmentSignal } from '../utils/remoteEnvironments';
 import { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
 import { areEquivalentTerminalStates } from '../utils/terminalStateEquality';
@@ -12,9 +14,9 @@ import { useFolders } from './FolderContext';
 const TerminalSessionContext = createContext(null);
 const STRUCTURED_SESSION_METADATA_STORAGE_KEY = 'structuredSessionMetadata';
 
-function readStructuredSessionMetadata() {
+function readStructuredSessionMetadata(storage = getEnvironmentStorage()) {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY) || '{}');
+    const parsed = JSON.parse(storage.getItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY) || '{}');
     return parsed && typeof parsed === 'object' ? parsed : {};
   } catch {
     return {};
@@ -22,10 +24,12 @@ function readStructuredSessionMetadata() {
 }
 
 export function TerminalSessionProvider({ children }) {
+  const environmentSignal = useRef(getEnvironmentSignal());
+  const storage = useMemo(() => getEnvironmentStorage(), []);
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(() => {
     try {
-      return localStorage.getItem('lastActiveSession') || null;
+      return storage.getItem('lastActiveSession') || null;
     } catch {
       return null;
     }
@@ -34,7 +38,7 @@ export function TerminalSessionProvider({ children }) {
   const [sessionLoadError, setSessionLoadError] = useState(null);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [projectInfo, setProjectInfo] = useState(null);
-  const [structuredSessionMetadata, setStructuredSessionMetadata] = useState(() => readStructuredSessionMetadata());
+  const [structuredSessionMetadata, setStructuredSessionMetadata] = useState(() => readStructuredSessionMetadata(storage));
 
   // Get folder state from FolderContext
   const { recentFolders, addRecentFolder } = useFolders();
@@ -141,7 +145,11 @@ export function TerminalSessionProvider({ children }) {
 
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
+    try {
+      if (activeSessionId) storage.setItem('lastActiveSession', activeSessionId);
+      else storage.removeItem('lastActiveSession');
+    } catch { /* Session selection still works without browser storage. */ }
+  }, [activeSessionId, storage]);
 
   useEffect(() => {
     structuredSessionMetadataRef.current = structuredSessionMetadata;
@@ -151,7 +159,7 @@ export function TerminalSessionProvider({ children }) {
     structuredSessionMetadataRef.current = nextMetadata;
     setStructuredSessionMetadata(nextMetadata);
     try {
-      localStorage.setItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY, JSON.stringify(nextMetadata));
+      storage.setItem(STRUCTURED_SESSION_METADATA_STORAGE_KEY, JSON.stringify(nextMetadata));
     } catch (error) {
       console.error('Failed to persist structured session metadata', error);
     }
@@ -248,7 +256,7 @@ export function TerminalSessionProvider({ children }) {
       if (isMountedRef.current) {
         setSessionLoadError(error.message || 'Failed to load terminals');
       }
-      return [];
+      return null;
     } finally {
       if (isMountedRef.current) {
         setLoadingSessions(false);
@@ -310,6 +318,8 @@ export function TerminalSessionProvider({ children }) {
 
   // Session CRUD operations
   const createSession = useCallback(async (options = {}) => {
+    if (environmentSignal.current.aborted) throw new Error('The active environment changed. Open the workspace again.');
+    requireEnvironmentCapability('terminalInput', 'terminal input');
     try {
       const requestBody = {};
       if (options.cwd) {
@@ -351,6 +361,8 @@ export function TerminalSessionProvider({ children }) {
   }, [loadSessions, recentFolders]);
 
   const createStructuredSession = useCallback(async (options = {}) => {
+    if (environmentSignal.current.aborted) throw new Error('The active environment changed. Open the workspace again.');
+    requireEnvironmentCapability('agentExecute', 'agent execution');
     try {
       const cwd = options.cwd || recentFolders[0];
       if (!cwd) {
@@ -389,7 +401,7 @@ export function TerminalSessionProvider({ children }) {
   const selectSession = useCallback((sessionId) => {
     setActiveSessionId(sessionId);
     try {
-      localStorage.setItem('lastActiveSession', sessionId);
+      storage.setItem('lastActiveSession', sessionId);
     } catch (error) {
       console.error('Failed to save last active session', error);
     }
@@ -399,7 +411,7 @@ export function TerminalSessionProvider({ children }) {
     if (isStructuredSessionId(sessionId)) {
       setActiveSessionId(sessionId);
       try {
-        localStorage.setItem('lastActiveSession', sessionId);
+        storage.setItem('lastActiveSession', sessionId);
       } catch (error) {
         console.error('Failed to save last active session', error);
       }
@@ -421,7 +433,7 @@ export function TerminalSessionProvider({ children }) {
       await loadSessions();
 
       try {
-        localStorage.setItem('lastActiveSession', sessionId);
+        storage.setItem('lastActiveSession', sessionId);
       } catch (error) {
         console.error('Failed to save last active session', error);
       }
@@ -899,7 +911,8 @@ export function TerminalSessionProvider({ children }) {
   }, []);
 
   const sendToSession = useCallback(async (sessionId, data) => {
-    if (!sessionId || data === undefined || data === null) return;
+    if (!sessionId || data === undefined || data === null || environmentSignal.current.aborted) return;
+    if (!environmentAllows(getActiveEnvironment(), isStructuredSessionId(sessionId) ? 'agentExecute' : 'terminalInput')) return false;
     const payload = typeof data === 'string' ? data : String(data);
 
     if (isStructuredSessionId(sessionId)) {
@@ -949,25 +962,25 @@ export function TerminalSessionProvider({ children }) {
 
     const initializeSessions = async () => {
       const initialSessions = await loadSessionsRef.current();
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || !Array.isArray(initialSessions)) return;
 
-      const lastSessionId = localStorage.getItem('lastActiveSession');
+      const lastSessionId = storage.getItem('lastActiveSession');
       if (lastSessionId) {
         try {
           const lastSession = initialSessions.find((session) => session.id === lastSessionId);
 
           if (lastSession) {
             setActiveSessionId(lastSession.id);
-            localStorage.setItem('lastActiveSession', lastSession.id);
+            storage.setItem('lastActiveSession', lastSession.id);
             return;
           }
 
           const activeSession = initialSessions.find((session) => session.isActive);
           if (activeSession) {
             setActiveSessionId(activeSession.id);
-            localStorage.setItem('lastActiveSession', activeSession.id);
+            storage.setItem('lastActiveSession', activeSession.id);
           } else {
-            localStorage.removeItem('lastActiveSession');
+            storage.removeItem('lastActiveSession');
             setActiveSessionId(null);
           }
         } catch (error) {
@@ -978,7 +991,7 @@ export function TerminalSessionProvider({ children }) {
           const activeSession = initialSessions.find((session) => session.isActive);
           if (activeSession) {
             setActiveSessionId(activeSession.id);
-            localStorage.setItem('lastActiveSession', activeSession.id);
+            storage.setItem('lastActiveSession', activeSession.id);
           }
         } catch (error) {
           console.error('Failed to find active session', error);

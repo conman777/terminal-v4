@@ -1,3 +1,5 @@
+import { routeEnvironmentPath, getEnvironmentStorage } from './remoteEnvironments';
+import { resolveApiUrl } from './apiBase';
 import { apiFetch } from './api';
 import { getAccessToken } from './auth';
 
@@ -90,9 +92,9 @@ export async function getActivePortsInfo() {
 function getPreviewSubdomainBase() {
   if (typeof window === 'undefined') return 'localhost';
   try {
-    const stored = localStorage.getItem(PREVIEW_SUBDOMAIN_BASE_KEY);
+    const stored = getEnvironmentStorage().getItem(PREVIEW_SUBDOMAIN_BASE_KEY);
     if (stored) return stored;
-    const basesRaw = localStorage.getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
+    const basesRaw = getEnvironmentStorage().getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
     if (basesRaw) {
       const bases = JSON.parse(basesRaw);
       if (Array.isArray(bases) && bases.length > 0) {
@@ -108,7 +110,7 @@ function getPreviewSubdomainBases() {
 
   const configuredBase = getPreviewSubdomainBase();
   try {
-    const stored = localStorage.getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
+    const stored = getEnvironmentStorage().getItem(PREVIEW_SUBDOMAIN_BASES_KEY);
     if (!stored) return [configuredBase];
 
     const parsed = JSON.parse(stored);
@@ -126,7 +128,7 @@ function getPreviewSubdomainBases() {
 function getPreviewProxyHosts() {
   if (typeof window === 'undefined') return [];
   try {
-    const stored = localStorage.getItem(PREVIEW_PROXY_HOSTS_KEY);
+    const stored = getEnvironmentStorage().getItem(PREVIEW_PROXY_HOSTS_KEY);
     if (!stored) return [];
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return [];
@@ -178,7 +180,7 @@ function shouldPreferPathBased() {
   if (defaultMode === 'path-first') return true;
   if (defaultMode === 'subdomain-first') return false;
   try {
-    const stored = localStorage.getItem(PREVIEW_PREFER_PATH_BASED_KEY);
+    const stored = getEnvironmentStorage().getItem(PREVIEW_PREFER_PATH_BASED_KEY);
     if (!stored) return false;
     return stored === 'true' || stored === '1' || stored === 'yes';
   } catch {
@@ -213,7 +215,10 @@ export function withAuthToken(url) {
   const token = getAccessToken();
   if (!token) return url;
   try {
-    const parsed = new URL(url, window.location.origin);
+    const routed = resolveApiUrl(url);
+    const parsed = new URL(routed, window.location.origin);
+    const homeOrigin = new URL(resolveApiUrl('/api/auth/me'), window.location.origin).origin;
+    if (parsed.origin !== homeOrigin || !/^\/(api\/|preview\/)/.test(parsed.pathname)) return url;
     if (!parsed.searchParams.has('token')) {
       parsed.searchParams.set('token', token);
     }
@@ -227,7 +232,7 @@ export function withAuthToken(url) {
  * Convert various URL formats to preview-compatible URLs.
  * Handles: file://, Windows paths, Unix paths, localhost, external URLs.
  */
-export function toPreviewUrl(inputUrl) {
+function buildPreviewUrl(inputUrl) {
   if (!inputUrl) return null;
   let normalizedInput = inputUrl.trim();
 
@@ -240,7 +245,7 @@ export function toPreviewUrl(inputUrl) {
   }
 
   // Keep preview path URLs intact
-  if (normalizedInput.startsWith('/preview/') || normalizedInput.startsWith('/api/preview')) {
+  if (/^\/api\/environments\/[^/]+\/proxy\//.test(normalizedInput) || normalizedInput.startsWith('/preview/') || normalizedInput.startsWith('/api/preview')) {
     return normalizedInput;
   }
 
@@ -327,4 +332,8 @@ export function toPathPreviewFallbackUrl(inputUrl) {
   } catch {
     return null;
   }
+}
+
+export function toPreviewUrl(inputUrl) {
+  return routeEnvironmentPath(buildPreviewUrl(inputUrl));
 }

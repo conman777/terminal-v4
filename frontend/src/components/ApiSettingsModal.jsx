@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useState, useEffect } from 'react';
 import { apiGet, apiPost, apiDelete, apiPatch } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -32,7 +33,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
     setIsLoading(true);
     setError(null);
     try {
-      const data = await apiGet('/api/settings');
+      const data = await apiGet('/api/settings', { home: true });
       setHasExistingGroqKey(data.hasGroqApiKey);
       setMaskedGroqKey(data.groqApiKey || '');
       setGroqApiKey('');
@@ -107,7 +108,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
         return;
       }
 
-      await apiPatch('/api/settings', payload);
+      await apiPatch('/api/settings', payload, { home: true });
       setSuccess('API key settings saved successfully');
       setGroqApiKey('');
       await loadSettings();
@@ -123,7 +124,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
     setError(null);
     setSuccess(null);
     try {
-      await apiPatch('/api/settings', { groqApiKey: null });
+      await apiPatch('/api/settings', { groqApiKey: null }, { home: true });
       setSuccess('Groq API key removed');
       setGroqApiKey('');
       await loadSettings();
@@ -140,7 +141,7 @@ export default function ApiSettingsModal({ isOpen, onClose }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content api-settings-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>API Settings</h2>
+          <h2>{getActiveEnvironment() ? 'Home server API settings' : 'API Settings'}</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>

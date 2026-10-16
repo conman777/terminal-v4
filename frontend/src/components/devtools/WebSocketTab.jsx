@@ -1,3 +1,4 @@
+import { apiFetch } from '../../utils/api';
 import React, { useState, useEffect } from 'react';
 
 /**
@@ -33,7 +34,7 @@ export function WebSocketTab({ port }) {
       if (selectedConnectionId) params.set('connectionId', selectedConnectionId);
       if (directionFilter !== 'all') params.set('direction', directionFilter);
 
-      const response = await fetch(`/api/preview/${port}/websockets?${params}`);
+      const response = await apiFetch(`/api/preview/${port}/websockets?${params}`);
       if (response.status === 404) {
         setNotAvailable(true);
         return;
@@ -50,7 +51,7 @@ export function WebSocketTab({ port }) {
 
   const clearLogs = async () => {
     try {
-      await fetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
+      await apiFetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
       setConnections([]);
       setMessages([]);
       setSelectedConnectionId(null);

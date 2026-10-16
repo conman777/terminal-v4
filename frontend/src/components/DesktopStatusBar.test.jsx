@@ -427,4 +427,13 @@ describe('DesktopStatusBar', () => {
     expect(getComputedStyle(statusButton).width).toBe('22px');
     expect(getComputedStyle(sendButton).width).toBe('26px');
   });
+  it('ignores dropped attachments when the composer is read only', async () => {
+    const image=new File(['image'],'blocked.png',{type:'image/png'});
+    getImageFileFromDataTransferMock.mockResolvedValue(image);
+    render(<DesktopStatusBar {...buildProps({composerDisabled:true})} />);
+    fireEvent.drop(screen.getByRole('textbox',{name:'Command composer'}).closest('form'),{dataTransfer:{types:['Files'],files:[image]}});
+    await waitFor(()=>expect(getImageFileFromDataTransferMock).toHaveBeenCalled());
+    expect(uploadScreenshotMock).not.toHaveBeenCalled();
+  });
+
 });

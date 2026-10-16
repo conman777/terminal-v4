@@ -13,6 +13,8 @@
   --terminal-chrome-bg: #1a1713;
   --terminal-bg: #1a1713;
   --bg-overlay: rgba(20, 17, 13, 0.86);
+  --bg-secondary: var(--bg-surface);
+  --border-color: var(--border-subtle);
 
   /* Primary accent - amber */
   --accent-primary: #d97706;
@@ -301,12 +303,9 @@ button {
 }
 
 .layout:not(.mobile) {
-  gap: 12px;
-  padding: 12px;
-  background:
-    radial-gradient(circle at top center, rgba(217, 119, 6, 0.14), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(120, 53, 15, 0.14), transparent 22%),
-    linear-gradient(180deg, #0d0a08 0%, #070605 100%);
+  gap: 0;
+  padding: 0;
+  background: var(--bg-base);
 }
 
 /* Main Container */
@@ -322,22 +321,11 @@ button {
 
 .layout:not(.mobile) .main-container {
   position: relative;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background:
-    linear-gradient(180deg, rgba(17, 14, 11, 0.96), rgba(10, 9, 7, 0.98)),
-    radial-gradient(circle at top center, rgba(217, 119, 6, 0.08), transparent 26%);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.03);
-}
-
-.layout:not(.mobile) .main-container::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03), transparent 18%),
-    radial-gradient(circle at top center, rgba(251, 191, 36, 0.06), transparent 24%);
+  min-width: 0;
+  border: none;
+  border-radius: 0;
+  background: var(--bg-base);
+  box-shadow: none;
 }
 
 .desktop-header {

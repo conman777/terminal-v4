@@ -1,0 +1,22 @@
+.workspace-tasks { display: grid; gap: 16px; min-width: 0; }
+.workspace-tasks h3 { margin: 0 0 6px; font-size: 17px; }
+.workspace-tasks p { margin: 0; color: var(--text-secondary, #a8abb4); font-size: 13px; overflow-wrap: anywhere; }
+.workspace-tasks form, .workspace-schedule-editor[open], .workspace-task-list, .workspace-schedule-list { display: grid; gap: 12px; }
+.workspace-tasks label { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
+.workspace-task-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.workspace-tasks input:not([type="checkbox"]), .workspace-tasks select, .workspace-tasks textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; color: var(--text-primary, #eee); background: var(--bg-primary, #181a20); border: 1px solid var(--border-color, #343743); border-radius: 7px; font: inherit; }
+.workspace-tasks textarea { resize: vertical; }
+.workspace-tasks button { padding: 9px 12px; min-height: 36px; background: var(--bg-secondary, #22252c); border: 1px solid var(--border-color, #343743); border-radius: 7px; color: var(--text-primary, #eee); cursor: pointer; }
+.workspace-tasks button:disabled { opacity: .6; cursor: default; }
+.workspace-task-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.workspace-tasks summary { cursor: pointer; font-size: 13px; }
+.workspace-tasks .workspace-schedule-checkbox { display: flex; align-items: center; gap: 8px; }
+.workspace-task-record { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--border-color, #343743); border-radius: 9px; min-width: 0; }
+.workspace-task-record-heading { display: flex; justify-content: space-between; gap: 12px; text-transform: capitalize; font-size: 13px; }
+.workspace-task-record-heading span, .workspace-task-record small { color: var(--text-secondary, #a8abb4); }
+.workspace-task-record pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow-y: auto; font-size: 12px; line-height: 1.6; }
+.workspace-task-record ul { padding-left: 18px; font-size: 12px; }
+.workspace-tasks [role="alert"], .workspace-tasks .workspace-task-error { color: var(--error-color, #ef9a9a); }
+.workspace-tasks [role="alert"] { display: grid; gap: 8px; }
+@media (max-width: 480px) { .workspace-task-options { grid-template-columns: 1fr; } .workspace-task-actions button { min-height: 42px; } }
+

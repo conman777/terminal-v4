@@ -26,3 +26,12 @@ export function reconcilePaneSessionIds(panes, visibleSessionIds) {
     return { ...pane, sessionId };
   });
 }
+
+export function shouldInitializeWorkspacePane(activeSessionId, layout, visibleSessionIds) {
+  if (!activeSessionId || !visibleSessionIds.includes(activeSessionId)) return false;
+  const panes = layout?.panes || [];
+  const activePane = panes.find(pane => pane.id === layout?.activePaneId);
+  if (!activePane || activePane.sessionId === activeSessionId) return false;
+  if (panes.length > 1 && activePane.sessionId) return false;
+  return !panes.some(pane => pane.id !== activePane.id && pane.sessionId === activeSessionId);
+}

@@ -1,3 +1,4 @@
+import { routeEnvironmentPath } from './remoteEnvironments';
 const CONFIGURED_API_BASE = import.meta.env.VITE_API_URL || '';
 
 export function isLoopbackHostname(hostname) {
@@ -31,5 +32,15 @@ export function resolveApiBase(configuredBase = CONFIGURED_API_BASE, locationLik
 
 export function resolveApiUrl(pathname, configuredBase = CONFIGURED_API_BASE, locationLike = typeof window !== 'undefined' ? window.location : null) {
   const base = resolveApiBase(configuredBase, locationLike);
-  return pathname.startsWith('http') ? pathname : `${base}${pathname}`;
+  return pathname.startsWith('http') ? pathname : `${base}${routeEnvironmentPath(pathname)}`;
+}
+
+export function resolveHomeApiUrl(pathname) {
+  return resolveApiBase() + pathname;
+}
+
+export function resolveWebSocketUrl(pathname) {
+  const url = new URL(resolveApiUrl(pathname), window.location.origin);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
 }

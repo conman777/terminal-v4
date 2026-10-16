@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { apiFetch } from '../utils/api';
 import { useTerminalSession } from './TerminalSessionContext';
@@ -10,7 +11,7 @@ export function BookmarkProvider({ children }) {
   const { activeSessionId } = useTerminalSession();
 
   const loadBookmarks = useCallback(async () => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || getActiveEnvironment()) return;
     try {
       const response = await apiFetch('/api/bookmarks');
       if (!response.ok) {

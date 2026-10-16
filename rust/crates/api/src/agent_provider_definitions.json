@@ -1,0 +1,1279 @@
+[
+  {
+    "id": "anthropic-api",
+    "label": "Anthropic API",
+    "transport": "anthropic-messages",
+    "auth": "api-key",
+    "authMethods": [
+      "api-key",
+      "oauth"
+    ],
+    "oauthCommand": "claude auth login --console",
+    "oauthHelp": "Claude opens the Anthropic Console OAuth flow with API usage billing.",
+    "baseUrl": "https://api.anthropic.com",
+    "envKeys": [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_TOKEN"
+    ],
+    "models": [
+      {
+        "id": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "default": true
+      },
+      {
+        "id": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-8",
+        "label": "Claude Opus 4.8",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-7",
+        "label": "Claude Opus 4.7",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-6",
+        "label": "Claude Opus 4.6",
+        "default": false
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-5-20251101",
+        "label": "Claude Opus 4.5",
+        "default": false
+      },
+      {
+        "id": "claude-sonnet-4-5-20250929",
+        "label": "Claude Sonnet 4.5",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-20250514",
+        "label": "Claude Opus 4",
+        "default": false
+      },
+      {
+        "id": "claude-sonnet-4-20250514",
+        "label": "Claude Sonnet 4",
+        "default": false
+      },
+      {
+        "id": "claude-haiku-4-5-20251001",
+        "label": "Claude Haiku 4.5",
+        "default": false
+      },
+      {
+        "id": "claude-opus-4-1-20250805",
+        "label": "Claude Opus 4.1",
+        "default": false
+      },
+      {
+        "id": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "xai",
+    "label": "xAI / Grok",
+    "transport": "openai-responses",
+    "auth": "api-key",
+    "baseUrl": "https://api.x.ai/v1",
+    "baseUrlEnvKey": "XAI_BASE_URL",
+    "envKeys": [
+      "XAI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "grok-build-0.1",
+        "label": "Grok Build 0.1",
+        "default": true
+      },
+      {
+        "id": "grok-composer-2.5-fast",
+        "label": "Grok Composer 2.5 Fast",
+        "default": false
+      },
+      {
+        "id": "grok-4.20-0309-non-reasoning",
+        "label": "Grok 4.20",
+        "default": false
+      },
+      {
+        "id": "grok-4.20-0309-reasoning",
+        "label": "Grok 4.20 Reasoning",
+        "default": false
+      },
+      {
+        "id": "grok-4.20-multi-agent-0309",
+        "label": "Grok 4.20 Multi-Agent",
+        "default": false
+      },
+      {
+        "id": "grok-4.3",
+        "label": "Grok 4.3",
+        "default": false
+      },
+      {
+        "id": "grok-4.5",
+        "label": "Grok 4.5",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "xai-oauth",
+    "label": "xAI / Grok OAuth profile (API fallback)",
+    "transport": "openai-responses",
+    "auth": "api-key",
+    "authMethods": [
+      "api-key"
+    ],
+    "baseUrl": "https://api.x.ai/v1",
+    "baseUrlEnvKey": "XAI_BASE_URL",
+    "envKeys": [
+      "XAI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "grok-4.5",
+        "label": "Grok 4.5",
+        "default": true
+      },
+      {
+        "id": "grok-4.3",
+        "label": "Grok 4.3",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "openai-api",
+    "label": "OpenAI API",
+    "transport": "openai-responses",
+    "auth": "api-key",
+    "baseUrl": "https://api.openai.com/v1",
+    "baseUrlEnvKey": "OPENAI_BASE_URL",
+    "envKeys": [
+      "OPENAI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "gpt-5.4",
+        "label": "GPT-5.4",
+        "default": true
+      },
+      {
+        "id": "gpt-4.1",
+        "label": "GPT-4.1",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "actual",
+    "label": "Actual Computer",
+    "transport": "openai-responses",
+    "auth": "api-key",
+    "baseUrl": "https://api.actual.inc/v1",
+    "baseUrlEnvKey": "ACTUAL_BASE_URL",
+    "allowLocalNoAuth": true,
+    "envKeys": [
+      "ACTUAL_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "actual/test-model",
+        "label": "Actual hosted model",
+        "default": true
+      },
+      {
+        "id": "actual/local-model",
+        "label": "Actual local model",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "none",
+      "low",
+      "medium",
+      "high",
+      "max"
+    ]
+  },
+  {
+    "id": "copilot",
+    "label": "GitHub Copilot",
+    "transport": "openai-chat",
+    "auth": "oauth",
+    "baseUrl": "https://api.githubcopilot.com",
+    "envKeys": [],
+    "models": [
+      {
+        "id": "gpt-4o",
+        "label": "GPT-4o",
+        "default": true
+      },
+      {
+        "id": "gpt-4.1",
+        "label": "GPT-4.1",
+        "default": false
+      }
+    ]
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.deepseek.com/v1",
+    "baseUrlEnvKey": "DEEPSEEK_BASE_URL",
+    "envKeys": [
+      "DEEPSEEK_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "default": true
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "moa",
+    "label": "Mixture of Agents",
+    "transport": "virtual",
+    "auth": "virtual",
+    "baseUrl": "",
+    "envKeys": [],
+    "models": [
+      {
+        "id": "default",
+        "label": "Default ensemble",
+        "default": true
+      }
+    ]
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "baseUrlEnvKey": "OPENROUTER_BASE_URL",
+    "envKeys": [
+      "OPENROUTER_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "openai/gpt-4o",
+        "label": "OpenAI GPT-4o",
+        "default": true
+      },
+      {
+        "id": "anthropic/claude-sonnet-4",
+        "label": "Claude Sonnet",
+        "default": false
+      },
+      {
+        "id": "google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "nous",
+    "label": "Nous",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://inference-api.nousresearch.com/v1",
+    "baseUrlEnvKey": "NOUS_BASE_URL",
+    "envKeys": [
+      "NOUS_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "Hermes-4-70B",
+        "label": "Nous 4 70B",
+        "default": true
+      },
+      {
+        "id": "Hermes-4-405B",
+        "label": "Nous 4 405B",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "qwen-oauth",
+    "label": "Qwen",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "authMethods": [
+      "api-key"
+    ],
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "baseUrlEnvKey": "QWEN_BASE_URL",
+    "envKeys": [
+      "QWEN_API_KEY",
+      "DASHSCOPE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "qwen3-coder-plus",
+        "label": "Qwen3 Coder Plus",
+        "default": true
+      },
+      {
+        "id": "qwen3.5-plus",
+        "label": "Qwen3.5 Plus",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "minimax-oauth",
+    "label": "MiniMax OAuth/API",
+    "transport": "anthropic-messages",
+    "auth": "api-key",
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "baseUrlEnvKey": "MINIMAX_BASE_URL",
+    "envKeys": [
+      "MINIMAX_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "label": "MiniMax M2.5",
+        "default": true
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "label": "MiniMax M2.1",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "copilot-acp",
+    "label": "GitHub Copilot ACP",
+    "transport": "external-cli",
+    "auth": "cli",
+    "command": "copilot",
+    "commandHelp": "Uses the installed GitHub Copilot CLI through the Terminal v4 PTY.",
+    "baseUrl": "acp://copilot",
+    "envKeys": [],
+    "models": [
+      {
+        "id": "default",
+        "label": "Copilot CLI default",
+        "default": true
+      }
+    ]
+  },
+  {
+    "id": "lmstudio",
+    "label": "LM Studio",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "http://127.0.0.1:1234/v1",
+    "baseUrlEnvKey": "LM_BASE_URL",
+    "allowLocalNoAuth": true,
+    "envKeys": [
+      "LM_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "local-model",
+        "label": "LM Studio loaded model",
+        "default": true
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "tencent-tokenhub",
+    "label": "Tencent TokenHub",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://tokenhub.tencentmaas.com/v1",
+    "baseUrlEnvKey": "TOKENHUB_BASE_URL",
+    "requiresBaseUrl": true,
+    "envKeys": [
+      "TOKENHUB_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "default",
+        "label": "TokenHub default model",
+        "default": true
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "zai",
+    "label": "Zai / GLM",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.z.ai/api/paas/v4",
+    "baseUrlEnvKey": "GLM_BASE_URL",
+    "envKeys": [
+      "GLM_API_KEY",
+      "ZAI_API_KEY",
+      "Z_AI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "glm-5",
+        "label": "GLM-5",
+        "default": true
+      },
+      {
+        "id": "glm-4.5",
+        "label": "GLM-4.5",
+        "default": false
+      },
+      {
+        "id": "glm-4.5-air",
+        "label": "GLM-4.5 Air",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "minimax",
+    "label": "MiniMax",
+    "transport": "anthropic-messages",
+    "auth": "api-key",
+    "baseUrl": "https://api.minimax.io/anthropic",
+    "baseUrlEnvKey": "MINIMAX_BASE_URL",
+    "envKeys": [
+      "MINIMAX_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "label": "MiniMax M2.5",
+        "default": true
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "label": "MiniMax M2.1",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "minimax-cn",
+    "label": "MiniMax China",
+    "transport": "anthropic-messages",
+    "auth": "api-key",
+    "baseUrl": "https://api.minimaxi.com/anthropic",
+    "baseUrlEnvKey": "MINIMAX_CN_BASE_URL",
+    "envKeys": [
+      "MINIMAX_CN_API_KEY",
+      "MINIMAX_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "label": "MiniMax M2.5",
+        "default": true
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "label": "MiniMax M2.1",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "kimi-coding",
+    "label": "Kimi Coding",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.moonshot.ai/v1",
+    "baseUrlEnvKey": "KIMI_BASE_URL",
+    "envKeys": [
+      "KIMI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "kimi-k2.5",
+        "label": "Kimi K2.5",
+        "default": true
+      },
+      {
+        "id": "kimi-k2-thinking",
+        "label": "Kimi K2 Thinking",
+        "default": false
+      },
+      {
+        "id": "kimi-k2",
+        "label": "Kimi K2",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "kimi-coding-cn",
+    "label": "Kimi Coding China",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.moonshot.cn/v1",
+    "baseUrlEnvKey": "KIMI_CN_BASE_URL",
+    "envKeys": [
+      "KIMI_CN_API_KEY",
+      "KIMI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "kimi-k2.5",
+        "label": "Kimi K2.5",
+        "default": true
+      },
+      {
+        "id": "kimi-k2-thinking",
+        "label": "Kimi K2 Thinking",
+        "default": false
+      },
+      {
+        "id": "kimi-k2",
+        "label": "Kimi K2",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "alibaba",
+    "label": "Alibaba / DashScope",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "baseUrlEnvKey": "DASHSCOPE_BASE_URL",
+    "envKeys": [
+      "DASHSCOPE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "qwen-plus",
+        "label": "Qwen Plus",
+        "default": true
+      },
+      {
+        "id": "qwen-max",
+        "label": "Qwen Max",
+        "default": false
+      },
+      {
+        "id": "qwen3-coder-plus",
+        "label": "Qwen3 Coder Plus",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "alibaba-coding-plan",
+    "label": "Alibaba Coding Plan",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "baseUrlEnvKey": "ALIBABA_CODING_PLAN_BASE_URL",
+    "envKeys": [
+      "ALIBABA_CODING_PLAN_API_KEY",
+      "DASHSCOPE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "qwen3-coder-plus",
+        "label": "Qwen3 Coder Plus",
+        "default": true
+      },
+      {
+        "id": "qwen3-coder-next",
+        "label": "Qwen3 Coder Next",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "xiaomi",
+    "label": "Xiaomi MiMo",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.xiaomimimo.com/v1",
+    "baseUrlEnvKey": "XIAOMI_BASE_URL",
+    "envKeys": [
+      "XIAOMI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "mimo-v2-flash",
+        "label": "MiMo V2 Flash",
+        "default": true
+      },
+      {
+        "id": "mimo-v2-pro",
+        "label": "MiMo V2 Pro",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "huggingface",
+    "label": "Hugging Face",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "baseUrlEnvKey": "HF_BASE_URL",
+    "envKeys": [
+      "HF_TOKEN"
+    ],
+    "models": [
+      {
+        "id": "meta-llama/Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B Instruct",
+        "default": true
+      },
+      {
+        "id": "Qwen/Qwen3-235B-A22B",
+        "label": "Qwen3 235B",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "fireworks",
+    "label": "Fireworks AI",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "baseUrlEnvKey": "FIREWORKS_BASE_URL",
+    "envKeys": [
+      "FIREWORKS_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "accounts/fireworks/models/llama-v3p1-70b-instruct",
+        "label": "Llama 3.1 70B",
+        "default": true
+      },
+      {
+        "id": "accounts/fireworks/models/deepseek-v3",
+        "label": "DeepSeek V3",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "novita",
+    "label": "Novita AI",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.novita.ai/openai",
+    "baseUrlEnvKey": "NOVITA_BASE_URL",
+    "envKeys": [
+      "NOVITA_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "deepseek/deepseek-v3-0324",
+        "label": "DeepSeek V3",
+        "default": true
+      },
+      {
+        "id": "meta-llama/llama-3.3-70b-instruct",
+        "label": "Llama 3.3 70B",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "nvidia",
+    "label": "NVIDIA NIM",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://integrate.api.nvidia.com/v1",
+    "baseUrlEnvKey": "NVIDIA_BASE_URL",
+    "envKeys": [
+      "NVIDIA_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "meta/llama-3.3-70b-instruct",
+        "label": "Llama 3.3 70B",
+        "default": true
+      },
+      {
+        "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        "label": "Llama Nemotron Ultra",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "deepinfra",
+    "label": "DeepInfra",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.deepinfra.com/v1/openai",
+    "baseUrlEnvKey": "DEEPINFRA_BASE_URL",
+    "envKeys": [
+      "DEEPINFRA_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "meta-llama/Meta-Llama-3.3-70B-Instruct",
+        "label": "Llama 3.3 70B",
+        "default": true
+      },
+      {
+        "id": "deepseek-ai/DeepSeek-V3",
+        "label": "DeepSeek V3",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "gmi",
+    "label": "GMI Serving",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.gmi-serving.com/v1",
+    "baseUrlEnvKey": "GMI_BASE_URL",
+    "envKeys": [
+      "GMI_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "gmi-default",
+        "label": "GMI default model",
+        "default": true
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "arcee",
+    "label": "Arcee AI",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.arcee.ai/api/v1",
+    "baseUrlEnvKey": "ARCEE_BASE_URL",
+    "envKeys": [
+      "ARCEE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "virtuoso-large",
+        "label": "Virtuoso Large",
+        "default": true
+      },
+      {
+        "id": "coder-large",
+        "label": "Coder Large",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "stepfun",
+    "label": "StepFun",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.stepfun.ai/step_plan/v1",
+    "baseUrlEnvKey": "STEPFUN_BASE_URL",
+    "envKeys": [
+      "STEPFUN_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "step-3.5-flash",
+        "label": "Step 3.5 Flash",
+        "default": true
+      },
+      {
+        "id": "step-3",
+        "label": "Step 3",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "upstage",
+    "label": "Upstage Solar",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.upstage.ai/v1",
+    "baseUrlEnvKey": "UPSTAGE_BASE_URL",
+    "envKeys": [
+      "UPSTAGE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "solar-pro2",
+        "label": "Solar Pro 2",
+        "default": true
+      },
+      {
+        "id": "solar-mini",
+        "label": "Solar Mini",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "kilocode",
+    "label": "KiloCode",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://api.kilo.ai/v1",
+    "baseUrlEnvKey": "KILOCODE_BASE_URL",
+    "envKeys": [
+      "KILOCODE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "kilo-default",
+        "label": "KiloCode default model",
+        "default": true
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "ai-gateway",
+    "label": "AI Gateway",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://ai-gateway.vercel.sh/v1",
+    "baseUrlEnvKey": "AI_GATEWAY_BASE_URL",
+    "envKeys": [
+      "AI_GATEWAY_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "openai/gpt-4o",
+        "label": "OpenAI GPT-4o",
+        "default": true
+      },
+      {
+        "id": "anthropic/claude-sonnet-4",
+        "label": "Claude Sonnet",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "opencode-zen",
+    "label": "OpenCode Zen",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://opencode.ai/zen/v1",
+    "baseUrlEnvKey": "OPENCODE_ZEN_BASE_URL",
+    "envKeys": [
+      "OPENCODE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "big-pickle",
+        "label": "Big Pickle",
+        "default": true
+      },
+      {
+        "id": "claude-sonnet",
+        "label": "Claude Sonnet",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "opencode-go",
+    "label": "OpenCode Go",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "baseUrlEnvKey": "OPENCODE_GO_BASE_URL",
+    "envKeys": [
+      "OPENCODE_GO_API_KEY",
+      "OPENCODE_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "minimax-m3",
+        "label": "MiniMax M3",
+        "default": true
+      },
+      {
+        "id": "kimi-k3",
+        "label": "Kimi K3",
+        "default": false
+      },
+      {
+        "id": "glm-5",
+        "label": "GLM-5",
+        "default": false
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "ollama-cloud",
+    "label": "Ollama Cloud",
+    "transport": "openai-chat",
+    "auth": "api-key",
+    "baseUrl": "https://ollama.com/v1",
+    "baseUrlEnvKey": "OLLAMA_BASE_URL",
+    "envKeys": [
+      "OLLAMA_API_KEY"
+    ],
+    "models": [
+      {
+        "id": "gpt-oss:120b",
+        "label": "GPT OSS 120B",
+        "default": true
+      },
+      {
+        "id": "qwen3:235b",
+        "label": "Qwen3 235B",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  {
+    "id": "bedrock",
+    "label": "AWS Bedrock",
+    "transport": "bedrock-converse",
+    "auth": "cloud",
+    "authMethods": [
+      "cli"
+    ],
+    "command": "aws configure",
+    "commandHelp": "Configure the AWS CLI credentials used by the Bedrock runtime.",
+    "baseUrl": "bedrock://runtime",
+    "envKeys": [],
+    "models": [
+      {
+        "id": "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "label": "Claude 3.7 Sonnet",
+        "default": true
+      },
+      {
+        "id": "amazon.nova-pro-v1:0",
+        "label": "Amazon Nova Pro",
+        "default": false
+      },
+      {
+        "id": "meta.llama3-3-70b-instruct-v1:0",
+        "label": "Llama 3.3 70B",
+        "default": false
+      }
+    ]
+  },
+  {
+    "id": "vertex",
+    "label": "Google Vertex AI",
+    "transport": "vertex-openai",
+    "auth": "cloud",
+    "authMethods": [
+      "cli"
+    ],
+    "command": "gcloud auth application-default login",
+    "commandHelp": "Sign in with Google Application Default Credentials for Vertex AI.",
+    "baseUrl": "https://us-central1-aiplatform.googleapis.com",
+    "envKeys": [],
+    "projectEnvKey": "GOOGLE_CLOUD_PROJECT",
+    "locationEnvKey": "GOOGLE_CLOUD_LOCATION",
+    "models": [
+      {
+        "id": "gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro",
+        "default": true
+      },
+      {
+        "id": "gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash",
+        "default": false
+      }
+    ]
+  },
+  {
+    "id": "azure-foundry",
+    "label": "Azure AI Foundry",
+    "transport": "azure-openai",
+    "auth": "api-key",
+    "baseUrl": "",
+    "baseUrlEnvKey": "AZURE_FOUNDRY_ENDPOINT",
+    "envKeys": [
+      "AZURE_FOUNDRY_API_KEY"
+    ],
+    "deploymentEnvKey": "AZURE_FOUNDRY_DEPLOYMENT",
+    "models": [
+      {
+        "id": "gpt-4.1",
+        "label": "GPT-4.1 deployment",
+        "default": true
+      },
+      {
+        "id": "claude-sonnet-4",
+        "label": "Claude Sonnet deployment",
+        "default": false
+      }
+    ],
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  }
+]

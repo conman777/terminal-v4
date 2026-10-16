@@ -179,3 +179,162 @@ Path-based preview routing:
 | POST | `/api/notes` | Yes | Create note |
 | PUT | `/api/notes/:id` | Yes | Update note |
 | DELETE | `/api/notes/:id` | Yes | Delete note |
+
+## Workspace profiles
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/api/workspace/profile?path=<absolute-directory>` | Yes | Load saved knowledge, skills, and task defaults |
+| PUT | `/api/workspace/profile?path=<absolute-directory>` | Yes | Validate and atomically replace the user's workspace profile |
+
+Both endpoints return the JSON profile directly with private, no-store caching.
+Profiles are scoped by authenticated user and canonical directory. Invalid
+directories or profile values return 400; unreadable or corrupt storage returns
+500. Unknown JSON fields are rejected. See
+[Workspace feature guide](../features/HERMES_T3_WORKSPACE.md) for fields and limits.
+
+
+## Workspace review, tasks, and history
+
+All routes below require the current app identity. Directory query/body values
+must be absolute existing workspace directories. Stored records are scoped by
+authenticated owner; malformed IDs and unsupported operations are rejected.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | /api/agent/catalog | Host launchers, models, availability and explicit capabilities |
+| GET | /api/agent/auth | Credential configuration and masked status |
+| PUT, DELETE | /api/agent/auth/{provider}/api-key | Save/remove an owner-scoped encrypted API key |
+| GET, POST | /api/workspace/proposals?path= | List/stage bounded learning updates |
+| POST | /api/workspace/proposals/{id}/accept?path= | Atomically apply a reviewed update and receipt |
+| POST | /api/workspace/proposals/{id}/reject?path= | Reject a pending update |
+| GET | /api/workspace/skills?path= | Discover bounded installed skill instruction text |
+| GET | /api/workspace/git/status?path=&mode=&base=&checkpointId= | Changed files and review scope |
+| GET | /api/workspace/git/diff?path=&mode=&base=&file=&checkpointId= | Bounded text/binary diff preview |
+| GET, POST | /api/workspace/git/worktrees | List/create managed isolated checkouts |
+| POST | /api/workspace/git/worktrees/archive | Save archive checkpoint and retain checkout |
+| POST | /api/workspace/git/worktrees/reactivate | Reactivate retained checkout |
+| GET, POST | /api/workspace/git/checkpoints | List/capture file checkpoints |
+| POST | /api/workspace/git/checkpoints/restore | Guarded managed-checkout file restore |
+| GET | /api/workspace/history?q=&path=&limit= | Search saved owned message bodies |
+| GET | /api/workspace/native-history/sources?path= | Discover workspace-matching native transcripts |
+| POST | /api/workspace/native-history/import?path= | Import selected opaque sourceId as an owned snapshot |
+| GET | /api/workspace/native-history/imports?path= | List imported snapshots |
+| GET | /api/workspace/native-history/imports/{id}?path= | Read an imported snapshot for handoff |
+| GET, POST | /api/workspace/tasks | List workspace tasks/schedules or enqueue intent |
+| DELETE | /api/workspace/tasks/{id} | Remove a finished task result |
+| POST | /api/workspace/tasks/{id}/cancel | Request cancellation of queued/running work |
+| POST | /api/workspace/schedules | Save a recurring interval schedule |
+| PATCH, DELETE | /api/workspace/schedules/{id} | Enable/pause or remove a schedule |
+| POST | /api/workspace/schedules/{id}/run | Explicitly enqueue one schedule run |
+
+Git GET routes take path in the query; create/lifecycle/restore bodies contain
+path and their operation fields. Task listing accepts an optional path filter
+and returns tasks plus schedules. Task and schedule inputs contain workspacePath,
+provider, prompt, optional model and parent links. Scheduling adds name,
+intervalSeconds, and enabled; enabled defaults to false.
+
+Git review mode is unstaged, staged, base, or checkpoint. Filesystem restore is
+independent of native conversation state. Native imported transcripts are owned
+text snapshots; they cannot grant tools or migrate provider approvals.
+
+Provider credentials are masked in responses and encrypted in api_key_vault.
+A native installed runtime can report authentication as unknown. Readiness and
+tool execution must follow the returned adapter capabilities rather than the
+presence of a provider label. Sensitive workspace/provider responses use
+private, no-store caching.
+
+See [Workspace feature guide](../features/HERMES_T3_WORKSPACE.md) for storage,
+limits, recovery behavior, and [Hermes runtime](../features/HERMES_RUNTIME.md)
+for installation and host configuration.
+
+
+## Paired environment runtime
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | /api/environments | Owner-scoped outgoing environments and incoming grants; no credentials |
+| POST | /api/environments/pairing-code | Create a 120-second one-use code; body label, profile, optional custom capabilities |
+| POST | /api/environments/connect | Consume code using url or relayUrl/deviceId, code, label, allowInsecureHttp |
+| GET | /api/environments/{id}/status | Check remote grant and reachability |
+| DELETE | /api/environments/{id} | Disconnect and attempt destination revocation |
+| DELETE | /api/environments/grants/{id} | Revoke incoming access |
+| POST | /api/environments/exchange | Destination's one-use code exchange |
+| GET | /api/environments/check | Validate a runtime grant |
+| POST | /api/environments/release | Release the presented runtime grant |
+| ANY | /api/environments/{id}/proxy/{path} | Owner-authenticated allowlisted HTTP, event-stream and WebSocket proxy |
+
+Control routes use the home JWT; exchange/check/release validate their own
+pairing credentials. The proxy does not expose a general-purpose destination URL.
+It selects an owner-owned stored environment and validates the original runtime
+path. Outgoing credentials are encrypted; destination grants retain credential
+hashes. Metadata createdAt/expiresAt fields use Unix seconds. Private responses
+use no-store caching. Home tokens are removed before destination forwarding.
+Account authentication, vault and provider-key mutation routes are excluded from
+paired runtime authority. GET provider authentication status is masked.
+
+## Coordinated native conversation rewind
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | /api/workspace/rewind?path= | Native sources and supported turn boundaries, managed state, checkpoints, live sessions and operation journal |
+| POST | /api/workspace/rewind/plan | Review immutable native/files intent; body path, sourceId, targetTurnId, checkpointId |
+| POST | /api/workspace/rewind/{id}/apply | Capture recovery checkpoint, fork native conversation, restore selected files |
+| POST | /api/workspace/rewind/{id}/resume | Create/reopen app terminal for the native branch; returns operation and session |
+| POST | /api/workspace/rewind/{id}/recover | Guarded restore of pre-rewind files |
+| POST | /api/workspace/rewind/suspend | Stop live app process preserving transcript; body path, sessionId |
+
+All routes require the current owner. Operation bodies contain path; IDs and
+canonical workspace ownership are checked against the durable journal. Rewind
+requires a managed checkout and an explicit files checkpoint. Native source
+fingerprints and provider boundaries are validated before mutation. Active
+workspace processes/tasks are gated. A selected turn means immediately before
+that user message. Native branching and file restoration are separate steps,
+with recorded recovery state when interruption prevents full completion.
+
+See [Paired environments and rewind](../features/PAIRED_ENVIRONMENTS_AND_REWIND.md)
+for provider-specific limits and the review/recovery flow.
+
+## Remote workspace extensions
+
+| Method | Path | Authority and purpose |
+| --- | --- | --- |
+| PATCH | /api/environments/{id} | Owner directory alias, favourite, tags and recent workspace |
+| GET | /api/relay/status | Direct home identity, relay setup and connection status |
+| WS | /api/relay/hosts/{device}/register | Configured broker registration key and pinned device secret |
+| ANY | /api/relay/devices/{device}/{runtimePath} | Bounded paired runtime/pairing transport |
+| GET, POST | /api/transfers | Owned transfer inventory and upload intent |
+| POST | /api/transfers/download | Download-only intent; transfer permission |
+| GET, DELETE | /api/transfers/{id} | Owned progress or cancellation/record removal |
+| GET, PUT | /api/transfers/{id}/chunk | Bounded verified download/upload chunks |
+| POST | /api/transfers/{id}/complete | Verify and atomically publish upload; file-write permission |
+| POST | /api/transfers/{id}/download-complete | Download-only checksum receipt |
+| GET, POST | /api/collaboration/invitations | Direct owner invitation/audit administration |
+| DELETE | /api/collaboration/invitations/{id} | Direct owner revocation |
+| POST | /api/collaboration/guest/exchange | Exchange fragment secret for a restricted guest credential |
+| GET, WS | /api/collaboration/guest/{session}/history or ws | Guest-only scoped output/control protocol |
+| GET, POST | /api/recordings | Owned captures; explicit capture intent |
+| GET, DELETE | /api/recordings/{id} | Replay data or removal |
+| POST | /api/recordings/{id}/stop | Stop and flush capture |
+| GET | /api/recordings/{id}/export | Versioned, best-effort redacted export |
+| GET, POST | /api/tunnels | Direct home owner listener inventory/create |
+| DELETE | /api/tunnels/{id} | Direct home owner listener/stream stop |
+| WS | /api/tunnels/connect?targetPort= | Explicit tunnel capability; binary TCP target bridge |
+| GET | /api/desktop/status | Host platform/opt-in/display capability |
+| POST | /api/desktop/sessions | Create owner-scoped viewing session; desktop-view permission |
+| DELETE | /api/desktop/sessions/{id} | Stop own viewing session |
+| GET | /api/desktop/sessions/{id}/frame | Bounded JPEG; authorization repeated after capture |
+| POST | /api/desktop/sessions/{id}/input | Validated native action; desktop-view and control permissions |
+
+The observer/operator/custom profile controls terminalInput, fileWrite,
+agentExecute, transfer, recordings, tunnels, desktopView and desktopControl.
+Desktop and tunnel access require explicit grants. Custom desktopControl without
+desktopView is rejected. Legacy grants migrate to operator without desktop/tunnel
+access. Guest credentials cannot authenticate to ordinary account/runtime APIs.
+Only full owner access tokens can issue preview cookies; paired/preview tokens
+cannot turn into a new unrestricted preview credential. Opaque preview sockets
+require terminal input authority.
+
+All feature errors remain explicit; no successful response implies native device
+control occurred when host access is disabled or unavailable. See the
+[remote workspace guide](../features/REMOTE_WORKSPACE.md) for limits and recovery.

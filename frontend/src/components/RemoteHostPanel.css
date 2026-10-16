@@ -1,0 +1,9 @@
+.remote-host-panel { display: grid; gap: 12px; color: var(--text-primary, #e6e6e6); }
+.remote-host-panel h3, .remote-host-panel p { margin: 0; }
+.remote-host-panel p { line-height: 1.55; font-size: 13px; }
+.remote-host-panel > label { display: grid; gap: 6px; font-size: 13px; }
+.remote-host-panel input:not([type="checkbox"]) { min-width: 0; width: 100%; box-sizing: border-box; padding: 9px; color: inherit; background: var(--bg-primary, #14151b); border: 1px solid var(--border-color, #373943); border-radius: 6px; }
+.remote-host-panel .remote-host-consent { display: flex; align-items: center; }
+.remote-host-panel pre { max-width: 100%; overflow: auto; padding: 12px; background: var(--bg-primary, #14151b); border-radius: 6px; font-size: 12px; line-height: 1.65; }
+.remote-host-panel .remote-host-note { color: var(--text-secondary, #aaa); }
+.remote-host-panel summary { cursor: pointer; }

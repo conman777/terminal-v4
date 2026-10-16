@@ -80,6 +80,14 @@ fn resolve_repo_root() -> Result<PathBuf> {
         .ok_or_else(|| io_error("Failed to resolve repository root from CARGO_MANIFEST_DIR"))
 }
 
+fn desktop_backend_mode(value: Option<&str>) -> Result<bool> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("owned") => Ok(false),
+        Some("attach") => Ok(true),
+        Some(_) => Err(io_error("TERMINAL_V4_BACKEND_MODE must be owned or attach")),
+    }
+}
+
 fn desktop_share_mode() -> String {
     env::var("TERMINAL_V4_SHARE_MODE")
         .ok()
@@ -311,6 +319,11 @@ fn main() {
         .manage(BackendProcess(Mutex::new(None)))
         .setup(|app| {
             let app_handle = app.handle().clone();
+            if desktop_backend_mode(env::var("TERMINAL_V4_BACKEND_MODE").ok().as_deref())? {
+                wait_for_backend()?;
+                eprintln!("[tauri] Attached to existing backend; desktop exit leaves it running");
+                return Ok(());
+            }
             let mut child = spawn_backend(&app_handle)?;
 
             if let Err(err) = wait_for_backend() {
@@ -340,8 +353,16 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_env_file, resolve_data_dir_override};
+    use super::{desktop_backend_mode, parse_env_file, resolve_data_dir_override};
     use std::ffi::OsString;
+
+    #[test]
+    fn attach_mode_is_explicit_and_unknown_modes_fail() {
+        assert!(!desktop_backend_mode(None).unwrap());
+        assert!(!desktop_backend_mode(Some("owned")).unwrap());
+        assert!(desktop_backend_mode(Some("attach")).unwrap());
+        assert!(desktop_backend_mode(Some("typo")).is_err());
+    }
 
     #[test]
     fn parse_env_file_reads_plain_and_quoted_pairs() {

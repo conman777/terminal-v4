@@ -1,11 +1,26 @@
+mod agent_catalog;
+mod agent_runtime;
 mod auth;
+mod collaboration;
+mod device_relay;
 mod external_auth;
+mod file_transfers;
 pub mod files;
 pub mod git;
+pub mod hermes_provider_bridge;
+mod native_history;
+mod native_provider_events;
+mod paired_environments;
 pub mod passkey;
 pub mod preview;
 pub mod processes;
+mod provider_rewind;
+mod remote_desktop;
+mod remote_permissions;
+mod remote_tunnels;
 pub mod screenshots;
+mod session_recordings;
+mod session_search;
 mod state;
 mod structured;
 pub mod system_stats;
@@ -15,6 +30,13 @@ pub mod transcribe;
 pub mod turn_detector;
 pub mod vault;
 pub mod webcontainer;
+mod workspace;
+mod workspace_activity;
+mod workspace_git;
+mod workspace_proposals;
+mod workspace_rewind;
+mod workspace_skills;
+pub mod workspace_tasks;
 
 use auth::{
     authenticate_preview_token, authenticate_token, issue_preview_token, require_auth,
@@ -51,6 +73,17 @@ use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 
 pub use state::AppState as ApiState;
 
+pub fn start_services(state: &AppState) {
+    device_relay::start(state);
+}
+
+pub async fn shutdown_services(state: &AppState) {
+    device_relay::shutdown(state).await;
+    remote_tunnels::shutdown(state);
+    session_recordings::shutdown(&state.config().data_dir).await;
+    workspace_tasks::shutdown_workers().await;
+}
+
 const PREVIEW_COOKIE_NAME: &str = "terminal_preview_token";
 
 /// Maximum bytes buffered on a terminal WebSocket before dropping output and
@@ -73,6 +106,13 @@ struct ApiError {
 }
 
 impl ApiError {
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
+
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
@@ -101,6 +141,22 @@ pub fn app(state: AppState) -> Router {
         .allow_headers(Any);
 
     let protected = Router::new()
+        .merge(paired_environments::routes())
+        .merge(device_relay::routes())
+        .merge(remote_desktop::routes())
+        .merge(collaboration::routes())
+        .merge(agent_catalog::routes())
+        .merge(native_history::routes())
+        .merge(workspace::routes())
+        .merge(workspace_proposals::routes())
+        .merge(workspace_skills::routes())
+        .merge(workspace_git::routes())
+        .merge(file_transfers::routes())
+        .merge(session_recordings::routes())
+        .merge(remote_tunnels::routes())
+        .merge(workspace_rewind::routes())
+        .merge(session_search::routes())
+        .merge(workspace_tasks::routes())
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/change-password", post(change_password))
@@ -331,6 +387,10 @@ pub fn app(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let router = Router::new()
+        .merge(paired_environments::public_routes())
+        .merge(device_relay::public_routes())
+        .merge(collaboration::public_routes())
+        .merge(remote_tunnels::public_routes())
         .route("/api/health", get(health))
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
@@ -441,11 +501,42 @@ pub fn app(state: AppState) -> Router {
     };
 
     router
+        .layer(middleware::from_fn(remote_workspace_cache_policy))
         .layer(middleware::from_fn_with_state(
             state,
             preview_host_middleware,
         ))
         .layer(cors)
+}
+
+async fn remote_workspace_cache_policy(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let private = matches!(
+        request
+            .uri()
+            .path()
+            .strip_prefix("/api/")
+            .and_then(|path| path.split('/').next()),
+        Some(
+            "transfers"
+                | "recordings"
+                | "collaboration"
+                | "desktop"
+                | "tunnels"
+                | "relay"
+                | "environments"
+        )
+    );
+    let mut response = next.run(request).await;
+    if private {
+        response.headers_mut().insert(
+            "cache-control",
+            axum::http::HeaderValue::from_static("private, no-store"),
+        );
+    }
+    response
 }
 
 fn resolve_frontend_dir(data_dir: &FsPath) -> PathBuf {
@@ -599,7 +690,26 @@ async fn logout(
 async fn create_preview_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
+    let owner = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|token| {
+            auth::authenticate_token(
+                &state.config().jwt_secret,
+                state.config().allowed_username.as_deref(),
+                token,
+            )
+            .ok()
+        })
+        .filter(|owner| owner.user_id == user.user_id)
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "A direct owner login is required to create a preview session".into(),
+        })?;
+    let user = owner;
     let token = issue_preview_token(&state.config().jwt_secret, &user.user_id, &user.username);
     Ok((
         [(
@@ -1464,6 +1574,11 @@ async fn terminal_git_checkout(
     Path(session_id): Path<String>,
     Json(input): Json<GitCheckoutInput>,
 ) -> Result<Json<Value>, ApiError> {
+    let session = terminal_session_summary(&state, &user, &session_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("Terminal session not found"))?;
+    let _activity = file_mutation_guard(&session.cwd)?;
     let branch_info = state
         .terminal_manager()
         .git_checkout(&user.user_id, &session_id, &input.branch)
@@ -1481,6 +1596,18 @@ async fn stream_terminal_session(
     Path(session_id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> axum::response::Response {
+    let is_active = state.terminal_manager().is_active(&session_id).await;
+
+    let broadcast_rx = if is_active {
+        state
+            .terminal_manager()
+            .subscribe(&user.user_id, &session_id)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
     let snapshot = match state
         .terminal_manager()
         .get_session_history(&user.user_id, &session_id, &query)
@@ -1497,21 +1624,11 @@ async fn stream_terminal_session(
         Err(e) => return ApiError::internal(e).into_response(),
     };
 
-    let is_active = state.terminal_manager().is_active(&session_id).await;
-
-    let broadcast_rx = if is_active {
-        state
-            .terminal_manager()
-            .subscribe(&user.user_id, &session_id)
-            .await
-            .ok()
-    } else {
-        None
-    };
-
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(64);
 
     tokio::spawn(async move {
+        let mut last_sequence = snapshot.history.iter().filter_map(|event| event.seq).max();
+
         for event in &snapshot.history {
             let data = serde_json::to_string(event).unwrap_or_default();
             if tx
@@ -1527,6 +1644,17 @@ async fn stream_terminal_session(
             loop {
                 match broadcast.recv().await {
                     Ok(TerminalSubscriptionEvent::Output(event)) => {
+                        if event
+                            .seq
+                            .zip(last_sequence)
+                            .is_some_and(|(next, previous)| next <= previous)
+                        {
+                            continue;
+                        }
+                        if let Some(sequence) = event.seq {
+                            last_sequence = Some(sequence);
+                        }
+
                         let data = serde_json::to_string(&event).unwrap_or_default();
                         if tx
                             .send(Ok(Event::default().event("data").data(data)))
@@ -2257,10 +2385,19 @@ struct MkdirInput {
     path: String,
 }
 
+fn file_mutation_guard(path: &str) -> Result<workspace_activity::WorkspaceActivity, ApiError> {
+    let path = files::resolve_safe_path(path).map_err(file_api_error)?;
+    workspace_activity::enter(&path).map_err(|message| ApiError {
+        status: StatusCode::CONFLICT,
+        message,
+    })
+}
+
 async fn mkdir(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(input): Json<MkdirInput>,
 ) -> Result<StatusCode, ApiError> {
+    let _activity = file_mutation_guard(&input.path)?;
     files::create_directory(&input.path)
         .await
         .map_err(file_api_error)?;
@@ -2305,7 +2442,7 @@ async fn upload_file(
         return Err(ApiError::bad_request("Missing file field"));
     }
 
-    let mut uploaded_paths = Vec::new();
+    let mut planned_uploads = Vec::new();
     for (field_name, filename, data) in files_to_upload {
         let target_path = if field_name == "files" {
             let filename = filename.ok_or_else(|| ApiError::bad_request("Missing filename"))?;
@@ -2313,6 +2450,14 @@ async fn upload_file(
         } else {
             path.clone()
         };
+        planned_uploads.push((target_path, data));
+    }
+    let _activities = planned_uploads
+        .iter()
+        .map(|(target, _)| file_mutation_guard(target))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut uploaded_paths = Vec::new();
+    for (target_path, data) in planned_uploads {
         files::write_file(&target_path, &data)
             .await
             .map_err(file_api_error)?;
@@ -2389,6 +2534,7 @@ async fn delete_file(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(input): Json<DeleteFileInput>,
 ) -> Result<StatusCode, ApiError> {
+    let _activity = file_mutation_guard(&input.path)?;
     files::delete_path(&input.path)
         .await
         .map_err(file_api_error)?;
@@ -2408,6 +2554,8 @@ async fn rename_file(
     Extension(_user): Extension<AuthenticatedUser>,
     Json(input): Json<RenameInput>,
 ) -> Result<StatusCode, ApiError> {
+    let _source_activity = file_mutation_guard(&input.from)?;
+    let _target_activity = file_mutation_guard(&input.to)?;
     files::rename_path(&input.from, &input.to)
         .await
         .map_err(file_api_error)?;
@@ -2439,6 +2587,7 @@ async fn unzip_file(
             .unwrap_or(".")
             .to_string()
     });
+    let _activity = file_mutation_guard(&target)?;
     let count = files::extract_zip(&zip_path, &target)
         .await
         .map_err(file_api_error)?;
@@ -2507,6 +2656,7 @@ async fn upload_screenshot(
         format!("~/screenshots/screenshot-{timestamp}.{ext}")
     });
 
+    let _activity = file_mutation_guard(&path)?;
     files::write_file(&path, &data)
         .await
         .map_err(file_api_error)?;
@@ -3019,7 +3169,8 @@ async fn dev_proxy_ws_inner(
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ApiError> {
     let ws = ws.map_err(|_| ApiError::bad_request("WebSocket upgrade required"))?;
-    let request_headers = request.headers().clone();
+    let mut request_headers = request.headers().clone();
+    request_headers.remove(axum::http::header::AUTHORIZATION);
     Ok(ws
         .on_upgrade(move |socket| async move {
             let _ = preview::ws_proxy::proxy_websocket(socket, port, &path, &request_headers, None)
@@ -3113,18 +3264,32 @@ async fn preview_proxy_response(
         .get_cookie_header(&scope_user_id, port)
         .await;
     if let Ok(ws) = ws {
-        let request_headers = request.headers().clone();
+        let credential = request
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_owned)
+            .or_else(|| preview_request_token(&request))
+            .unwrap_or_default();
+        if credential.starts_with("tv4pair.")
+            && !auth::runtime_message_allowed(&state, &credential, false, "input")
+        {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "Preview WebSocket control requires terminal input permission".into(),
+            });
+        }
+        let authorization_path = preview_auth_route_path(&request).to_string();
+        let mut request_headers = request.headers().clone();
+        request_headers.remove(axum::http::header::AUTHORIZATION);
         let websocket_path = path.clone();
         return Ok(ws
             .on_upgrade(move |socket| async move {
-                let _ = preview::ws_proxy::proxy_websocket(
-                    socket,
-                    port,
-                    &websocket_path,
-                    &request_headers,
-                    cookie_header.as_deref(),
-                )
-                .await;
+                tokio::select! {
+                    _ = wait_for_preview_revocation(&state,&credential,&authorization_path)=>{},
+                    _ = preview::ws_proxy::proxy_websocket(socket,port,&websocket_path,&request_headers,cookie_header.as_deref())=>{},
+                }
             })
             .into_response());
     }
@@ -3133,6 +3298,7 @@ async fn preview_proxy_response(
     let method = request.method().as_str().to_string();
     let mut headers = request.headers().clone();
     headers.remove(axum::http::header::COOKIE);
+    headers.remove(axum::http::header::AUTHORIZATION);
     populate_forward_headers(&mut headers);
     let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
         .await
@@ -4106,26 +4272,11 @@ struct LatencyWsQuery {
 
 async fn connect_latency_ws(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Query(query): Query<LatencyWsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = query
-        .token
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "Missing latency websocket token".to_string(),
-        })?;
-    authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        &token,
-    )
-    .map_err(|_| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        message: "Invalid or expired token".to_string(),
-    })?;
-
+    authenticate_runtime_websocket(&state, &headers, query.token.as_deref(), "/api/latency/ws")?;
     Ok(ws.on_upgrade(handle_latency_ws))
 }
 
@@ -4179,32 +4330,37 @@ struct PreviewPerformanceStreamQuery {
 
 async fn stream_preview_performance(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Path(port): Path<u16>,
     Query(query): Query<PreviewPerformanceStreamQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = query
-        .token
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "Missing preview performance token".to_string(),
-        })?;
-    let user = authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        &token,
-    )
-    .map_err(|_| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        message: "Invalid or expired token".to_string(),
-    })?;
+    let user = authenticate_runtime_websocket(
+        &state,
+        &headers,
+        query.token.as_deref(),
+        &format!("/api/preview/{port}/performance/stream"),
+    )?;
+
     let subscription = state
         .preview_performance_store()
         .subscribe(&user.user_id, port)
         .await;
 
-    Ok(ws.on_upgrade(move |socket| handle_preview_performance_ws(socket, subscription)))
+    let runtime_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or(query.token)
+        .unwrap_or_default();
+    let authorization_path = format!("/api/preview/{port}/performance/stream");
+    Ok(ws.on_upgrade(move |socket| async move {
+        tokio::select! {
+            _ = wait_for_preview_revocation(&state,&runtime_token,&authorization_path)=>{},
+            _ = handle_preview_performance_ws(socket,subscription)=>{},
+        }
+    }))
 }
 
 async fn handle_preview_performance_ws(
@@ -4248,26 +4404,17 @@ struct StructuredWsQuery {
 
 async fn connect_structured_ws(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Path(session_id): Path<String>,
     Query(query): Query<StructuredWsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let token = query
-        .token
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| ApiError {
-            status: StatusCode::UNAUTHORIZED,
-            message: "Missing structured session token".to_string(),
-        })?;
-    let user = authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        &token,
-    )
-    .map_err(|_| ApiError {
-        status: StatusCode::UNAUTHORIZED,
-        message: "Invalid or expired token".to_string(),
-    })?;
+    let user = authenticate_runtime_websocket(
+        &state,
+        &headers,
+        query.token.as_deref(),
+        &format!("/api/structured/sessions/{session_id}/ws"),
+    )?;
 
     let structured_manager = state.structured_session_manager();
     let (history, subscription) = structured_manager
@@ -4278,29 +4425,53 @@ async fn connect_structured_ws(
             message: error,
         })?;
 
+    let runtime_token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .or(query.token.clone())
+        .unwrap_or_default();
     let last_seq = query.last_seq;
     Ok(ws.on_upgrade(move |socket| {
         handle_structured_ws(
             socket,
-            structured_manager,
-            user,
-            session_id,
-            history,
-            subscription,
-            last_seq,
+            StructuredWsConnection {
+                state,
+                runtime_token,
+                structured_manager,
+                user,
+                session_id,
+                history,
+                subscription,
+                last_seq,
+            },
         )
     }))
 }
 
-async fn handle_structured_ws(
-    mut socket: WebSocket,
+struct StructuredWsConnection {
+    state: AppState,
+    runtime_token: String,
     structured_manager: StructuredSessionManager,
     user: AuthenticatedUser,
     session_id: String,
     history: Vec<terminal_v4_core::StructuredSessionEvent>,
-    mut subscription: tokio::sync::broadcast::Receiver<terminal_v4_core::StructuredSessionEvent>,
+    subscription: tokio::sync::broadcast::Receiver<terminal_v4_core::StructuredSessionEvent>,
     last_seq: Option<i64>,
-) {
+}
+
+async fn handle_structured_ws(mut socket: WebSocket, connection: StructuredWsConnection) {
+    let StructuredWsConnection {
+        state,
+        runtime_token,
+        structured_manager,
+        user,
+        session_id,
+        history,
+        mut subscription,
+        last_seq,
+    } = connection;
     // Send event history on connect — filtered by last_seq if provided (resume)
     for event in history {
         if let Some(cursor) = last_seq {
@@ -4329,11 +4500,14 @@ async fn handle_structured_ws(
     // Without this, persisted sessions would close the WS immediately after history,
     // causing the frontend to enter a reconnect loop.
     let mut broadcast_closed = false;
+    let mut authorization_check = tokio::time::interval(std::time::Duration::from_secs(2));
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(15));
     ping_interval.tick().await; // consume first immediate tick
 
     loop {
         tokio::select! {
+            _=authorization_check.tick()=>{if auth::authenticate_runtime_token(&state,&runtime_token,&format!("/api/structured/sessions/{session_id}/ws")).is_err(){let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4401,reason:"Session access expired or was revoked".into()}))).await;break;}}
+
             event = subscription.recv(), if !broadcast_closed => {
                 match event {
                     Ok(event) => {
@@ -4386,6 +4560,8 @@ async fn handle_structured_ws(
                         let Ok(value) = serde_json::from_str::<Value>(&payload) else {
                             continue;
                         };
+                        let kind=value.get("type").and_then(Value::as_str).unwrap_or("");
+                        if !auth::runtime_message_allowed(&state,&runtime_token,true,kind){let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4403,reason:"Agent control is not permitted".into()}))).await;break;}
                         match value.get("type").and_then(Value::as_str) {
                             Some("message") => {
                                 if let Some(text) = value.get("text").and_then(Value::as_str) {
@@ -4658,10 +4834,74 @@ fn host_port(host: &str) -> Option<&str> {
         .filter(|port| !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()))
 }
 
+fn authenticate_runtime_websocket(
+    state: &AppState,
+    headers: &HeaderMap,
+    query_token: Option<&str>,
+    path: &str,
+) -> Result<AuthenticatedUser, ApiError> {
+    let result = if let Some(token) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        auth::authenticate_runtime_token(state, token, path)
+    } else {
+        query_token
+            .ok_or_else(|| "Missing session token".to_string())
+            .and_then(|token| {
+                authenticate_token(
+                    &state.config().jwt_secret,
+                    state.config().allowed_username.as_deref(),
+                    token,
+                )
+            })
+    };
+    result.map_err(|_| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "Invalid or expired session token".into(),
+    })
+}
+
+async fn wait_for_preview_revocation(state: &AppState, token: &str, path: &str) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        if auth::authenticate_runtime_request(state, token, "GET", path).is_err()
+            && authenticate_preview_token(
+                &state.config().jwt_secret,
+                state.config().allowed_username.as_deref(),
+                token,
+                path,
+            )
+            .is_err()
+        {
+            return;
+        }
+    }
+}
+
 fn authenticate_preview_request_user(
     state: &AppState,
     request: &axum::extract::Request,
 ) -> Result<AuthenticatedUser, ApiError> {
+    if let Some(token) = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    {
+        return auth::authenticate_runtime_request(
+            state,
+            token,
+            request.method().as_str(),
+            preview_auth_route_path(request),
+        )
+        .map_err(|_| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Invalid or expired preview session".into(),
+        });
+    }
     let token = preview_request_token(request).ok_or_else(|| ApiError {
         status: StatusCode::UNAUTHORIZED,
         message: "Missing preview session".to_string(),
@@ -4839,10 +5079,10 @@ async fn handle_terminal_ws(
         return;
     }
 
-    let Ok(user) = authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
+    let Ok(user) = auth::authenticate_runtime_token(
+        &state,
         &auth_message.token,
+        &format!("/api/terminal/{session_id}/ws"),
     ) else {
         let _ = socket.send(Message::Close(None)).await;
         return;
@@ -4904,8 +5144,13 @@ async fn handle_terminal_ws(
     let mut backpressure_active = false;
     let mut resync_pending = false;
 
+    let mut authorization_check = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         tokio::select! {
+            _=authorization_check.tick()=>{
+                if auth::authenticate_runtime_token(&state,&auth_message.token,&format!("/api/terminal/{session_id}/ws")).is_err(){let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4401,reason:"Session access expired or was revoked".into()}))).await;break;}
+            }
+
             _ = ping_interval.tick() => {
                 if send_ws_meta(&mut socket, framed, json!({ "type": "serverPing" })).await.is_err() {
                     break;
@@ -4985,6 +5230,9 @@ async fn handle_terminal_ws(
                                 break;
                             }
                             continue;
+                        }
+                        if !auth::runtime_message_allowed(&state,&auth_message.token,false,"input") {
+                            let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4403,reason:"Terminal input is not permitted".into()}))).await;break;
                         }
                         if terminal_manager.write(&user.user_id, &session_id, &payload).await.is_err() {
                             break;
@@ -7868,6 +8116,373 @@ done
         assert_eq!(provider.interrupt_hits(), 1);
     }
 
+    #[tokio::test]
+    async fn workspace_routes_keep_owned_history_and_tasks_out_of_shared_caches() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "workspace-owner", "owner");
+        for uri in ["/api/workspace/history", "/api/workspace/tasks"] {
+            let response = app(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("Authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|value| value.to_str().ok()),
+                Some("private, no-store")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_workspace_responses_are_private_and_not_stored() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "remote-cache-owner", "owner");
+        for uri in [
+            "/api/transfers",
+            "/api/recordings",
+            "/api/collaboration/invitations",
+            "/api/tunnels",
+            "/api/relay/status",
+            "/api/desktop/status",
+            "/api/environments",
+        ] {
+            let response = app(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("Authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            assert_eq!(
+                response
+                    .headers()
+                    .get("cache-control")
+                    .and_then(|value| value.to_str().ok()),
+                Some("private, no-store"),
+                "{uri}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_profile_routes_require_authentication() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/workspace/profile?path=/project")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn workspace_profile_persists_and_isolates_users_and_projects() {
+        let state = test_state();
+        let project = state.config().data_dir.join("workspace-profile-project");
+        fs::create_dir_all(&project).unwrap();
+        let other_project = state.config().data_dir.join("workspace-profile-other");
+        fs::create_dir_all(&other_project).unwrap();
+        let uri = format!(
+            "/api/workspace/profile?path={}",
+            url::form_urlencoded::byte_serialize(project.to_str().unwrap().as_bytes())
+                .collect::<String>()
+        );
+        let token = issue_access_token(&state.config().jwt_secret, "workspace-owner", "owner");
+        let other_token =
+            issue_access_token(&state.config().jwt_secret, "workspace-other", "other");
+        let profile = json!({
+            "memory": "Use the Rust API.", "defaultAgent": "claude",
+            "selection": { "model": "sonnet", "reasoning": "high" },
+            "skills": [{ "id": "00000000-0000-4000-8000-000000000001", "name": "Review", "instructions": "Check async boundaries." }]
+        });
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(&uri)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(profile.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let fresh_state = test_state_with_data_dir(state.config().data_dir.clone());
+        let mut results = Vec::new();
+        let other_uri = format!(
+            "/api/workspace/profile?path={}",
+            url::form_urlencoded::byte_serialize(other_project.to_str().unwrap().as_bytes())
+                .collect::<String>()
+        );
+        for (request_uri, request_token) in
+            [(&uri, &token), (&uri, &other_token), (&other_uri, &token)]
+        {
+            let response = app(fresh_state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(request_uri)
+                        .header("Authorization", format!("Bearer {request_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            results.push(
+                serde_json::from_slice::<Value>(
+                    &response.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap(),
+            );
+        }
+        let empty = json!({ "memory": "", "defaultAgent": "", "selection": null, "skills": [] });
+        assert_eq!(results, vec![profile, empty.clone(), empty]);
+    }
+
+    #[tokio::test]
+    async fn workspace_profile_rejects_oversized_knowledge() {
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "workspace-owner", "owner");
+        let project = state.config().data_dir.to_str().unwrap();
+        let uri = format!(
+            "/api/workspace/profile?path={}",
+            url::form_urlencoded::byte_serialize(project.as_bytes()).collect::<String>()
+        );
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({ "memory": "x".repeat(6001) }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    async fn preview_grant(state: &ApiState, profile: &str) -> (String, String) {
+        let owner = issue_access_token(&state.config().jwt_secret, "preview-grant-owner", "owner");
+        let issued = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/environments/pairing-code")
+                    .header("Authorization", format!("Bearer {owner}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({"label":"Preview grant","profile":profile}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(issued.status(), StatusCode::OK);
+        let code: Value =
+            serde_json::from_slice(&issued.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        let exchanged = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/environments/exchange")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({"code":code["code"]}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(exchanged.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&exchanged.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        (
+            body["credential"].as_str().unwrap().into(),
+            body["grantId"].as_str().unwrap().into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn preview_grant_cannot_issue_or_renew_owner_preview_cookies() {
+        let state = test_state();
+        for profile in ["observer", "operator"] {
+            let (credential, _) = preview_grant(&state, profile).await;
+            let response = app(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/preview/session")
+                        .header("Authorization", format!("Bearer {credential}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(response.headers().get("set-cookie").is_none());
+        }
+        let cookie = preview_test_cookie(&state, "preview-grant-owner", "owner");
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/preview/session")
+                    .header("Cookie", cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let owner = issue_access_token(&state.config().jwt_secret, "preview-grant-owner", "owner");
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/preview/session")
+                    .header("Authorization", format!("Bearer {owner}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get("set-cookie").is_some());
+    }
+
+    #[tokio::test]
+    async fn preview_grant_observer_cannot_open_an_opaque_control_socket() {
+        let state = test_state();
+        let (credential, _) = preview_grant(&state, "observer").await;
+        let (upstream, upstream_task) = spawn_preview_ws_upstream().await;
+        let (port, task) = spawn_router(app(state)).await;
+        let mut request = format!("ws://127.0.0.1:{port}/preview/{upstream}/hmr")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {credential}").parse().unwrap(),
+        );
+        let connection = tokio_tungstenite::connect_async(request).await;
+        task.abort();
+        upstream_task.abort();
+        assert!(
+            matches!(connection,Err(tungstenite::Error::Http(response)) if response.status()==StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_grant_revocation_closes_direct_preview_and_performance_sockets() {
+        let state = test_state();
+        let (credential, grant) = preview_grant(&state, "operator").await;
+        let (upstream, upstream_task) = spawn_preview_ws_upstream().await;
+        let (port, task) = spawn_router(app(state.clone())).await;
+        let mut request = format!("ws://127.0.0.1:{port}/preview/{upstream}/hmr")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {credential}").parse().unwrap(),
+        );
+        let (mut preview, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        assert_eq!(
+            preview.next().await.unwrap().unwrap().into_text().unwrap(),
+            "ready"
+        );
+        let mut request =
+            format!("ws://127.0.0.1:{port}/api/preview/{upstream}/performance/stream")
+                .into_client_request()
+                .unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            format!("Bearer {credential}").parse().unwrap(),
+        );
+        let (mut performance, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        let owner = issue_access_token(&state.config().jwt_secret, "preview-grant-owner", "owner");
+        let revoke = app(state)
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/environments/grants/{grant}"))
+                    .header("Authorization", format!("Bearer {owner}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+        let results = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(5), preview.next()),
+            tokio::time::timeout(Duration::from_secs(5), performance.next())
+        );
+        task.abort();
+        upstream_task.abort();
+        for result in [results.0, results.1] {
+            let frame = result
+                .expect("Revoked socket must close within two seconds plus scheduling margin");
+            assert!(matches!(
+                frame,
+                None | Some(Err(_)) | Some(Ok(tungstenite::Message::Close(_)))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn preview_grant_direct_event_stream_closes_after_revocation() {
+        let state = test_state();
+        let (credential, grant) = preview_grant(&state, "observer").await;
+        let (port, task) = spawn_router(app(state.clone())).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let response = client
+            .get(format!(
+                "http://127.0.0.1:{port}/api/preview/5173/log-stream"
+            ))
+            .bearer_auth(credential)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let owner = issue_access_token(&state.config().jwt_secret, "preview-grant-owner", "owner");
+        let revoke = app(state)
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/environments/grants/{grant}"))
+                    .header("Authorization", format!("Bearer {owner}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revoke.status(), StatusCode::NO_CONTENT);
+        let closed = tokio::time::timeout(Duration::from_secs(5), response.bytes()).await;
+        task.abort();
+        closed
+            .expect("Revoked paired event stream must close")
+            .unwrap();
+    }
+
     fn test_state() -> ApiState {
         test_state_with_external_auth(None)
     }
@@ -8270,5 +8885,102 @@ done
             self.id_hits.fetch_add(1, Ordering::SeqCst);
             Ok(self.users_by_id.get(user_id).cloned())
         }
+    }
+}
+
+#[cfg(test)]
+mod file_mutation_rewind_tests {
+    use super::*;
+    use terminal_v4_core::AppConfig;
+    use tower::ServiceExt;
+    #[tokio::test]
+    async fn checkout_rewind_excludes_file_mutation_routes() {
+        let output = std::env::current_dir().unwrap().join("output");
+        std::fs::create_dir_all(&output).unwrap();
+        let directory = tempfile::tempdir_in(&output).unwrap();
+        let checkout = directory.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        let existing = checkout.join("existing.txt");
+        std::fs::write(&existing, "original").unwrap();
+        let state = AppState::new_with_external_auth(
+            AppConfig {
+                data_dir: directory.path().join("state"),
+                jwt_secret: "file-guard-test".into(),
+                ..AppConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        let token = auth::issue_access_token(&state.config().jwt_secret, "owner", "owner");
+        let _rewind = workspace_activity::exclusive(&checkout).unwrap();
+        let app = app(state);
+        for (method, url, body) in [
+            (
+                "POST",
+                "/api/files/mkdir",
+                json!({"path":checkout.join("new-directory")}),
+            ),
+            ("DELETE", "/api/files/delete", json!({"path":existing})),
+            (
+                "POST",
+                "/api/files/rename",
+                json!({"from":existing,"to":checkout.join("renamed.txt")}),
+            ),
+            (
+                "POST",
+                "/api/files/unzip",
+                json!({"zipPath":checkout.join("archive.zip"),"extractTo":checkout.join("extracted")}),
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(method)
+                        .uri(url)
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT, "{method} {url}");
+        }
+        for (route, filename, data) in [
+            (
+                "/api/files/upload",
+                "upload.txt",
+                b"uploaded bytes".as_slice(),
+            ),
+            (
+                "/api/files/screenshot",
+                "screenshot.png",
+                b"\x89PNG\r\n\x1a\n".as_slice(),
+            ),
+        ] {
+            let target = checkout.join(filename);
+            let mut body=format!("--rewind-test\r\nContent-Disposition: form-data; name=\"path\"\r\n\r\n{}\r\n--rewind-test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n",target.to_string_lossy()).into_bytes();
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\r\n--rewind-test--\r\n");
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(route)
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("content-type", "multipart/form-data; boundary=rewind-test")
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CONFLICT, "{route}");
+            assert!(!target.exists());
+        }
+        assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
+        assert!(!checkout.join("new-directory").exists());
+        assert!(!checkout.join("renamed.txt").exists());
     }
 }

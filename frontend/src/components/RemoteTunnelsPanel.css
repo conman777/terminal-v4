@@ -1,0 +1,10 @@
+.remote-tunnels { border-top:1px solid var(--border-color,#444); padding-top:1rem; margin-top:1rem; }
+.remote-tunnels h3 { margin:0 0 .5rem; }
+.remote-tunnels p { font-size:.85rem; line-height:1.5; overflow-wrap:anywhere; }
+.remote-tunnels form { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:.65rem; align-items:end; }
+.remote-tunnels label { display:grid; gap:.3rem; font-size:.85rem; }
+.remote-tunnels input,.remote-tunnels select { min-width:0; padding:.6rem; color:inherit; background:var(--bg-secondary,#222); border:1px solid var(--border-color,#555); border-radius:5px; }
+.remote-tunnels button { min-height:40px; padding:.5rem .8rem; }
+.remote-tunnels article { display:flex; justify-content:space-between; align-items:center; gap:.75rem; padding:.75rem 0; border-bottom:1px solid var(--border-color,#444); }
+.remote-tunnels article div { min-width:0; overflow-wrap:anywhere; }
+.remote-tunnels small { display:block; margin-top:.3rem; }

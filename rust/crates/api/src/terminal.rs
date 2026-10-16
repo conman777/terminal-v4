@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread;
 
@@ -91,6 +91,7 @@ struct TerminalManagerInner {
 }
 
 struct LiveSession {
+    closed: AtomicBool,
     state: Mutex<LiveSessionState>,
     io: PtySessionIo,
     broadcaster: broadcast::Sender<TerminalSubscriptionEvent>,
@@ -295,6 +296,43 @@ impl PtySessionIo {
     }
 }
 
+impl PtySessionIo {
+    async fn stop_tree(&self) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            let process = self.process.clone();
+            spawn_blocking_io(move || {
+                let process = lock_blocking(process.as_ref(), "terminal process")?;
+                if !process.is_alive() {
+                    return Ok(());
+                }
+                let system = std::env::var_os("SystemRoot")
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_absolute())
+                    .ok_or("Windows process controller unavailable")?;
+                let result = std::process::Command::new(system.join("System32/taskkill.exe"))
+                    .args(["/T", "/F", "/PID", &process.pid().to_string()])
+                    .creation_flags(0x08000000)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map_err(|_| "Unable to stop terminal process tree".to_string())?;
+                if !result.success() && process.is_alive() {
+                    return Err("Unable to stop terminal process tree".into());
+                }
+                Ok(())
+            })
+            .await
+        }
+        #[cfg(not(windows))]
+        {
+            self.kill().await
+        }
+    }
+}
+
 impl TerminalManager {
     pub fn new(config: AppConfig) -> Self {
         Self {
@@ -324,7 +362,7 @@ impl TerminalManager {
             if !active.contains_key(session_id) {
                 tracing::info!(
                     session_id = session_id.as_str(),
-                    "Found orphaned tmux session — available for restore"
+                    "Found orphaned tmux session â€” available for restore"
                 );
             }
         }
@@ -667,6 +705,54 @@ impl TerminalManager {
         }
     }
 
+    pub(crate) async fn has_live_workspace(&self, path: &Path) -> bool {
+        let sessions = self.inner.sessions.lock().await;
+        for session in sessions.values() {
+            let state = session.state.lock().await;
+            if workspace_contains(path, Path::new(&state.cwd)) {
+                return true;
+            }
+        }
+        false
+    }
+    pub(crate) async fn suspend(&self, user_id: &str, session_id: &str) -> Result<bool, String> {
+        let mut sessions = self.inner.sessions.lock().await;
+        let Some(session) = sessions.get(session_id).cloned() else {
+            return Ok(load_persisted_session(&self.inner.config, user_id, session_id)?.is_some());
+        };
+        let (cwd, uses_tmux) = {
+            let state = session.state.lock().await;
+            if state.user_id != user_id {
+                return Ok(false);
+            }
+            (state.cwd.clone(), state.uses_tmux)
+        };
+        let _workspace_activity = crate::workspace_activity::enter(Path::new(&cwd))?;
+        if uses_tmux {
+            crate::tmux::kill_session(session_id).await?;
+        }
+        session.io.stop_tree().await?;
+        let pending = {
+            let mut batcher = session.batcher.lock().await;
+            batcher.cancel_timer();
+            batcher.take()
+        };
+        if !pending.is_empty() {
+            self.record_output(session.clone(), pending).await?;
+        }
+        session.closed.store(true, Ordering::SeqCst);
+        {
+            let mut state = session.state.lock().await;
+            state.uses_tmux = false;
+            state.is_busy = false;
+            state.updated_at = iso_timestamp();
+        }
+        persist_session_state(&self.inner.config, &session).await?;
+        sessions.remove(session_id);
+        let _ = session.broadcaster.send(TerminalSubscriptionEvent::Closed);
+        Ok(true)
+    }
+
     pub async fn close(&self, user_id: &str, session_id: &str) -> Result<bool, String> {
         let session = {
             let mut sessions = self.inner.sessions.lock().await;
@@ -953,6 +1039,7 @@ impl TerminalManager {
     ) -> Result<TerminalSessionSnapshot, String> {
         let created_at = iso_timestamp();
         let cwd = resolve_cwd(cwd.as_deref());
+        let _workspace_activity = crate::workspace_activity::enter(Path::new(&cwd))?;
         let shell = shell.unwrap_or_else(detect_shell);
         let (shell_path, shell_args) = shell_command(&shell);
 
@@ -980,6 +1067,7 @@ impl TerminalManager {
         let (broadcaster, _) = broadcast::channel(256);
 
         let session = Arc::new(LiveSession {
+            closed: AtomicBool::new(false),
             state: Mutex::new(LiveSessionState {
                 id: id.clone(),
                 user_id: user_id.to_string(),
@@ -1012,7 +1100,7 @@ impl TerminalManager {
         }
 
         spawn_terminal_reader(self.clone(), session.clone(), reader);
-        spawn_terminal_exit_watcher(self.clone(), id.clone(), child);
+        spawn_terminal_exit_watcher(self.clone(), id.clone(), session.clone(), child);
 
         if cfg!(windows) {
             sleep(Duration::from_millis(100)).await;
@@ -1041,12 +1129,14 @@ impl TerminalManager {
     }
 
     async fn record_output(&self, session: Arc<LiveSession>, text: String) -> Result<(), String> {
-        if text.is_empty() {
+        if text.is_empty() || session.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
-
         let event = {
             let mut state = session.state.lock().await;
+            if session.closed.load(Ordering::SeqCst) {
+                return Ok(());
+            }
             let event = TerminalStreamEvent {
                 text,
                 ts: now_millis(),
@@ -1075,6 +1165,9 @@ impl TerminalManager {
         session: Arc<LiveSession>,
         text: String,
     ) -> Result<(), String> {
+        if session.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         let (sanitized_text, responses) = intercept_terminal_queries(&text);
         for response in responses {
             session.io.write(response).await?;
@@ -1108,7 +1201,7 @@ impl TerminalManager {
                     };
                     let _ = manager.record_output(session_clone, text).await;
                 });
-                // Store flush handle — batcher lock is still held from above
+                // Store flush handle â€” batcher lock is still held from above
                 batcher.flush_handle = Some(handle);
                 None
             }
@@ -1121,14 +1214,25 @@ impl TerminalManager {
         self.record_output(session, flush_text).await
     }
 
-    async fn mark_session_inactive(&self, session_id: &str) -> Result<(), String> {
+    async fn mark_session_inactive(
+        &self,
+        session_id: &str,
+        expected: &Arc<LiveSession>,
+    ) -> Result<(), String> {
         let session = {
             let mut sessions = self.inner.sessions.lock().await;
+            if !sessions
+                .get(session_id)
+                .is_some_and(|current| Arc::ptr_eq(current, expected))
+            {
+                return Ok(());
+            }
             sessions.remove(session_id)
         };
         let Some(session) = session else {
             return Ok(());
         };
+        session.closed.store(true, Ordering::SeqCst);
 
         persist_session_state(&self.inner.config, &session).await?;
         let _ = session.broadcaster.send(TerminalSubscriptionEvent::Closed);
@@ -1157,6 +1261,13 @@ impl TerminalManager {
 
         Ok(())
     }
+}
+
+fn workspace_contains(workspace: &Path, candidate: &Path) -> bool {
+    crate::workspace_activity::workspace_key(workspace)
+        .ok()
+        .zip(crate::workspace_activity::workspace_key(candidate).ok())
+        .is_some_and(|(workspace, candidate)| workspace == candidate)
 }
 
 fn summary_from_live_state(state: &LiveSessionState) -> TerminalSessionSummary {
@@ -1557,11 +1668,12 @@ fn spawn_terminal_reader(
 fn spawn_terminal_exit_watcher(
     manager: TerminalManager,
     session_id: String,
+    session: Arc<LiveSession>,
     mut child: Box<dyn PtyChild + Send + Sync>,
 ) {
     tokio::spawn(async move {
         let _ = tokio::task::spawn_blocking(move || child.wait()).await;
-        let _ = manager.mark_session_inactive(&session_id).await;
+        let _ = manager.mark_session_inactive(&session_id, &session).await;
     });
 }
 
@@ -1569,6 +1681,7 @@ fn spawn_terminal_exit_watcher(
 fn spawn_terminal_exit_watcher(
     manager: TerminalManager,
     session_id: String,
+    session: Arc<LiveSession>,
     process: Arc<StdMutex<conpty::Process>>,
 ) {
     tokio::spawn(async move {
@@ -1583,7 +1696,7 @@ fn spawn_terminal_exit_watcher(
             std::thread::sleep(std::time::Duration::from_millis(500));
         })
         .await;
-        let _ = manager.mark_session_inactive(&session_id).await;
+        let _ = manager.mark_session_inactive(&session_id, &session).await;
     });
 }
 
@@ -2022,6 +2135,8 @@ fn find_history_start_index_by_seq(history: &[TerminalStreamEvent], after_seq: i
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::shell_command;
     use super::{
         apply_thread_update, build_sandbox_info, intercept_terminal_queries, normalize_newlines,
         tmux_mode_from_env, ThreadUpdate,
@@ -2034,6 +2149,91 @@ mod tests {
     use terminal_v4_core::ThreadMetadata;
 
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
+
+    #[tokio::test]
+    async fn rewind_exclusion_blocks_terminal_creation_before_process_spawn() {
+        let folder = tempfile::tempdir().unwrap();
+        let manager = super::TerminalManager::new(terminal_v4_core::AppConfig {
+            data_dir: folder.path().join("app"),
+            ..Default::default()
+        });
+        let guard = crate::workspace_activity::exclusive(folder.path()).unwrap();
+        let result = manager
+            .create_session(
+                "owner",
+                super::TerminalCreateOptions {
+                    cwd: Some(folder.path().to_string_lossy().into_owned()),
+                    cols: None,
+                    rows: None,
+                    title: None,
+                    shell: None,
+                    sandbox_mode: None,
+                    sandbox_workspace_root: None,
+                    initial_command: None,
+                },
+            )
+            .await;
+        if let Ok(session) = &result {
+            let _ = manager.close("owner", &session.id).await;
+        }
+        drop(guard);
+        assert!(matches!(result,Err(error) if error.contains("rewind")));
+    }
+
+    #[tokio::test]
+    async fn suspend_stops_native_pty_and_preserves_owned_transcript() {
+        let folder = tempfile::tempdir().unwrap();
+        let manager = super::TerminalManager::new(terminal_v4_core::AppConfig {
+            data_dir: folder.path().join("app"),
+            ..Default::default()
+        });
+        let session = manager
+            .create_session(
+                "owner",
+                super::TerminalCreateOptions {
+                    cwd: Some(folder.path().to_string_lossy().into_owned()),
+                    cols: None,
+                    rows: None,
+                    title: None,
+                    shell: None,
+                    sandbox_mode: None,
+                    sandbox_workspace_root: None,
+                    initial_command: None,
+                },
+            )
+            .await
+            .unwrap();
+        let live = {
+            manager
+                .inner
+                .sessions
+                .lock()
+                .await
+                .get(&session.id)
+                .cloned()
+                .unwrap()
+        };
+        manager
+            .record_output(live.clone(), "persisted rewind marker".into())
+            .await
+            .unwrap();
+        assert!(!manager.suspend("other", &session.id).await.unwrap());
+        assert!(manager.has_live_workspace(&folder.path().join(".")).await);
+        assert!(manager.suspend("owner", &session.id).await.unwrap());
+        assert!(!manager.has_live_workspace(folder.path()).await);
+        let stored = super::load_persisted_session(&manager.inner.config, "owner", &session.id)
+            .unwrap()
+            .unwrap();
+        assert!(stored
+            .history
+            .iter()
+            .any(|event| event.text == "persisted rewind marker"));
+        assert!(
+            super::load_persisted_session(&manager.inner.config, "other", &session.id)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn normalize_newlines_matches_platform_terminal_conventions() {

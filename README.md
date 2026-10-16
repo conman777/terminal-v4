@@ -19,6 +19,22 @@ A browser-based terminal emulator that provides remote access to your system's c
 
 See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 
+## Agent workspace
+
+The [Hermes and T3 inspired workspace](docs/features/HERMES_T3_WORKSPACE.md)
+adds native Hermes and compatible API runtimes, Git review/worktrees/checkpoints,
+parallel tasks and schedules, saved/native history handoff, reviewed project
+knowledge, and [paired hosts with native conversation/files rewind](docs/features/PAIRED_ENVIRONMENTS_AND_REWIND.md). See [Hermes setup](docs/features/HERMES_RUNTIME.md) to configure the
+installed runtime before running model tasks.
+
+## Remote workspace
+
+The [remote workspace guide](docs/features/REMOTE_WORKSPACE.md) covers named devices,
+permission profiles, reconnect recovery, Windows background startup, resumable
+transfers, guest invitations, session replay, service tunnels, self-hosted relay
+connections and optional Windows desktop viewing/control. Use Environments for
+host features and Workspace tools for transfers, sharing and replay.
+
 ## Requirements
 
 - Node.js 18+ (Node.js 22 recommended for node-pty prebuilt compatibility)

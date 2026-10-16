@@ -336,22 +336,23 @@
   background: var(--bg-surface) !important;
   border: 1px solid var(--border-subtle) !important;
   border-radius: 12px !important;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.02) !important;
+  box-shadow: var(--shadow-sm) !important;
   transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 
 .status-composer-shell:focus-within {
   border-color: var(--accent-primary) !important;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.42), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
 }
 
 .status-composer-input {
-  color: #fff !important;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+  color: var(--text-primary) !important;
+  font-family: var(--font-ui) !important;
 }
 
 .status-composer-input::placeholder {
-  color: rgba(255, 255, 255, 0.3) !important;
+  color: var(--text-placeholder) !important;
+  opacity: 1;
 }
 
 .status-bar-right {
@@ -362,7 +363,7 @@
 .desktop-status-bar-shell.pane-active .status-composer-shell {
   background: var(--bg-base) !important;
   border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.42), 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  box-shadow: var(--shadow-sm) !important;
 }
 
 .desktop-status-bar-shell.pane-active .status-bar-right {

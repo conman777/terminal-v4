@@ -1,3 +1,4 @@
+import { resolveWebSocketUrl } from '../../utils/apiBase';
 import React, { useState, useEffect, useRef } from 'react';
 import { MetricCard } from './shared/MetricCard';
 import { apiFetch } from '../../utils/api';
@@ -37,11 +38,10 @@ export function PerformanceTab({ port }) {
   useEffect(() => {
     if (!isLive || notAvailable) return;
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const token = getAccessToken();
     if (!token) return;
     const params = new URLSearchParams({ token });
-    const wsUrl = `${protocol}//${window.location.host}/api/preview/${port}/performance/stream?${params.toString()}`;
+    const wsUrl = resolveWebSocketUrl(`/api/preview/${port}/performance/stream?${params.toString()}`);
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

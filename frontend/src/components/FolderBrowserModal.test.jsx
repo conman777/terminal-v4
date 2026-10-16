@@ -73,7 +73,7 @@ describe('FolderBrowserModal', () => {
     );
 
     await waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledTimes(1);
+      expect(apiFetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/fs/list'))).toHaveLength(1);
     });
 
     rerender(
@@ -89,7 +89,7 @@ describe('FolderBrowserModal', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Open here' })).toBeInTheDocument();
     });
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    expect(apiFetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/fs/list'))).toHaveLength(1);
   });
 
   it('passes the selected native agent, model, and reasoning into session creation', async () => {
@@ -178,7 +178,67 @@ describe('FolderBrowserModal', () => {
       undefined,
       undefined
     );
-    expect(onClose).toHaveBeenCalled();
-    expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(apiFetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/fs/list'))).toHaveLength(1);
+  });
+
+  it('applies saved project agent, model, and reasoning when opening that folder', async () => {
+    apiFetchMock.mockImplementation(async url => {
+      if (String(url).startsWith('/api/workspace/profile')) return {
+        ok: true, json: async () => ({ defaultAgent: 'claude', selection: { model: 'sonnet', reasoning: 'high' } }),
+      };
+      if (String(url).startsWith('/api/agent/catalog')) return {
+        ok: true, json: async () => ({ agents: [
+          { id: 'claude', label: 'Claude Code', status: 'ready', models: [{ id: 'sonnet', label: 'Sonnet' }], reasoningLevels: ['low', 'high'] },
+        ] }),
+      };
+      return { ok: true, json: async () => ({ path: '/projects/api', folders: [], parent: '/projects' }) };
+    });
+    const onSelect = vi.fn();
+    render(<FolderBrowserModal isOpen currentPath="/projects/api" recentFolders={[]} onClose={vi.fn()} onSelect={onSelect}
+      showAiSelector aiOptions={[{ id: 'cli', label: 'CLI' }, { id: 'claude', label: 'Claude Code' }]} />);
+    await screen.findByRole('button', { name: /Claude Code model Sonnet/ });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open here' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Open here' }));
+    expect(onSelect).toHaveBeenCalledWith('/projects/api', 'claude', '', { model: 'sonnet', reasoning: 'high' });
+  });
+
+  it('uses a recent destination project default rather than the current folder default', async () => {
+    apiFetchMock.mockImplementation(async url => {
+      if (String(url).startsWith('/api/workspace/profile')) return {
+        ok: true, json: async () => String(url).includes(encodeURIComponent('/projects/recent'))
+          ? { defaultAgent: 'claude', selection: { model: 'sonnet', reasoning: 'high' } }
+          : { defaultAgent: '' },
+      };
+      return { ok: true, json: async () => ({ path: '/projects/api', folders: [], parent: '/projects' }) };
+    });
+    const onSelect = vi.fn();
+    render(<FolderBrowserModal isOpen currentPath="/projects/api" recentFolders={['/projects/recent']} onClose={vi.fn()} onSelect={onSelect}
+      showAiSelector aiOptions={[{ id: 'cli', label: 'CLI' }, { id: 'claude', label: 'Claude Code' }]} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open here' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'recent' }));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith('/projects/recent', 'claude', '', { model: 'sonnet', reasoning: 'high' }));
+  });
+
+  it('does not launch a recent project if the picker closes while defaults are loading', async () => {
+    let finishRecent;
+    apiFetchMock.mockImplementation(async url => {
+      if (String(url).startsWith('/api/workspace/profile') && String(url).includes(encodeURIComponent('/projects/recent'))) {
+        return await new Promise(resolve => { finishRecent = resolve; });
+      }
+      if (String(url).startsWith('/api/workspace/profile')) return { ok: true, json: async () => ({ defaultAgent: '' }) };
+      return { ok: true, json: async () => ({ path: '/projects/api', folders: [], parent: '/projects' }) };
+    });
+    const onSelect = vi.fn();
+    const props = { currentPath: '/projects/api', recentFolders: ['/projects/recent'], onClose: vi.fn(), onSelect,
+      showAiSelector: true, aiOptions: [{ id: 'cli', label: 'CLI' }] };
+    const { rerender } = render(<FolderBrowserModal {...props} isOpen />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open here' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'recent' }));
+    await waitFor(() => expect(finishRecent).toBeTypeOf('function'));
+    rerender(<FolderBrowserModal {...props} isOpen={false} />);
+    finishRecent({ ok: true, json: async () => ({ defaultAgent: 'cli' }) });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

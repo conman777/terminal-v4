@@ -134,3 +134,29 @@ describe('aiProviders', () => {
     expect(inferSessionAiType({ shell: 'pwsh', title: 'Gemini CLI' })).toBe('gemini');
   });
 });
+
+describe('Hermes native runtime', () => {
+  it('is available as a native agent and preserves model and reasoning arguments', () => {
+    expect(NEW_TAB_AI_OPTIONS.some(option => option.id === 'hermes')).toBe(true);
+    expect(getAiInitialCommand('hermes')).toBe('hermes');
+    expect(buildAgentLaunchCommand({ agent: 'hermes', model: 'provider/model', reasoning: 'high' })).toBe("hermes --model 'provider/model' --reasoning 'high'");
+  });
+});
+
+
+describe('host native launchers', () => {
+  const launcher = '"C:\\Program Files\\Hermes\\hermes.exe"';
+  it('uses an installed native executable and its configured default model', () => {
+    expect(buildAgentLaunchCommand({ agent: 'hermes', model: '', launchCommand: launcher, hostShell: 'cmd' })).toBe(launcher);
+    expect(buildAgentLaunchCommand({ agent: 'hermes', model: 'nous/model:v1', launchCommand: launcher, hostShell: 'cmd' }))
+      .toBe(launcher + ' --model "nous/model:v1"');
+  });
+  it.each(['a%PATH%', 'a!USER!', 'a" & echo bad', 'a^b', 'a&b', 'a|b', 'a\nnext', 'a\u001bb'])('rejects unsafe Windows model %s', model => {
+    expect(() => buildAgentLaunchCommand({ agent: 'hermes', model, launchCommand: launcher, hostShell: 'cmd' })).toThrow(/invalid/i);
+  });
+  it('uses Windows arguments for Codex reasoning and refuses unavailable adapters', () => {
+    expect(buildAgentLaunchCommand({ agent: 'codex', model: 'gpt-model', reasoning: 'high', hostShell: 'cmd', launchCommand: '"C:\\tools\\codex.cmd"' }))
+      .toBe('"C:\\tools\\codex.cmd" --model "gpt-model" --config "model_reasoning_effort=\'high\'"');
+    expect(() => buildAgentLaunchCommand({ agent: 'hermes', available: false })).toThrow(/unavailable/i);
+  });
+});

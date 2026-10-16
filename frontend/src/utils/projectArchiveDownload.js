@@ -1,3 +1,4 @@
+import { resolveApiUrl } from './apiBase';
 import { getAccessToken } from './auth';
 
 export function downloadProjectArchive(projectPath) {
@@ -10,6 +11,6 @@ export function downloadProjectArchive(projectPath) {
     params.set('token', token);
   }
 
-  window.location.href = `/api/fs/download?${params.toString()}`;
+  window.location.href = resolveApiUrl(`/api/fs/download?${params.toString()}`);
   return true;
 }

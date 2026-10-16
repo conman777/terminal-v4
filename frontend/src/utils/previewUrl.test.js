@@ -1,3 +1,4 @@
+import { setActiveEnvironment } from './remoteEnvironments';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./api', () => ({
@@ -72,5 +73,14 @@ describe('toPreviewUrl', () => {
 
   it('returns null for non-preview host URLs in path fallback helper', () => {
     expect(toPathPreviewFallbackUrl('http://localhost:5173/app')).toBeNull();
+  });
+});
+
+describe('paired environment previews', () => {
+  it('routes development servers through the selected host and never attaches home auth to an external origin', () => {
+    setActiveEnvironment({ id: 'remote-a' });
+    try {
+      expect(toPreviewUrl('http://localhost:5173/app')).toBe('/api/environments/remote-a/proxy/preview/5173/app');
+    } finally { setActiveEnvironment(null); }
   });
 });

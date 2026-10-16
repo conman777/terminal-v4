@@ -1,15 +1,26 @@
 import { getAccessToken, clearTokens, refreshTokens, getAuthInitializing } from './auth';
-import { resolveApiUrl } from './apiBase';
+import { resolveApiBase, resolveApiUrl, resolveHomeApiUrl } from './apiBase';
+import { getEnvironmentSignal, routeEnvironmentPath } from './remoteEnvironments';
 
 export async function apiFetch(url, options = {}) {
+  const { home: homeRequest = false, ...fetchOptions } = options;
+  const fullUrl = homeRequest ? resolveHomeApiUrl(url) : resolveApiUrl(url);
+  const target = new URL(fullUrl, window.location.origin);
+  const home = new URL(resolveApiBase() || window.location.origin, window.location.origin);
+  if (target.origin !== home.origin) throw new Error('API requests must use the home server');
+  const environmentSignal = !homeRequest && routeEnvironmentPath(url) !== url ? getEnvironmentSignal() : null;
   const accessToken = getAccessToken();
   const requestOptions = {
-    ...options,
+    ...fetchOptions,
     headers: {
       ...options.headers,
     }
   };
 
+  if (environmentSignal) {
+    requestOptions.signal = options.signal
+      ? AbortSignal.any([options.signal, environmentSignal]) : environmentSignal;
+  }
   const headers = requestOptions.headers;
 
   if (accessToken) {
@@ -21,7 +32,6 @@ export async function apiFetch(url, options = {}) {
     requestOptions.body = JSON.stringify(requestOptions.body);
   }
 
-  const fullUrl = resolveApiUrl(url);
   let response = await fetch(fullUrl, requestOptions);
 
   // Handle 401 - try to refresh token
@@ -34,6 +44,7 @@ export async function apiFetch(url, options = {}) {
     try {
       // Use centralized refresh to avoid race conditions
       const result = await refreshTokens();
+      environmentSignal?.throwIfAborted();
       headers['Authorization'] = `Bearer ${result.accessToken}`;
       response = await fetch(fullUrl, requestOptions);
     } catch (err) {
@@ -51,8 +62,8 @@ export async function apiFetch(url, options = {}) {
   return response;
 }
 
-export async function apiGet(url) {
-  const response = await apiFetch(url);
+export async function apiGet(url, options) {
+  const response = await apiFetch(url, options);
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }));
     throw new Error(error.error || 'Request failed');
@@ -90,8 +101,9 @@ export async function apiPut(url, body) {
   return response.json();
 }
 
-export async function apiPatch(url, body) {
+export async function apiPatch(url, body, options) {
   const response = await apiFetch(url, {
+    ...options,
     method: 'PATCH',
     body
   });

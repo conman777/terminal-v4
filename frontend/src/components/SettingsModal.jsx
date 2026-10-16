@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useState, useRef, useEffect } from 'react';
 import { FolderBrowserModal } from './FolderBrowserModal';
 import { getAccessToken } from '../utils/auth';
@@ -376,7 +377,8 @@ export function SettingsModal({
                       type="button"
                       className="btn-secondary btn-small"
                       onClick={onOpenProcessManager}
-                      disabled={!onOpenProcessManager}
+                      disabled={Boolean(getActiveEnvironment()) || !onOpenProcessManager}
+                      title={getActiveEnvironment() ? 'Available on the owning server directly' : undefined}
                     >
                       Open Process Manager
                     </button>

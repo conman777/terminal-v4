@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useCallback, useEffect } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
@@ -94,10 +95,10 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
     <button
       type="button"
       onClick={toggleRecording}
-      disabled={disabled || isTranscribing || isRequesting || isChecking}
+      disabled={Boolean(getActiveEnvironment()) || disabled || isTranscribing || isRequesting || isChecking}
       className={buttonClasses}
       aria-label={ariaLabel}
-      title={ariaLabel}
+      title={getActiveEnvironment() ? 'Voice transcription is available on the owning server directly' : ariaLabel}
     >
       {isTranscribing ? (
         <span className="mic-loading">...</span>

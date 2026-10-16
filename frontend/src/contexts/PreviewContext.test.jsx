@@ -1,3 +1,5 @@
+import { setActiveEnvironment, getEnvironmentStorage } from '../utils/remoteEnvironments';
+import { apiFetch } from '../utils/api';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreviewProvider, usePreview } from './PreviewContext';
@@ -57,11 +59,14 @@ describe('PreviewContext', () => {
   let originalWindow;
 
   beforeEach(() => {
+    setActiveEnvironment(null);
+    vi.clearAllMocks();
     originalWindow = window;
     localStorage.clear();
   });
 
   afterEach(() => {
+    setActiveEnvironment(null);
     vi.stubGlobal('window', originalWindow);
     localStorage.clear();
   });
@@ -97,4 +102,12 @@ describe('PreviewContext', () => {
       expect(screen.getByTestId('preview-url')).toHaveTextContent('/preview/5173/app');
     });
   });
+  it('uses remote preview preferences locally without requesting account settings or host preview configuration', async () => {
+    setActiveEnvironment({id:'remote'});
+    render(<PreviewProvider><PreviewConsumer /></PreviewProvider>);
+    fireEvent.click(screen.getByRole('button',{name:'set-valid-preview'}));
+    await waitFor(()=>expect(screen.getByTestId('preview-url')).toHaveTextContent('/preview/5173/app'));
+    expect([apiFetch.mock.calls,getEnvironmentStorage().getItem('terminal_preview_prefer_path_based')]).toEqual([[],'true']);
+  });
+
 });

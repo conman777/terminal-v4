@@ -101,7 +101,10 @@ describe('PreviewPanel', () => {
   beforeEach(() => {
     previewUrlBarSpy.mockClear();
     terminalChatSpy.mockClear();
-    apiFetchMock.mockClear();
+    apiFetchMock.mockReset().mockImplementation(async input => ({
+      ok: true,
+      json: async () => String(input).includes('/api/preview/active-ports') ? { ports: activePortsResponse } : {},
+    }));
     uploadScreenshotMock.mockReset();
     uploadScreenshotMock.mockResolvedValue('C:/tmp/preview image.png');
     isMobile = false;

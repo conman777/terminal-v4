@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { MobileDrawer } from './MobileDrawer';
 import { ContextMenu } from './ContextMenu';
@@ -301,6 +302,8 @@ export function MobileHeader({
     },
     {
       label: 'Process Manager',
+      disabled: Boolean(getActiveEnvironment()),
+      title: getActiveEnvironment() ? 'Available on the owning server directly' : undefined,
       icon: (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />

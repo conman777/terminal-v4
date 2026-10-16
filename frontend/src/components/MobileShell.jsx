@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { environmentAllows } from '../utils/runtimePermissions';
+import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { resolveAgentLaunchCommand } from '../utils/agentLauncher';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { LazyTerminalChat } from './LazyTerminalChat';
 import { LazyDesktopConversationView } from './LazyDesktopConversationView';
+import { WorkspaceToolsButton } from './WorkspaceToolsButton';
+import { latestWorkspaceResponse } from '../utils/workspaceResponse';
+import { WorkspaceProfileButton } from './WorkspaceProfileButton';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { MobileKeybar } from './MobileKeybar';
 import { WorkspaceStartView } from './WorkspaceStartView';
@@ -42,6 +48,7 @@ export function MobileShell({
   sessions = [],
   activeSessionId = null,
   onSelectSession,
+  onSelectHistorySession,
   onCreateSession,
   onSubmitPrompt,
   onAddWorkspace,
@@ -84,6 +91,10 @@ export function MobileShell({
     [activeSessionId, sessions]
   );
   const isStructuredSession = isStructuredSessionId(currentSession?.id);
+  const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
+  const terminalInputAllowed = environmentAllows(environment, 'terminalInput');
+  const agentExecutionAllowed = environmentAllows(environment, 'agentExecute');
+  const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const inferredAiType = currentSession ? (sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
   const aiOptions = useMemo(
     () => getAiTypeOptions(customAiProviders),
@@ -252,7 +263,7 @@ export function MobileShell({
   }, []);
 
   const handleComposerSubmit = useCallback((text) => {
-    if (!currentSession?.id) return;
+    if (!currentSession?.id || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
     const trimmed = typeof text === 'string' ? text.trim() : '';
     const attachmentPaths = composerAttachments
       .map((attachment) => attachment?.path)
@@ -262,11 +273,11 @@ export function MobileShell({
     const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
     if (!payload) return;
 
-    const result = handleChatSend(payload);
+    const result = isStructuredSession ? structuredSendMessage(payload) : handleChatSend(payload);
     setComposerValue('');
     setComposerAttachments([]);
     setTransportNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
-  }, [composerAttachments, currentSession?.id, handleChatSend]);
+  }, [composerAttachments, currentSession?.id, handleChatSend, isStructuredSession, structuredSendMessage]);
 
   const handleComposerAttachmentAdd = useCallback((attachment) => {
     if (!attachment?.path) return;
@@ -280,11 +291,13 @@ export function MobileShell({
     setComposerAttachments((current) => current.filter((attachment) => attachment.path !== pathToRemove));
   }, []);
 
-  const launchAiType = useCallback((aiTypeToLaunch, commandOverride = null) => {
-    const nextLaunchCommand = commandOverride || getAiInitialCommand(aiTypeToLaunch, customAiProviders);
-    if (!nextLaunchCommand) return;
-    const result = handleChatSend(nextLaunchCommand);
-    setTransportNotice(result?.queued ? 'Terminal is still connecting. Launch command queued.' : '');
+  const launchAiType = useCallback(async (aiTypeToLaunch, commandOverride = null) => {
+    try {
+      const nextLaunchCommand = commandOverride || await resolveAgentLaunchCommand(aiTypeToLaunch, null, customAiProviders);
+      if (!nextLaunchCommand) return;
+      const result = handleChatSend(nextLaunchCommand);
+      setTransportNotice(result?.queued ? 'Terminal is still connecting. Launch command queued.' : '');
+    } catch (error) { setTransportNotice(error.message || 'Unable to start this agent'); }
   }, [customAiProviders, handleChatSend]);
 
   const handleLaunchAgent = useCallback(() => {
@@ -346,9 +359,9 @@ export function MobileShell({
                     turns={isStructuredSession ? [] : turns}
                     isStreaming={isStructuredSession ? structuredIsStreaming : isTerminalBusy}
                     isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
-                    onSend={isStructuredSession ? structuredSendMessage : handleChatSend}
-                    onSendRaw={handleRawSend}
-                    onInterrupt={isStructuredSession ? structuredInterrupt : handleInterrupt}
+                    onSend={sessionInputAllowed ? (isStructuredSession ? structuredSendMessage : handleChatSend) : undefined}
+                    onSendRaw={sessionInputAllowed ? handleRawSend : undefined}
+                    onInterrupt={sessionInputAllowed ? (isStructuredSession ? structuredInterrupt : handleInterrupt) : undefined}
                     onImageUpload={handleImageUpload}
                     sessionId={currentSession.id}
                     aiType={currentAiType}
@@ -358,7 +371,7 @@ export function MobileShell({
                     terminalScreenSnapshot={terminalScreenSnapshot}
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={false}
-                    onLaunchAgent={isStructuredSession ? undefined : handleLaunchAgent}
+                    onLaunchAgent={!isStructuredSession && terminalInputAllowed && agentExecutionAllowed ? handleLaunchAgent : undefined}
                     onOpenTerminal={isStructuredSession || isTerminalBackedSession ? handleOpenTerminalPanel : undefined}
                     conversationNotice={transportNotice}
                     showTerminalMirror={isTerminalDockVisible}
@@ -368,7 +381,7 @@ export function MobileShell({
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
-                    onApprove={structuredApprove}
+                    onApprove={agentExecutionAllowed ? structuredApprove : undefined}
                   />
                 </div>
               ) : null}
@@ -388,7 +401,7 @@ export function MobileShell({
                       onUrlDetected={onUrlDetected}
                       fontSize={fontSize}
                       webglEnabled={webglEnabled}
-                      inputEnabled={useTerminalFirstLayout || (isStructuredSession && isTerminalPanelOpen)}
+                      inputEnabled={terminalInputAllowed && (useTerminalFirstLayout || (isStructuredSession && isTerminalPanelOpen))}
                       usesTmux={currentSession?.usesTmux}
                       isPrimary={isTerminalDockVisible}
                       onRegisterImageUpload={(trigger) => {
@@ -431,19 +444,35 @@ export function MobileShell({
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
-                composerPlaceholder="Ask V4 anything"
-                composerDisabled={!currentSession.id}
+                composerPlaceholder={sessionInputAllowed ? "Ask V4 anything" : "Read-only remote session"}
+                composerDisabled={!currentSession.id || !sessionInputAllowed}
                 runtimeInfo={runtimeInfo}
                 gitBranches={gitBranchInfo?.branches || []}
                 currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
                 isLoadingGitBranches={isLoadingGitBranches}
                 isSwitchingGitBranch={isSwitchingGitBranch}
-                onSelectGitBranch={handleSelectGitBranch}
+                onSelectGitBranch={environmentAllows(environment, 'fileWrite') ? handleSelectGitBranch : undefined}
+                composerSecondaryAction={<>
+                  <WorkspaceToolsButton
+                    workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
+                    currentSessionId={currentSession?.id}
+                    latestAssistantText={latestWorkspaceResponse(isStructuredSession ? structuredMessages : turns, isStructuredSession ? structuredIsStreaming : isTerminalBusy)}
+                    onStartTask={onCreateSession}
+                    onSelectSession={onSelectHistorySession}
+                    onInsertPrompt={currentAiType || isStructuredSession ? prompt => setComposerValue(prompt) : undefined}
+                  />
+                  <WorkspaceProfileButton
+                  workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
+                  aiOptions={aiOptions}
+                  onInsertContext={currentAiType || isStructuredSession ? context => setComposerValue(value =>
+                    context + (value.trim() ? '\n\nTask:\n' + value : '')) : undefined}
+                /></>}
               />
             </div>
           </div>
         ) : (
           <WorkspaceStartView
+            onSelectHistorySession={onSelectHistorySession}
             currentPath={projectInfo?.cwd || ''}
             onCreateSession={onCreateSession}
             onSubmitPrompt={onSubmitPrompt}
@@ -452,7 +481,7 @@ export function MobileShell({
         )}
       </section>
 
-      {currentSession?.id && isTerminalDockVisible ? (
+      {currentSession?.id && isTerminalDockVisible && terminalInputAllowed ? (
         <MobileKeybar
           sessionId={currentSession.id}
           isOpen={accessoryOpen}

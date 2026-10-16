@@ -1,3 +1,5 @@
+import { getActiveEnvironment, getEnvironmentStorage } from '../utils/remoteEnvironments';
+import { resolveApiUrl } from '../utils/apiBase';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useMobileDetect } from '../hooks/useMobileDetect';
 import { toPreviewUrl, toPathPreviewFallbackUrl, withAuthToken, extractPortFromUrl } from '../utils/previewUrl';
@@ -121,9 +123,9 @@ function formatElementForTerminal(element) {
   return parts.join(' | ');
 }
 
-function readPreviewStorage() {
+function readPreviewStorage(storage) {
   try {
-    const raw = localStorage.getItem(PREVIEW_STORAGE_KEY);
+    const raw = storage.getItem(PREVIEW_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return {};
@@ -133,13 +135,13 @@ function readPreviewStorage() {
   }
 }
 
-function writePreviewStorage(data) {
+function writePreviewStorage(storage, data) {
   try {
     const payload = JSON.stringify(data);
     if (payload.length > PREVIEW_STORAGE_MAX_BYTES) {
       return false;
     }
-    localStorage.setItem(PREVIEW_STORAGE_KEY, payload);
+    storage.setItem(PREVIEW_STORAGE_KEY, payload);
     return true;
   } catch {
     return false;
@@ -225,6 +227,7 @@ function classifyPreviewMode(iframeSrc, useWebContainer) {
 }
 
 export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartProject, onSendToTerminal, onSendToClaudeCode, activeSessions = [], activeSessionId, sessionActivity = {}, onSessionBusyChange, fontSize = 14, webglEnabled, onUrlDetected, mainTerminalMinimized = false, onToggleMainTerminal, showStatusLabels = false }) {
+  const storage = useMemo(() => getEnvironmentStorage(), []);
   const isMobile = useMobileDetect();
   const uiPort = useMemo(() => {
     if (typeof window === 'undefined') return 3020;
@@ -246,7 +249,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [showDevTools, setShowDevTools] = useState(() => {
     if (isMobile) return false;
     try {
-      const stored = localStorage.getItem(DEVTOOLS_VISIBLE_KEY);
+      const stored = storage.getItem(DEVTOOLS_VISIBLE_KEY);
       if (stored === null) return false;
       return stored === 'true';
     } catch {
@@ -256,7 +259,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [compactChrome, setCompactChrome] = useState(() => {
     if (isMobile) return false;
     try {
-      const stored = localStorage.getItem(PREVIEW_CHROME_COMPACT_KEY);
+      const stored = storage.getItem(PREVIEW_CHROME_COMPACT_KEY);
       if (stored === null) return true;
       return stored === 'true';
     } catch {
@@ -266,7 +269,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [desktopMobileView, setDesktopMobileView] = useState(() => {
     if (isMobile) return false;
     try {
-      const stored = localStorage.getItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY);
+      const stored = storage.getItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY);
       if (stored === null) return false;
       return stored === 'true';
     } catch {
@@ -315,7 +318,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const [browserSplitEnabled, setBrowserSplitEnabled] = useState(!isMobile);
   const [browserSplitPosition, setBrowserSplitPosition] = useState(() => {
     try {
-      const stored = localStorage.getItem('browser_split_position_v1');
+      const stored = storage.getItem('browser_split_position_v1');
       if (!stored) return DESKTOP_BROWSER_SPLIT_DEFAULT;
       const parsed = parseInt(stored, 10);
       // Validate range (10-90%)
@@ -327,7 +330,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   });
   const [devToolsHeight, setDevToolsHeight] = useState(() => {
     try {
-      const stored = Number.parseInt(localStorage.getItem(DEVTOOLS_HEIGHT_KEY) || '', 10);
+      const stored = Number.parseInt(storage.getItem(DEVTOOLS_HEIGHT_KEY) || '', 10);
       if (!Number.isFinite(stored)) return 220;
       if (stored < 140 || stored > 900) return 220;
       return stored;
@@ -337,7 +340,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   });
   const [terminalPosition, setTerminalPosition] = useState(() => {
     try {
-      const stored = localStorage.getItem('browser_terminal_position_v1');
+      const stored = storage.getItem('browser_terminal_position_v1');
       return stored === 'left' ? 'left' : 'right';
     } catch {
       return 'right';
@@ -345,7 +348,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   });
   const [selectedTerminalSession, setSelectedTerminalSession] = useState(() => {
     try {
-      return localStorage.getItem(MOBILE_SPLIT_SESSION_KEY);
+      return storage.getItem(MOBILE_SPLIT_SESSION_KEY);
     } catch {
       return null;
     }
@@ -430,17 +433,17 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   // Mobile view mode state ('preview' | 'terminal')
   const [mobileViewMode, setMobileViewMode] = useState(() => {
     try {
-      const stored = localStorage.getItem(MOBILE_VIEW_MODE_KEY);
+      const stored = storage.getItem(MOBILE_VIEW_MODE_KEY);
       if (MOBILE_VIEW_MODES.has(stored)) return stored;
       // Migration from old boolean key
-      if (localStorage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true') return 'split';
+      if (storage.getItem(MOBILE_SPLIT_ENABLED_KEY) === 'true') return 'split';
       return 'preview';
     } catch { return 'preview'; }
   });
   const mobileSplitEnabled = mobileViewMode === 'split';
   const [mobileSplitHeight, setMobileSplitHeight] = useState(() => {
     try {
-      const stored = Number.parseFloat(localStorage.getItem(MOBILE_SPLIT_HEIGHT_KEY) || '');
+      const stored = Number.parseFloat(storage.getItem(MOBILE_SPLIT_HEIGHT_KEY) || '');
       return Number.isFinite(stored) ? stored : 320;
     } catch {
       return 320;
@@ -564,7 +567,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch(`/api/preview/${previewPort}/cookies`, { headers });
+        const res = await apiFetch(`/api/preview/${previewPort}/cookies`, { headers });
         const data = await res.json();
         if (disposed) return false;
         setHasCookies(data.hasCookies);
@@ -608,7 +611,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       const currentIframeSrc = iframeSrcRef.current || baseIframeSrc;
       const token = getAccessToken();
       const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-      await fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
+      await apiFetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers });
 
       // Only update state if iframe src hasn't changed during the async operation
       if (currentIframeSrc === (iframeSrcRef.current || baseIframeSrcRef.current)) {
@@ -638,8 +641,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       const clearPromises = [];
       if (previewPort) {
         clearPromises.push(
-          fetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers }).catch(() => {}),
-          fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers }).catch(() => {})
+          apiFetch(`/api/preview/${previewPort}/cookies`, { method: 'DELETE', headers }).catch(() => {}),
+          apiFetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers }).catch(() => {})
         );
       }
       await Promise.all(clearPromises);
@@ -681,7 +684,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch('/api/preview/active-ports', { headers });
+        const res = await apiFetch('/api/preview/active-ports', { headers });
         if (res.ok) {
           const data = await res.json();
           if (disposed) return false;
@@ -726,7 +729,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const res = await fetch('/api/preview/active-ports', { headers });
+        const res = await apiFetch('/api/preview/active-ports', { headers });
         if (!res.ok || disposed) return;
         const data = await res.json();
         if (disposed) return;
@@ -810,7 +813,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         types,
         since: String(Math.max(0, since))
       });
-      eventSource = new EventSource(`/api/preview/${previewPort}/log-stream?${params.toString()}`);
+      eventSource = new EventSource(resolveApiUrl(`/api/preview/${previewPort}/log-stream?${params.toString()}`));
 
       eventSource.addEventListener('proxy', (event) => {
         if (disposed) return;
@@ -963,7 +966,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       } else if (event.data?.type === 'preview-storage-request') {
         const requestedPort = parseInt(event.data.port, 10);
         if (!requestedPort || requestedPort !== previewPort) return;
-        const allStorage = readPreviewStorage();
+        const allStorage = readPreviewStorage(storage);
         const stored = allStorage[requestedPort] || {};
         const localSnapshot = normalizeStorageSnapshot(stored.local);
         const sessionSnapshot = normalizeStorageSnapshot(stored.session);
@@ -985,9 +988,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
           localStorage: localSnapshot,
           sessionStorage: sessionSnapshot
         }));
-        const allStorage = readPreviewStorage();
+        const allStorage = readPreviewStorage(storage);
         allStorage[syncPort] = { local: localSnapshot, session: sessionSnapshot };
-        writePreviewStorage(allStorage);
+        writePreviewStorage(storage, allStorage);
       } else if (event.data?.type === 'preview-send-to-terminal') {
         if (event.data.element) {
           void sendElementToActiveTerminal(event.data.element);
@@ -1055,8 +1058,8 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         // Clear client-side logs and proxy logs (process logs are not clearable)
         await Promise.all([
-          fetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE', headers }),
-          fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers })
+          apiFetch(`/api/preview/${previewPort}/logs`, { method: 'DELETE', headers }),
+          apiFetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers })
         ]);
       } catch {
         // Ignore
@@ -1071,7 +1074,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       try {
         const token = getAccessToken();
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        await fetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers });
+        await apiFetch(`/api/preview/${previewPort}/proxy-logs`, { method: 'DELETE', headers });
       } catch {
         // Ignore
       }
@@ -1778,7 +1781,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       setBrowserSplitPosition((position) => {
         const next = Math.max(position, DESKTOP_BROWSER_SPLIT_DEFAULT);
         try {
-          localStorage.setItem('browser_split_position_v1', String(Math.round(next)));
+          storage.setItem('browser_split_position_v1', String(Math.round(next)));
         } catch {
           // Ignore localStorage persistence failures
         }
@@ -1793,7 +1796,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         // Keep terminal wide enough in debug mode so wrapped logs/prompts stay readable.
         const next = Math.min(Math.max(position, 52), 60);
         try {
-          localStorage.setItem('browser_split_position_v1', String(Math.round(next)));
+          storage.setItem('browser_split_position_v1', String(Math.round(next)));
         } catch {
           // Ignore localStorage persistence failures
         }
@@ -1811,7 +1814,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     setTerminalPosition(prev => {
       const newPos = prev === 'right' ? 'left' : 'right';
       try {
-        localStorage.setItem('browser_terminal_position_v1', newPos);
+        storage.setItem('browser_terminal_position_v1', newPos);
       } catch {}
       return newPos;
     });
@@ -1854,7 +1857,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       // Save final position to localStorage
       setBrowserSplitPosition(pos => {
         try {
-          localStorage.setItem('browser_split_position_v1', String(Math.round(pos)));
+          storage.setItem('browser_split_position_v1', String(Math.round(pos)));
         } catch {}
         return pos;
       });
@@ -1906,9 +1909,9 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (typeof window === 'undefined') return;
     if (isMobile) return;
     try {
-      localStorage.setItem(DEVTOOLS_VISIBLE_KEY, String(showDevTools));
-      localStorage.setItem(PREVIEW_CHROME_COMPACT_KEY, String(compactChrome));
-      localStorage.setItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY, String(desktopMobileView));
+      storage.setItem(DEVTOOLS_VISIBLE_KEY, String(showDevTools));
+      storage.setItem(PREVIEW_CHROME_COMPACT_KEY, String(compactChrome));
+      storage.setItem(PREVIEW_DESKTOP_MOBILE_VIEW_KEY, String(desktopMobileView));
     } catch {
       // Ignore localStorage persistence failures
     }
@@ -1918,7 +1921,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
     if (typeof window === 'undefined') return;
     if (isMobile) return;
     try {
-      localStorage.setItem(DEVTOOLS_HEIGHT_KEY, String(Math.round(devToolsHeight)));
+      storage.setItem(DEVTOOLS_HEIGHT_KEY, String(Math.round(devToolsHeight)));
     } catch {
       // Ignore localStorage persistence failures
     }
@@ -2064,7 +2067,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   const handleSetMobileViewMode = useCallback((mode) => {
     const nextMode = normalizeMobileViewMode(mode);
     setMobileViewMode(nextMode);
-    try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, nextMode); } catch {}
+    try { storage.setItem(MOBILE_VIEW_MODE_KEY, nextMode); } catch {}
     if (nextMode !== 'terminal') setShowMobileToolsMenu(false);
     // Keep view mode controls accessible when switching between mobile layouts.
     setShowLogs(false);
@@ -2189,7 +2192,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       // Auto-switch to preview when last session closes
       if (mobileViewMode !== 'preview') {
         setMobileViewMode('preview');
-        try { localStorage.setItem(MOBILE_VIEW_MODE_KEY, 'preview'); } catch {}
+        try { storage.setItem(MOBILE_VIEW_MODE_KEY, 'preview'); } catch {}
       }
       return;
     }
@@ -2199,10 +2202,10 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
   useEffect(() => {
     if (!isMobile) return;
     try {
-      localStorage.setItem(MOBILE_VIEW_MODE_KEY, mobileViewMode);
-      localStorage.setItem(MOBILE_SPLIT_HEIGHT_KEY, String(Math.round(clampMobileSplitHeight(mobileSplitHeight))));
+      storage.setItem(MOBILE_VIEW_MODE_KEY, mobileViewMode);
+      storage.setItem(MOBILE_SPLIT_HEIGHT_KEY, String(Math.round(clampMobileSplitHeight(mobileSplitHeight))));
       if (selectedTerminalSession) {
-        localStorage.setItem(MOBILE_SPLIT_SESSION_KEY, selectedTerminalSession);
+        storage.setItem(MOBILE_SPLIT_SESSION_KEY, selectedTerminalSession);
       }
     } catch {
       // Ignore localStorage persistence failures on restricted browsers
@@ -3530,7 +3533,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
         toolsMenuRef={toolsMenuRef}
         inspectMode={inspectMode}
         onToggleInspect={handleToggleInspect}
-        webContainerSupported={webContainerSupported}
+        webContainerSupported={Boolean(webContainerSupported) && !getActiveEnvironment()}
         onToggleWebContainer={() => setUseWebContainer(!useWebContainer)}
         onOpenExternal={handleOpenExternal}
         hasCookies={hasCookies}

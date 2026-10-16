@@ -439,3 +439,82 @@ Development:
 Production:
 - Build frontend (`frontend/dist`)
 - Rust Axum serves static assets and SPA fallback
+
+## Workspace knowledge and project defaults
+
+The Rust API stores user- and directory-scoped workspace profiles as bounded JSON
+files in the application data directory. Authenticated GET/PUT routes canonicalize
+the selected workspace and use hashed user/directory keys; saves replace files
+atomically. The React workspace editor is shared by desktop, mobile, and
+new-session surfaces. Selected notes and skills are copied into an editable
+prompt before sending. New-session agent/model defaults resolve by directory,
+with manual selection taking precedence. Launch commands are obtained from the
+live provider catalog.
+
+See [Workspace feature guide](../features/HERMES_T3_WORKSPACE.md) for the data
+contract, source inspection, limits, and current scope.
+
+
+## Agent workspace orchestration
+
+The active Rust host exposes agent catalog/authentication routes and workspace
+modules for profiles, staged learning proposals, installed skill discovery, Git
+worktrees/checkpoints, saved-body search, native history import, and durable
+tasks/schedules. The React workspace tools dialog is shared by desktop and mobile.
+
+Provider commands are built with argv APIs for background execution. Windows npm
+Codex resolves through Node plus its installed script; catalog launcher metadata
+also identifies the host shell for interactive PTYs. Native authentication is
+reported as unknown until the native runtime verifies it. API credentials remain
+encrypted in the existing owner-scoped vault.
+
+A single queue worker registration owns each data directory. It claims at most
+three distinct canonical workspaces, persists intent and transitions, contains
+child process trees, and recovers interrupted runs and completion receipts.
+Graceful shutdown signals workers before the server runtime exits. Separate
+worktrees allow parallel file changes without sharing one working directory.
+
+Checkpoints use private Git indexes/hidden refs and guarded file restore; provider
+conversation state is independent. Archive retains checkout files. Imported
+native transcripts are owned snapshots and portable text context, not native
+runtime sessions. Existing browser preview and developer tooling remain the
+application's inspection surface.
+
+Compatible API providers run through a same-binary agent CLI bridge. The
+interactive launcher contains only provider/model choices and an encoded owner
+identifier; it resolves the encrypted owner credential at child startup and
+injects it into an environment-cleared Hermes process. Background tasks call the
+same owner-aware command builder directly. Account/provider profile homes are
+separate from the operator's native Hermes home. Unmapped adapters stay disabled.
+
+
+## Paired hosts and native conversation rewind
+
+The authenticated home server owns paired-host records and encrypted outbound
+runtime credentials. Destination one-use code exchange issues a revocable,
+expiring grant bound to the destination account. Browser runtime traffic stays
+on the home origin through an allowlisted HTTP/WebSocket proxy; the home identity
+is never reused as a remote login. Workspace state and client persistence are
+partitioned by environment, and switching remounts the runtime workspace.
+
+Conversation rewind coordinates existing private-index Git checkpoints with
+real Claude/Codex/Hermes native branching. An owner-scoped durable operation
+journal records native boundaries, source fingerprints, selected files and
+recovery checkpoints. Managed-worktree and active-process checks run before
+mutation. Resume creates an app terminal for the native fork. Partial failures
+retain explicit recovery state instead of presenting a cosmetic transcript
+rollback. See [feature workflow](../features/PAIRED_ENVIRONMENTS_AND_REWIND.md).
+
+## Remote workspace runtime
+
+The device directory and grant profiles extend paired_environments. Every delegated HTTP method and runtime socket message is checked against remote_permissions. Raw paired credentials remain server-side; direct target requests repeat authorization and revocation checks. Owner identity gates browser state restoration before the workspace providers mount. Connection generations cancel stale work on host changes, and sequence cursors reconcile history/live overlap without replaying input.
+
+Feature modules isolate durable file transfers, guest collaboration, session recordings, local TCP forwarding, device relay and optional native desktop sessions. File-transfer publication participates in the hierarchical workspace activity guard, including ancestor-directory mutations. Recording and relay tasks use bounded queues, deadlines and explicit shutdown. start_services starts configured outbound relay registration after listener binding; shutdown_services stops relay, tunnels, captures and task workers.
+
+Guest credentials authorize only a named existing terminal. OS shell access retains its native host permissions. Native desktop access requires an explicit Windows host opt-in and request capability checks. Background hosting is a protected current-user Windows launcher/logon task; Tauri attach mode does not own that process. Broker hosting, TLS termination and startup installation are separate deployment actions.
+
+See [remote workspace](../features/REMOTE_WORKSPACE.md), [background host](../features/BACKGROUND_HOST.md), and [device relay](../features/DEVICE_RELAY.md) for operating limits and configuration.
+
+### Workspace presentation
+
+The React workspace shell uses the shared Carbon & Amber tokens in styles.css. WorkspaceShell.css coordinates environment chrome, the project/thread sidebar, the composer start view and remote/workspace dialogs. New thread and home navigation select the start view without creating a process; selecting or creating a session returns to the appropriate terminal or structured conversation surface. The existing desktop/mobile split remains in App.jsx, while backend session and permission ownership remain unchanged.

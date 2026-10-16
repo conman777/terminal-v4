@@ -1,3 +1,4 @@
+import { setActiveEnvironment } from '../utils/remoteEnvironments';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthModal } from './ProviderAuthModal';
@@ -23,6 +24,7 @@ const PROVIDERS = [
 
 describe('ProviderAuthModal', () => {
   beforeEach(() => {
+    setActiveEnvironment(null);
     apiGetMock.mockReset().mockResolvedValue({ providers: PROVIDERS });
     apiPutMock.mockReset().mockResolvedValue({ configured: true, masked: '****alue' });
     apiDeleteMock.mockReset().mockResolvedValue(null);
@@ -58,4 +60,14 @@ describe('ProviderAuthModal', () => {
     await waitFor(() => expect(apiPutMock).toHaveBeenCalledWith('/api/agent/auth/deepseek/api-key', { apiKey: 'deepseek-secret-value' }));
     await waitFor(() => expect(screen.getByLabelText('DeepSeek API key')).toHaveValue(''));
   });
+  it('shows remote provider status while requiring credential management on the owning server', async () => {
+    setActiveEnvironment({ id: 'remote-a', label: 'Build host' });
+    render(<ProviderAuthModal isOpen onClose={vi.fn()} />);
+    expect(await screen.findByLabelText('DeepSeek API key')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+    expect(screen.getByText(/Configure API keys on Build host/)).toBeInTheDocument();
+    setActiveEnvironment(null);
+  });
+
 });

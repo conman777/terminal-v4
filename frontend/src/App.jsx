@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense } from 'react';
+import { DeviceRelayPanel } from './components/DeviceRelayPanel';
+import RemoteDesktopPanel from './components/RemoteDesktopPanel';
+import RemoteHostPanel from './components/RemoteHostPanel';
+import RemoteTunnelsPanel from './components/RemoteTunnelsPanel';
+import { GuestInvitationGate } from './components/GuestInvitationGate';
+import { EnvironmentIdentityGate } from './components/EnvironmentIdentityGate';
+import { RemoteEnvironmentSwitcher } from './components/RemoteEnvironmentsPanel';
+import { getEnvironmentStorage, getActiveEnvironment, subscribeEnvironment, setActiveEnvironment, setEnvironmentIdentity } from './utils/remoteEnvironments';
+import { shouldInitializeWorkspacePane } from './utils/paneSessionAssignments';
+import { resolveAgentLaunchCommand } from './utils/agentLauncher';
+import { reopenWorkspaceSession } from './utils/workspaceNavigation';
+import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense, useSyncExternalStore } from 'react';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 // SessionTabBar is now rendered inside Header
@@ -33,7 +44,6 @@ import './ProTerminalEmpty.css';
 import './ProUI.css';
 import { apiFetch } from './utils/api';
 import {
-  buildAgentLaunchCommand,
   createCustomAiProvider,
   getNewTabAiOptions,
   normalizeAiType,
@@ -164,6 +174,9 @@ const SystemResourcesView = lazyWithChunkRecovery(
 );
 
 function AppContent() {
+  const [showWorkspaceStart, setShowWorkspaceStart] = useState(false);
+  const storage = useMemo(() => getEnvironmentStorage(), []);
+  const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   const { logout, user } = useAuth();
   const { setTheme } = useTheme();
 
@@ -224,6 +237,19 @@ function AppContent() {
     projects, projectsLoading, addScanFolder,
     sidebarProjects, addSidebarProject, removeSidebarProject,
   } = useFolders();
+  useEffect(() => {
+    const environment=getActiveEnvironment();
+    if (!environment || !projectInfo?.cwd || environment.lastWorkspace === projectInfo.cwd) return;
+    const controller=new AbortController();
+    const timer=setTimeout(() => {
+      apiFetch('/api/environments/'+encodeURIComponent(environment.id), {home:true,method:'PATCH',body:{lastWorkspace:projectInfo.cwd},signal:controller.signal})
+        .then(response=>{if (!response.ok) throw new Error('Unable to save recent workspace');})
+        .catch(error=>{if(!controller.signal.aborted) console.warn(error.message);});
+    },500);
+    return ()=>{clearTimeout(timer);controller.abort();};
+  },[projectInfo?.cwd]);
+  useEffect(() => { setShowWorkspaceStart(false); }, [activeSessionId]);
+
   const startupWorkspacePath = useMemo(
     () => resolveStartupWorkspacePath(projectInfo?.cwd, recentFolders),
     [projectInfo?.cwd, recentFolders]
@@ -302,7 +328,7 @@ function AppContent() {
   const mainTerminalFitRafRef = useRef(null);
   const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
     try {
-      return localStorage.getItem('mainTerminalMinimized') === 'true';
+      return storage.getItem('mainTerminalMinimized') === 'true';
     } catch {
       return false;
     }
@@ -313,7 +339,7 @@ function AppContent() {
     if (showPreview && !mainTerminalMinimized) {
       setMainTerminalMinimized(true);
       try {
-        localStorage.setItem('mainTerminalMinimized', 'true');
+        storage.setItem('mainTerminalMinimized', 'true');
       } catch {
         // Ignore localStorage errors
       }
@@ -328,11 +354,12 @@ function AppContent() {
   const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
   const isMobile = useMobileDetect();
   const {
-    height: viewportHeight,
+    height: measuredViewportHeight,
     width: viewportWidth,
     offsetTop: viewportOffsetTop,
     offsetLeft: viewportOffsetLeft
   } = useViewportMetrics();
+  const viewportHeight = measuredViewportHeight ? Math.max(0, measuredViewportHeight - 44) : measuredViewportHeight;
   useMobileInputZoomLock(isMobile && isMobileTextEntryFocused);
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
@@ -574,12 +601,12 @@ function AppContent() {
 
   // Per-session AI type mapping, persisted in localStorage for tab color restoration
   const [sessionAiTypes, setSessionAiTypes] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('sessionAiTypes') || '{}'); }
+    try { return JSON.parse(storage.getItem('sessionAiTypes') || '{}'); }
     catch { return {}; }
   });
   const migratedSessionAiTypesRef = useRef(new Set());
   const [customAiProviders, setCustomAiProviders] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('customAiProviders') || '[]'); }
+    try { return JSON.parse(storage.getItem('customAiProviders') || '[]'); }
     catch { return []; }
   });
 
@@ -608,7 +635,7 @@ function AppContent() {
     if (Object.keys(serverAiTypes).length > 0) {
       setSessionAiTypes((current) => {
         const next = { ...current, ...serverAiTypes };
-        localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+        storage.setItem('sessionAiTypes', JSON.stringify(next));
         return next;
       });
     }
@@ -622,11 +649,14 @@ function AppContent() {
   }, [sessions, sessionAiTypes, updateThreadMetadata]);
 
   // Tab reorder state - stores session IDs in user-defined order, persisted server-side
-  const [tabOrder, setTabOrder] = useState([]);
+  const [tabOrder, setTabOrder] = useState(() => {
+    try { const stored = JSON.parse(storage.getItem('tabOrder') || '[]'); return Array.isArray(stored) ? stored.filter(id => typeof id === 'string') : []; } catch { return []; }
+  });
   const tabOrderSaveRef = useRef(null);
 
   // Keep tabOrder in sync: add new sessions, remove deleted ones
   useEffect(() => {
+    if (loadingSessions || sessionLoadError) return;
     const activeIds = new Set(activeSessions.map(s => s.id));
     setTabOrder(prev => {
       const existing = prev.filter(id => activeIds.has(id));
@@ -634,21 +664,23 @@ function AppContent() {
       if (newIds.length === 0 && existing.length === prev.length) return prev;
       return [...existing, ...newIds];
     });
-  }, [activeSessions]);
+  }, [activeSessions, loadingSessions, sessionLoadError]);
 
   // Persist tab order to server (debounced to avoid excessive API calls)
   useEffect(() => {
-    if (tabOrder.length === 0) return;
+    if (loadingSessions || sessionLoadError) return;
+    try { storage.setItem('tabOrder', JSON.stringify(tabOrder)); } catch {}
+    if (remotePreferences || tabOrder.length === 0) return;
     clearTimeout(tabOrderSaveRef.current);
     tabOrderSaveRef.current = setTimeout(() => {
-      apiFetch('/api/settings', {
+      if (!remotePreferences) apiFetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tabOrder })
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(tabOrderSaveRef.current);
-  }, [tabOrder]);
+  }, [tabOrder, loadingSessions, sessionLoadError, remotePreferences, storage]);
 
   // Ordered sessions respects user drag reorder
   const orderedSessions = useMemo(() => {
@@ -722,7 +754,7 @@ function AppContent() {
   // Sidebar collapsed state (synced with server)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
-      return localStorage.getItem('sidebarCollapsed') === 'true';
+      return storage.getItem('sidebarCollapsed') === 'true';
     } catch {
       return false;
     }
@@ -732,9 +764,9 @@ function AppContent() {
   // Terminal font size (synced with server)
   const [terminalFontSize, setTerminalFontSize] = useState(() => {
     try {
-      const deviceStored = localStorage.getItem(terminalFontSizeStorageKey);
+      const deviceStored = storage.getItem(terminalFontSizeStorageKey);
       if (deviceStored) return parseInt(deviceStored, 10);
-      const stored = localStorage.getItem('terminalFontSize');
+      const stored = storage.getItem('terminalFontSize');
       if (stored) return parseInt(stored, 10);
       return isMobile ? 16 : 14;
     } catch {
@@ -744,7 +776,7 @@ function AppContent() {
 
   const [terminalWebglEnabled, setTerminalWebglEnabled] = useState(() => {
     try {
-      const stored = localStorage.getItem('terminalWebglEnabled');
+      const stored = storage.getItem('terminalWebglEnabled');
       if (stored !== null) return resolveTerminalWebglEnabled(stored === 'true');
       return resolveTerminalWebglEnabled(true);
     } catch {
@@ -753,13 +785,13 @@ function AppContent() {
   });
   const desktopTerminalInputMigrationRef = useRef(false);
   const [desktopAllowTerminalInput, setDesktopAllowTerminalInput] = useState(() => {
-    const preference = resolveDesktopTerminalInputPreference();
+    const preference = resolveDesktopTerminalInputPreference(storage);
     desktopTerminalInputMigrationRef.current = preference.didResetLegacyPreference;
     return preference.value;
   });
   const [showTabStatusLabels, setShowTabStatusLabels] = useState(() => {
     try {
-      const stored = localStorage.getItem('showTabStatusLabels');
+      const stored = storage.getItem('showTabStatusLabels');
       if (stored === null) return true;
       return stored === 'true';
     } catch {
@@ -770,7 +802,7 @@ function AppContent() {
   useEffect(() => {
     if (resolveTerminalWebglEnabled(true)) return;
     try {
-      localStorage.setItem('terminalWebglEnabled', 'false');
+      storage.setItem('terminalWebglEnabled', 'false');
     } catch {
       // Ignore storage failures
     }
@@ -778,10 +810,11 @@ function AppContent() {
 
   // Fetch settings from server on mount
   useEffect(() => {
+    if (remotePreferences) { desktopTerminalInputMigrationRef.current = false; setSettingsLoaded(true); return; }
     const shouldResetLegacyDesktopTypingPreference = desktopTerminalInputMigrationRef.current;
     if (shouldResetLegacyDesktopTypingPreference) {
       setDesktopAllowTerminalInput(false);
-      apiFetch('/api/settings', {
+      if (!remotePreferences) apiFetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ desktopAllowTerminalInput: false })
@@ -799,7 +832,7 @@ function AppContent() {
           if (data.terminalFontSize !== null) {
             let hasDeviceOverride = false;
             try {
-              hasDeviceOverride = localStorage.getItem(terminalFontSizeStorageKey) !== null;
+              hasDeviceOverride = storage.getItem(terminalFontSizeStorageKey) !== null;
             } catch {
               hasDeviceOverride = false;
             }
@@ -807,8 +840,8 @@ function AppContent() {
             if (!hasDeviceOverride) {
               setTerminalFontSize(data.terminalFontSize);
               try {
-                localStorage.setItem('terminalFontSize', String(data.terminalFontSize));
-                localStorage.setItem(terminalFontSizeStorageKey, String(data.terminalFontSize));
+                storage.setItem('terminalFontSize', String(data.terminalFontSize));
+                storage.setItem(terminalFontSizeStorageKey, String(data.terminalFontSize));
               } catch { /* ignore */ }
             }
           }
@@ -816,7 +849,7 @@ function AppContent() {
             const resolvedWebglEnabled = resolveTerminalWebglEnabled(data.terminalWebglEnabled);
             setTerminalWebglEnabled(resolvedWebglEnabled);
             try {
-              localStorage.setItem('terminalWebglEnabled', String(resolvedWebglEnabled));
+              storage.setItem('terminalWebglEnabled', String(resolvedWebglEnabled));
             } catch { /* ignore */ }
           }
           if (
@@ -826,20 +859,20 @@ function AppContent() {
           ) {
             setDesktopAllowTerminalInput(data.desktopAllowTerminalInput);
             try {
-              localStorage.setItem('desktopAllowTerminalInput', String(data.desktopAllowTerminalInput));
+              storage.setItem('desktopAllowTerminalInput', String(data.desktopAllowTerminalInput));
             } catch { /* ignore */ }
           }
           if (data.sidebarCollapsed !== null && data.sidebarCollapsed !== undefined) {
             setSidebarCollapsed(data.sidebarCollapsed);
             try {
-              localStorage.setItem('sidebarCollapsed', String(data.sidebarCollapsed));
+              storage.setItem('sidebarCollapsed', String(data.sidebarCollapsed));
             } catch { /* ignore */ }
           }
           // Apply server theme if no localStorage override
           if (data.theme) {
             let hasLocalTheme = false;
             try {
-              hasLocalTheme = localStorage.getItem('theme') !== null;
+              hasLocalTheme = storage.getItem('theme') !== null;
             } catch { hasLocalTheme = false; }
             if (!hasLocalTheme) {
               setTheme(data.theme);
@@ -864,13 +897,13 @@ function AppContent() {
     setTerminalFontSize(size);
     // Save to localStorage for immediate use
     try {
-      localStorage.setItem('terminalFontSize', String(size));
-      localStorage.setItem(terminalFontSizeStorageKey, String(size));
+      storage.setItem('terminalFontSize', String(size));
+      storage.setItem(terminalFontSizeStorageKey, String(size));
     } catch (e) {
       console.error('Failed to save terminal font size to localStorage', e);
     }
     // Save to server for persistence across devices/sessions
-    apiFetch('/api/settings', {
+    if (!remotePreferences) apiFetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalFontSize: size })
@@ -881,11 +914,11 @@ function AppContent() {
     const resolvedEnabled = resolveTerminalWebglEnabled(enabled);
     setTerminalWebglEnabled(resolvedEnabled);
     try {
-      localStorage.setItem('terminalWebglEnabled', String(resolvedEnabled));
+      storage.setItem('terminalWebglEnabled', String(resolvedEnabled));
     } catch (e) {
       console.error('Failed to save terminal WebGL setting to localStorage', e);
     }
-    apiFetch('/api/settings', {
+    if (!remotePreferences) apiFetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ terminalWebglEnabled: resolvedEnabled })
@@ -895,11 +928,11 @@ function AppContent() {
   const updateDesktopAllowTerminalInput = useCallback((enabled) => {
     setDesktopAllowTerminalInput(enabled);
     try {
-      localStorage.setItem('desktopAllowTerminalInput', String(enabled));
+      storage.setItem('desktopAllowTerminalInput', String(enabled));
     } catch (e) {
       console.error('Failed to save desktop terminal input setting to localStorage', e);
     }
-    apiFetch('/api/settings', {
+    if (!remotePreferences) apiFetch('/api/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ desktopAllowTerminalInput: enabled })
@@ -909,7 +942,7 @@ function AppContent() {
   const updateShowTabStatusLabels = useCallback((enabled) => {
     setShowTabStatusLabels(enabled);
     try {
-      localStorage.setItem('showTabStatusLabels', String(enabled));
+      storage.setItem('showTabStatusLabels', String(enabled));
     } catch (e) {
       console.error('Failed to save tab status label setting to localStorage', e);
     }
@@ -920,12 +953,12 @@ function AppContent() {
       const newValue = !prev;
       // Save to localStorage for immediate use
       try {
-        localStorage.setItem('sidebarCollapsed', String(newValue));
+        storage.setItem('sidebarCollapsed', String(newValue));
       } catch (e) {
         console.error('Failed to save sidebar state to localStorage', e);
       }
       // Save to server for persistence across devices/sessions
-      apiFetch('/api/settings', {
+      if (!remotePreferences) apiFetch('/api/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sidebarCollapsed: newValue })
@@ -938,18 +971,10 @@ function AppContent() {
   // In multi-pane mode, only initialize empty active panes to avoid overwriting
   // other pane assignments when a different pane/session is selected.
   useEffect(() => {
-    if (!activeSessionId) return;
-    const panes = legacyLayout?.panes || [];
-    const activePane = panes.find((pane) => pane.id === legacyLayout?.activePaneId);
-    if (!activePane) return;
-    const assignedToOtherPane = panes.some(
-      (pane) => pane.id !== activePane.id && pane.sessionId === activeSessionId
-    );
-    if (assignedToOtherPane) return;
-    if (panes.length > 1 && activePane.sessionId) return;
-    if (activePane.sessionId === activeSessionId) return;
-    initializePaneWithSession(activeSessionId);
-  }, [activeSessionId, initializePaneWithSession, legacyLayout]);
+    if (shouldInitializeWorkspacePane(activeSessionId, legacyLayout, visibleDesktopSessions.map(session => session.id))) {
+      initializePaneWithSession(activeSessionId);
+    }
+  }, [activeSessionId, initializePaneWithSession, legacyLayout, visibleDesktopSessions]);
 
   const desktopPaneAssignmentSignature = useMemo(
     () => (legacyLayout?.panes || []).map((pane) => `${pane.id}:${pane.sessionId ?? ''}`).join('|'),
@@ -970,6 +995,7 @@ function AppContent() {
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
+    setShowWorkspaceStart(false);
     selectSession(sessionId);
     setShowPreview(false);
   }, [selectSession, setShowPreview]);
@@ -979,6 +1005,12 @@ function AppContent() {
     addSessionToDesktop(sessionId);
     setShowPreview(false);
   }, [restoreSession, addSessionToDesktop, setShowPreview]);
+
+  const handleSelectHistorySession = useCallback(async (sessionId, paneId = legacyLayout.activePaneId) => {
+    setShowWorkspaceStart(false);
+    await reopenWorkspaceSession(sessionId, { restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane }, paneId);
+    setShowPreview(false);
+  }, [restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, legacyLayout.activePaneId, setShowPreview]);
 
   const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
     // Ensure this pane is active before syncing global active session state.
@@ -1083,7 +1115,6 @@ function AppContent() {
     tabName = '',
     agentSelection = null,
   ) => {
-    setShowNewSessionModal(false);
     if (!path) return;
     const newTabAiOptions = getNewTabAiOptions(customAiProviders);
     const selectedAi = newTabAiOptions.find((option) => option.id === aiOptionId) || newTabAiOptions[0];
@@ -1091,16 +1122,7 @@ function AppContent() {
     const useStructuredCreation = aiOptionId !== 'cli'
       && shouldCreateStructuredSession(aiOptionId, customAiProviders);
     const request = { cwd: path };
-    if (aiOptionId !== 'cli' && agentSelection?.model) {
-      request.initialCommand = buildAgentLaunchCommand({
-        agent: aiOptionId,
-        model: agentSelection.model,
-        reasoning: agentSelection.reasoning,
-        launchCommand: agentSelection.launchCommand,
-      });
-    } else if (selectedAi.command) {
-      request.initialCommand = selectedAi.command;
-    }
+    if (aiOptionId !== 'cli') request.initialCommand = await resolveAgentLaunchCommand(aiOptionId, agentSelection, customAiProviders);
     request.title = title;
 
     try {
@@ -1118,13 +1140,14 @@ function AppContent() {
         if (aiOptionId !== 'cli') {
           setSessionAiTypes(prev => {
             const next = { ...prev, [session.id]: aiOptionId };
-            localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+            storage.setItem('sessionAiTypes', JSON.stringify(next));
             return next;
           });
           void updateThreadMetadata(session.id, { aiType: aiOptionId }).catch(() => {});
         }
       }
-    } catch { /* createSession already logs */ }
+      setShowNewSessionModal(false);
+    } catch (error) { throw error; }
   }, [addSessionToDesktop, addSidebarProject, createSession, createStructuredSession, customAiProviders, updateThreadMetadata]);
 
   const handleSetSessionAiType = useCallback((sessionId, aiType) => {
@@ -1136,7 +1159,7 @@ function AppContent() {
       } else {
         delete next[sessionId];
       }
-      localStorage.setItem('sessionAiTypes', JSON.stringify(next));
+      storage.setItem('sessionAiTypes', JSON.stringify(next));
       return next;
     });
     void updateThreadMetadata(sessionId, { aiType: normalizedAiType }).catch(() => {});
@@ -1148,7 +1171,7 @@ function AppContent() {
 
     setCustomAiProviders((prev) => {
       const next = [...prev, provider];
-      localStorage.setItem('customAiProviders', JSON.stringify(next));
+      storage.setItem('customAiProviders', JSON.stringify(next));
       return next;
     });
 
@@ -1319,7 +1342,7 @@ function AppContent() {
     setMainTerminalMinimized(prev => {
       const newValue = !prev;
       try {
-        localStorage.setItem('mainTerminalMinimized', String(newValue));
+        storage.setItem('mainTerminalMinimized', String(newValue));
       } catch {
         // Ignore localStorage errors
       }
@@ -1380,7 +1403,7 @@ function AppContent() {
     if (typeof window === 'undefined') return false;
     try {
       const params = new URLSearchParams(window.location.search);
-      return params.get('mobileDebug') === '1' || localStorage.getItem('mobileKeyboardDebug') === '1';
+      return params.get('mobileDebug') === '1' || storage.getItem('mobileKeyboardDebug') === '1';
     } catch {
       return false;
     }
@@ -1528,6 +1551,9 @@ function AppContent() {
       {!isMobile && (
         <>
           <ThreadsSidebar
+            onOpenWorkspaceStart={() => setShowWorkspaceStart(true)}
+            workspacePath={startupWorkspacePath}
+            onSelectHistorySession={handleSelectHistorySession}
             isCollapsed={sidebarCollapsed}
             onToggle={toggleSidebar}
             sessionsGroupedByProject={scopedSidebarData.sessionsGroupedByProject}
@@ -1605,16 +1631,20 @@ function AppContent() {
                     <div className="empty-state">
                       <p>Loading sessions…</p>
                     </div>
-                  ) : visibleDesktopSessions.length === 0 ? (
+                  ) : visibleDesktopSessions.length === 0 || showWorkspaceStart ? (
                     <WorkspaceStartView
+                      onSelectHistorySession={handleSelectHistorySession}
+                      onSelectSession={handleSelectSession}
                       currentPath={startupWorkspacePath}
-                      onCreateSession={() => handleRequestNewSession(startupWorkspacePath)}
+                      onCreateSession={path => handleRequestNewSession(typeof path === 'string' ? path : startupWorkspacePath)}
                       onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
                       onAddWorkspace={openAddProjectModal}
                     />
                   ) : (
                     <ErrorBoundary name="terminal" resetKey={activeSessionId}>
                       <SplitPaneContainer
+                        onSelectHistorySession={handleSelectHistorySession}
+                        onStartWorkspaceTask={handleRequestNewSession}
                         layout={legacyLayout}
                         paneLayout={paneLayout}
                         sessions={visibleDesktopSessions}
@@ -1769,10 +1799,11 @@ function AppContent() {
                 </ErrorBoundary>
               ) : (
                 <MobileShell
+                  onSelectHistorySession={handleSelectHistorySession}
                   sessions={activeSessions}
                   activeSessionId={activeSessionId}
                   onSelectSession={selectSession}
-                  onCreateSession={() => handleRequestNewSession(startupWorkspacePath)}
+                  onCreateSession={path => handleRequestNewSession(typeof path === 'string' ? path : startupWorkspacePath)}
                   onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
                   onAddWorkspace={openAddProjectModal}
                   projectInfo={projectInfo ? { ...projectInfo, cwd: projectInfo.cwd || startupWorkspacePath } : { cwd: startupWorkspacePath }}
@@ -1827,14 +1858,19 @@ function AppContent() {
 
 export default function App() {
   return (
+    <GuestInvitationGate>
     <AuthProvider>
       <AuthenticatedApp />
     </AuthProvider>
+    </GuestInvitationGate>
   );
 }
 
 function AuthenticatedApp() {
-  const { isAuthenticated, loading } = useAuth();
+  const { user, isAuthenticated, loading } = useAuth();
+  const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
+  const [directoryRevision,setDirectoryRevision]=useState(0);
+  useEffect(() => { if (!loading && !isAuthenticated) setEnvironmentIdentity(null); }, [loading, isAuthenticated]);
 
   if (loading) {
     return (
@@ -1849,6 +1885,10 @@ function AuthenticatedApp() {
   }
 
   return (
+    <EnvironmentIdentityGate userId={user.id}>
+    <div className="environment-shell">
+    <RemoteEnvironmentSwitcher key={directoryRevision}><DeviceRelayPanel onPaired={saved=>{setActiveEnvironment(saved);setDirectoryRevision(value=>value+1);}} /><RemoteDesktopPanel /><RemoteTunnelsPanel /><RemoteHostPanel /></RemoteEnvironmentSwitcher>
+    <div className="environment-workspace" key={environment?.id || "home"}>
     <ThemeProvider>
       <AutocorrectProvider>
       <NotesProvider>
@@ -1866,5 +1906,8 @@ function AuthenticatedApp() {
       </NotesProvider>
       </AutocorrectProvider>
     </ThemeProvider>
+    </div>
+    </div>
+    </EnvironmentIdentityGate>
   );
 }

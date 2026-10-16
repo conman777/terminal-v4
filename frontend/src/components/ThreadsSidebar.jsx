@@ -4,6 +4,7 @@ import ThreadsSessionItem from './ThreadsSessionItem';
 import { useTheme } from '../contexts/ThemeContext';
 import { normalizeProjectPath } from '../utils/projectPaths';
 import './ThreadsSidebar.css';
+import { WorkspaceToolsButton } from './WorkspaceToolsButton';
 
 function matchesSessionQuery(session, normalizedQuery) {
   if (!normalizedQuery) return true;
@@ -27,6 +28,9 @@ function matchesGroupQuery(group, normalizedQuery) {
 
 export default function ThreadsSidebar({
   isCollapsed,
+  workspacePath,
+  onSelectHistorySession,
+  onOpenWorkspaceStart,
   onToggle,
   sessionsGroupedByProject,
   pinnedSessions,
@@ -115,7 +119,7 @@ export default function ThreadsSidebar({
   return (
     <aside className={`pro-sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="pro-sidebar-rail">
-        <button className="pro-rail-brand" type="button" aria-label="Terminal v4 home" title="Terminal v4">
+        <button className="pro-rail-brand" type="button" onClick={onOpenWorkspaceStart} aria-label="Terminal v4 home" title="Terminal v4">
           <span className="pro-rail-brand-mark">&gt;_</span>
           <span className="pro-rail-brand-text">V4</span>
         </button>
@@ -137,7 +141,7 @@ export default function ThreadsSidebar({
         <button
           className="pro-rail-item accent"
           type="button"
-          onClick={() => onCreateSession?.()}
+          onClick={() => (onOpenWorkspaceStart || onCreateSession)?.()}
           aria-label="New"
           title="New"
         >
@@ -231,7 +235,7 @@ export default function ThreadsSidebar({
         <div className="pro-sidebar-panel">
           <div className="pro-sidebar-header">
             <div className="pro-sidebar-brand">
-              <span>Threads</span>
+              <span className="pro-sidebar-kicker">TERMINAL V4</span><span>Workspace</span>
             </div>
             <div className="pro-sidebar-header-actions">
               <div className="pro-sidebar-count">{visibleSessionCount}</div>
@@ -260,7 +264,7 @@ export default function ThreadsSidebar({
           </div>
 
           <div className="pro-sidebar-toolbar">
-            <button className="pro-toolbar-btn primary" type="button" onClick={() => onCreateSession?.()}>
+            <button className="pro-toolbar-btn primary" type="button" onClick={() => (onOpenWorkspaceStart || onCreateSession)?.()}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
@@ -276,6 +280,11 @@ export default function ThreadsSidebar({
                 Add workspace
               </button>
             )}
+          </div>
+
+          <div className="pro-sidebar-workspace-tools">
+            <WorkspaceToolsButton workspacePath={workspacePath} currentSessionId={activeSessionId} onStartTask={onCreateSession} onSelectSession={onSelectHistorySession || onSelectSession} />
+            <span>Git, tasks &amp; history</span>
           </div>
 
           <label className="pro-sidebar-search">

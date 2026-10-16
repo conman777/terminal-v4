@@ -1,3 +1,4 @@
+import { apiFetch } from '../../utils/api';
 import React, { useState, useEffect } from 'react';
 
 /**
@@ -19,7 +20,7 @@ export function BrowserSettings() {
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch('/api/settings/browser');
+      const response = await apiFetch('/api/settings/browser');
       if (response.ok) {
         const data = await response.json();
         setSettings(data.settings);
@@ -37,7 +38,7 @@ export function BrowserSettings() {
     setMessage(null);
 
     try {
-      const response = await fetch('/api/settings/browser', {
+      const response = await apiFetch('/api/settings/browser', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formValues)
@@ -64,7 +65,7 @@ export function BrowserSettings() {
     setMessage(null);
 
     try {
-      const response = await fetch('/api/settings/browser', {
+      const response = await apiFetch('/api/settings/browser', {
         method: 'DELETE'
       });
 

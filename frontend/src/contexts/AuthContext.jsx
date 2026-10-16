@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens } from '../utils/auth';
-import { resolveApiUrl } from '../utils/apiBase';
+import { resolveHomeApiUrl } from '../utils/apiBase';
 
 const AuthContext = createContext(null);
 
@@ -19,7 +19,7 @@ function normalizeAuthError(err) {
 async function syncPreviewSession(accessToken) {
   if (!accessToken) return;
 
-  await fetch(resolveApiUrl('/api/preview/session'), {
+  await fetch(resolveHomeApiUrl('/api/preview/session'), {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${accessToken}` }
   });
@@ -50,7 +50,7 @@ export function AuthProvider({ children }) {
         // Try to validate the access token with the backend
         if (accessToken) {
           try {
-            const response = await fetch(resolveApiUrl('/api/auth/me'), {
+            const response = await fetch(resolveHomeApiUrl('/api/auth/me'), {
               headers: { 'Authorization': `Bearer ${accessToken}` }
             });
 
@@ -84,7 +84,7 @@ export function AuthProvider({ children }) {
               setUserState(result.user);
             } else {
               // Fetch user data if not returned from refresh
-              const meResponse = await fetch(resolveApiUrl('/api/auth/me'), {
+              const meResponse = await fetch(resolveHomeApiUrl('/api/auth/me'), {
                 headers: { 'Authorization': `Bearer ${result.accessToken}` }
               });
               if (meResponse.ok) {
@@ -126,7 +126,7 @@ export function AuthProvider({ children }) {
   const login = useCallback(async (username, password) => {
     setError(null);
     try {
-      const response = await fetch(resolveApiUrl('/api/auth/login'), {
+      const response = await fetch(resolveHomeApiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -153,7 +153,7 @@ export function AuthProvider({ children }) {
   const register = useCallback(async (username, password) => {
     setError(null);
     try {
-      const response = await fetch(resolveApiUrl('/api/auth/register'), {
+      const response = await fetch(resolveHomeApiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
@@ -188,7 +188,7 @@ export function AuthProvider({ children }) {
     try {
       const token = getAccessToken();
       if (token) {
-        await fetch(resolveApiUrl('/api/auth/logout'), {
+        await fetch(resolveHomeApiUrl('/api/auth/logout'), {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` }
         });

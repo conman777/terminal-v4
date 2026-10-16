@@ -1,0 +1,11 @@
+.session-replay-panel { display: grid; gap: 12px; min-width: 0; color: var(--text-primary, #eceef3); }
+.session-replay-panel p { margin: 0; line-height: 1.5; }
+.session-replay-panel label { display: grid; gap: 5px; }
+.session-replay-panel .session-replay-consent { display: flex; align-items: flex-start; gap: 8px; }
+.session-replay-panel select { max-width: 100%; min-width: 0; padding: 8px; }
+.session-replay-panel button { padding: 9px 12px; min-height: 40px; }
+.session-replay-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.session-replay-panel input[type=range] { width: 100%; }
+.session-replay-output { min-width: 0; width: 100%; height: 310px; overflow: auto; background: #111318; border: 1px solid var(--border-color, #343843); border-radius: 8px; padding: 8px; }
+.session-replay-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media(max-width: 600px) { .session-replay-controls > * { flex: 1 1 45%; } .session-replay-output { height: 260px; } }

@@ -1,0 +1,104 @@
+/* Terminal v4 workspace surfaces share the existing Carbon & Amber tokens. */
+.environment-shell .remote-environment-bar {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-inline: 14px;
+  color: var(--text-secondary);
+}
+.remote-environment-bar button {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: inherit;
+  padding-inline: 10px;
+}
+.remote-environment-bar button:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.remote-environment-bar strong { color: var(--accent-primary-light); font-weight: 500; }
+.environment-workspace .desktop-header { background: var(--bg-base); min-height: 52px; }
+.environment-workspace .desktop-titlebar { min-height: 52px; gap: 16px; }
+.desktop-workspace-label { color: var(--text-muted); font-size: 12px; padding-right: 16px; border-right: 1px solid var(--border-subtle); }
+.environment-workspace .desktop-titlebar-action { min-height: 30px; border-radius: 6px; border-color: transparent; font-family: var(--font-ui); font-size: 12px; text-transform: capitalize; }
+.environment-workspace .desktop-titlebar-action.active { border-color: var(--border-subtle); background: var(--bg-elevated); color: var(--text-primary); }
+.environment-workspace .desktop-titlebar-path { flex: 1; }
+.environment-workspace .desktop-titlebar-branch { max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.environment-workspace .pro-sidebar-brand { gap: 5px; }
+.environment-workspace .pro-sidebar-brand .pro-sidebar-kicker { font-size: 10px; color: var(--accent-primary-light); letter-spacing: .14em; }
+.environment-workspace .pro-sidebar-brand span:last-child { font-size: 17px; font-weight: 500; }
+.environment-workspace .pro-sidebar-count { border: none; background: transparent; color: var(--text-muted); }
+.environment-workspace .pro-sidebar-minimize { border-radius: 6px; background: transparent; }
+.environment-workspace .pro-sidebar-panel { background: var(--bg-surface); }
+.environment-workspace .pro-sidebar-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; }
+.environment-workspace .pro-sidebar-toolbar > button:last-child:not(:first-child) { font-size: 0; padding: 0; justify-content: center; }
+.environment-workspace .pro-sidebar-toolbar > button:last-child:not(:first-child) svg { width: 14px; height: 14px; }
+.environment-workspace .pro-toolbar-btn { padding-inline: 9px; font-size: 11px; gap: 5px; }
+.environment-workspace .pro-sidebar-search { border-radius: 6px; min-height: 34px; padding-inline: 10px; }
+.environment-workspace .pro-section-title { font-size: 10px; font-weight: 500; letter-spacing: .09em; }
+.environment-workspace .threads-project-header { border-radius: 5px; }
+.environment-workspace .pro-rail-brand { color: var(--accent-primary-light); background: transparent; border-color: transparent; }
+.pro-sidebar-workspace-tools { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
+.pro-sidebar-workspace-tools > span { color: var(--text-muted); font-size: 11px; }
+.pro-sidebar-workspace-tools .workspace-tools-button { min-height: 30px; background: transparent; border-color: var(--border-subtle); color: var(--text-secondary); }
+.environment-workspace .workspace-start-view { align-items: center; padding: clamp(20px, 4vw, 60px); overflow-y: auto; }
+.environment-workspace .workspace-start-shell { width: min(720px, 100%); margin: auto; gap: 20px; padding-block: 28px; }
+.workspace-welcome { padding: 0 12px 14px; }
+.workspace-wordmark { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 600; letter-spacing: -.04em; color: var(--text-primary); }
+.workspace-wordmark > span { font-family: var(--font-mono); color: var(--accent-primary-light); font-size: 22px; letter-spacing: -.1em; }
+.workspace-welcome .workspace-welcome-eyebrow { margin-top: 32px; color: var(--accent-primary-light); font-size: 12px; letter-spacing: .02em; }
+.workspace-welcome h1 { font-size: clamp(28px, 3vw, 42px); line-height: 1.15; letter-spacing: -.045em; font-weight: 500; margin: 12px 0 14px; }
+.workspace-welcome p { color: var(--text-muted); font-size: 14px; line-height: 1.6; margin: 0; }
+.environment-workspace .workspace-start-lightbar { justify-content: flex-start; gap: 6px; padding-inline: 12px; }
+.environment-workspace .workspace-start-path-pill { flex: 1; min-width: 120px; border: none; background: transparent; box-shadow: none; padding-inline: 6px; backdrop-filter: none; }
+.environment-workspace .workspace-start-path-pill-label { display: none; }
+.environment-workspace .workspace-start-path-pill code { color: var(--text-muted); font-size: 11px; }
+.environment-workspace .workspace-start-light-action { min-height: 34px; border-radius: 6px; border-color: var(--border-subtle); background: transparent; box-shadow: none; backdrop-filter: none; font-size: 12px; font-weight: 500; }
+.environment-workspace .workspace-start-composer-shell { width: 100%; border-radius: 12px; box-shadow: none; }
+.environment-workspace .workspace-start-composer-shell .status-composer-shell { min-height: 108px; }
+.environment-workspace .layout:not(.mobile) .split-terminal-pane { border-radius: 0; box-shadow: none; }
+.environment-workspace .layout:not(.mobile) .terminal-with-status { border-radius: 0; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) { border-color: var(--border-default); box-shadow: 0 32px 100px #0007; font-size: 13px; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) h2 { font-size: 18px; font-weight: 500; letter-spacing: -.02em; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) h3 { font-size: 14px; font-weight: 600; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) button {
+  min-height: 34px; border: 1px solid var(--border-default); border-radius: 6px;
+  background: var(--bg-elevated); color: var(--text-primary); padding: 6px 11px;
+  font-family: var(--font-ui); font-size: 12px; transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+:is(.workspace-tools-dialog, .remote-environment-dialog) button:hover:not(:disabled) { border-color: var(--border-hover); background: color-mix(in srgb, var(--bg-elevated) 85%, var(--accent-primary) 15%); }
+:is(.workspace-tools-dialog, .remote-environment-dialog) button:disabled { opacity: .45; cursor: not-allowed; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+:is(.workspace-tools-dialog, .remote-environment-dialog) :is(input:not([type=checkbox]):not([type=range]), select, textarea) {
+  box-sizing: border-box; min-height: 36px; border: 1px solid var(--border-default); border-radius: 6px;
+  background: var(--bg-base); color: var(--text-primary); padding: 8px 10px; font: inherit;
+}
+.workspace-tools-dialog .workspace-git-review nav { padding: 4px; }
+.workspace-tools-dialog .workspace-git-review nav button { border-color: transparent; border-radius: 4px; background: transparent; margin-bottom: 2px; font-size: 12px; }
+.workspace-tools-dialog .workspace-git-review nav button[aria-pressed=true] { background: var(--accent-primary-dim); color: var(--accent-primary-light); }
+.workspace-tools-dialog .workspace-tools-tabs { flex-wrap: wrap; gap: 3px; padding-bottom: 10px; }
+.workspace-tools-dialog .workspace-tools-tabs > button { border-color: transparent; background: transparent; color: var(--text-muted); padding-inline: 10px; }
+.workspace-tools-dialog .workspace-tools-tabs > button[aria-selected=true] { color: var(--accent-primary-light); background: var(--accent-primary-dim); }
+:is(.workspace-tools-dialog, .remote-environment-dialog) > header button { min-width: 36px; background: transparent; border-color: transparent; }
+@media (min-width: 769px) and (max-width: 1100px) {
+  .environment-workspace .pro-sidebar { width: 256px; min-width: 256px; }
+  .environment-workspace .pro-sidebar.collapsed { width: 48px; min-width: 48px; }
+  .environment-workspace .pro-sidebar-toolbar { flex-wrap: wrap; }
+  .environment-workspace .desktop-workspace-label, .environment-workspace .desktop-titlebar-path-parent { display: none; }
+}
+@media (max-width: 768px) {
+  .environment-shell .remote-environment-bar { padding-inline: 4px; }
+  .environment-workspace .mobile-shell.mobile-shell-parity { padding: 0; gap: 0; background: var(--bg-base); }
+  .environment-workspace .mobile-shell-parity .mobile-shell-stage.mobile-shell-stage-parity { border: none; border-radius: 0; box-shadow: none; background: var(--terminal-bg); }
+
+  .environment-workspace .workspace-start-view { padding: 20px 12px; }
+  .environment-workspace .workspace-start-shell { padding-block: 10px; gap: 16px; }
+  .workspace-welcome { padding-bottom: 4px; }
+  .workspace-welcome .workspace-welcome-eyebrow { margin-top: 24px; }
+  .workspace-welcome h1 { font-size: 30px; }
+  .environment-workspace .workspace-start-lightbar { padding-inline: 4px; }
+  .environment-workspace .workspace-start-light-action { min-height: 44px; }
+  :is(.workspace-tools-dialog, .remote-environment-dialog) button,
+  :is(.workspace-tools-dialog, .remote-environment-dialog) :is(input:not([type=checkbox]):not([type=range]), select) { min-height: 44px; }
+  .workspace-tools-dialog .workspace-tools-tabs { flex-wrap: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .environment-workspace .pro-sidebar, .environment-workspace .status-composer-shell { transition: none !important; }
+}

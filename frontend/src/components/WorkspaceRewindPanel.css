@@ -1,0 +1,15 @@
+.workspace-rewind-panel { display: grid; gap: 12px; min-width: 0; color: var(--text-primary, #e2e8f0); }
+.workspace-rewind-panel h3, .workspace-rewind-panel h4, .workspace-rewind-panel p { margin: 0; }
+.workspace-rewind-panel p, .workspace-rewind-panel small { font-size: 13px; color: var(--text-secondary, #a9b7c9); overflow-wrap: anywhere; }
+.workspace-rewind-panel [role=alert] { color: #fda4af; }
+.workspace-rewind-fields, .workspace-rewind-fields label { display: grid; gap: 6px; min-width: 0; }
+.workspace-rewind-fields { gap: 12px; }
+.workspace-rewind-panel button, .workspace-rewind-panel select { min-height: 38px; padding: 8px 10px; background: var(--bg-secondary, #17202d); color: inherit; border: 1px solid var(--border-color, #354154); border-radius: 6px; font: inherit; }
+.workspace-rewind-panel select { width: 100%; min-width: 0; }
+.workspace-rewind-panel button:disabled { opacity: .5; }
+.workspace-rewind-panel button:focus-visible, .workspace-rewind-panel select:focus-visible { outline: 2px solid var(--accent-primary, #60a5fa); outline-offset: 2px; }
+.workspace-rewind-confirm, .workspace-rewind-operation { border: 1px solid var(--border-color, #354154); padding: 12px; border-radius: 8px; display: grid; gap: 10px; }
+.workspace-rewind-confirm blockquote { margin: 0; max-height: 160px; overflow: auto; padding: 10px; background: var(--bg-secondary, #17202d); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-rewind-row { display: flex; gap: 8px; justify-content: space-between; align-items: center; padding: 8px 0; }
+.workspace-rewind-operation { margin-top: 10px; }
+.workspace-rewind-operation small { display: block; }

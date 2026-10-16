@@ -277,6 +277,23 @@ impl StructuredSessionManager {
         Ok(Some(thread))
     }
 
+    pub(crate) async fn has_active_workspace(&self, path: &Path) -> bool {
+        let sessions = self.inner.sessions.lock().await;
+        let Ok(expected) = crate::workspace_activity::workspace_key(path) else {
+            return false;
+        };
+        for session in sessions.values() {
+            let state = session.state.lock().await;
+            if state.process.is_some()
+                && crate::workspace_activity::workspace_key(Path::new(&state.cwd))
+                    .is_ok_and(|candidate| candidate == expected)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     pub async fn send_message(
         &self,
         user_id: &str,
@@ -290,11 +307,12 @@ impl StructuredSessionManager {
         }
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
 
-        let (provider_id, cwd, model, continuation, existing_process) = {
+        let (provider_id, cwd, model, continuation, existing_process, workspace_activity) = {
             let mut state = session.state.lock().await;
             if state.user_id != user_id {
                 return Err(format!("Session not found: {session_id}"));
             }
+            let workspace_activity = crate::workspace_activity::enter(Path::new(&state.cwd))?;
             let existing_process = state.process.clone();
             state.process = None;
             (
@@ -303,6 +321,7 @@ impl StructuredSessionManager {
                 state.model.clone(),
                 state.active_cli_session_id.clone(),
                 existing_process,
+                workspace_activity,
             )
         };
 
@@ -335,6 +354,7 @@ impl StructuredSessionManager {
         let session_id = session_id.to_string();
         let user_id = user_id.to_string();
         tokio::spawn(async move {
+            let _workspace_activity = workspace_activity;
             while let Some(event) = events.recv().await {
                 if manager
                     .record_event(&user_id, &session_id, event)
@@ -455,6 +475,7 @@ impl StructuredSessionManager {
         }
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
 
+        let subscription = session.broadcaster.subscribe();
         let history = {
             let state = session.state.lock().await;
             if state.user_id != user_id {
@@ -462,7 +483,7 @@ impl StructuredSessionManager {
             }
             state.events.clone()
         };
-        Ok((history, session.broadcaster.subscribe()))
+        Ok((history, subscription))
     }
 
     async fn current_process(
@@ -1113,6 +1134,52 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
+
+    #[tokio::test]
+    async fn rewind_exclusion_blocks_structured_provider_spawn() {
+        struct CountingProvider(Arc<AtomicUsize>);
+        impl StructuredProvider for CountingProvider {
+            fn provider_id(&self) -> &'static str {
+                "claude"
+            }
+            fn spawn(
+                &self,
+                _options: StructuredSpawnOptions,
+            ) -> Result<SpawnedStructuredProcess, String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err("Provider reached".into())
+            }
+        }
+        let folder = tempfile::tempdir().unwrap();
+        let count = Arc::new(AtomicUsize::new(0));
+        let manager = StructuredSessionManager::new_with_providers(
+            AppConfig {
+                data_dir: folder.path().join("app"),
+                ..Default::default()
+            },
+            vec![Arc::new(CountingProvider(count.clone()))],
+        );
+        let session = manager
+            .create_session(
+                "owner",
+                folder.path().to_str().unwrap(),
+                Some("claude"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let guard = crate::workspace_activity::exclusive(folder.path()).unwrap();
+        let result = manager.send_message("owner", &session.id, "hello").await;
+        drop(guard);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert!(matches!(result,Err(error) if error.contains("rewind")));
+        assert_eq!(
+            manager.send_message("owner", &session.id, "hello").await,
+            Err("Provider reached".into())
+        );
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn sanitize_identifier_strips_special_chars() {

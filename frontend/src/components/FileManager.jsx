@@ -1,3 +1,4 @@
+import { resolveApiUrl } from '../utils/apiBase';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { apiGet, apiFetch } from '../utils/api';
 import { getAccessToken } from '../utils/auth';
@@ -157,7 +158,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
 
       try {
         const token = getAccessToken();
-        const response = await fetch('/api/files/upload', {
+        const response = await apiFetch('/api/files/upload', {
           method: 'POST',
           headers: token ? { 'Authorization': `Bearer ${token}` } : {},
           body: formData
@@ -240,7 +241,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const handleDownload = useCallback(async (item) => {
     const fullPath = buildItemPath(item.name);
     const token = getAccessToken();
-    window.open(`/api/files/download?path=${encodeURIComponent(fullPath)}&token=${token}`, '_blank');
+    window.open(resolveApiUrl(`/api/files/download?path=${encodeURIComponent(fullPath)}&token=${encodeURIComponent(token)}`), '_blank');
   }, [buildItemPath]);
 
   const handleUnzip = useCallback(async (item) => {
@@ -264,7 +265,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal }) {
   const handlePreviewImage = useCallback((item) => {
     const fullPath = buildItemPath(item.name);
     const token = getAccessToken();
-    const imageUrl = `/api/files/download?path=${encodeURIComponent(fullPath)}&token=${token}`;
+    const imageUrl = resolveApiUrl(`/api/files/download?path=${encodeURIComponent(fullPath)}&token=${encodeURIComponent(token)}`);
     setPreviewImage({ name: item.name, url: imageUrl });
   }, [buildItemPath]);
 

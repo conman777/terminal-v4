@@ -1,3 +1,4 @@
+import { getEnvironmentStorage } from '../utils/remoteEnvironments';
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { reconcilePaneSessionIds } from '../utils/paneSessionAssignments';
 
@@ -161,9 +162,9 @@ function defaultPaneLayout() {
   };
 }
 
-function loadDesktopsFromStorage() {
+function loadDesktopsFromStorage(storage = getEnvironmentStorage()) {
   try {
-    const saved = localStorage.getItem('desktops');
+    const saved = storage.getItem('desktops');
     if (saved) {
       const parsed = JSON.parse(saved);
       // Migrate: add ownedSessionIds if not yet present (derived from pane assignments)
@@ -177,11 +178,11 @@ function loadDesktopsFromStorage() {
     }
 
     // Migrate old single layout
-    const oldLayout = localStorage.getItem('paneLayout');
+    const oldLayout = storage.getItem('paneLayout');
     let paneLayout;
     if (oldLayout) {
       paneLayout = migrateLayout(JSON.parse(oldLayout));
-      localStorage.removeItem('paneLayout');
+      storage.removeItem('paneLayout');
     } else {
       paneLayout = defaultPaneLayout();
     }
@@ -283,8 +284,9 @@ export function initializeActivePaneWithSessionState(desktopsState, sessionId) {
 }
 
 export function PaneLayoutProvider({ children }) {
+  const storage = useMemo(() => getEnvironmentStorage(), []);
   // Multi-desktop state
-  const [desktopsState, setDesktopsState] = useState(() => loadDesktopsFromStorage());
+  const [desktopsState, setDesktopsState] = useState(() => loadDesktopsFromStorage(storage));
 
   // Fullscreen pane state (not persisted - temporary)
   const [fullscreenPaneId, setFullscreenPaneId] = useState(null);
@@ -301,7 +303,7 @@ export function PaneLayoutProvider({ children }) {
   // Save desktops state to localStorage on every change
   useEffect(() => {
     try {
-      localStorage.setItem('desktops', JSON.stringify(desktopsState));
+      storage.setItem('desktops', JSON.stringify(desktopsState));
     } catch {}
   }, [desktopsState]);
 

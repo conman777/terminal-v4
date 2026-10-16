@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import { installBuildFreshnessReloader } from './utils/buildFreshness';
 import './styles.css';
+import './WorkspaceShell.css';
 
 if (!import.meta.env.DEV) {
   installBuildFreshnessReloader();

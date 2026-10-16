@@ -740,3 +740,11 @@
     justify-content: flex-end;
   }
 }
+
+.tv4-agent-model-mark-hermes { background: #d6a84b; color: #15110a; }
+.tv4-agent-custom-model { padding: 10px; display: grid; gap: 8px; }
+.tv4-agent-custom-model label { display: grid; gap: 6px; }
+.tv4-agent-custom-model input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; }
+.tv4-agent-custom-model > button { min-height: 40px; }
+
+.tv4-agent-model-picker-controls.tv4-agent-model-controls-single { grid-template-columns: minmax(0, 1fr); }

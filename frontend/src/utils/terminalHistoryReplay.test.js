@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite } from './terminalHistoryReplay';
+import { getHistoryReplayObserverText, shouldUseSingleHistoryWrite, unseenTerminalEvents, hasTerminalHistoryGap } from './terminalHistoryReplay';
 
 describe('terminalHistoryReplay', () => {
   it('uses a single write for typical initial history payloads', () => {
@@ -20,5 +20,33 @@ describe('terminalHistoryReplay', () => {
   it('returns an empty observer payload for empty or invalid history text', () => {
     expect(getHistoryReplayObserverText('')).toBe('');
     expect(getHistoryReplayObserverText(null)).toBe('');
+  });
+});
+
+describe('terminal output replay reconciliation', () => {
+  it('discards overlap between an HTTP history snapshot and buffered socket output without duplicating display bytes', () => {
+    const snapshotLastSeq = 42;
+    const buffered = [
+      { seq: 41, text: 'already shown one' },
+      { seq: 42, text: 'already shown two' },
+      { seq: 43, text: 'new output' },
+      { seq: 43, text: 'duplicate new output' },
+      { seq: 44, text: 'new output two' },
+    ];
+    expect(unseenTerminalEvents(buffered, snapshotLastSeq)).toEqual([
+      { seq: 43, text: 'new output' }, { seq: 44, text: 'new output two' },
+    ]);
+  });
+  it('detects a truncated incremental page so the renderer rebuilds from bounded recent history', () => {
+    expect([
+      hasTerminalHistoryGap([{ seq: 43, text: 'next' }], 42),
+      hasTerminalHistoryGap([{ seq: 100, text: 'truncated' }], 42),
+      hasTerminalHistoryGap([], 42),
+      hasTerminalHistoryGap([{ seq: 100 }], 0),
+    ]).toEqual([false, true, false, false]);
+  });
+  it('preserves legacy unsequenced entries while rejecting older sequenced output', () => {
+    expect(unseenTerminalEvents([{ text: 'legacy' }, { seq: 9, text: 'old' }, { seq: 11, text: 'new' }], 10))
+      .toEqual([{ text: 'legacy' }, { seq: 11, text: 'new' }]);
   });
 });

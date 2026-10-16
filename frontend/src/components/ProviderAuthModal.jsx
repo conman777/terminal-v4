@@ -1,3 +1,4 @@
+import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { useEffect, useState } from 'react';
 import { apiDelete, apiGet, apiPost, apiPut } from '../utils/api';
 
@@ -21,6 +22,7 @@ function setupLabel(provider) {
 }
 
 export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
+  const remoteEnvironment = getActiveEnvironment();
   const [providers, setProviders] = useState([]);
   const [values, setValues] = useState({});
   const [loading, setLoading] = useState(false);
@@ -47,6 +49,7 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
   }, [isOpen]);
 
   const save = async provider => {
+    if (remoteEnvironment) return;
     const value = values[provider.id]?.trim();
     if (!value) return;
     setSaving(provider.id);
@@ -65,6 +68,7 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
   };
 
   const remove = async provider => {
+    if (remoteEnvironment) return;
     setSaving(provider.id);
     setError(null);
     try {
@@ -120,6 +124,7 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
           <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
         <div className="modal-body">
+          {remoteEnvironment && <p role="note">Configure API keys on {remoteEnvironment.label || remoteEnvironment.url} directly. This connection grants runtime access.</p>}
           {loading && <div className="loading">Checking provider status…</div>}
           {error && <div className="tv4-provider-auth-error">{error}</div>}
           {notice && <div className="tv4-provider-auth-notice">{notice}</div>}
@@ -145,14 +150,15 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
                     <div className="tv4-provider-auth-key-row">
                       <input
                         type="password"
+                        disabled={Boolean(remoteEnvironment)}
                         value={values[provider.id] || ''}
                         onChange={event => setValues(current => ({ ...current, [provider.id]: event.target.value }))}
                         placeholder={provider.masked || 'Paste API key'}
                         autoComplete="off"
                         aria-label={`${provider.label} API key`}
                       />
-                      <button type="button" className="btn-primary" disabled={!values[provider.id]?.trim() || saving === provider.id} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
-                      {provider.configured && <button type="button" className="btn-secondary" disabled={saving === provider.id} onClick={() => remove(provider)}>Remove</button>}
+                      <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || saving === provider.id} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
+                      {provider.configured && <button type="button" className="btn-secondary" disabled={Boolean(remoteEnvironment) || saving === provider.id} onClick={() => remove(provider)}>Remove</button>}
                     </div>
                   )}
                   {provider.models && <div className="tv4-provider-auth-model-count">{provider.models} models available</div>}

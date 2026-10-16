@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { setActiveEnvironment } from '../utils/remoteEnvironments';
 import { TerminalPane } from './TerminalPane';
 
 const refreshSessionGitStats = vi.fn();
@@ -60,6 +61,7 @@ vi.mock('./DesktopStatusBar', () => ({
     >
       <textarea
         aria-label="Command composer"
+        disabled={props.composerDisabled}
         placeholder={props.composerPlaceholder}
         value={props.composerValue}
         onChange={(event) => props.onComposerChange?.(event.target.value)}
@@ -170,6 +172,7 @@ function buildProps(overrides = {}) {
 
 describe('TerminalPane', () => {
   beforeEach(() => {
+    setActiveEnvironment(null);
     refreshSessionGitStats.mockReset();
     listSessionGitBranches.mockReset();
     checkoutSessionGitBranch.mockReset();
@@ -427,4 +430,13 @@ describe('TerminalPane', () => {
 
     expect(screen.getByTitle('Fullscreen')).toBeInTheDocument();
   });
+  it('renders remote observer terminal and composer as read only', async () => {
+    setActiveEnvironment({id:'observer',label:'Observer host',capabilities:{}});
+    render(<TerminalPane {...buildProps()} />);
+    await waitFor(()=>expect(lastTerminalChatProps).not.toBeNull());
+    expect(lastTerminalChatProps.inputEnabled).toBe(false);
+    expect(screen.getByRole('textbox',{name:'Command composer'})).toBeDisabled();
+    expect(screen.getByText(/Read-only access/)).toBeInTheDocument();
+  });
+
 });
