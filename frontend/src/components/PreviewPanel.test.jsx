@@ -277,8 +277,25 @@ describe('PreviewPanel', () => {
         '/api/terminal/session-1/input',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ command: '"C:/tmp/preview image.png" hello' }),
+          body: JSON.stringify({ command: '"C:/tmp/preview image.png" hello\r' }),
         }),
+      );
+    });
+  });
+
+  it('submits preview composer commands with Enter so the shell runs them', async () => {
+    const user = userEvent.setup();
+    const command = 'echo preview-composer';
+    const expectedBody = JSON.stringify({ command: `${command}\r` });
+    render(<PreviewPanel {...buildProps()} />);
+
+    await user.type(screen.getByRole('textbox', { name: 'Command composer' }), command);
+    await user.click(screen.getByRole('button', { name: 'Send to terminal' }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        '/api/terminal/session-1/input',
+        expect.objectContaining({ method: 'POST', body: expectedBody }),
       );
     });
   });

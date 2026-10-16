@@ -373,7 +373,7 @@ export function PreviewPanel({ url, onClose, onUrlChange, projectInfo, onStartPr
       await apiFetch(`/api/terminal/${selectedTerminalSession}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: payload })
+        body: JSON.stringify({ command: `${payload}\r` })
       });
     } catch {
       if (onSendToTerminal) onSendToTerminal(payload);
