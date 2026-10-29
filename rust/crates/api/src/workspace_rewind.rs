@@ -150,6 +150,7 @@ async fn list_route(
     Extension(user): Extension<AuthenticatedUser>,
     Query(input): Query<WorkspaceInput>,
 ) -> Result<Json<Value>, ApiError> {
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let files =
         workspace_git::rewind_files(&state.config().data_dir, &user.user_id, &input.path).await?;
@@ -189,6 +190,7 @@ async fn plan_route(
     Json(input): Json<PlanInput>,
 ) -> Result<Json<Operation>, ApiError> {
     let _mutation = MUTATIONS.lock().await;
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let _activity = crate::workspace_activity::enter(&path).map_err(ApiError::bad_request)?;
     let files =
@@ -259,6 +261,7 @@ async fn apply_route(
     Json(input): Json<WorkspaceInput>,
 ) -> Result<Json<Operation>, ApiError> {
     let _mutation = MUTATIONS.lock().await;
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let _activity = crate::workspace_activity::exclusive(&path).map_err(ApiError::bad_request)?;
     require_idle(&state, &path).await?;
@@ -356,6 +359,7 @@ async fn suspend_route(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<SuspendInput>,
 ) -> Result<Json<Value>, ApiError> {
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let _activity = crate::workspace_activity::enter(&path).map_err(ApiError::bad_request)?;
     let snapshot = state
@@ -385,6 +389,7 @@ async fn resume_route(
     Json(input): Json<WorkspaceInput>,
 ) -> Result<Json<Value>, ApiError> {
     let _mutation = MUTATIONS.lock().await;
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let _activity = crate::workspace_activity::enter(&path).map_err(ApiError::bad_request)?;
     let data = &state.config().data_dir;
@@ -470,6 +475,7 @@ async fn recover_route(
     Json(input): Json<WorkspaceInput>,
 ) -> Result<Json<Operation>, ApiError> {
     let _mutation = MUTATIONS.lock().await;
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     let path = workspace(&input.path)?;
     let _activity = crate::workspace_activity::exclusive(&path).map_err(ApiError::bad_request)?;
     require_idle(&state, &path).await?;
@@ -553,6 +559,7 @@ mod tests {
     }
     async fn isolated(data: &Path) -> (tempfile::TempDir, String) {
         let parent = tempfile::tempdir().unwrap();
+        workspace_git::permit_roots_for_test(&[parent.path()]);
         git(parent.path(), &["init", "-b", "main"]);
         git(parent.path(), &["config", "core.autocrlf", "false"]);
         git(parent.path(), &["config", "user.name", "Rewind tests"]);
@@ -683,6 +690,7 @@ mod tests {
     async fn recovered_operation_cannot_reopen_a_previous_native_branch() {
         let data = tempfile::tempdir().unwrap();
         let folder = tempfile::tempdir().unwrap();
+        workspace_git::permit_roots_for_test(&[folder.path()]);
         let path = workspace(folder.path().to_str().unwrap()).unwrap();
         let mut record = operation(&path);
         record.status = "recovered".into();
@@ -819,7 +827,7 @@ mod tests {
         let uri = format!("/api/workspace/rewind/{}/apply", record.id);
         for (owner, status) in [
             (None, StatusCode::UNAUTHORIZED),
-            (Some("other"), StatusCode::NOT_FOUND),
+            (Some("other"), StatusCode::FORBIDDEN),
             (Some("owner"), StatusCode::BAD_REQUEST),
         ] {
             let mut request = Request::builder()
@@ -865,6 +873,7 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
+        workspace_git::permit_roots_for_test(&[workspace.path(), other.path()]);
         let mut record = operation(workspace.path());
         save(data.path(), "owner", workspace.path(), &record).unwrap();
         assert!(load(data.path(), "other", workspace.path(), record.id).is_err());

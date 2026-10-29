@@ -4359,6 +4359,7 @@ mod tests {
             let mut db = state.lock_db().unwrap();
             Arc::new(bootstrap::open_or_provision(&data, &mut db).unwrap())
         };
+        background.enable_commands();
         let manager = state.structured_session_manager();
         manager.bind_live_ownership().unwrap();
         manager.bind_background_processes(background).unwrap();

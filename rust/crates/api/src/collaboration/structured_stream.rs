@@ -3,25 +3,25 @@ use std::collections::HashSet;
 use terminal_v4_core::StructuredSessionEvent;
 
 #[derive(Debug, PartialEq)]
-struct Cursor<'a> {
-    generation: &'a str,
-    seq: i64,
+pub(crate) struct Cursor<'a> {
+    pub(crate) generation: &'a str,
+    pub(crate) seq: i64,
 }
 #[derive(Debug, PartialEq)]
-struct Page<'a> {
-    cursor: Cursor<'a>,
-    messages: Vec<GuestMessage>,
-    omitted: usize,
+pub(crate) struct Page<'a> {
+    pub(crate) cursor: Cursor<'a>,
+    pub(crate) messages: Vec<GuestMessage>,
+    pub(crate) omitted: usize,
 }
 
-fn project_page<'a>(
+pub(crate) fn project_page<'a>(
     events: &[StructuredSessionEvent],
     generation: &'a str,
     cursor: Cursor<'_>,
     max_messages: usize,
     max_bytes: usize,
 ) -> Result<Page<'a>, &'static str> {
-    const MAX_EVENTS: usize = 32_768;
+    const MAX_EVENTS: usize = 262_144;
     const MAX_MESSAGE_BYTES: usize = 16 * 1024;
     const MAX_PAGE_BYTES: usize = 512 * 1024;
     if generation.is_empty()

@@ -624,16 +624,27 @@ pub(super) async fn run_command_with_backend(
     input: &Value,
     backend: &dyn super::execution_backend::ExecutionBackend,
 ) -> Result<String, String> {
-    let resources = CommandResources::default();
-    run_command_inner(
+    run_command_with_backend_controls(
         root,
         input,
-        true,
+        backend,
         std::time::Duration::from_secs(10),
         &super::interaction::Cancellation::default(),
-        &resources,
-        None,
-        backend,
+    )
+    .await
+}
+
+#[cfg(all(test, unix))]
+pub(super) async fn run_command_with_backend_controls(
+    root: &Path,
+    input: &Value,
+    backend: &dyn super::execution_backend::ExecutionBackend,
+    timeout: std::time::Duration,
+    cancel: &super::interaction::Cancellation,
+) -> Result<String, String> {
+    let resources = CommandResources::default();
+    run_command_inner(
+        root, input, true, timeout, cancel, &resources, None, backend,
     )
     .await
 }
@@ -673,7 +684,9 @@ async fn run_command_inner(
             "Previous command cleanup must be confirmed before another command can run".into(),
         );
     }
-    let mut process = backend.command(root, command)?;
+    let prepared = backend.prepare(root, command)?;
+    let mut cleanup = prepared.cleanup;
+    let mut process = prepared.command;
     process
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -735,7 +748,15 @@ async fn run_command_inner(
     };
     // The execution future only borrowed the owned pipes. Cleanup can therefore
     // freeze/discover before any handle closes, and drains without a failed sink.
-    resources.close_locked(&mut current).await?;
+    let closed = resources.close_locked(&mut current).await;
+    if let Some(mut cleanup) = cleanup.take() {
+        if result.as_ref().is_ok_and(|(status, _, _)| status.success()) {
+            cleanup.disarm();
+        } else {
+            let _ = tokio::task::spawn_blocking(move || cleanup.force_remove()).await;
+        }
+    }
+    closed?;
     cancel.check()?;
     let (status, (out, out_truncated), (err, err_truncated)) = result?;
     Ok(json!({"exitCode":status.code(),"stdout":String::from_utf8_lossy(&out),"stderr":String::from_utf8_lossy(&err),"truncated":out_truncated || err_truncated}).to_string())

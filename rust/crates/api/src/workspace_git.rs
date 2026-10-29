@@ -1,4 +1,9 @@
-use crate::{auth::AuthenticatedUser, state::AppState, ApiError};
+use crate::{
+    auth::AuthenticatedUser,
+    state::AppState,
+    worktree_setup::{self, RunEnd, RunStatus, StageStatus, WorktreeProgress},
+    ApiError,
+};
 use axum::{
     extract::{Query, State},
     Extension, Json, Router,
@@ -6,6 +11,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -17,7 +23,28 @@ use uuid::Uuid;
 
 const PATCH_LIMIT: usize = 200_000;
 const LIST_LIMIT: usize = 2_000_000;
+const SETUP_SCRIPT: &str = ".v4/worktree-setup.sh";
+const WORKTREE_ADD_TIMEOUT: Duration = Duration::from_secs(600);
+const SETUP_TIMEOUT: Duration = Duration::from_secs(600);
 static MUTATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(test)]
+thread_local! {
+    static TEST_SETUP_SCRIPTS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+fn setup_scripts_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = TEST_SETUP_SCRIPTS.with(|cell| cell.get()) {
+        return enabled;
+    }
+    #[cfg(test)]
+    {
+        true
+    }
+    #[cfg(not(test))]
+    {
+        std::env::var("TERMINAL_V4_WORKTREE_SETUP_SCRIPTS").is_ok_and(|value| value == "1")
+    }
+}
 
 #[cfg(test)]
 pub(crate) async fn lock_mutations_for_test() -> tokio::sync::MutexGuard<'static, ()> {
@@ -143,6 +170,18 @@ pub fn routes() -> Router<AppState> {
             axum::routing::get(worktrees_route).post(create_worktree_route),
         )
         .route(
+            "/api/workspace/git/worktrees/progress",
+            axum::routing::get(worktree_progress_route),
+        )
+        .route(
+            "/api/workspace/git/worktrees/cancel",
+            axum::routing::post(cancel_worktree_route),
+        )
+        .route(
+            "/api/workspace/git/worktrees/discard",
+            axum::routing::post(discard_worktree_route),
+        )
+        .route(
             "/api/workspace/git/worktrees/archive",
             axum::routing::post(archive_worktree_route),
         )
@@ -204,12 +243,10 @@ fn git_command(repo: &Path) -> tokio::process::Command {
         .kill_on_drop(true);
     command
 }
-async fn git_run(
+async fn filtered_git_command(
     repo: &Path,
-    args: &[&str],
     index: Option<&Path>,
-    limit: usize,
-) -> Result<GitOutput, ApiError> {
+) -> Result<tokio::process::Command, ApiError> {
     let mut command = git_command(repo);
     // Repository-defined filters execute programs during index reads and checkout.
     let filter_output = tokio::time::timeout(
@@ -246,6 +283,15 @@ async fn git_run(
     if let Some(index) = index {
         command.env("GIT_INDEX_FILE", index);
     }
+    Ok(command)
+}
+async fn git_run(
+    repo: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+    limit: usize,
+) -> Result<GitOutput, ApiError> {
+    let mut command = filtered_git_command(repo, index).await?;
     let mut child = command
         .args(args)
         .stdout(Stdio::piped())
@@ -305,6 +351,95 @@ pub(crate) async fn repository(path: &str) -> Result<PathBuf, ApiError> {
     let root = git_text(&cwd, &["rev-parse", "--show-toplevel"], None).await?;
     std::fs::canonicalize(root)
         .map_err(|_| ApiError::bad_request("Workspace is not an available Git repository"))
+}
+fn forbidden_workspace() -> ApiError {
+    ApiError {
+        status: axum::http::StatusCode::FORBIDDEN,
+        message: "This folder is outside your permitted workspaces".into(),
+    }
+}
+#[cfg(test)]
+thread_local! {
+    static TEST_ROOTS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+#[cfg(test)]
+pub(crate) fn permit_roots_for_test(roots: &[&Path]) {
+    TEST_ROOTS.with(|cell| {
+        cell.borrow_mut().extend(
+            roots
+                .iter()
+                .map(|root| std::fs::canonicalize(root).unwrap()),
+        )
+    });
+}
+fn resolve_lenient(path: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    let mut existing = path;
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(existing) {
+            return Some(
+                missing
+                    .iter()
+                    .rev()
+                    .fold(canonical, |acc, part| acc.join(part)),
+            );
+        }
+        let name = existing.file_name()?;
+        missing.push(name.to_owned());
+        existing = existing.parent()?;
+    }
+}
+struct WorkspaceScope {
+    roots: Vec<PathBuf>,
+    own_storage: PathBuf,
+    all_storage: PathBuf,
+}
+impl WorkspaceScope {
+    fn permits(&self, canonical: &Path) -> bool {
+        if canonical.starts_with(&self.own_storage) {
+            return true;
+        }
+        if canonical.starts_with(&self.all_storage) {
+            return false;
+        }
+        self.roots.iter().any(|root| canonical.starts_with(root))
+    }
+}
+fn workspace_scope(data_dir: &Path, user_id: &str) -> Result<WorkspaceScope, ApiError> {
+    #[allow(unused_mut)]
+    let mut roots = crate::files::allowed_file_roots().map_err(|_| forbidden_workspace())?;
+    #[cfg(test)]
+    TEST_ROOTS.with(|cell| roots.extend(cell.borrow().iter().cloned()));
+    let all_storage =
+        resolve_lenient(&data_dir.join("workspace-git")).ok_or_else(forbidden_workspace)?;
+    Ok(WorkspaceScope {
+        roots,
+        own_storage: all_storage.join(&digest(user_id)[..32]),
+        all_storage,
+    })
+}
+/// Allows only repositories inside the configured file roots or this user's managed checkouts.
+pub(crate) async fn authorize_workspace_path(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    path: &str,
+) -> Result<(), ApiError> {
+    if path.is_empty() || path.len() > 4096 || !Path::new(path).is_absolute() {
+        return Err(ApiError::bad_request(
+            "An absolute workspace directory is required",
+        ));
+    }
+    let scope = workspace_scope(&state.config().data_dir, &user.user_id)?;
+    let canonical = resolve_lenient(Path::new(path)).ok_or_else(forbidden_workspace)?;
+    if !scope.permits(&canonical) {
+        return Err(forbidden_workspace());
+    }
+    if let Ok(top) = repository(path).await {
+        if !scope.permits(&top) {
+            return Err(forbidden_workspace());
+        }
+    }
+    Ok(())
 }
 fn digest(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
@@ -590,7 +725,8 @@ async fn base_refs(path: &str) -> Result<Value, ApiError> {
     Ok(json!({ "branches": branches, "truncated": truncated }))
 }
 async fn base_refs_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<GitQuery>,
 ) -> Result<
     (
@@ -599,6 +735,7 @@ async fn base_refs_route(
     ),
     ApiError,
 > {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     Ok((
         [(axum::http::header::CACHE_CONTROL, "private, no-store")],
         Json(base_refs(&query.path).await?),
@@ -609,7 +746,8 @@ struct BranchesInput {
     paths: Vec<String>,
 }
 async fn branches_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<BranchesInput>,
 ) -> Result<
     (
@@ -618,7 +756,16 @@ async fn branches_route(
     ),
     ApiError,
 > {
-    let branches = current_branches(&input.paths).await?;
+    let mut permitted = Vec::new();
+    for path in &input.paths {
+        if authorize_workspace_path(&state, &user, path).await.is_ok() {
+            permitted.push(path.clone());
+        }
+    }
+    let mut branches = current_branches(&permitted).await?;
+    for path in &input.paths {
+        branches.entry(path.clone()).or_insert(Value::Null);
+    }
     Ok((
         [(axum::http::header::CACHE_CONTROL, "private, no-store")],
         Json(json!({ "branches": branches })),
@@ -760,9 +907,11 @@ struct PullRequestQuery {
 }
 
 async fn pull_request_status_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<PullRequestQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     Ok(Json(
         crate::workspace_pull_request::status(&query.path).await?,
     ))
@@ -776,9 +925,11 @@ struct CommitInput {
     push: bool,
 }
 async fn commit_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<CommitInput>,
 ) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     let (commit, branch) = commit_all(&input.path, &input.message).await?;
     let pushed = if input.push {
         Some(push_branch(&input.path).await?)
@@ -794,9 +945,11 @@ struct PushInput {
     path: String,
 }
 async fn push_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<PushInput>,
 ) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     Ok(Json(
         json!({ "branch": push_branch(&input.path).await?, "pushed": true }),
     ))
@@ -809,9 +962,11 @@ struct PullRequestInput {
     body: String,
 }
 async fn pull_request_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<PullRequestInput>,
 ) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     push_branch(&input.path).await?;
     let url = create_pull_request_with("gh", &input.path, &input.title, &input.body).await?;
     crate::workspace_pull_request::invalidate_cache();
@@ -901,6 +1056,36 @@ async fn create_managed_worktree_with_id(
     base_ref: &str,
     id: Uuid,
 ) -> Result<ManagedWorktree, ApiError> {
+    let progress = WorktreeProgress::new(id);
+    create_managed_worktree_tracked(data_dir, user_id, path, name, base_ref, id, &progress).await
+}
+async fn create_managed_worktree_tracked(
+    data_dir: &Path,
+    user_id: &str,
+    path: &str,
+    name: &str,
+    base_ref: &str,
+    id: Uuid,
+    progress: &Arc<WorktreeProgress>,
+) -> Result<ManagedWorktree, ApiError> {
+    let outcome =
+        create_worktree_stages(data_dir, user_id, path, name, base_ref, id, progress).await;
+    match &outcome {
+        Ok(_) => progress.finish(RunStatus::Ready, None),
+        Err(error) => progress.finish(RunStatus::Failed, Some(error.message.clone())),
+    }
+    outcome
+}
+async fn create_worktree_stages(
+    data_dir: &Path,
+    user_id: &str,
+    path: &str,
+    name: &str,
+    base_ref: &str,
+    id: Uuid,
+    progress: &Arc<WorktreeProgress>,
+) -> Result<ManagedWorktree, ApiError> {
+    progress.set_stage("base", StageStatus::Running, None);
     if !cfg!(unix) {
         return Err(ApiError::internal(
             "Durable worktree creation is unavailable on this platform",
@@ -1019,29 +1204,92 @@ async fn create_managed_worktree_with_id(
         archive_checkpoint_id: None,
         creation_status: WorktreeCreationStatus::Unconfirmed,
     };
+    let workspace_text = workspace.to_string_lossy().into_owned();
     let intent = WorktreeCreationIntent {
         tree: result.clone(),
         commit: commit.clone(),
         workspace,
     };
-    write_durable_record(data_dir, &operation_file, &intent)?;
-    if git_text(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "--no-track",
-            "-b",
-            &result.branch,
-            &result.path,
-            &commit,
-        ],
-        None,
-    )
-    .await
-    .is_err()
+    let checkouts = root.join("checkouts");
+    let branch_ref = format!("refs/heads/{}", result.branch);
+    if std::fs::symlink_metadata(&target).is_ok()
+        || git_text(
+            &repo,
+            &["show-ref", "--verify", "--quiet", &branch_ref],
+            None,
+        )
+        .await
+        .is_ok()
     {
-        return Err(ApiError::internal(format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", result.path)));
+        return Err(ApiError::bad_request(
+            "The worktree location or branch already exists. Review Git & worktrees before trying again.",
+        ));
+    }
+    progress.set_stage(
+        "base",
+        StageStatus::Done,
+        Some(format!(
+            "{} at {}",
+            base_ref,
+            &commit[..commit.len().min(12)]
+        )),
+    );
+    progress.set_stage(
+        "checkout",
+        StageStatus::Running,
+        Some(result.branch.clone()),
+    );
+    write_durable_record(data_dir, &operation_file, &intent)?;
+    let mut add = filtered_git_command(&repo, None).await?;
+    add.args([
+        "worktree",
+        "add",
+        "--no-track",
+        "-b",
+        &result.branch,
+        &result.path,
+        &commit,
+    ]);
+    let end = match worktree_setup::run_streamed(add, progress, WORKTREE_ADD_TIMEOUT).await {
+        Ok(end) => end,
+        Err(error) => {
+            abandon_creation(&repo, &checkouts, &result, &operation_file, progress).await;
+            return Err(error);
+        }
+    };
+    let end = if end == RunEnd::Success && progress.token().is_cancelled() {
+        RunEnd::Cancelled
+    } else {
+        end
+    };
+    match end {
+        RunEnd::Success => {}
+        RunEnd::Cancelled => {
+            progress.set_stage("checkout", StageStatus::Cancelled, None);
+            let cleaned =
+                abandon_creation(&repo, &checkouts, &result, &operation_file, progress).await;
+            progress.finish(RunStatus::Cancelled, None);
+            return Err(cancelled_error(cleaned, &result.path));
+        }
+        RunEnd::Failed(_) | RunEnd::TimedOut => {
+            let reason = if end == RunEnd::TimedOut {
+                "Git timed out".to_string()
+            } else {
+                progress
+                    .last_line()
+                    .unwrap_or_else(|| "Git reported an error".into())
+            };
+            progress.set_stage("checkout", StageStatus::Failed, Some(reason.clone()));
+            let cleaned =
+                abandon_creation(&repo, &checkouts, &result, &operation_file, progress).await;
+            return Err(if cleaned {
+                ApiError::bad_request(format!(
+                    "Git could not create the worktree: {reason}. Nothing was left behind."
+                ))
+            } else {
+                ApiError::internal(format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", result.path))
+            });
+        }
     }
     #[cfg(test)]
     if std::env::var("V4_TEST_WORKTREE_CRASH_AFTER_GIT")
@@ -1059,10 +1307,189 @@ async fn create_managed_worktree_with_id(
     {
         std::fs::write(root.join("worktrees"), b"blocked").unwrap();
     }
+    progress.set_stage("checkout", StageStatus::Done, None);
+    let script = Path::new(&result.path).join(SETUP_SCRIPT);
+    let script_present = std::fs::symlink_metadata(&script).is_ok_and(|meta| meta.is_file());
+    if script_present && !setup_scripts_enabled() {
+        progress.set_stage(
+            "setup",
+            StageStatus::Skipped,
+            Some(format!("{SETUP_SCRIPT} was not run. Running repository setup scripts is off; set TERMINAL_V4_WORKTREE_SETUP_SCRIPTS=1 on the server to allow it.")),
+        );
+    } else if script_present {
+        progress.set_stage("setup", StageStatus::Running, Some(SETUP_SCRIPT.into()));
+        let mut setup = tokio::process::Command::new("sh");
+        setup
+            .arg(SETUP_SCRIPT)
+            .current_dir(&result.path)
+            .env("V4_WORKTREE_PATH", &result.path)
+            .env("V4_PROJECT_PATH", &workspace_text);
+        match worktree_setup::run_streamed(setup, progress, SETUP_TIMEOUT).await? {
+            RunEnd::Success => progress.set_stage("setup", StageStatus::Done, None),
+            RunEnd::Failed(code) => progress.set_stage(
+                "setup",
+                StageStatus::Warning,
+                Some(match code {
+                    Some(code) => format!("Exited with status {code}. The worktree is ready, but setup did not finish."),
+                    None => "Stopped unexpectedly. The worktree is ready, but setup did not finish.".into(),
+                }),
+            ),
+            RunEnd::TimedOut => progress.set_stage(
+                "setup",
+                StageStatus::Warning,
+                Some("Timed out. The worktree is ready, but setup did not finish.".into()),
+            ),
+            RunEnd::Cancelled => {
+                progress.set_stage("setup", StageStatus::Cancelled, None);
+                let cleaned =
+                    abandon_creation(&repo, &checkouts, &result, &operation_file, progress).await;
+                progress.finish(RunStatus::Cancelled, None);
+                return Err(cancelled_error(cleaned, &result.path));
+            }
+        }
+    } else {
+        progress.set_stage(
+            "setup",
+            StageStatus::Skipped,
+            Some("No setup script configured".into()),
+        );
+    }
     result.available = true;
     result.creation_status = WorktreeCreationStatus::Ready;
     write_durable_record(data_dir, &record_file, &result).map_err(|_| ApiError::internal(format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", result.path)))?;
     Ok(result)
+}
+fn cancelled_error(cleaned: bool, path: &str) -> ApiError {
+    ApiError {
+        status: axum::http::StatusCode::CONFLICT,
+        message: if cleaned {
+            "Worktree creation was cancelled and the partial checkout was removed.".into()
+        } else {
+            format!("Worktree creation was cancelled, but the partial checkout could not be fully removed. Review {path} in Git & worktrees.")
+        },
+    }
+}
+async fn abandon_creation(
+    repo: &Path,
+    checkouts: &Path,
+    tree: &ManagedWorktree,
+    operation_file: &Path,
+    progress: &Arc<WorktreeProgress>,
+) -> bool {
+    let cleaned = discard_created_checkout(repo, checkouts, tree).await;
+    if cleaned {
+        let _ = std::fs::remove_file(operation_file);
+        progress.set_cleanup(
+            true,
+            "The partial checkout and its branch were removed.".into(),
+        );
+    } else {
+        progress.set_cleanup(
+            false,
+            "The partial checkout could not be fully removed and is kept for review.".into(),
+        );
+    }
+    cleaned
+}
+async fn discard_created_checkout(repo: &Path, checkouts: &Path, tree: &ManagedWorktree) -> bool {
+    let target = PathBuf::from(&tree.path);
+    let own_branch =
+        tree.branch.starts_with("codex/") && tree.branch.ends_with(&tree.id.simple().to_string());
+    let Ok(parent) = std::fs::canonicalize(checkouts) else {
+        return false;
+    };
+    if !own_branch
+        || target.parent() != Some(parent.as_path())
+        || target.file_name().and_then(|name| name.to_str()) != Some(&tree.id.to_string())
+    {
+        return false;
+    }
+    let _ = git_text(repo, &["worktree", "remove", "--force", &tree.path], None).await;
+    if let Ok(meta) = std::fs::symlink_metadata(&target) {
+        let _ = if meta.is_dir() {
+            std::fs::remove_dir_all(&target)
+        } else {
+            std::fs::remove_file(&target)
+        };
+    }
+    let _ = git_text(repo, &["worktree", "prune"], None).await;
+    let branch_ref = format!("refs/heads/{}", tree.branch);
+    if git_text(
+        repo,
+        &["show-ref", "--verify", "--quiet", &branch_ref],
+        None,
+    )
+    .await
+    .is_ok()
+    {
+        let _ = git_text(repo, &["branch", "-D", &tree.branch], None).await;
+    }
+    let listed = git_text(repo, &["worktree", "list", "--porcelain"], None)
+        .await
+        .unwrap_or_default();
+    std::fs::symlink_metadata(&target).is_err()
+        && !listed.contains(&tree.path)
+        && git_text(
+            repo,
+            &["show-ref", "--verify", "--quiet", &branch_ref],
+            None,
+        )
+        .await
+        .is_err()
+}
+async fn discard_unfinished_worktree(
+    data_dir: &Path,
+    user_id: &str,
+    path: &str,
+    id: Uuid,
+) -> Result<(), ApiError> {
+    if worktree_setup::lookup(user_id, id).is_some_and(|progress| progress.is_running()) {
+        return Err(ApiError {
+            status: axum::http::StatusCode::CONFLICT,
+            message: "This worktree is still being created. Cancel it first.".into(),
+        });
+    }
+    let _guard = MUTATIONS.lock().await;
+    let repo = repository(path).await?;
+    let root = storage_root(data_dir, user_id, &repo).await?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(root.join("worktree-creation.lock"))
+        .map_err(|_| ApiError::bad_request("No unfinished worktree request was found"))?;
+    lock.try_lock().map_err(|_| {
+        ApiError::bad_request("Another worktree creation is in progress. Try again shortly.")
+    })?;
+    let operation_file = root.join("worktree-operations").join(format!("{id}.json"));
+    let record_file = root.join("worktrees").join(format!("{id}.json"));
+    if !operation_file.exists() {
+        return Err(ApiError::bad_request(
+            "No unfinished worktree request was found",
+        ));
+    }
+    if record_file.exists() {
+        let record: ManagedWorktree = read_record(&record_file)?;
+        if record.creation_status == WorktreeCreationStatus::Ready {
+            return Err(ApiError::bad_request(
+                "This worktree finished creating. Archive it from Git & worktrees instead.",
+            ));
+        }
+    }
+    let intent: WorktreeCreationIntent = read_record(&operation_file)?;
+    if intent.tree.id != id {
+        return Err(ApiError::internal("Worktree creation record needs review"));
+    }
+    if !discard_created_checkout(&repo, &root.join("checkouts"), &intent.tree).await {
+        return Err(ApiError::internal(format!(
+            "The unfinished checkout could not be removed safely. Inspect {} yourself.",
+            intent.tree.path
+        )));
+    }
+    let _ = std::fs::remove_file(&record_file);
+    std::fs::remove_file(&operation_file)
+        .map_err(|_| ApiError::internal("Unable to clear the unfinished worktree record"))?;
+    Ok(())
 }
 async fn list_managed_worktrees(
     data_dir: &Path,
@@ -1594,6 +2021,7 @@ async fn status_route(
     ),
     ApiError,
 > {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     let mut value = if query.mode == "turn" {
         let (repo, args) =
             turn_review_args(&query.path, query.from.as_deref(), query.to.as_deref()).await?;
@@ -1629,6 +2057,7 @@ async fn diff_route(
     ),
     ApiError,
 > {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     let file = query
         .file
         .ok_or_else(|| ApiError::bad_request("Changed file is required"))?;
@@ -1673,6 +2102,7 @@ async fn worktrees_route(
     Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<GitQuery>,
 ) -> Result<Json<Vec<ManagedWorktree>>, ApiError> {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     Ok(Json(
         list_managed_worktrees(&state.config().data_dir, &user.user_id, &query.path).await?,
     ))
@@ -1682,25 +2112,89 @@ async fn create_worktree_route(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<WorktreeInput>,
 ) -> Result<Json<ManagedWorktree>, ApiError> {
-    let _activity =
+    authorize_workspace_path(&state, &user, &input.path).await?;
+    let activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
-    Ok(Json(
-        create_managed_worktree_with_id(
-            &state.config().data_dir,
-            &user.user_id,
+    let id = input.operation_id.unwrap_or_else(Uuid::new_v4);
+    let progress = worktree_setup::begin(&user.user_id, id)?;
+    let data_dir = state.config().data_dir.clone();
+    let owner = user.user_id.clone();
+    let task = tokio::spawn(async move {
+        let _activity = activity;
+        create_managed_worktree_tracked(
+            &data_dir,
+            &owner,
             &input.path,
             &input.name,
             &input.base_ref,
-            input.operation_id.unwrap_or_else(Uuid::new_v4),
+            id,
+            &progress,
         )
-        .await?,
+        .await
+    });
+    Ok(Json(task.await.map_err(|_| {
+        ApiError::internal("Worktree creation stopped unexpectedly")
+    })??))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressQuery {
+    operation_id: Uuid,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CancelInput {
+    operation_id: Uuid,
+}
+async fn worktree_progress_route(
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<ProgressQuery>,
+) -> Result<
+    (
+        [(axum::http::header::HeaderName, &'static str); 1],
+        Json<worktree_setup::ProgressSnapshot>,
+    ),
+    ApiError,
+> {
+    let progress = worktree_setup::lookup(&user.user_id, query.operation_id)
+        .ok_or_else(|| ApiError::not_found("No worktree progress for this request"))?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(progress.snapshot()),
     ))
+}
+async fn cancel_worktree_route(
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<CancelInput>,
+) -> Result<Json<worktree_setup::ProgressSnapshot>, ApiError> {
+    let progress = worktree_setup::lookup(&user.user_id, input.operation_id)
+        .ok_or_else(|| ApiError::not_found("No worktree progress for this request"))?;
+    progress.cancel();
+    Ok(Json(progress.snapshot()))
+}
+async fn discard_worktree_route(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<WorktreeLifecycleInput>,
+) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
+    let _activity =
+        crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
+    discard_unfinished_worktree(
+        &state.config().data_dir,
+        &user.user_id,
+        &input.path,
+        input.worktree_id,
+    )
+    .await?;
+    Ok(Json(json!({"discarded": true})))
 }
 async fn archive_worktree_route(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<WorktreeLifecycleInput>,
 ) -> Result<Json<ManagedWorktree>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     let _activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
     Ok(Json(
@@ -1719,6 +2213,7 @@ async fn reactivate_worktree_route(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<WorktreeLifecycleInput>,
 ) -> Result<Json<ManagedWorktree>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     let _activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
     Ok(Json(
@@ -1737,6 +2232,7 @@ async fn checkpoints_route(
     Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<GitQuery>,
 ) -> Result<Json<Vec<WorkspaceCheckpoint>>, ApiError> {
+    authorize_workspace_path(&state, &user, &query.path).await?;
     let repo = repository(&query.path).await?;
     let records = checkpoint_records(&state.config().data_dir, &user.user_id, &repo).await?;
     Ok(Json(
@@ -1751,6 +2247,7 @@ async fn capture_route(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<CheckpointInput>,
 ) -> Result<Json<WorkspaceCheckpoint>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     let _activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
     let checkpoint = capture_checkpoint(
@@ -1768,6 +2265,7 @@ async fn restore_route(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<RestoreInput>,
 ) -> Result<Json<Value>, ApiError> {
+    authorize_workspace_path(&state, &user, &input.path).await?;
     let _activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
     restore_checkpoint(
@@ -2524,6 +3022,7 @@ mod route_tests {
     async fn git_routes_require_authentication_and_isolate_worktree_records() {
         let data = tempfile::tempdir().unwrap();
         let repo = super::integration_tests::repository();
+        permit_roots_for_test(&[repo.path()]);
         let config = terminal_v4_core::AppConfig {
             data_dir: data.path().to_path_buf(),
             jwt_secret: "git-route-secret".into(),
@@ -2689,6 +3188,7 @@ mod route_tests {
     async fn lifecycle_routes_require_authentication_and_reject_other_owners() {
         let data = tempfile::tempdir().unwrap();
         let repo = super::integration_tests::repository();
+        permit_roots_for_test(&[repo.path()]);
         let path = repo.path().to_str().unwrap();
         let tree = create_managed_worktree(data.path(), "owner", path, "API lifecycle", "HEAD")
             .await
@@ -2780,6 +3280,319 @@ mod route_tests {
                 diff["patch"].as_str().unwrap().len()
             ),
             (true, PATCH_LIMIT)
+        );
+    }
+    fn authorized_app(data: &Path, secret: &str) -> axum::Router {
+        let state = AppState::new_with_external_auth(
+            terminal_v4_core::AppConfig {
+                data_dir: data.to_path_buf(),
+                jwt_secret: secret.into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        routes()
+            .merge(crate::workspace_pull_request::routes())
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::require_auth,
+            ))
+            .with_state(state)
+    }
+    async fn call(
+        app: &axum::Router,
+        secret: &str,
+        user: &str,
+        method: &str,
+        uri: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let token = crate::auth::issue_access_token(secret, user, user);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+    fn encoded(path: &Path) -> String {
+        url::form_urlencoded::byte_serialize(path.to_str().unwrap().as_bytes()).collect()
+    }
+    fn commit_count(path: &Path) -> String {
+        integration_tests::git(path, &["rev-list", "--count", "HEAD"])
+    }
+
+    #[tokio::test]
+    async fn every_git_route_refuses_repositories_outside_permitted_workspaces_before_running_anything(
+    ) {
+        let data = tempfile::tempdir().unwrap();
+        let allowed = tempfile::tempdir().unwrap();
+        let outside = super::integration_tests::repository();
+        std::fs::write(outside.path().join("note.txt"), "dirty\n").unwrap();
+        permit_roots_for_test(&[allowed.path()]);
+        let app = authorized_app(data.path(), "perm-secret");
+        let path = outside.path();
+        let q = encoded(path);
+        let p = path.to_str().unwrap();
+        let id = Uuid::new_v4();
+        let requests: Vec<(&str, String, Value)> = vec![
+            (
+                "GET",
+                format!("/api/workspace/git/status?path={q}"),
+                Value::Null,
+            ),
+            (
+                "GET",
+                format!("/api/workspace/git/diff?path={q}&file=note.txt"),
+                Value::Null,
+            ),
+            (
+                "GET",
+                format!("/api/workspace/git/branches?path={q}"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/api/workspace/git/commit".into(),
+                json!({"path":p,"message":"x","push":true}),
+            ),
+            ("POST", "/api/workspace/git/push".into(), json!({"path":p})),
+            (
+                "POST",
+                "/api/workspace/git/pull-request".into(),
+                json!({"path":p,"title":"t"}),
+            ),
+            (
+                "GET",
+                format!("/api/workspace/git/pull-request?path={q}"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/api/workspace/git/pull-request/action".into(),
+                json!({"path":p,"repository":p,"headSha":"1111111","url":"u","action":"ready","number":7,"confirm":"ready #7 @ 1111111"}),
+            ),
+            (
+                "GET",
+                format!("/api/workspace/git/worktrees?path={q}"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/api/workspace/git/worktrees".into(),
+                json!({"path":p,"name":"t"}),
+            ),
+            (
+                "POST",
+                "/api/workspace/git/worktrees/archive".into(),
+                json!({"path":p,"worktreeId":id}),
+            ),
+            (
+                "POST",
+                "/api/workspace/git/worktrees/discard".into(),
+                json!({"path":p,"worktreeId":id}),
+            ),
+            (
+                "POST",
+                "/api/workspace/git/worktrees/reactivate".into(),
+                json!({"path":p,"worktreeId":id}),
+            ),
+            (
+                "GET",
+                format!("/api/workspace/git/checkpoints?path={q}"),
+                Value::Null,
+            ),
+            (
+                "POST",
+                "/api/workspace/git/checkpoints".into(),
+                json!({"path":p,"label":"t"}),
+            ),
+            (
+                "POST",
+                "/api/workspace/git/checkpoints/restore".into(),
+                json!({"path":p,"checkpointId":id}),
+            ),
+        ];
+        let mut statuses = Vec::new();
+        for (method, uri, body) in &requests {
+            statuses.push(
+                call(&app, "perm-secret", "owner", method, uri, body.clone())
+                    .await
+                    .0,
+            );
+        }
+        assert_eq!(
+            (
+                statuses,
+                commit_count(path),
+                std::fs::read_dir(data.path().join("workspace-git")).is_err(),
+            ),
+            (
+                vec![StatusCode::FORBIDDEN; requests.len()],
+                "1".to_string(),
+                true
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn symlinks_and_parent_repositories_cannot_escape_the_permitted_roots() {
+        let data = tempfile::tempdir().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let outside = super::integration_tests::repository();
+        let allowed = base.path().join("allowed");
+        std::fs::create_dir(&allowed).unwrap();
+        std::os::unix::fs::symlink(outside.path(), allowed.join("link")).unwrap();
+        let parent_repo = super::integration_tests::repository();
+        let nested = parent_repo.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        permit_roots_for_test(&[&allowed, &nested]);
+        let app = authorized_app(data.path(), "link-secret");
+        let mut statuses = Vec::new();
+        for target in [
+            allowed.join("link"),
+            allowed.join("link").join("missing"),
+            allowed.join("../outside-missing"),
+            nested.clone(),
+        ] {
+            let uri = format!("/api/workspace/git/status?path={}", encoded(&target));
+            statuses.push(
+                call(&app, "link-secret", "owner", "GET", &uri, Value::Null)
+                    .await
+                    .0,
+            );
+        }
+        assert_eq!(
+            statuses,
+            [
+                StatusCode::FORBIDDEN,
+                StatusCode::FORBIDDEN,
+                StatusCode::FORBIDDEN,
+                StatusCode::FORBIDDEN
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn permitted_roots_and_their_subfolders_keep_working_and_hide_unpermitted_branches() {
+        let data = tempfile::tempdir().unwrap();
+        let repo = super::integration_tests::repository();
+        let outside = super::integration_tests::repository();
+        let sub = repo.path().join("src");
+        std::fs::create_dir(&sub).unwrap();
+        permit_roots_for_test(&[repo.path()]);
+        let app = authorized_app(data.path(), "ok-secret");
+        let root_status = call(
+            &app,
+            "ok-secret",
+            "owner",
+            "GET",
+            &format!("/api/workspace/git/status?path={}", encoded(repo.path())),
+            Value::Null,
+        )
+        .await
+        .0;
+        let sub_status = call(
+            &app,
+            "ok-secret",
+            "owner",
+            "GET",
+            &format!("/api/workspace/git/status?path={}", encoded(&sub)),
+            Value::Null,
+        )
+        .await
+        .0;
+        let batch = call(
+            &app,
+            "ok-secret",
+            "owner",
+            "POST",
+            "/api/workspace/git/branches",
+            json!({"paths":[repo.path().to_str().unwrap(), outside.path().to_str().unwrap()]}),
+        )
+        .await;
+        assert_eq!(
+            (
+                root_status,
+                sub_status,
+                batch.0,
+                batch.1["branches"][outside.path().to_str().unwrap()].clone(),
+                batch.1["branches"][repo.path().to_str().unwrap()].clone()
+            ),
+            (
+                StatusCode::OK,
+                StatusCode::OK,
+                StatusCode::OK,
+                Value::Null,
+                json!("main")
+            )
+        );
+    }
+
+    fn managed_checkout_fixture(data: &Path, owner: &str) -> PathBuf {
+        let checkout = data
+            .join("workspace-git")
+            .join(&digest(owner)[..32])
+            .join("repo-key")
+            .join("checkouts")
+            .join("task");
+        std::fs::create_dir_all(&checkout).unwrap();
+        integration_tests::git(&checkout, &["init", "-b", "main"]);
+        checkout
+    }
+    async fn status_codes(
+        app: &axum::Router,
+        secret: &str,
+        checkout: &Path,
+    ) -> (StatusCode, StatusCode) {
+        let uri = format!("/api/workspace/git/status?path={}", encoded(checkout));
+        (
+            call(app, secret, "owner", "GET", &uri, Value::Null).await.0,
+            call(app, secret, "another", "GET", &uri, Value::Null)
+                .await
+                .0,
+        )
+    }
+
+    #[tokio::test]
+    async fn managed_checkouts_belong_to_their_owner_even_when_storage_is_inside_a_permitted_root()
+    {
+        let shared = tempfile::tempdir().unwrap();
+        let data = shared.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        permit_roots_for_test(&[shared.path()]);
+        let checkout = managed_checkout_fixture(&data, "owner");
+        let app = authorized_app(&data, "iso-secret");
+        assert_eq!(
+            status_codes(&app, "iso-secret", &checkout).await,
+            (StatusCode::OK, StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_checkouts_outside_every_file_root_stay_usable_by_their_owner() {
+        let data = tempfile::tempdir().unwrap();
+        let unrelated = tempfile::tempdir().unwrap();
+        permit_roots_for_test(&[unrelated.path()]);
+        let checkout = managed_checkout_fixture(data.path(), "owner");
+        let app = authorized_app(data.path(), "own-secret");
+        assert_eq!(
+            status_codes(&app, "own-secret", &checkout).await,
+            (StatusCode::OK, StatusCode::FORBIDDEN)
         );
     }
 }
@@ -3011,6 +3824,378 @@ mod worktree_lifecycle_tests {
                 before_status,
                 "initial\n".into(),
             )
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod worktree_progress_tests {
+    use super::integration_tests::{git, repository};
+    use super::*;
+
+    fn repository_with_setup(script: &str) -> tempfile::TempDir {
+        let repo = repository();
+        std::fs::create_dir_all(repo.path().join(".v4")).unwrap();
+        std::fs::write(repo.path().join(SETUP_SCRIPT), script).unwrap();
+        git(repo.path(), &["add", SETUP_SCRIPT]);
+        git(repo.path(), &["commit", "-m", "setup script"]);
+        repo
+    }
+    fn stage_status(progress: &WorktreeProgress, id: &str) -> StageStatus {
+        progress
+            .snapshot()
+            .stages
+            .iter()
+            .find(|stage| stage.id == id)
+            .unwrap()
+            .status
+    }
+    fn only_main_worktree(repo: &Path) -> bool {
+        git(repo, &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count()
+            == 1
+            && git(repo, &["branch", "--list", "codex/*"]).is_empty()
+    }
+
+    #[tokio::test]
+    async fn progress_reports_each_stage_and_the_setup_output_tail() {
+        let repo = repository_with_setup("echo installing\necho done-installing\n");
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let progress = WorktreeProgress::new(id);
+        let tree = create_managed_worktree_tracked(
+            data.path(),
+            "owner",
+            repo.path().to_str().unwrap(),
+            "Staged",
+            "HEAD",
+            id,
+            &progress,
+        )
+        .await
+        .unwrap();
+        let snapshot = progress.snapshot();
+        assert_eq!(
+            (
+                snapshot.status,
+                snapshot.stages.iter().map(|s| s.status).collect::<Vec<_>>(),
+                snapshot.tail.contains(&"installing".to_string()),
+                snapshot.tail.contains(&"done-installing".to_string()),
+                tree.available,
+            ),
+            (
+                RunStatus::Ready,
+                vec![StageStatus::Done, StageStatus::Done, StageStatus::Done],
+                true,
+                true,
+                true
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_setup_script_is_skipped_and_failing_script_warns_but_keeps_the_worktree() {
+        let plain = repository();
+        let data = tempfile::tempdir().unwrap();
+        let skipped = WorktreeProgress::new(Uuid::new_v4());
+        create_managed_worktree_tracked(
+            data.path(),
+            "owner",
+            plain.path().to_str().unwrap(),
+            "Plain",
+            "HEAD",
+            Uuid::new_v4(),
+            &skipped,
+        )
+        .await
+        .unwrap();
+        let failing = repository_with_setup("echo boom\nexit 3\n");
+        let id = Uuid::new_v4();
+        let warned = WorktreeProgress::new(id);
+        let tree = create_managed_worktree_tracked(
+            data.path(),
+            "owner",
+            failing.path().to_str().unwrap(),
+            "Failing",
+            "HEAD",
+            id,
+            &warned,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                stage_status(&skipped, "setup"),
+                stage_status(&warned, "setup"),
+                warned.snapshot().status,
+                tree.available,
+                warned.snapshot().tail.last().cloned(),
+            ),
+            (
+                StageStatus::Skipped,
+                StageStatus::Warning,
+                RunStatus::Ready,
+                true,
+                Some("boom".to_string())
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_setup_scripts_are_not_run_and_the_worktree_stays_usable() {
+        TEST_SETUP_SCRIPTS.with(|cell| cell.set(Some(false)));
+        let repo = repository_with_setup("touch ran.marker\n");
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let progress = WorktreeProgress::new(id);
+        let tree = create_managed_worktree_tracked(
+            data.path(),
+            "owner",
+            repo.path().to_str().unwrap(),
+            "Disabled",
+            "HEAD",
+            id,
+            &progress,
+        )
+        .await
+        .unwrap();
+        TEST_SETUP_SCRIPTS.with(|cell| cell.set(None));
+        assert_eq!(
+            (
+                stage_status(&progress, "setup"),
+                Path::new(&tree.path).join("ran.marker").exists(),
+                tree.available,
+            ),
+            (StageStatus::Skipped, false, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_during_setup_removes_the_checkout_branch_and_record() {
+        let repo = repository_with_setup("echo begun\nsleep 60\n");
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let progress = WorktreeProgress::new(id);
+        let running = progress.clone();
+        let data_path = data.path().to_owned();
+        let path = repo.path().to_str().unwrap().to_owned();
+        let task = tokio::spawn(async move {
+            create_managed_worktree_tracked(
+                &data_path,
+                "owner",
+                &path,
+                "Cancel me",
+                "HEAD",
+                id,
+                &running,
+            )
+            .await
+        });
+        let started = std::time::Instant::now();
+        while !progress.snapshot().tail.contains(&"begun".to_string()) {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "setup never started"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(progress.cancel());
+        let result = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let root = storage_root(data.path(), "owner", repo.path())
+            .await
+            .unwrap();
+        let snapshot = progress.snapshot();
+        assert_eq!(
+            (
+                result.unwrap_err().status,
+                snapshot.status,
+                stage_status(&progress, "setup"),
+                snapshot.cleanup.is_some(),
+                root.join("checkouts").join(id.to_string()).exists(),
+                root.join("worktree-operations")
+                    .join(format!("{id}.json"))
+                    .exists(),
+                root.join("worktrees").join(format!("{id}.json")).exists(),
+                only_main_worktree(repo.path()),
+            ),
+            (
+                axum::http::StatusCode::CONFLICT,
+                RunStatus::Cancelled,
+                StageStatus::Cancelled,
+                true,
+                false,
+                false,
+                false,
+                true
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_before_git_runs_leaves_nothing_behind() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let progress = WorktreeProgress::new(id);
+        progress.cancel();
+        let result = create_managed_worktree_tracked(
+            data.path(),
+            "owner",
+            repo.path().to_str().unwrap(),
+            "Never started",
+            "HEAD",
+            id,
+            &progress,
+        )
+        .await;
+        assert_eq!(
+            (
+                result.is_err(),
+                progress.snapshot().status,
+                only_main_worktree(repo.path()),
+                list_managed_worktrees(data.path(), "owner", repo.path().to_str().unwrap())
+                    .await
+                    .unwrap()
+                    .len(),
+            ),
+            (true, RunStatus::Cancelled, true, 0)
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_setup_crash_fixture() {
+        let Some(id) = std::env::var("V4_TEST_WORKTREE_SETUP_CRASH").ok() else {
+            return;
+        };
+        let _ = create_managed_worktree_with_id(
+            Path::new(&std::env::var("V4_TEST_WORKTREE_DATA").unwrap()),
+            "owner",
+            &std::env::var("V4_TEST_WORKTREE_REPO").unwrap(),
+            "Crash in setup",
+            "HEAD",
+            Uuid::parse_str(&id).unwrap(),
+        )
+        .await;
+        panic!("setup script did not take the process down");
+    }
+
+    #[tokio::test]
+    async fn crash_during_setup_is_detected_not_reused_and_can_be_discarded() {
+        let repo = repository_with_setup("echo half\nkill -9 $PPID\nsleep 1\n");
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let crashed = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace_git::worktree_progress_tests::worktree_setup_crash_fixture",
+                "--nocapture",
+            ])
+            .env("V4_TEST_WORKTREE_SETUP_CRASH", id.to_string())
+            .env("V4_TEST_WORKTREE_DATA", data.path())
+            .env("V4_TEST_WORKTREE_REPO", repo.path())
+            .output()
+            .unwrap();
+        assert!(!crashed.status.success());
+        let path = repo.path().to_str().unwrap();
+        let listed = list_managed_worktrees(data.path(), "owner", path)
+            .await
+            .unwrap();
+        let checkout = PathBuf::from(&listed[0].path);
+        assert_eq!(
+            (
+                listed.len(),
+                listed[0].creation_status,
+                listed[0].available,
+                checkout.join("note.txt").exists(),
+                create_managed_worktree_with_id(
+                    data.path(),
+                    "owner",
+                    path,
+                    "Crash in setup",
+                    "HEAD",
+                    id
+                )
+                .await
+                .is_err(),
+                discard_unfinished_worktree(data.path(), "other", path, id)
+                    .await
+                    .is_err(),
+            ),
+            (
+                1,
+                WorktreeCreationStatus::Unconfirmed,
+                false,
+                true,
+                true,
+                true
+            )
+        );
+        discard_unfinished_worktree(data.path(), "owner", path, id)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                list_managed_worktrees(data.path(), "owner", path)
+                    .await
+                    .unwrap()
+                    .len(),
+                checkout.exists(),
+                only_main_worktree(repo.path()),
+            ),
+            (0, false, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_never_removes_a_ready_worktree_or_a_path_outside_checkouts() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let ready_id = Uuid::new_v4();
+        let ready =
+            create_managed_worktree_with_id(data.path(), "owner", path, "Ready", "HEAD", ready_id)
+                .await
+                .unwrap();
+        let ready_refused = discard_unfinished_worktree(data.path(), "owner", path, ready_id)
+            .await
+            .is_err();
+
+        let bystander = tempfile::tempdir().unwrap();
+        std::fs::write(bystander.path().join("precious.txt"), "keep").unwrap();
+        let forged_id = Uuid::new_v4();
+        let root = storage_root(data.path(), "owner", repo.path())
+            .await
+            .unwrap();
+        let mut forged = ready.clone();
+        forged.id = forged_id;
+        forged.path = bystander.path().to_string_lossy().into_owned();
+        forged.branch = format!("codex/forged-{}", forged_id.simple());
+        write_record(
+            &root
+                .join("worktree-operations")
+                .join(format!("{forged_id}.json")),
+            &WorktreeCreationIntent {
+                tree: forged,
+                commit: "HEAD".into(),
+                workspace: repo.path().to_path_buf(),
+            },
+        )
+        .unwrap();
+        let forged_refused = discard_unfinished_worktree(data.path(), "owner", path, forged_id)
+            .await
+            .is_err();
+        assert_eq!(
+            (
+                ready_refused,
+                forged_refused,
+                Path::new(&ready.path).join("note.txt").exists(),
+                bystander.path().join("precious.txt").exists(),
+            ),
+            (true, true, true, true)
         );
     }
 }

@@ -22,7 +22,7 @@ pub(crate) mod session_fence;
 #[cfg(unix)]
 pub(crate) use super::background_owner_gate as owner_gate;
 #[path = "background_tool.rs"]
-#[cfg(test)]
+#[cfg(unix)]
 pub(crate) mod tool;
 #[cfg(unix)]
 #[path = "background_process_watchdog.rs"]
@@ -247,7 +247,7 @@ pub(crate) struct OwnerCleanupReleaseGuard<'a> {
 }
 
 impl BackgroundProcesses {
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) fn validate_actor_binding(&self, root: &std::path::Path) -> Result<(), String> {
         self.owner_gate
             .as_ref()
@@ -931,7 +931,7 @@ impl BackgroundProcesses {
     }
     /// Advisory preflight so a user is not asked to approve a command that
     /// admission would refuse; `start_with` rechecks under the registry lock.
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) async fn ensure_capacity(&self, scope: &BackgroundScope) -> Result<(), String> {
         let registry = self.registry.lock().await;
         self.check_running_slots(&registry, &scope.owner)
@@ -1023,7 +1023,7 @@ impl BackgroundProcesses {
         *self.claim_pause.lock().unwrap() = Some((entered, release));
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) async fn start_for_actor<F>(
         &self,
         request: BackgroundRequest,
@@ -1467,7 +1467,7 @@ impl BackgroundProcesses {
         })
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) fn access_for_actor(
         &self,
         scope: &BackgroundScope,
@@ -1534,7 +1534,7 @@ impl BackgroundProcesses {
     /// Reads the bounded in-memory output under the same owner, credential,
     /// session-incarnation and cancellation fences as status. The caller must
     /// obtain explicit user approval of this exact snapshot before releasing it.
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) fn output_for_actor(
         &self,
         scope: &BackgroundScope,

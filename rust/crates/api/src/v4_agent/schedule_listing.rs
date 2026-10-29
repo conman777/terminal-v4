@@ -145,6 +145,7 @@ mod tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         }
     }
 
@@ -386,6 +387,7 @@ mod tests {
             enabled: false,
             at: None,
             run_once_at: None,
+            deliver_to: None,
         };
         workspace_tasks::create_owner_schedule(
             data.clone(),
@@ -486,6 +488,7 @@ mod tests {
             enabled: false,
             at: None,
             run_once_at: None,
+            deliver_to: None,
         };
         workspace_tasks::create_owner_schedule(
             data.path().into(),

@@ -165,6 +165,10 @@ exit 0
     }
 
     fn seed_due_schedule(&self) -> Uuid {
+        self.seed_due_schedule_delivering(None)
+    }
+
+    fn seed_due_schedule_delivering(&self, deliver_to: Option<DeliveryTarget>) -> Uuid {
         let now = now_ms();
         let mut store = TaskStore {
             owner_id: "owner".into(),
@@ -188,6 +192,7 @@ exit 0
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to,
         });
         write_store(&self.data, &store).unwrap();
         id
@@ -404,5 +409,220 @@ async fn a_skill_job_reaches_the_real_agent_process_as_its_prompt() {
     assert!(runs[0].contains("exec --json --sandbox workspace-write"));
     assert!(runs[0].contains("Run the saved skill"));
     assert_eq!(rig.store().tasks[0].result, "fake done");
+    assert!(worker.graceful_exit().await.success());
+}
+
+struct MockTelegram {
+    port: u16,
+    hits: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+}
+
+async fn mock_telegram(delay_ms: u64) -> MockTelegram {
+    let hits: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> = Default::default();
+    let log = hits.clone();
+    let app = axum::Router::new().route(
+        "/bot{token}/sendMessage",
+        axum::routing::post(move |Json(body): Json<serde_json::Value>| {
+            let log = log.clone();
+            async move {
+                log.lock().unwrap().push(body);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                Json(serde_json::json!({ "ok": true, "result": {} }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    MockTelegram { port, hits }
+}
+
+impl MockTelegram {
+    fn env(&self) -> (&'static str, String) {
+        (
+            "TELEGRAM_API_BASE",
+            format!("http://127.0.0.1:{}", self.port),
+        )
+    }
+    fn count(&self) -> usize {
+        self.hits.lock().unwrap().len()
+    }
+}
+
+fn pair_owner(rig: &Rig) {
+    crate::telegram_gateway::seed_paired_for_test(
+        &rig.data,
+        "owner",
+        "123:test-token",
+        Some(4242),
+        true,
+    );
+}
+
+fn delivery_of(rig: &Rig) -> DeliveryState {
+    rig.store()
+        .tasks
+        .into_iter()
+        .next()
+        .map(|task| task.delivery)
+        .unwrap_or_default()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_workers_deliver_a_schedule_result_to_telegram_exactly_once() {
+    let rig = Rig::new();
+    let telegram = mock_telegram(0).await;
+    pair_owner(&rig);
+    rig.seed_due_schedule_delivering(Some(DeliveryTarget::Telegram));
+    let env = [telegram.env()];
+    let mut first = rig.spawn("a", &env);
+    let mut second = rig.spawn("b", &env);
+    wait_until("result delivered", 40, || {
+        rig.store()
+            .tasks
+            .first()
+            .is_some_and(|task| task.delivery.delivery_status == Some(DeliveryStatus::Delivered))
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let hits = telegram.hits.lock().unwrap().clone();
+    let text = hits[0]["text"].as_str().unwrap().to_owned();
+    assert_eq!(
+        (
+            hits.len(),
+            hits[0]["chat_id"].clone(),
+            text.contains("Terminal v4 schedule: Due"),
+            text.contains("Status: Completed"),
+            text.contains("fake done"),
+            rig.runs().len(),
+            delivery_of(&rig).delivery_reason,
+        ),
+        (1, serde_json::json!(4242), true, true, true, 1, None)
+    );
+    assert!(first.graceful_exit().await.success());
+    assert!(second.graceful_exit().await.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_9_between_completion_and_delivery_delivers_once_after_takeover() {
+    let rig = Rig::new();
+    let telegram = mock_telegram(0).await;
+    pair_owner(&rig);
+    rig.seed_due_schedule_delivering(Some(DeliveryTarget::Telegram));
+    let hold = rig.root.join("hold-delivery");
+    std::fs::write(&hold, "1").unwrap();
+    let mut first = rig.spawn(
+        "a",
+        &[
+            telegram.env(),
+            (
+                "TASK_TEST_DELIVERY_HOLD",
+                hold.to_string_lossy().into_owned(),
+            ),
+        ],
+    );
+    wait_until("task completed with delivery still pending", 40, || {
+        rig.store()
+            .tasks
+            .first()
+            .is_some_and(|task| task.status == TaskStatus::Completed)
+    })
+    .await;
+    first.kill9();
+    let before = (telegram.count(), delivery_of(&rig));
+    std::fs::remove_file(&hold).unwrap();
+    let mut second = rig.spawn("b", &[telegram.env()]);
+    wait_until("takeover delivered", 40, || {
+        delivery_of(&rig).delivery_status == Some(DeliveryStatus::Delivered)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        (
+            before.0,
+            before.1.delivery_status,
+            before.1.delivery_attempted_at,
+            telegram.count(),
+            rig.runs().len(),
+        ),
+        (0, Some(DeliveryStatus::Pending), None, 1, 1)
+    );
+    assert!(second.graceful_exit().await.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_9_during_a_send_is_reported_unknown_and_never_sent_twice() {
+    let rig = Rig::new();
+    let telegram = mock_telegram(30_000).await;
+    pair_owner(&rig);
+    rig.seed_due_schedule_delivering(Some(DeliveryTarget::Telegram));
+    let mut first = rig.spawn("a", &[telegram.env()]);
+    wait_until("send reached Telegram", 40, || telegram.count() == 1).await;
+    first.kill9();
+    assert_eq!(
+        delivery_of(&rig).delivery_status,
+        Some(DeliveryStatus::Pending)
+    );
+    let mut second = rig.spawn("b", &[telegram.env()]);
+    wait_until("takeover reported the unknown outcome", 40, || {
+        delivery_of(&rig).delivery_status == Some(DeliveryStatus::Failed)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let state = delivery_of(&rig);
+    assert_eq!(
+        (
+            telegram.count(),
+            state
+                .delivery_reason
+                .is_some_and(|reason| reason.contains("not sent again")),
+            rig.runs().len(),
+        ),
+        (1, true, 1)
+    );
+    assert!(second.graceful_exit().await.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_is_skipped_with_a_reason_when_no_chat_is_paired_and_never_blocks_the_task() {
+    let rig = Rig::new();
+    let telegram = mock_telegram(0).await;
+    rig.seed_due_schedule_delivering(Some(DeliveryTarget::Telegram));
+    let mut worker = rig.spawn("a", &[telegram.env()]);
+    wait_until("delivery skipped", 40, || {
+        delivery_of(&rig).delivery_status == Some(DeliveryStatus::Skipped)
+    })
+    .await;
+    let task = rig.store().tasks.remove(0);
+    assert_eq!(
+        (task.status, task.delivery.delivery_reason, telegram.count(),),
+        (
+            TaskStatus::Completed,
+            Some("Telegram is not connected".to_owned()),
+            0
+        )
+    );
+    assert!(worker.graceful_exit().await.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn schedules_without_the_opt_in_never_message_telegram() {
+    let rig = Rig::new();
+    let telegram = mock_telegram(0).await;
+    pair_owner(&rig);
+    rig.seed_due_schedule();
+    let mut worker = rig.spawn("a", &[telegram.env()]);
+    wait_until("task completed", 40, || {
+        rig.store()
+            .tasks
+            .first()
+            .is_some_and(|task| task.status == TaskStatus::Completed)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        (telegram.count(), delivery_of(&rig)),
+        (0, DeliveryState::default())
+    );
     assert!(worker.graceful_exit().await.success());
 }

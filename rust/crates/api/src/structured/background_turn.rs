@@ -32,6 +32,20 @@ pub(in crate::structured) struct ApprovedStart {
     expires_at: i64,
 }
 
+impl StructuredSessionManager {
+    pub(crate) fn enable_background_commands(&self) -> Result<(), String> {
+        let background = self
+            .inner
+            .background_processes
+            .get()
+            .ok_or("Background process manager is unavailable")?;
+        tokio::runtime::Handle::try_current()
+            .map_err(|_| "Background completion delivery requires an async runtime")?;
+        background.enable_commands();
+        self.start_background_completion_worker()
+    }
+}
+
 impl BackgroundTurn {
     pub(in crate::structured) fn new(
         manager: StructuredSessionManager,
@@ -43,7 +57,8 @@ impl BackgroundTurn {
         authority: crate::auth::LocalAuthority,
     ) -> Result<Self, String> {
         background.validate_actor_binding(&manager.inner.config.data_dir)?;
-        if !manager.live_ownership_enabled()
+        if !background.commands_enabled()
+            || !manager.live_ownership_enabled()
             || !manager
                 .inner
                 .background_processes

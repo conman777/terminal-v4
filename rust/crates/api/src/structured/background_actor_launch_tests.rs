@@ -97,7 +97,10 @@ async fn background_actor_wait_stops_when_its_turn_is_cancelled() {
     fixture.manager.shutdown().await.unwrap();
 }
 
-async fn wait_background_approval(fixture: &Fixture, call_id: &str) -> StructuredSessionEvent {
+pub(super) async fn wait_background_approval(
+    fixture: &Fixture,
+    call_id: &str,
+) -> StructuredSessionEvent {
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         loop {
             let state = fixture.live.state.lock().await;
@@ -120,7 +123,7 @@ async fn wait_background_approval(fixture: &Fixture, call_id: &str) -> Structure
     .expect("background approval was not shown")
 }
 
-async fn decide_background_approval(
+pub(super) async fn decide_background_approval(
     fixture: &Fixture,
     call_id: &str,
     approved: bool,
@@ -153,7 +156,7 @@ async fn decide_background_approval(
     approval
 }
 
-async fn approve_prepared(
+pub(super) async fn approve_prepared(
     fixture: &Fixture,
     actor: &Arc<BackgroundTurn>,
     prepared: background_turn::PreparedStart,
@@ -426,6 +429,7 @@ async fn actor_rejects_an_ungated_background_manager() {
         .unwrap()
         .join("background-processes");
     let background = Arc::new(BackgroundProcesses::create(&path).unwrap());
+    background.enable_commands();
     fixture
         .manager
         .bind_background_processes(background.clone())
@@ -471,6 +475,7 @@ async fn actor_rejects_a_controlled_background_manager_from_another_data_root() 
             .unwrap(),
         )
     };
+    background.enable_commands();
     fixture
         .manager
         .bind_background_processes(background.clone())
@@ -523,6 +528,7 @@ async fn actor_rejects_a_foreign_ledger_even_with_the_correct_owner_gate() {
         .unwrap()
         .join("background-processes");
     let background = Arc::new(BackgroundProcesses::create_controlled(&path, gate).unwrap());
+    background.enable_commands();
     fixture
         .manager
         .bind_background_processes(background.clone())
@@ -549,7 +555,7 @@ async fn actor_rejects_a_foreign_ledger_even_with_the_correct_owner_gate() {
     );
 }
 
-async fn actor_fixture(
+pub(super) async fn actor_fixture(
     fixture: &Fixture,
 ) -> (
     Arc<BackgroundProcesses>,
@@ -567,6 +573,7 @@ async fn actor_fixture(
             .unwrap(),
         )
     };
+    background.enable_commands();
     fixture
         .manager
         .bind_background_processes(background.clone())
@@ -865,7 +872,11 @@ async fn actor_start_is_fenced_by_a_cross_process_session_boundary() {
 
 // ---- Production-path lifecycle: tool actions go through the bound actor only.
 
-async fn wait_tool_approval(fixture: &Fixture, call_id: &str, tool: &str) -> (String, String) {
+pub(super) async fn wait_tool_approval(
+    fixture: &Fixture,
+    call_id: &str,
+    tool: &str,
+) -> (String, String) {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             let state = fixture.live.state.lock().await;
@@ -891,7 +902,7 @@ async fn wait_tool_approval(fixture: &Fixture, call_id: &str, tool: &str) -> (St
     .expect("approval was not shown")
 }
 
-async fn decide(fixture: &Fixture, id: &str, approved: bool) {
+pub(super) async fn decide(fixture: &Fixture, id: &str, approved: bool) {
     let authority = crate::auth::LocalAuthority::for_test("owner", 0, i64::MAX);
     fixture
         .manager
@@ -911,7 +922,7 @@ async fn decide(fixture: &Fixture, id: &str, approved: bool) {
         .unwrap();
 }
 
-async fn approvals_shown(fixture: &Fixture) -> usize {
+pub(super) async fn approvals_shown(fixture: &Fixture) -> usize {
     fixture
         .live
         .state
@@ -923,7 +934,7 @@ async fn approvals_shown(fixture: &Fixture) -> usize {
         .count()
 }
 
-async fn started_through_actor(
+pub(super) async fn started_through_actor(
     fixture: &Fixture,
     actor: &Arc<BackgroundTurn>,
     call_id: &str,
@@ -948,7 +959,7 @@ async fn started_through_actor(
     action
 }
 
-async fn terminal(actor: &BackgroundTurn, action: &str) -> BackgroundState {
+pub(super) async fn terminal(actor: &BackgroundTurn, action: &str) -> BackgroundState {
     let snapshot = actor
         .wait(action, std::time::Duration::from_secs(10))
         .await
@@ -1040,7 +1051,7 @@ async fn running_slot_is_released_after_cancel_and_refusal_claims_no_receipt() {
     fixture.manager.shutdown().await.unwrap();
 }
 
-fn actor_scope(actor: &Arc<BackgroundTurn>) -> ActionScope {
+pub(super) fn actor_scope(actor: &Arc<BackgroundTurn>) -> ActionScope {
     BackgroundActor::scope(actor.as_ref()).clone()
 }
 
@@ -1177,7 +1188,10 @@ async fn durable_outcomes_survive_restart_and_a_crashed_action_stays_honestly_un
     let state = {
         let mut attempt = 0;
         loop {
-            match crate::state::AppState::new_runtime(config.clone()) {
+            match crate::state::AppState::new_runtime_with_background_commands(
+                config.clone(),
+                false,
+            ) {
                 Ok(state) => break state,
                 Err(error) if attempt < 100 => {
                     attempt += 1;
@@ -1192,6 +1206,7 @@ async fn durable_outcomes_survive_restart_and_a_crashed_action_stays_honestly_un
     let background = manager
         .background_processes_for_test()
         .expect("runtime did not retain the existing background installation");
+    background.enable_commands();
     let live = manager
         .owned_session("owner", &id)
         .await
@@ -1279,7 +1294,7 @@ async fn durable_outcomes_survive_restart_and_a_crashed_action_stays_honestly_un
     assert!(manager.shutdown().await.is_err());
 }
 
-fn tool_results(body: &Value) -> Vec<Value> {
+pub(super) fn tool_results(body: &Value) -> Vec<Value> {
     body["messages"]
         .as_array()
         .into_iter()
@@ -1292,7 +1307,7 @@ fn tool_results(body: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn tool_call_response(id: &str, name: &str, arguments: Value) -> Value {
+pub(super) fn tool_call_response(id: &str, name: &str, arguments: Value) -> Value {
     serde_json::json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":id,"type":"function","function":{"name":name,"arguments":arguments.to_string()}}]}}]})
 }
 

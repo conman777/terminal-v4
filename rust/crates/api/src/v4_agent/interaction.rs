@@ -150,7 +150,7 @@ impl ApprovalGate {
             state: Mutex::new(ApprovalState::default()),
         }
     }
-    #[cfg(test)]
+    #[cfg(unix)]
     pub(crate) fn matches_scope(&self, scope: &ActionScope) -> bool {
         self.scope == *scope
     }
@@ -464,7 +464,7 @@ pub(crate) struct TurnResources {
     confirmed: std::sync::atomic::AtomicBool,
     #[cfg(unix)]
     delegation: std::sync::Mutex<Option<std::sync::Weak<super::delegation_outbox::DelegationTurn>>>,
-    #[cfg(test)]
+    #[cfg(unix)]
     background_actor: std::sync::Mutex<
         Option<std::sync::Weak<dyn super::background_process::tool::BackgroundActor>>,
     >,
@@ -486,7 +486,7 @@ impl Default for TurnResources {
             confirmed: std::sync::atomic::AtomicBool::new(true),
             #[cfg(unix)]
             delegation: std::sync::Mutex::new(None),
-            #[cfg(test)]
+            #[cfg(unix)]
             background_actor: std::sync::Mutex::new(None),
             #[cfg(unix)]
             profiles: std::sync::Mutex::new(None),
@@ -517,7 +517,7 @@ impl TurnResources {
         let turn = self.delegation.lock().ok()?.as_ref()?.upgrade()?;
         (turn.scope == *scope).then_some(turn)
     }
-    #[cfg(test)]
+    #[cfg(unix)]
     pub(crate) fn bind_background_actor(
         &self,
         actor: &Arc<dyn super::background_process::tool::BackgroundActor>,
@@ -532,7 +532,7 @@ impl TurnResources {
         *slot = Some(Arc::downgrade(actor));
         Ok(())
     }
-    #[cfg(test)]
+    #[cfg(unix)]
     pub(super) fn background_actor(
         &self,
         scope: &ActionScope,

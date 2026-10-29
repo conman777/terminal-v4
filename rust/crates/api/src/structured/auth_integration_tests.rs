@@ -5325,7 +5325,7 @@ async fn another_process_cannot_logout_during_canonical_publication() {
     manager.close_owner(&owner).await.unwrap();
 }
 
-fn post_request(path: &str, token: Option<&str>, payload: Value) -> Request<Body> {
+pub(super) fn post_request(path: &str, token: Option<&str>, payload: Value) -> Request<Body> {
     let mut request = Request::builder()
         .method("POST")
         .uri(path)
@@ -5513,6 +5513,7 @@ async fn http_background_authority_fixture() {
     };
     let manager = state.structured_session_manager();
     manager.bind_live_ownership().unwrap();
+    background.enable_commands();
     manager
         .bind_background_processes(background.clone())
         .unwrap();

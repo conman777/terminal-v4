@@ -271,7 +271,7 @@ impl Ledger {
             .transpose()
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(super) fn validate_actor_root(&self, root: &Path) -> Result<(), String> {
         let expected = root
             .canonicalize()

@@ -602,7 +602,7 @@ fn resolve_contained_path_for_write_with_roots(
     Ok(requested)
 }
 
-fn allowed_file_roots() -> Result<Vec<PathBuf>, String> {
+pub(crate) fn allowed_file_roots() -> Result<Vec<PathBuf>, String> {
     let mut roots = Vec::new();
 
     if let Some(configured_roots) = std::env::var_os(ALLOWED_FILE_ROOTS_ENV) {

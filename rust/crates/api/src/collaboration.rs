@@ -24,10 +24,8 @@ use std::time::Duration;
 
 #[cfg(test)]
 mod structured_invitations;
-#[cfg(test)]
-mod structured_projection;
-#[cfg(test)]
-mod structured_stream;
+pub(crate) mod structured_projection;
+pub(crate) mod structured_stream;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()

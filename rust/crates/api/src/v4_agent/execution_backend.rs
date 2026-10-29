@@ -1,5 +1,20 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 use tokio::process::Command;
+
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
+const APP_LABEL: &str = "terminal-v4.app=run-command";
+const PID_LABEL: &str = "terminal-v4.pid";
+const RUN_LABEL: &str = "terminal-v4.run";
+const SSH_HOST_VARIABLE: &str = "V4_RUN_COMMAND_SSH_HOST";
+const SSH_USER_VARIABLE: &str = "V4_RUN_COMMAND_SSH_USER";
+const SSH_PORT_VARIABLE: &str = "V4_RUN_COMMAND_SSH_PORT";
+const SSH_IDENTITY_VARIABLE: &str = "V4_RUN_COMMAND_SSH_IDENTITY";
+const SSH_KNOWN_HOSTS_VARIABLE: &str = "V4_RUN_COMMAND_SSH_KNOWN_HOSTS";
+const SSH_WORKDIR_VARIABLE: &str = "V4_RUN_COMMAND_SSH_WORKDIR";
 
 pub(super) const BACKEND_VARIABLE: &str = "V4_RUN_COMMAND_BACKEND";
 pub(super) const DOCKER_IMAGE_VARIABLE: &str = "V4_RUN_COMMAND_DOCKER_IMAGE";
@@ -22,6 +37,176 @@ pub(super) trait ExecutionBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn host_description(&self) -> String;
     fn command(&self, root: &Path, command: &str) -> Result<Command, String>;
+    fn prepare(&self, root: &Path, command: &str) -> Result<PreparedCommand, String> {
+        self.command(root, command).map(|command| PreparedCommand {
+            command,
+            cleanup: None,
+        })
+    }
+}
+
+pub(super) struct PreparedCommand {
+    pub(super) command: Command,
+    pub(super) cleanup: Option<ContainerCleanup>,
+}
+
+fn run_id() -> &'static str {
+    static RUN_ID: OnceLock<String> = OnceLock::new();
+    RUN_ID.get_or_init(|| uuid::Uuid::new_v4().simple().to_string())
+}
+
+fn scrubbed_std_command(program: &str) -> std::process::Command {
+    let mut process = std::process::Command::new(program);
+    process.env_clear();
+    for (name, value) in scrubbed_host_environment(&|name| std::env::var_os(name)) {
+        process.env(name, value);
+    }
+    process
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    process
+}
+
+fn bounded_output(mut process: std::process::Command, timeout: Duration) -> Option<String> {
+    let mut child = process.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(&mut stdout, &mut text);
+        text
+    });
+    let deadline = Instant::now() + timeout;
+    let finished = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+        }
+    };
+    let text = reader.join().ok()?;
+    finished.then_some(text)
+}
+
+pub(super) struct ContainerCleanup {
+    program: String,
+    name: String,
+    directory: tempfile::TempDir,
+    armed: bool,
+}
+impl ContainerCleanup {
+    fn cidfile(&self) -> std::path::PathBuf {
+        self.directory.path().join("container.id")
+    }
+
+    pub(super) fn disarm(&mut self) {
+        self.armed = false;
+    }
+
+    pub(super) fn force_remove(&mut self) {
+        self.armed = false;
+        let mut targets = vec![self.name.clone()];
+        if let Ok(id) = std::fs::read_to_string(self.cidfile()) {
+            let id = id.trim();
+            if is_container_id(id) {
+                targets.push(id.to_owned());
+            }
+        }
+        for (index, target) in targets.iter().enumerate() {
+            if index == 0 {
+                let mut kill = scrubbed_std_command(&self.program);
+                kill.args(["kill", target]);
+                let _ = bounded_output(kill, CLEANUP_TIMEOUT);
+            }
+            let mut remove = scrubbed_std_command(&self.program);
+            remove.args(["rm", "-f", target]);
+            let _ = bounded_output(remove, CLEANUP_TIMEOUT);
+        }
+    }
+}
+impl Drop for ContainerCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            self.force_remove();
+        }
+    }
+}
+
+fn is_container_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128 && value.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        pid > 0
+            && (unsafe { libc::kill(pid as i32, 0) } == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+pub(super) fn dead_run_container_ids(
+    listing: &str,
+    current_run: &str,
+    alive: &dyn Fn(u32) -> bool,
+) -> Vec<String> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (id, pid, run) = (fields.next()?, fields.next()?, fields.next()?);
+            let pid: u32 = pid.trim().parse().ok()?;
+            (is_container_id(id.trim())
+                && !run.trim().is_empty()
+                && run.trim() != current_run
+                && !alive(pid))
+            .then(|| id.trim().to_owned())
+        })
+        .collect()
+}
+
+pub(super) fn reap_leftover_containers(program: &str) -> usize {
+    reap_with(program, run_id(), &process_is_alive)
+}
+
+fn reap_with(program: &str, current_run: &str, alive: &dyn Fn(u32) -> bool) -> usize {
+    let mut list = scrubbed_std_command(program);
+    list.args([
+        "ps",
+        "-a",
+        "--filter",
+        &format!("label={APP_LABEL}"),
+        "--format",
+        &format!("{{{{.ID}}}}\t{{{{.Label \"{PID_LABEL}\"}}}}\t{{{{.Label \"{RUN_LABEL}\"}}}}"),
+    ]);
+    let Some(listing) = bounded_output(list, CLEANUP_TIMEOUT) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for id in dead_run_container_ids(&listing, current_run, alive) {
+        let mut remove = scrubbed_std_command(program);
+        remove.args(["rm", "-f", &id]);
+        if bounded_output(remove, CLEANUP_TIMEOUT).is_some() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+pub(super) fn reap_from_environment() -> usize {
+    match select(&|name| std::env::var(name).ok()) {
+        Ok(backend) if backend.name() == "docker" => reap_leftover_containers("docker"),
+        _ => 0,
+    }
 }
 
 pub(super) fn scrubbed_host_environment(
@@ -69,11 +254,24 @@ pub(super) struct DockerBackend {
     pub(super) network: bool,
 }
 impl DockerBackend {
-    pub(super) fn arguments(&self, root: &Path, command: &str) -> Vec<String> {
+    pub(super) fn arguments(
+        &self,
+        root: &Path,
+        command: &str,
+        name: &str,
+        cidfile: &Path,
+    ) -> Vec<String> {
         let mut arguments: Vec<String> = ["run", "--rm", "--init"]
             .iter()
             .map(|value| value.to_string())
             .collect();
+        arguments.extend([
+            format!("--name={name}"),
+            format!("--cidfile={}", cidfile.display()),
+            format!("--label={APP_LABEL}"),
+            format!("--label={PID_LABEL}={}", std::process::id()),
+            format!("--label={RUN_LABEL}={}", run_id()),
+        ]);
         arguments.push(format!(
             "--network={}",
             if self.network { "bridge" } else { "none" }
@@ -111,6 +309,9 @@ impl ExecutionBackend for DockerBackend {
         )
     }
     fn command(&self, root: &Path, command: &str) -> Result<Command, String> {
+        self.prepare(root, command).map(|prepared| prepared.command)
+    }
+    fn prepare(&self, root: &Path, command: &str) -> Result<PreparedCommand, String> {
         if self.image.is_empty()
             || self.image.starts_with('-')
             || self.image.contains(char::is_whitespace)
@@ -124,8 +325,149 @@ impl ExecutionBackend for DockerBackend {
         if root_text.contains(':') || root_text.contains(',') {
             return Err("Workspace path cannot be mounted into Docker".into());
         }
+        let directory = tempfile::Builder::new()
+            .prefix("v4-container-")
+            .tempdir()
+            .map_err(|_| "Cannot prepare container tracking")?;
+        let cleanup = ContainerCleanup {
+            program: self.program.clone(),
+            name: format!("v4-run-{}", uuid::Uuid::new_v4().simple()),
+            directory,
+            armed: true,
+        };
         let mut process = Command::new(&self.program);
-        process.args(self.arguments(&root, command)).env_clear();
+        process
+            .args(self.arguments(&root, command, &cleanup.name, &cleanup.cidfile()))
+            .env_clear();
+        for (name, value) in scrubbed_host_environment(&|name| std::env::var_os(name)) {
+            process.env(name, value);
+        }
+        Ok(PreparedCommand {
+            command: process,
+            cleanup: Some(cleanup),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SshBackend {
+    pub(super) program: String,
+    pub(super) host: String,
+    pub(super) user: Option<String>,
+    pub(super) port: Option<u16>,
+    pub(super) identity: Option<String>,
+    pub(super) known_hosts: Option<String>,
+    pub(super) workdir: String,
+}
+
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+fn is_ssh_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+fn is_plain_absolute_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() <= 4096
+        && !value.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+fn is_remote_directory(value: &str) -> bool {
+    value.starts_with('/') && value.len() <= 4096 && !value.chars().any(char::is_control)
+}
+
+impl SshBackend {
+    pub(super) fn arguments(&self, command: &str) -> Vec<String> {
+        let mut arguments: Vec<String> = [
+            "-n",
+            "-T",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ForwardAgent=no",
+            "-o",
+            "ForwardX11=no",
+            "-o",
+            "ClearAllForwardings=yes",
+            "-o",
+            "PermitLocalCommand=no",
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=2",
+        ]
+        .iter()
+        .map(|value| value.to_string())
+        .collect();
+        if let Some(identity) = &self.identity {
+            arguments.extend([
+                "-o".into(),
+                "IdentitiesOnly=yes".into(),
+                "-i".into(),
+                identity.clone(),
+            ]);
+        }
+        if let Some(known_hosts) = &self.known_hosts {
+            arguments.extend(["-o".into(), format!("UserKnownHostsFile={known_hosts}")]);
+        }
+        if let Some(port) = self.port {
+            arguments.extend(["-p".into(), port.to_string()]);
+        }
+        if let Some(user) = &self.user {
+            arguments.extend(["-l".into(), user.clone()]);
+        }
+        arguments.extend([
+            "--".into(),
+            self.host.clone(),
+            format!(
+                "cd -- {} && exec /bin/sh -c {}",
+                shell_quote(&self.workdir),
+                shell_quote(command)
+            ),
+        ]);
+        arguments
+    }
+}
+impl ExecutionBackend for SshBackend {
+    fn name(&self) -> &'static str {
+        "ssh"
+    }
+    fn host_description(&self) -> String {
+        format!(
+            "runs on the remote host {} over SSH in {} (not this machine; the workspace is not synchronised; the remote login shell must be POSIX)",
+            self.host, self.workdir
+        )
+    }
+    fn command(&self, _root: &Path, command: &str) -> Result<Command, String> {
+        if !is_ssh_name(&self.host)
+            || self.user.as_deref().is_some_and(|user| !is_ssh_name(user))
+            || self
+                .identity
+                .as_deref()
+                .into_iter()
+                .chain(self.known_hosts.as_deref())
+                .any(|path| !is_plain_absolute_path(path))
+            || !is_remote_directory(&self.workdir)
+        {
+            return Err("SSH execution backend settings are invalid".into());
+        }
+        let mut process = Command::new(&self.program);
+        process.args(self.arguments(command)).env_clear();
         for (name, value) in scrubbed_host_environment(&|name| std::env::var_os(name)) {
             process.env(name, value);
         }
@@ -133,17 +475,29 @@ impl ExecutionBackend for DockerBackend {
     }
 }
 
-pub(super) struct SshBackend;
-impl ExecutionBackend for SshBackend {
-    fn name(&self) -> &'static str {
-        "ssh"
-    }
-    fn host_description(&self) -> String {
-        "SSH backend (not implemented)".into()
-    }
-    fn command(&self, _root: &Path, _command: &str) -> Result<Command, String> {
-        Err("The SSH execution backend is not implemented".into())
-    }
+fn ssh_from_settings(lookup: &dyn Fn(&str) -> Option<String>) -> Result<SshBackend, String> {
+    let setting = |name: &str| {
+        lookup(name)
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let host = setting(SSH_HOST_VARIABLE).ok_or("SSH execution backend requires a host setting")?;
+    let workdir = setting(SSH_WORKDIR_VARIABLE)
+        .ok_or("SSH execution backend requires a remote directory setting")?;
+    let port = setting(SSH_PORT_VARIABLE)
+        .map(|value| value.parse::<u16>().ok().filter(|port| *port > 0))
+        .map(|port| port.ok_or("SSH execution backend port is invalid"))
+        .transpose()?;
+    let backend = SshBackend {
+        program: "ssh".into(),
+        host,
+        user: setting(SSH_USER_VARIABLE),
+        port,
+        identity: setting(SSH_IDENTITY_VARIABLE),
+        known_hosts: setting(SSH_KNOWN_HOSTS_VARIABLE),
+        workdir,
+    };
+    backend.command(Path::new("/"), "true").map(|_| backend)
 }
 
 pub(super) fn select(
@@ -165,7 +519,7 @@ pub(super) fn select(
                 network: matches!(lookup(DOCKER_NETWORK_VARIABLE).as_deref(), Some("enabled")),
             }))
         }
-        Some("ssh") => Ok(Box::new(SshBackend)),
+        Some("ssh") => Ok(Box::new(ssh_from_settings(lookup)?)),
         Some(_) => Err("Unknown execution backend setting".into()),
     }
 }

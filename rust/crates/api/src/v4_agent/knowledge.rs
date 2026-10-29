@@ -1,5 +1,7 @@
 #[path = "knowledge_history.rs"]
 mod history;
+#[path = "knowledge_index.rs"]
+mod index;
 
 use crate::{
     session_search::safe_history_text,
@@ -23,7 +25,7 @@ const WINDOW_CHARS: usize = 24_000;
 
 pub(super) fn definitions() -> Vec<Value> {
     [
-        ("recall_sessions", "Search owned app conversations. Query matches redacted titles or messages containing all terms; exact phrases rank ahead of unordered terms, then title matches. By default ranking applies within each returned page. Set rankWindow true to rank the whole bounded scan window; continue nextResultOffset with the same candidatePage, offset, filters, limit and windowRevision before advancing nextOffset or nextCandidatePage. Changes to a ranked window require restarting it. Ranking is not global across windows. Optional updatedAfter and updatedBefore filter last-update timestamps, inclusive and exclusive respectively; use RFC3339 or YYYY-MM-DD at midnight UTC. Undated records are excluded and counted. Returns redacted excerpts and references for read_session.", json!({"query":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":25},"scope":{"type":"string","enum":["workspace","account"]},"source":{"type":"string","enum":["v4","terminal","structured","imported"]},"provider":{"type":"string","minLength":1,"maxLength":128},"model":{"type":"string","minLength":1,"maxLength":200},"role":{"type":"string","enum":["user","assistant","system","tool","terminal"]},"updatedAfter":{"type":"string","minLength":10,"maxLength":35},"updatedBefore":{"type":"string","minLength":10,"maxLength":35},"offset":{"type":"integer","minimum":0},"candidatePage":{"type":"integer","minimum":0},"rankWindow":{"type":"boolean"},"resultOffset":{"type":"integer","minimum":0,"maximum":50},"windowRevision":{"type":"string","minLength":64,"maxLength":64}}), vec![]),
+        ("recall_sessions", "Search owned app conversations. Query matches redacted titles or messages containing all terms; exact phrases rank ahead of unordered terms, then title matches. By default ranking applies within each returned page. Set rankWindow true to rank the whole bounded scan window; continue nextResultOffset with the same candidatePage, offset, filters, limit and windowRevision before advancing nextOffset or nextCandidatePage. Changes to a ranked window require restarting it. Ranking is not global across windows. Optional updatedAfter and updatedBefore filter last-update timestamps, inclusive and exclusive respectively; use RFC3339 or YYYY-MM-DD at midnight UTC. Undated records are excluded and counted. Returns redacted excerpts and references for read_session.", json!({"query":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":25},"scope":{"type":"string","enum":["workspace","account"]},"source":{"type":"string","enum":["v4","terminal","structured","imported"]},"provider":{"type":"string","minLength":1,"maxLength":128},"model":{"type":"string","minLength":1,"maxLength":200},"role":{"type":"string","enum":["user","assistant","system","tool","terminal"]},"updatedAfter":{"type":"string","minLength":10,"maxLength":35},"updatedBefore":{"type":"string","minLength":10,"maxLength":35},"offset":{"type":"integer","minimum":0},"candidatePage":{"type":"integer","minimum":0},"rankWindow":{"type":"boolean"},"resultOffset":{"type":"integer","minimum":0,"maximum":50},"windowRevision":{"type":"string","minLength":64,"maxLength":64},"indexCursor":{"type":"string","maxLength":512}}), vec![]),
         ("read_session", "Read an anchored window of one owned app session. Use source/workspacePath from recall for other conversation kinds or workspaces. Message anchors are 1-based; a fingerprint can reject stale history. Secrets are redacted; truncated text is identified.", json!({"sessionId":{"type":"string"},"anchor":{"type":"integer","minimum":1},"before":{"type":"integer","minimum":0,"maximum":10},"after":{"type":"integer","minimum":0,"maximum":10},"fingerprint":{"type":"string"},"charOffset":{"type":"integer","minimum":0},"source":{"type":"string","enum":["v4","terminal","structured","imported"]},"workspacePath":{"type":"string"}}), vec!["sessionId","anchor"]),
         ("read_context_archive", "Read a bounded redacted public/tool-evidence window from an owned V4 compaction archive. Use the session/receipt IDs and zero-based record index in a v4://context source reference. Private reasoning, signatures and binary images are excluded. Immutable source revisions and character offsets support reliable continuation.", json!({"sessionId":{"type":"string"},"receiptId":{"type":"string"},"record":{"type":"integer","minimum":0},"charOffset":{"type":"integer","minimum":0},"revision":{"type":"string"}}), vec!["sessionId","receiptId","record"]),
         ("inspect_knowledge", "Inspect this account's saved workspace/account memory, reusable skill package metadata, and pending reviewed proposals. Does not read another application's private memory.", json!({"scope":{"type":"string","enum":["workspace","account","both"]}}), vec![]),
@@ -130,6 +132,7 @@ struct Recall {
     rank_window: bool,
     result_offset: Option<usize>,
     window_revision: Option<String>,
+    index_cursor: Option<String>,
 }
 
 fn recall_time_bound(value: Option<&str>) -> Result<Option<time::OffsetDateTime>, String> {
@@ -214,6 +217,41 @@ fn recall_with_budget(
         .is_some_and(|(after, before)| after >= before)
     {
         return Err("Recall updatedAfter must be earlier than updatedBefore".into());
+    }
+    let mut index_note = None;
+    let scan_continuation = input.rank_window
+        || offset > 0
+        || candidate_page > 0
+        || input.result_offset.is_some()
+        || input.window_revision.is_some();
+    if input.index_cursor.is_some() && (scan_continuation || byte_limit != history::SCAN_BYTES) {
+        return Err("indexCursor cannot be combined with scan continuation parameters".into());
+    }
+    if crate::recall_index::enabled(data) && !scan_continuation && byte_limit == history::SCAN_BYTES
+    {
+        match index::try_search(
+            data,
+            owner,
+            workspace,
+            &index::IndexFilters {
+                query: &input.query,
+                limit,
+                account: scope == "account",
+                source,
+                provider: input.provider.as_deref(),
+                model: input.model.as_deref(),
+                role: input.role.as_deref(),
+                updated_after,
+                updated_before,
+                cursor: input.index_cursor.as_deref(),
+                scope,
+            },
+        )? {
+            Ok(result) => return Ok(result),
+            Err(reason) => index_note = Some(reason),
+        }
+    } else if input.index_cursor.is_some() {
+        return Err("Recall index is not enabled; restart recall without indexCursor".into());
     }
     let needle = input.query.trim().to_lowercase();
     let terms: Vec<&str> = needle.split_whitespace().collect();
@@ -417,6 +455,9 @@ fn recall_with_budget(
     let mut result = json!({"sessions":rows,"scanned":scanned,"scannedBytes":bytes,"unreadable":unreadable,"scope":scope,"nextOffset":if window_complete && next<total_candidates {Some(next)}else{None},"candidateLimitPerSource":2_000,"candidatePage":candidate_page,"nextCandidatePage":if window_complete && truncated {candidate_page.checked_add(1)}else{None},"candidateScanTruncated":truncated,"omitted":omitted,"scanLimit":history::SCAN_FILES,"byteLimit":byte_limit,"warnings":warnings});
     if updated_after.is_some() || updated_before.is_some() {
         result["undated"] = json!(undated);
+    }
+    if let Some(reason) = index_note {
+        result["index"] = json!({"used":false,"complete":false,"reason":reason,"note":"Results come from the bounded scan, which is not a complete search."});
     }
     if input.rank_window {
         result["windowRevision"] = json!(window_revision);

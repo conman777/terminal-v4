@@ -44,6 +44,7 @@ fn schedule(workspace: &str, at: Option<CalendarTime>, next: u64) -> ScheduleRec
         skill: None,
         last_status: None,
         last_error: None,
+        deliver_to: None,
     }
 }
 
@@ -232,6 +233,7 @@ async fn cron_schedule_persists_with_the_advanced_format_and_survives_restart() 
             enabled: true,
             at: Some(cron_time("0 9 * * 1-5", Some("America/New_York"))),
             run_once_at: None,
+            deliver_to: None,
         },
     )
     .await
@@ -281,6 +283,7 @@ async fn cron_schedule_persists_with_the_advanced_format_and_survives_restart() 
                 enabled: true,
                 at: Some(bad),
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await

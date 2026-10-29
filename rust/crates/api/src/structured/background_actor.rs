@@ -1,10 +1,10 @@
 use super::*;
 
-#[path = "background_turn.rs"]
-pub(super) mod background_turn;
-use background_turn::BackgroundTurn;
+use super::background_turn::{self, BackgroundTurn};
 #[path = "background_actor_launch_tests.rs"]
 mod launch_tests;
+#[path = "background_runtime_tests.rs"]
+mod runtime_tests;
 
 struct Fixture {
     _data: tempfile::TempDir,

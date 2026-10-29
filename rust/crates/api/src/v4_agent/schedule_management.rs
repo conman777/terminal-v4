@@ -70,6 +70,7 @@ mod tests {
                 enabled: true,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await
@@ -253,6 +254,7 @@ mod tests {
                 enabled: true,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await
@@ -346,6 +348,7 @@ mod tests {
                 enabled: true,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await
@@ -462,6 +465,7 @@ mod tests {
                 enabled: false,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await

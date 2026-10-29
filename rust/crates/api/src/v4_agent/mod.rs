@@ -22,6 +22,7 @@ pub(crate) mod delegation_outbox;
 mod delegation_review;
 #[cfg(unix)]
 mod execute_code;
+mod execute_code_sandbox;
 mod execution_backend;
 mod integrations;
 pub(crate) mod interaction;
@@ -60,6 +61,10 @@ use tokio::process::Command;
 fn definition(provider: &str) -> Option<Value> {
     provider_config::definition(provider).cloned()
 }
+pub fn reap_leftover_execution_containers() -> usize {
+    execution_backend::reap_from_environment()
+}
+
 pub(crate) fn supports(provider: &str) -> bool {
     #[cfg(unix)]
     if profile::Binding::parse(provider).is_some() {
@@ -926,6 +931,28 @@ pub(crate) async fn test_background_provider_turn(
     sink: &dyn Interaction,
     authority: Option<crate::auth::LocalAuthority>,
 ) -> Result<String, String> {
+    test_background_provider_turn_as(url, data, session, scope, resources, sink, authority, false)
+        .await
+}
+
+#[cfg(all(test, unix))]
+pub(crate) async fn test_background_provider_turn_as(
+    url: String,
+    data: &Path,
+    session: &mut Session,
+    scope: ActionScope,
+    resources: Arc<interaction::TurnResources>,
+    sink: &dyn Interaction,
+    authority: Option<crate::auth::LocalAuthority>,
+    read_only_child: bool,
+) -> Result<String, String> {
+    let workspace = PathBuf::from(&session.workspace);
+    if directory(data, "owner", &workspace)
+        .join(format!("{}.json", session.id))
+        .exists()
+    {
+        *session = load(data, "owner", &workspace, &session.id.clone())?;
+    }
     let provider = Provider {
         profile: None,
         transport: "openai-chat".into(),
@@ -940,7 +967,11 @@ pub(crate) async fn test_background_provider_turn(
         resources,
         attachments: &[],
         local_authority: authority,
-        tool_policy: ToolPolicy::Standard,
+        tool_policy: if read_only_child {
+            ToolPolicy::ReadOnlyChild
+        } else {
+            ToolPolicy::Standard
+        },
     };
     turn_with_interaction(
         &provider,
@@ -1006,7 +1037,7 @@ async fn turn_with_interaction(
         ) {
             definitions.push(definition);
         }
-        #[cfg(test)]
+        #[cfg(unix)]
         if context.tool_policy == ToolPolicy::Standard
             && context
                 .local_authority
@@ -1364,8 +1395,11 @@ async fn turn_with_interaction(
                         .await
                         .map(integrations::Output::text);
                     }
-                    #[cfg(test)]
+                    #[cfg(unix)]
                     if background_process::tool::handles(name) {
+                        if context.tool_policy != ToolPolicy::Standard {
+                            return Err("Background actions are unavailable for this turn".into());
+                        }
                         if context
                             .local_authority
                             .as_ref()
@@ -1452,7 +1486,7 @@ async fn turn_with_interaction(
                     || name == "delegate_task"
                     || name == "delegate_tasks"
                     || name == "delegate_task_background"
-                    || (cfg!(test) && name.starts_with("background_"))
+                    || (cfg!(unix) && name.starts_with("background_"))
                 {
                     operation.await
                 } else {

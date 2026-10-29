@@ -1,4 +1,5 @@
 use super::{
+    execute_code_sandbox,
     execution_backend::scrubbed_host_environment,
     interaction::{ActionScope, ApprovalRequest, Cancellation, Interaction},
     tools, ToolPolicy,
@@ -30,7 +31,12 @@ pub(super) fn nested_tools(policy: ToolPolicy) -> Vec<&'static str> {
 }
 
 pub(super) fn definition() -> Value {
-    json!({"name":NAME,"description":"Run a short Python 3 script that orchestrates several workspace tool calls in one step. The script runs on this host after the user approves its exact text; unattended tasks cannot approve it. Inside the script, `from v4_tools import read_file, list_files, search_text` (plus write_file, replace_text, apply_patch when this session may write) and call them with keyword arguments, for example read_file(path=\"a.txt\"); they return the same text as direct calls and raise v4_tools.ToolError on failure. Nested calls use the same policy and workspace checks as direct calls, at most 50 per script. Network access is disabled by default inside Python, and the environment holds no credentials, but there is no OS sandbox: the script has the same host file access as run_command. Maximum 60 seconds; stdout and stderr are bounded and returned as untrusted text.","parameters":{"type":"object","properties":{"script":{"type":"string"}},"required":["script"],"additionalProperties":false}})
+    let containment = if execute_code_sandbox::available() {
+        "The script runs inside a macOS sandbox: the OS denies all network access except the tool channel and denies file writes outside the workspace and temporary directories, but file reads are not restricted, so it can read any file your account can. A best-effort network guard inside Python is also installed."
+    } else {
+        "There is no OS sandbox on this host: the network guard inside Python is best effort only (a script can bypass it, for example through subprocesses), and the script has the same host file access as run_command."
+    };
+    json!({"name":NAME,"description":format!("Run a short Python 3 script that orchestrates several workspace tool calls in one step. The script runs on this host after the user approves its exact text; unattended tasks cannot approve it. Inside the script, `from v4_tools import read_file, list_files, search_text` (plus write_file, replace_text, apply_patch when this session may write) and call them with keyword arguments, for example read_file(path=\"a.txt\"); they return the same text as direct calls and raise v4_tools.ToolError on failure. Nested calls use the same policy and workspace checks as direct calls, at most 50 per script. The environment holds no credentials. {containment} Maximum 60 seconds; stdout and stderr are bounded and returned as untrusted text."),"parameters":{"type":"object","properties":{"script":{"type":"string"}},"required":["script"],"additionalProperties":false}})
 }
 
 fn script_text(input: &Value) -> Result<&str, String> {
@@ -48,7 +54,8 @@ fn script_text(input: &Value) -> Result<&str, String> {
 
 fn approval_description(root: &Path, policy: ToolPolicy, script: &str) -> String {
     format!(
-        "Python script (runs on this host with your file access; no OS sandbox)\nWorkspace: {}\nNested tools: {}\nScript:\n{}",
+        "Python script ({})\nWorkspace: {}\nNested tools: {}\nScript:\n{}",
+        execute_code_sandbox::describe(),
         root.display(),
         nested_tools(policy).join(", "),
         script
@@ -201,24 +208,40 @@ async fn run_script(
         .prefix("v4-execute-code-")
         .tempdir()
         .map_err(|_| "Cannot prepare script directory")?;
+    let base = directory
+        .path()
+        .canonicalize()
+        .map_err(|_| "Cannot prepare script directory")?;
     for (name, content) in support_files(policy) {
-        std::fs::write(directory.path().join(name), content)
-            .map_err(|_| "Cannot prepare script directory")?;
+        std::fs::write(base.join(name), content).map_err(|_| "Cannot prepare script directory")?;
     }
-    let script_path = directory.path().join("script.py");
+    let script_path = base.join("script.py");
     std::fs::write(&script_path, script).map_err(|_| "Cannot prepare script directory")?;
-    let socket_path = directory.path().join("rpc.sock");
+    let socket_path = base.join("rpc.sock");
     let listener =
         tokio::net::UnixListener::bind(&socket_path).map_err(|_| "Cannot open the tool channel")?;
 
-    let mut process = tokio::process::Command::new("python3");
+    let mut process = if execute_code_sandbox::available() {
+        let workspace = root
+            .canonicalize()
+            .map_err(|_| "Workspace is unavailable")?;
+        let profile = execute_code_sandbox::profile(
+            &workspace,
+            &base,
+            &socket_path,
+            &execute_code_sandbox::temporary_directories(),
+        )?;
+        execute_code_sandbox::command(&profile, &script_path)
+    } else {
+        let mut plain = tokio::process::Command::new("python3");
+        plain.arg("-u").arg(&script_path);
+        plain
+    };
     process
-        .arg("-u")
-        .arg(&script_path)
         .current_dir(root)
         .env_clear()
         .env("V4_RPC_SOCKET", &socket_path)
-        .env("PYTHONPATH", directory.path())
+        .env("PYTHONPATH", &base)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONIOENCODING", "utf-8")
         .stdin(std::process::Stdio::null())

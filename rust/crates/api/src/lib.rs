@@ -42,12 +42,14 @@ mod feature_delivery_contract_tests;
 mod file_rename_contract_tests;
 #[cfg(test)]
 mod rebuild_route_tests;
+mod recall_index;
 mod session_recordings;
 mod session_search;
 mod state;
 #[cfg(test)]
 mod static_frontend_route_tests;
 mod structured;
+mod structured_share;
 mod system_rebuild;
 pub mod system_stats;
 mod terminal;
@@ -75,6 +77,7 @@ mod workspace_pull_request;
 mod workspace_rewind;
 mod workspace_skills;
 pub mod workspace_tasks;
+mod worktree_setup;
 
 #[cfg(test)]
 use auth::issue_preview_token;
@@ -115,6 +118,15 @@ pub fn start_services(state: &AppState) {
     state.stats_collector().start_background_collection();
     device_relay::start(state);
     telegram_gateway::start_workers(state);
+    tokio::task::spawn_blocking(|| {
+        let removed = v4_agent::reap_leftover_execution_containers();
+        if removed > 0 {
+            tracing::info!(
+                removed,
+                "Removed leftover run_command containers from earlier runs"
+            );
+        }
+    });
 }
 
 pub async fn shutdown_services(state: &AppState) {
@@ -316,6 +328,7 @@ pub fn app(state: AppState) -> Router {
             post(send_structured_input),
         )
         .merge(structured::queue::routes())
+        .merge(structured_share::routes())
         .merge(structured::context::routes())
         .merge(structured::turn_changes::routes())
         .merge(user_images::routes())
@@ -585,6 +598,7 @@ pub fn app(state: AppState) -> Router {
         .merge(paired_environments::public_routes())
         .merge(device_relay::public_routes())
         .merge(collaboration::public_routes())
+        .merge(structured_share::public_routes())
         .merge(remote_tunnels::public_routes())
         .route("/api/health", get(health))
         .route("/api/client-build", get(client_build))

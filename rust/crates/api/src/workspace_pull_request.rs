@@ -1,5 +1,5 @@
 use crate::{auth::AuthenticatedUser, state::AppState, workspace_git, ApiError};
-use axum::{Extension, Json, Router};
+use axum::{extract::State, Extension, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -13,7 +13,7 @@ use std::{
 const CACHE_TTL: Duration = Duration::from_secs(15);
 const CACHE_LIMIT: usize = 64;
 const VIEW_FIELDS: &str =
-    "number,url,title,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup";
+    "number,url,title,state,isDraft,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup";
 
 pub(crate) struct PullRequestCache {
     entries: Mutex<HashMap<String, (Instant, Value)>>,
@@ -77,6 +77,7 @@ pub(crate) fn summarize_pull_request(view: &Value) -> Value {
     let mergeable = view["mergeable"].as_str().unwrap_or("UNKNOWN");
     json!({
         "number": view["number"], "url": view["url"], "title": view["title"], "state": view["state"],
+        "headSha": view["headRefOid"],
         "isDraft": view["isDraft"].as_bool().unwrap_or(false),
         "mergeable": mergeable,
         "mergeStateStatus": view["mergeStateStatus"].as_str().unwrap_or("UNKNOWN"),
@@ -142,7 +143,7 @@ pub(crate) async fn status_with(
     }
     let value = match fetch_view(program, &repo, &branch).await {
         ViewOutcome::Found(view) => {
-            json!({ "pullRequest": summarize_pull_request(&view), "availability": "ok" })
+            json!({ "pullRequest": summarize_pull_request(&view), "availability": "ok", "repository": repo.display().to_string() })
         }
         ViewOutcome::NoPullRequest => {
             json!({ "pullRequest": null, "availability": "none", "reason": "No pull request for this branch yet" })
@@ -163,11 +164,14 @@ pub(crate) async fn status(path: &str) -> Result<Value, ApiError> {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ActionInput {
     path: String,
     action: String,
     number: u64,
+    repository: String,
+    head_sha: String,
+    url: String,
     #[serde(default)]
     method: Option<String>,
     confirm: String,
@@ -177,11 +181,17 @@ pub(crate) fn expected_confirmation(
     action: &str,
     number: u64,
     method: Option<&str>,
+    head_sha: &str,
 ) -> Result<String, ApiError> {
+    if head_sha.len() < 7 || !head_sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "The reviewed pull request head commit is required",
+        ));
+    }
     match (action, method) {
-        ("ready", None) => Ok(format!("ready #{number}")),
+        ("ready", None) => Ok(format!("ready #{number} @ {head_sha}")),
         ("merge", Some(method @ ("merge" | "squash" | "rebase"))) => {
-            Ok(format!("merge #{number} ({method})"))
+            Ok(format!("merge #{number} ({method}) @ {head_sha}"))
         }
         ("merge", _) => Err(ApiError::bad_request(
             "Choose merge, squash or rebase to merge",
@@ -196,13 +206,23 @@ pub(crate) async fn act_with(
     input: &ActionInput,
     cache: &PullRequestCache,
 ) -> Result<Value, ApiError> {
-    let expected = expected_confirmation(&input.action, input.number, input.method.as_deref())?;
+    let expected = expected_confirmation(
+        &input.action,
+        input.number,
+        input.method.as_deref(),
+        &input.head_sha,
+    )?;
     if input.confirm != expected {
         return Err(ApiError::bad_request(
             "The confirmation does not match this action",
         ));
     }
     let repo = workspace_git::repository(&input.path).await?;
+    if input.repository != repo.display().to_string() {
+        return Err(ApiError::bad_request(
+            "This pull request was reviewed in a different repository. Refresh and try again",
+        ));
+    }
     let branch = workspace_git::current_branch(&repo).await?;
     let view = match fetch_view(program, &repo, &branch).await {
         ViewOutcome::Found(view) => view,
@@ -223,6 +243,16 @@ pub(crate) async fn act_with(
     if view["number"].as_u64() != Some(input.number) || view["state"].as_str() != Some("OPEN") {
         return Err(ApiError::bad_request(
             "The pull request for this branch changed. Refresh and try again",
+        ));
+    }
+    if view["headRefOid"].as_str() != Some(input.head_sha.as_str()) {
+        return Err(ApiError::bad_request(
+            "The pull request head changed since you reviewed it. Refresh and try again",
+        ));
+    }
+    if view["url"].as_str() != Some(input.url.as_str()) {
+        return Err(ApiError::bad_request(
+            "This pull request belongs to a different repository. Refresh and try again",
         ));
     }
     let draft = view["isDraft"].as_bool().unwrap_or(false);
@@ -246,6 +276,7 @@ pub(crate) async fn act_with(
             "rebase" => "--rebase",
             _ => "--merge",
         });
+        args.extend(["--match-head-commit", &input.head_sha]);
     }
     let run = tokio::time::timeout(
         Duration::from_secs(60),
@@ -278,9 +309,11 @@ pub(crate) async fn act_with(
 }
 
 async fn action_route(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<ActionInput>,
 ) -> Result<Json<Value>, ApiError> {
+    workspace_git::authorize_workspace_path(&state, &user, &input.path).await?;
     Ok(Json(act_with("gh", &input, shared_cache()).await?))
 }
 
@@ -341,36 +374,42 @@ mod tests {
         gh.path().join("gh").display().to_string()
     }
 
-    const OPEN: &str = r#"{"number":7,"url":"https://github.com/acme/app/pull/7","title":"Fix","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}"#;
+    const SHA: &str = "1111111111111111111111111111111111111111";
+    const OPEN: &str = r#"{"number":7,"url":"https://github.com/acme/app/pull/7","title":"Fix","state":"OPEN","isDraft":false,"headRefOid":"1111111111111111111111111111111111111111","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}"#;
 
     #[test]
     fn summary_counts_checks_and_carries_draft_and_conflict_state() {
         let view = json!({"number": 7, "url": "u", "title": "Fix", "state": "OPEN", "isDraft": true, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "reviewDecision": "APPROVED",
-            "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}, {"conclusion": "", "state": "PENDING"}, {"state": "SUCCESS"}]});
+            "headRefOid": "abc1234", "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}, {"conclusion": "", "state": "PENDING"}, {"state": "SUCCESS"}]});
         assert_eq!(
             summarize_pull_request(&view),
-            json!({"number": 7, "url": "u", "title": "Fix", "state": "OPEN", "isDraft": true, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "review": "APPROVED",
+            json!({"number": 7, "url": "u", "title": "Fix", "state": "OPEN", "headSha": "abc1234", "isDraft": true, "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY", "review": "APPROVED",
                 "checks": {"passed": 2, "failed": 1, "pending": 1}})
         );
     }
 
     #[test]
-    fn confirmation_names_the_exact_action() {
+    fn confirmation_names_the_exact_action_and_reviewed_head() {
         assert_eq!(
             [
-                expected_confirmation("ready", 7, None).unwrap(),
-                expected_confirmation("merge", 7, Some("squash")).unwrap(),
+                expected_confirmation("ready", 7, None, SHA).unwrap(),
+                expected_confirmation("merge", 7, Some("squash"), SHA).unwrap(),
             ],
-            ["ready #7".to_string(), "merge #7 (squash)".to_string()]
+            [
+                format!("ready #7 @ {SHA}"),
+                format!("merge #7 (squash) @ {SHA}")
+            ]
         );
         assert_eq!(
             [
-                expected_confirmation("merge", 7, None).is_err(),
-                expected_confirmation("merge", 7, Some("force")).is_err(),
-                expected_confirmation("close", 7, None).is_err(),
-                expected_confirmation("ready", 7, Some("squash")).is_err(),
+                expected_confirmation("merge", 7, None, SHA).is_err(),
+                expected_confirmation("merge", 7, Some("force"), SHA).is_err(),
+                expected_confirmation("close", 7, None, SHA).is_err(),
+                expected_confirmation("ready", 7, Some("squash"), SHA).is_err(),
+                expected_confirmation("ready", 7, None, "").is_err(),
+                expected_confirmation("ready", 7, None, "not-a-sha").is_err(),
             ],
-            [true; 4]
+            [true; 6]
         );
     }
 
@@ -430,6 +469,9 @@ mod tests {
     fn input(path: &str, action: &str, method: Option<&str>, confirm: &str) -> ActionInput {
         ActionInput {
             path: path.into(),
+            repository: std::fs::canonicalize(path).unwrap().display().to_string(),
+            head_sha: SHA.into(),
+            url: "https://github.com/acme/app/pull/7".into(),
             action: action.into(),
             number: 7,
             method: method.map(String::from),
@@ -448,7 +490,7 @@ mod tests {
                 repo.path().to_str().unwrap(),
                 "merge",
                 Some("squash"),
-                "merge #7",
+                &format!("merge #7 (squash) @ {}", "2".repeat(40)),
             ),
             &cache,
         )
@@ -468,7 +510,12 @@ mod tests {
         status_with(&program(&gh), path, &cache).await.unwrap();
         let done = act_with(
             &program(&gh),
-            &input(path, "merge", Some("squash"), "merge #7 (squash)"),
+            &input(
+                path,
+                "merge",
+                Some("squash"),
+                &format!("merge #7 (squash) @ {SHA}"),
+            ),
             &cache,
         )
         .await
@@ -478,9 +525,9 @@ mod tests {
             (
                 json!(true),
                 vec![
-                    "pr view feature --json number,url,title,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup".to_string(),
-                    "pr view feature --json number,url,title,state,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup".to_string(),
-                    "pr merge 7 --squash".to_string(),
+                    "pr view feature --json number,url,title,state,isDraft,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup".to_string(),
+                    "pr view feature --json number,url,title,state,isDraft,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup".to_string(),
+                    format!("pr merge 7 --squash --match-head-commit {SHA}"),
                 ],
                 None
             )
@@ -506,7 +553,12 @@ mod tests {
             async move {
                 act_with(
                     &program,
-                    &input(path, "merge", Some("merge"), "merge #7 (merge)"),
+                    &input(
+                        path,
+                        "merge",
+                        Some("merge"),
+                        &format!("merge #7 (merge) @ {SHA}"),
+                    ),
                     cache,
                 )
                 .await
@@ -514,11 +566,16 @@ mod tests {
         };
         let ready_not_draft = act_with(
             &program(&failing),
-            &input(path, "ready", None, "ready #7"),
+            &input(path, "ready", None, &format!("ready #7 @ {SHA}")),
             &cache,
         )
         .await;
-        let mut stale = input(path, "merge", Some("merge"), "merge #8 (merge)");
+        let mut stale = input(
+            path,
+            "merge",
+            Some("merge"),
+            &format!("merge #8 (merge) @ {SHA}"),
+        );
         stale.number = 8;
         let stale = act_with(&program(&failing), &stale, &cache).await;
         assert_eq!(
@@ -551,7 +608,12 @@ mod tests {
         let cache = PullRequestCache::new();
         act_with(
             &program(&draft),
-            &input(repo.path().to_str().unwrap(), "ready", None, "ready #7"),
+            &input(
+                repo.path().to_str().unwrap(),
+                "ready",
+                None,
+                &format!("ready #7 @ {SHA}"),
+            ),
             &cache,
         )
         .await
@@ -559,6 +621,110 @@ mod tests {
         assert_eq!(
             calls(&draft).last().cloned(),
             Some("pr ready 7".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn actions_reject_a_changed_head_and_run_nothing() {
+        let repo = repo();
+        let path = repo.path().to_str().unwrap();
+        let moved = fake_gh(&OPEN.replace(SHA, &"2".repeat(40)), 0, "", 0);
+        let result = act_with(
+            &program(&moved),
+            &input(
+                path,
+                "merge",
+                Some("squash"),
+                &format!("merge #7 (squash) @ {SHA}"),
+            ),
+            &PullRequestCache::new(),
+        )
+        .await;
+        assert_eq!(
+            (
+                result.unwrap_err().message,
+                calls(&moved)
+                    .iter()
+                    .any(|call| call.starts_with("pr merge")),
+            ),
+            (
+                "The pull request head changed since you reviewed it. Refresh and try again"
+                    .to_string(),
+                false
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_pull_request_number_in_another_repository_is_not_acted_on() {
+        let reviewed = repo();
+        let other = repo();
+        let gh = fake_gh(OPEN, 0, "", 0);
+        let mut from_other_checkout = input(
+            other.path().to_str().unwrap(),
+            "merge",
+            Some("squash"),
+            &format!("merge #7 (squash) @ {SHA}"),
+        );
+        from_other_checkout.repository = std::fs::canonicalize(reviewed.path())
+            .unwrap()
+            .display()
+            .to_string();
+        let wrong_checkout = act_with(
+            &program(&gh),
+            &from_other_checkout,
+            &PullRequestCache::new(),
+        )
+        .await;
+        let foreign_remote = fake_gh(&OPEN.replace("acme/app", "mallory/app"), 0, "", 0);
+        let wrong_remote = act_with(
+            &program(&foreign_remote),
+            &input(
+                reviewed.path().to_str().unwrap(),
+                "merge",
+                Some("squash"),
+                &format!("merge #7 (squash) @ {SHA}"),
+            ),
+            &PullRequestCache::new(),
+        )
+        .await;
+        assert_eq!(
+            (
+                wrong_checkout.unwrap_err().message,
+                wrong_remote.unwrap_err().message,
+                calls(&gh).len()
+                    + calls(&foreign_remote)
+                        .iter()
+                        .filter(|call| call.starts_with("pr merge"))
+                        .count(),
+            ),
+            (
+                "This pull request was reviewed in a different repository. Refresh and try again"
+                    .to_string(),
+                "This pull request belongs to a different repository. Refresh and try again"
+                    .to_string(),
+                0
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_canonical_repository_and_head_for_the_confirmation() {
+        let repo = repo();
+        let gh = fake_gh(OPEN, 0, "", 0);
+        let path = repo.path().to_str().unwrap();
+        let value = status_with(&program(&gh), path, &PullRequestCache::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                value["repository"].clone(),
+                value["pullRequest"]["headSha"].clone()
+            ),
+            (
+                json!(std::fs::canonicalize(path).unwrap().display().to_string()),
+                json!(SHA)
+            )
         );
     }
 }

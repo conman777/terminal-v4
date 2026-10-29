@@ -2,14 +2,16 @@ use super::{
     interaction::{ActionScope, ApprovalRequest, Cancellation, Interaction},
     Session,
 };
-use crate::workspace_tasks::{self, CalendarTime, ScheduleInput, ScheduleSkill, TaskInput};
+use crate::workspace_tasks::{
+    self, CalendarTime, DeliveryTarget, ScheduleInput, ScheduleSkill, TaskInput,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Digest;
 use std::path::Path;
 
 pub(super) fn definition() -> Value {
-    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. In at, give hour, minute and weekdays, or a 5-field cron expression (minute hour day-of-month month day-of-week) in cron; timeZone is an IANA name. Provide a prompt, or skillRef (workspace:<id> or account:<id> from discover_skills) to run a saved skill's current instructions as the task prompt; skillInput adds input after them. The task cannot run commands. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"skillRef":{"type":"string"},"skillInput":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"cron":{"type":"string"},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"additionalProperties":false},"runOnceAt":{"type":"integer"}},"required":["name","enabled"],"additionalProperties":false}})
+    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. In at, give hour, minute and weekdays, or a 5-field cron expression (minute hour day-of-month month day-of-week) in cron; timeZone is an IANA name. deliverTo telegram sends a bounded summary of each finished run to the user's paired Telegram chat; it appears in the approval. Provide a prompt, or skillRef (workspace:<id> or account:<id> from discover_skills) to run a saved skill's current instructions as the task prompt; skillInput adds input after them. The task cannot run commands. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"skillRef":{"type":"string"},"skillInput":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"cron":{"type":"string"},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"additionalProperties":false},"runOnceAt":{"type":"integer"},"deliverTo":{"type":"string","enum":["telegram"]}},"required":["name","enabled"],"additionalProperties":false}})
 }
 
 #[derive(Deserialize)]
@@ -23,6 +25,7 @@ struct Arguments {
     interval_seconds: Option<u64>,
     at: Option<CalendarTime>,
     run_once_at: Option<u64>,
+    deliver_to: Option<DeliveryTarget>,
 }
 
 fn skill_prompt(
@@ -126,6 +129,7 @@ pub(super) async fn execute(
         enabled: args.enabled,
         at: args.at,
         run_once_at: args.run_once_at,
+        deliver_to: args.deliver_to,
     };
     let reviewed = workspace_tasks::prepare_reviewed_schedule(
         data.to_path_buf(),
@@ -156,13 +160,17 @@ pub(super) async fn execute(
                 .map(|millis| format!("{millis} milliseconds since the epoch"))
                 .unwrap_or_else(|| "No first run while disabled".into())
         });
+    let delivery_note = match args.deliver_to {
+        Some(DeliveryTarget::Telegram) => "Result delivery: after each run, a redacted summary (status, name, up to 3000 characters of the final text) is sent to your paired Telegram chat.\n",
+        None => "",
+    };
     let approved = cancellation.run(interaction.approve(ApprovalRequest {
         id: uuid::Uuid::new_v4().to_string(),
         scope: scope.clone(),
         tool_call_id: call_id.into(),
         tool_name: "create_schedule".into(),
         tool_input: details.clone(),
-        description: format!("Create unattended app schedule for owner {owner}\nFirst run (UTC): {first_run}\nExact schedule (times are Unix milliseconds):\n{}", serde_json::to_string_pretty(&details).map_err(|_| "Cannot encode schedule review")?),
+        description: format!("Create unattended app schedule for owner {owner}\nFirst run (UTC): {first_run}\n{delivery_note}Exact schedule (times are Unix milliseconds):\n{}", serde_json::to_string_pretty(&details).map_err(|_| "Cannot encode schedule review")?),
         expires_at,
     })).await?;
     if !approved {
@@ -261,6 +269,60 @@ mod tests {
             serde_json::from_slice(&std::fs::read(files[0].path()).unwrap()).unwrap();
         assert_eq!(persisted["ownerId"], "owner");
         assert_eq!(persisted["schedules"], json!([saved]));
+    }
+    #[tokio::test]
+    async fn telegram_delivery_is_shown_in_the_approval_and_saved_only_when_requested() {
+        let workspace = tempfile::tempdir().unwrap();
+        let session = super::super::new_session("openai-api", "gpt-4.1", workspace.path());
+        let run = |extra: Value| {
+            let session = &session;
+            async move {
+                let dir = tempfile::tempdir().unwrap();
+                let gate = Gate {
+                    approved: true,
+                    requests: Mutex::new(vec![]),
+                };
+                let mut args = input();
+                args.as_object_mut()
+                    .unwrap()
+                    .extend(extra.as_object().unwrap().clone());
+                let saved = execute(
+                    dir.path(),
+                    "owner",
+                    session,
+                    &scope(session),
+                    "call",
+                    &args,
+                    &gate,
+                    &Cancellation::default(),
+                )
+                .await;
+                let description = gate
+                    .requests
+                    .lock()
+                    .unwrap()
+                    .pop()
+                    .map(|request| request.description)
+                    .unwrap_or_default();
+                (saved, description)
+            }
+        };
+        let (with, with_text) = run(json!({"deliverTo":"telegram"})).await;
+        let (without, without_text) = run(json!({})).await;
+        let (invalid, _) = run(json!({"deliverTo":"email"})).await;
+        let with: Value = serde_json::from_str(&with.unwrap()).unwrap();
+        let without: Value = serde_json::from_str(&without.unwrap()).unwrap();
+        assert_eq!(
+            (
+                with["deliverTo"].clone(),
+                with_text.contains("sent to your paired Telegram chat"),
+                with_text.contains("\"deliverTo\": \"telegram\""),
+                without.get("deliverTo").cloned(),
+                without_text.contains("Telegram chat"),
+                invalid.is_err(),
+            ),
+            (json!("telegram"), true, true, None, false, true)
+        );
     }
     #[tokio::test]
     async fn denial_foreign_scope_and_unexpected_arguments_never_save() {

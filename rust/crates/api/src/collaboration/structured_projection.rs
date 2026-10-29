@@ -1,21 +1,25 @@
 use serde::Serialize;
+#[cfg(test)]
 use std::collections::HashSet;
+#[cfg(test)]
 use terminal_v4_core::StructuredSessionEvent;
 
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct GuestMessage {
-    pub(super) seq: i64,
-    pub(super) role: &'static str,
-    pub(super) text: String,
+pub(crate) struct GuestMessage {
+    pub(crate) seq: i64,
+    pub(crate) role: &'static str,
+    pub(crate) text: String,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize, PartialEq)]
 struct GuestHistory {
     messages: Vec<GuestMessage>,
     omitted: usize,
 }
 
+#[cfg(test)]
 fn project_guest_history(events: &[StructuredSessionEvent]) -> GuestHistory {
     const MAX_MESSAGE_BYTES: usize = 16 * 1024;
     const MAX_HISTORY_BYTES: usize = 512 * 1024;

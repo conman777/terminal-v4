@@ -539,6 +539,7 @@ mod edit_tests {
                 enabled: true,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await
@@ -765,6 +766,7 @@ mod edit_tests {
                 enabled: false,
                 at: None,
                 run_once_at: Some(when),
+                deliver_to: None,
             },
         )
         .await
@@ -822,6 +824,7 @@ mod edit_tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         };
         let at = CalendarTime {
             hour: 2,

@@ -1240,3 +1240,17 @@ async fn workspace_replaced_while_waiting_for_admission_is_rejected() {
         .is_err());
     manager.shutdown().await.unwrap();
 }
+
+#[test]
+fn read_only_children_are_never_allowed_any_background_tool() {
+    use crate::v4_agent::ToolPolicy;
+    for definition in definitions() {
+        let name = definition["name"].as_str().unwrap();
+        assert!(handles(name));
+        assert!(
+            !ToolPolicy::ReadOnlyChild.allows(name),
+            "{name} must not be available to a read-only child"
+        );
+        assert!(ToolPolicy::Standard.allows(name));
+    }
+}

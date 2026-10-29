@@ -254,6 +254,16 @@ impl AppState {
     /// Construct the server state with exclusive structured-session ownership.
     /// On non-Unix platforms the existing session behavior is retained.
     pub fn new_runtime(config: AppConfig) -> Result<Self, String> {
+        Self::new_runtime_with_background_commands(
+            config,
+            std::env::var("TERMINAL_V4_BACKGROUND_COMMANDS").is_ok_and(|value| value == "1"),
+        )
+    }
+
+    pub fn new_runtime_with_background_commands(
+        config: AppConfig,
+        background_commands: bool,
+    ) -> Result<Self, String> {
         let state = Self::new(config)?;
         #[cfg(unix)]
         {
@@ -316,7 +326,14 @@ impl AppState {
                 }
             }
             manager.start_owner_cleanup_workers()?;
+            if background_commands {
+                if let Err(error) = manager.enable_background_commands() {
+                    tracing::warn!(%error, "Background commands stay disabled");
+                }
+            }
         }
+        #[cfg(not(unix))]
+        let _ = background_commands;
         Ok(state)
     }
 

@@ -1,12 +1,16 @@
 //! Agent-facing background actions. The caller supplies authenticated session
 //! context and a manager retained beyond the lifetime of a turn.
-use super::{
-    BackgroundProcesses, BackgroundRequest, BackgroundScope, BackgroundSnapshot, BackgroundState,
-};
-use crate::v4_agent::interaction::{self, ActionScope, ApprovalRequest, Cancellation, Interaction};
+#[cfg(test)]
+use super::{BackgroundProcesses, BackgroundRequest, BackgroundScope};
+use super::{BackgroundSnapshot, BackgroundState};
+use crate::v4_agent::interaction::ActionScope;
+#[cfg(test)]
+use crate::v4_agent::interaction::{self, ApprovalRequest, Cancellation, Interaction};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{path::Path, sync::Arc, time::Duration};
+#[cfg(test)]
+use std::path::Path;
+use std::{sync::Arc, time::Duration};
 
 pub(crate) fn definitions() -> Vec<Value> {
     [
@@ -161,6 +165,7 @@ pub(crate) async fn execute_actor(
 /// Legacy direct-manager prototype, kept only for manager-level tests. It
 /// starts commands without the trusted actor (no session-incarnation fence) and
 /// is not reachable from the agent loop.
+#[cfg(test)]
 pub(crate) async fn execute_direct(
     manager: &BackgroundProcesses,
     scope: &ActionScope,

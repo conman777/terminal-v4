@@ -174,7 +174,7 @@ fn clear_quiescence_if_present(tx: &Transaction<'_>, owner: &str) -> Result<(), 
 }
 
 impl OwnerGate {
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
     pub(crate) fn validate_actor_root(&self, root: &Path) -> Result<(), String> {
         let expected = root
             .canonicalize()

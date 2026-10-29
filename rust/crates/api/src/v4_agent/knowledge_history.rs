@@ -82,6 +82,15 @@ pub(super) struct Candidate {
     modified: SystemTime,
 }
 
+pub(super) fn candidate_at(path: PathBuf, source: Source, bytes: u64) -> Candidate {
+    Candidate {
+        path,
+        source,
+        bytes,
+        modified: SystemTime::UNIX_EPOCH,
+    }
+}
+
 fn exact_legacy_owner(owner: &str) -> bool {
     !owner.is_empty()
         && owner

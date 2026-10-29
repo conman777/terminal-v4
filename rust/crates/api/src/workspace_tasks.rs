@@ -10,8 +10,11 @@ use uuid::Uuid;
 
 #[path = "workspace_tasks/cron.rs"]
 mod cron;
+#[path = "workspace_tasks/delivery.rs"]
+mod delivery;
 #[path = "workspace_tasks/schedule_change.rs"]
 mod schedule_change;
+pub use delivery::{DeliveryState, DeliveryStatus, DeliveryTarget};
 #[cfg(test)]
 use schedule_change::ReviewedScheduleChange;
 pub(crate) use schedule_change::{
@@ -22,7 +25,7 @@ pub(crate) use schedule_change::{
 const TASK_LIMIT: usize = 200;
 const RECEIPT_LIMIT: usize = 512 * 1024;
 const COMPACT_RESULT_LIMIT: usize = 16 * 1024;
-const WORKER_PROTOCOL: u64 = 1;
+const WORKER_PROTOCOL: u64 = 2;
 
 fn compact_receipt(record: &TaskRecord) -> TaskRecord {
     let mut compact = record.clone();
@@ -110,6 +113,8 @@ pub struct ScheduleInput {
     pub at: Option<CalendarTime>,
     #[serde(default)]
     pub run_once_at: Option<u64>,
+    #[serde(default)]
+    pub deliver_to: Option<DeliveryTarget>,
 }
 
 /// A time of day on chosen weekdays (0 = Sunday), or a 5-field cron expression,
@@ -327,6 +332,8 @@ pub struct TaskRecord {
     pub before_checkpoint_id: Option<Uuid>,
     #[serde(default)]
     pub after_checkpoint_id: Option<Uuid>,
+    #[serde(flatten)]
+    pub delivery: DeliveryState,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -356,6 +363,8 @@ pub struct ScheduleRecord {
     pub last_status: Option<TaskStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deliver_to: Option<DeliveryTarget>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -455,6 +464,9 @@ fn merge_completion(existing: &mut TaskRecord, mut finished: TaskRecord) {
             "Task cancelled",
             now_ms(),
         );
+    }
+    if existing.delivery.progress() > finished.delivery.progress() {
+        finished.delivery = existing.delivery.clone();
     }
     *existing = finished;
 }
@@ -984,6 +996,7 @@ mod read_only_schedule_tests {
                 skill: None,
                 last_status: None,
                 last_error: None,
+                deliver_to: None,
             }],
         }
     }
@@ -1193,6 +1206,7 @@ mod reviewed_schedule_change_tests {
                 enabled,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
         )
         .await
@@ -1546,6 +1560,7 @@ fn enqueue(
         error: None,
         before_checkpoint_id: None,
         after_checkpoint_id: None,
+        delivery: DeliveryState::default(),
         events: vec![TaskEvent {
             at: now,
             status: TaskStatus::Queued,
@@ -1578,6 +1593,7 @@ fn queue_due_schedules(store: &mut TaskStore, now: u64, can_queue: impl Fn(&Task
         let input = schedule.input.clone();
         let next = schedule.next_after(now);
         let one_shot = schedule.run_once_at.is_some();
+        let target = schedule.deliver_to;
         if store
             .tasks
             .iter()
@@ -1589,6 +1605,7 @@ fn queue_due_schedules(store: &mut TaskStore, now: u64, can_queue: impl Fn(&Task
             continue;
         }
         if let Ok(task) = enqueue(store, input, Some(id), now) {
+            delivery::mark_for_delivery(store, task.id, target);
             store.schedules[index].enabled = !one_shot;
             store.schedules[index].next_run_at = (!one_shot).then_some(next);
             store.schedules[index].last_run_at = Some(now);
@@ -1928,6 +1945,7 @@ mod unit_tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         })
         .unwrap();
         value["runOnceAt"] = 1.into();
@@ -2061,6 +2079,7 @@ mod unit_tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         });
         queue_due_schedules(&mut store, now, |_| true);
         queue_due_schedules(&mut store, now + 60_000, |_| true);
@@ -2452,6 +2471,7 @@ mod persisted_io_tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         };
         for schedule in [
             base.clone(),
@@ -4132,7 +4152,17 @@ struct WorkspaceQuery {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScheduleUpdate {
-    enabled: bool,
+    enabled: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    deliver_to: Option<Option<DeliveryTarget>>,
+}
+
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 #[derive(Serialize)]
 struct TaskList {
@@ -4414,6 +4444,7 @@ pub(crate) async fn create_owner_schedule(
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: input.deliver_to,
         };
         let mut schedule = schedule;
         schedule.next_run_at = schedule.enabled.then(|| {
@@ -4502,6 +4533,7 @@ pub(crate) async fn prepare_reviewed_schedule(
         skill,
         last_status: None,
         last_error: None,
+        deliver_to: input.deliver_to,
     };
     schedule.next_run_at = schedule.enabled.then(|| {
         schedule
@@ -4587,20 +4619,26 @@ async fn update_schedule(
                 .iter_mut()
                 .find(|schedule| schedule.id == id)
                 .ok_or_else(not_found)?;
-            if input.enabled && schedule.run_once_at.is_some() && schedule.last_task_id.is_some() {
+            if let Some(target) = input.deliver_to {
+                schedule.deliver_to = target;
+            }
+            let Some(enabled) = input.enabled else {
+                return Ok(schedule.clone());
+            };
+            if enabled && schedule.run_once_at.is_some() && schedule.last_task_id.is_some() {
                 return Err(ApiError::bad_request(
                     "This one-shot schedule has already run",
                 ));
             }
-            if input.enabled == schedule.enabled {
+            if enabled == schedule.enabled {
                 return Ok(schedule.clone());
             }
             let now = now_ms();
-            if input.enabled && !schedule.enabled && schedule.run_once_at.is_some_and(|when| when <= now) {
+            if enabled && !schedule.enabled && schedule.run_once_at.is_some_and(|when| when <= now) {
                 return Err(ApiError::bad_request("This one-shot time has passed. Use Run now or create a new schedule for a future time."));
             }
-            schedule.enabled = input.enabled;
-            schedule.next_run_at = input.enabled.then(|| {
+            schedule.enabled = enabled;
+            schedule.next_run_at = enabled.then(|| {
                 schedule
                     .run_once_at
                     .unwrap_or_else(|| schedule.next_after(now))
@@ -4648,6 +4686,8 @@ async fn run_schedule(
             ))
             .map_err(ApiError::bad_request)?;
             let task = enqueue(store, store.schedules[index].input.clone(), Some(id), now)?;
+            let target = store.schedules[index].deliver_to;
+            let task = delivery::mark_for_delivery(store, task.id, target).unwrap_or(task);
             let schedule = &mut store.schedules[index];
             schedule.last_run_at = Some(now);
             schedule.last_task_id = Some(task.id);
@@ -5073,6 +5113,7 @@ mod worker_durability_tests {
             skill: None,
             last_status: None,
             last_error: None,
+            deliver_to: None,
         }
     }
 
@@ -5754,16 +5795,20 @@ pub fn start_worker(state: AppState) -> bool {
             }
         };
         let mut running = tokio::task::JoinSet::new();
+        let mut deliveries = tokio::task::JoinSet::new();
         let mut occupied = std::collections::HashSet::new();
         let mut recover = true;
+        let mut recover_deliveries = true;
         loop {
             while let Some(result) = running.try_join_next() {
                 if let Ok(key) = result {
                     occupied.remove(&key);
                 }
             }
+            while deliveries.try_join_next().is_some() {}
             if *shutdown.borrow() {
                 while running.join_next().await.is_some() {}
+                delivery::drain(&mut deliveries).await;
                 break;
             }
             let path = data_dir.clone();
@@ -5794,6 +5839,20 @@ pub fn start_worker(state: AppState) -> bool {
                     }
                 }
                 _ => tracing::warn!("Workspace task queue could not be read"),
+            }
+            let path = data_dir.clone();
+            match tokio::task::spawn_blocking(move || {
+                delivery::claim_deliveries(&path, recover_deliveries)
+            })
+            .await
+            {
+                Ok(Ok(items)) => {
+                    recover_deliveries = false;
+                    for item in items {
+                        deliveries.spawn(delivery::deliver(data_dir.clone(), item));
+                    }
+                }
+                _ => tracing::warn!("Schedule result delivery queue could not be read"),
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
@@ -7520,6 +7579,7 @@ mod reviewed_schedule_tests {
                 enabled: true,
                 at: None,
                 run_once_at: None,
+                deliver_to: None,
             },
             None,
         )

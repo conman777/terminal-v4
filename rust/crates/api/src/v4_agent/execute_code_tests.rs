@@ -1,6 +1,7 @@
 use super::*;
 use crate::v4_agent::interaction::now_ms;
 use async_trait::async_trait;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use terminal_v4_core::StructuredSessionEvent;
 
@@ -382,4 +383,87 @@ async fn leftover_background_children_are_killed_when_the_script_exits() {
         .parse()
         .unwrap();
     assert_dead(pid).await;
+}
+
+#[test]
+fn sandbox_profile_escapes_paths_and_rejects_control_characters() {
+    let profile = execute_code_sandbox::profile(
+        Path::new("/w\"x\\y"),
+        Path::new("/d"),
+        Path::new("/d/rpc.sock"),
+        &[PathBuf::from("/t")],
+    )
+    .unwrap();
+    assert_eq!(
+        profile,
+        "(version 1)\n(allow default)\n(deny network*)\n(allow network-outbound (remote unix-socket (path-literal \"/d/rpc.sock\")))\n(deny file-write*)\n(allow file-write* (subpath \"/w\\\"x\\\\y\") (subpath \"/d\") (subpath \"/t\") (literal \"/dev/null\") (literal \"/dev/dtracehelper\"))\n"
+    );
+    assert!(execute_code_sandbox::profile(
+        Path::new("/w\n(allow network*)"),
+        Path::new("/d"),
+        Path::new("/d/s"),
+        &[]
+    )
+    .is_err());
+}
+
+#[test]
+fn description_and_approval_state_the_actual_containment() {
+    let description = definition()["description"].as_str().unwrap().to_owned();
+    let approval = approval_description(Path::new("/w"), STANDARD, "print(1)");
+    if execute_code_sandbox::available() {
+        assert!(description.contains("macOS sandbox"));
+        assert!(description.contains("file reads are not restricted"));
+        assert!(
+            approval.starts_with("Python script (macOS sandbox: network access denied by the OS")
+        );
+    } else {
+        assert!(description.contains("There is no OS sandbox"));
+        assert!(description.contains("best effort only"));
+        assert!(approval.starts_with("Python script (no OS sandbox is available on this host"));
+    }
+}
+
+#[tokio::test]
+async fn sandbox_denies_network_even_when_the_python_guard_is_bypassed() {
+    if !execute_code_sandbox::available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let value = run_script_for_test(
+        root.path(),
+        &format!("import _socket, subprocess\ntry:\n    _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM).connect(('127.0.0.1', {port}))\n    print('raw connected')\nexcept OSError as error:\n    print('raw blocked', error.errno)\nresult = subprocess.run(['/usr/bin/nc', '-z', '-w', '2', '127.0.0.1', '{port}'], capture_output=True)\nprint('nc exit', result.returncode)\n"),
+    )
+    .await;
+    assert_eq!(value["stdout"], "raw blocked 1\nnc exit 1\n");
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+    );
+}
+
+#[tokio::test]
+async fn sandbox_denies_writes_outside_workspace_and_temporary_directories() {
+    if !execute_code_sandbox::available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let home = std::env::var("HOME").unwrap();
+    let outside = format!(
+        "{home}/v4-execute-code-sandbox-probe-{}",
+        std::process::id()
+    );
+    let value = run_script_for_test(
+        root.path(),
+        &format!("try:\n    open({outside:?}, 'w').write('x')\n    print('outside written')\nexcept OSError as error:\n    print('outside blocked', error.errno)\nopen('inside.txt', 'w').write('ok')\nimport tempfile\nwith tempfile.NamedTemporaryFile() as handle:\n    handle.write(b'ok')\nprint('inside ok')\n"),
+    )
+    .await;
+    let _ = std::fs::remove_file(&outside);
+    assert_eq!(value["stdout"], "outside blocked 1\ninside ok\n");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("inside.txt")).unwrap(),
+        "ok"
+    );
 }

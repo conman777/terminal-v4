@@ -202,12 +202,97 @@ async fn send_part(token: &str, chat_id: i64, part: &str) -> bool {
     false
 }
 
-async fn send(token: &str, chat_id: i64, text: &str) {
+async fn send_all(token: &str, chat_id: i64, text: &str) -> bool {
     for part in chunks(text) {
         if !send_part(token, chat_id, &part).await {
-            return;
+            return false;
         }
     }
+    true
+}
+
+async fn send(token: &str, chat_id: i64, text: &str) {
+    send_all(token, chat_id, text).await;
+}
+
+const OWNER_SEND_CHARS: usize = 12_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnerSendError {
+    NotConnected,
+    Disabled,
+    NotPaired,
+    TokenUnavailable,
+    Rejected,
+}
+
+impl OwnerSendError {
+    pub(crate) fn reason(self) -> &'static str {
+        match self {
+            Self::NotConnected => "Telegram is not connected",
+            Self::Disabled => "The Telegram gateway is turned off",
+            Self::NotPaired => "No Telegram chat is paired",
+            Self::TokenUnavailable => "The saved Telegram bot token could not be read",
+            Self::Rejected => "Telegram did not accept the message",
+        }
+    }
+
+    pub(crate) fn skipped(self) -> bool {
+        matches!(self, Self::NotConnected | Self::Disabled | Self::NotPaired)
+    }
+}
+
+/// Sends bounded text to the chat paired by `owner` and to no other chat.
+pub(crate) async fn send_to_owner(
+    data_dir: &Path,
+    owner: &str,
+    text: &str,
+) -> Result<(), OwnerSendError> {
+    let config = load_config(data_dir, owner)
+        .filter(|config| config.owner == owner)
+        .ok_or(OwnerSendError::NotConnected)?;
+    if !config.enabled {
+        return Err(OwnerSendError::Disabled);
+    }
+    let chat_id = config.chat_id.ok_or(OwnerSendError::NotPaired)?;
+    let token = VaultCipher::load(data_dir)
+        .and_then(|cipher| cipher.decrypt(&config.token))
+        .map_err(|_| OwnerSendError::TokenUnavailable)?;
+    let bounded = if text.chars().count() > OWNER_SEND_CHARS {
+        let mut shortened: String = text.chars().take(OWNER_SEND_CHARS).collect();
+        shortened.push_str("\n[truncated]");
+        shortened
+    } else {
+        text.to_owned()
+    };
+    if send_all(&token, chat_id, &bounded).await {
+        Ok(())
+    } else {
+        Err(OwnerSendError::Rejected)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn seed_paired_for_test(
+    data_dir: &Path,
+    owner: &str,
+    token: &str,
+    chat_id: Option<i64>,
+    enabled: bool,
+) {
+    let cipher = VaultCipher::load(data_dir).unwrap();
+    save_config(
+        data_dir,
+        &Config {
+            owner: owner.into(),
+            token: cipher.encrypt(token).unwrap(),
+            bot_name: "test_bot".into(),
+            chat_id,
+            session_id: None,
+            enabled,
+        },
+    )
+    .unwrap();
 }
 
 fn offset_path(data_dir: &Path, user_id: &str) -> PathBuf {
@@ -236,8 +321,19 @@ fn save_offset(data_dir: &Path, user_id: &str, offset: i64) {
 #[derive(Debug, PartialEq)]
 enum Inbound {
     Ignore,
-    Text { chat_id: i64, text: String },
-    Attachment { chat_id: i64 },
+    Text {
+        chat_id: i64,
+        text: String,
+    },
+    Voice {
+        chat_id: i64,
+        file_id: String,
+        file_size: Option<u64>,
+        duration: u64,
+    },
+    Attachment {
+        chat_id: i64,
+    },
 }
 
 fn classify_update(update: &Value) -> Inbound {
@@ -252,6 +348,14 @@ fn classify_update(update: &Value) -> Inbound {
         return Inbound::Text {
             chat_id,
             text: text.to_owned(),
+        };
+    }
+    if let Some(file_id) = message["voice"]["file_id"].as_str() {
+        return Inbound::Voice {
+            chat_id,
+            file_id: file_id.to_owned(),
+            file_size: message["voice"]["file_size"].as_u64(),
+            duration: message["voice"]["duration"].as_u64().unwrap_or(0),
         };
     }
     let has_attachment = ["photo", "document", "voice", "audio", "video", "video_note"]
@@ -398,6 +502,140 @@ async fn relay_reply(
         (Ok(()), false) => reply,
     };
     send(&token, chat_id, &text).await;
+}
+
+const VOICE_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const VOICE_MAX_SECONDS: u64 = 120;
+const VOICE_TRANSCRIPT_CHARS: usize = 4000;
+
+struct VoiceNote {
+    file_id: String,
+    file_size: Option<u64>,
+    duration: u64,
+}
+
+fn safe_file_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && !path.starts_with('/')
+        && !path.split('/').any(|part| part.is_empty() || part == "..")
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+}
+
+async fn download_voice(token: &str, file_id: &str) -> Result<Vec<u8>, &'static str> {
+    let file = call(
+        token,
+        "getFile",
+        json!({ "file_id": file_id }),
+        Duration::from_secs(15),
+    )
+    .await
+    .map_err(|_| "Telegram would not give me that voice message.")?;
+    if file["file_size"]
+        .as_u64()
+        .is_some_and(|size| size > VOICE_MAX_BYTES)
+    {
+        return Err("That voice message is too large (limit 2 MB).");
+    }
+    let path = file["file_path"]
+        .as_str()
+        .filter(|path| safe_file_path(path))
+        .ok_or("Telegram returned an unusable file location.")?;
+    let mut response = reqwest::Client::new()
+        .get(format!("{}/file/bot{token}/{path}", api_base()))
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|_| "The voice message could not be downloaded.")?;
+    if !response.status().is_success() {
+        return Err("The voice message could not be downloaded.");
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > VOICE_MAX_BYTES)
+    {
+        return Err("That voice message is too large (limit 2 MB).");
+    }
+    let mut audio = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "The voice message could not be downloaded.")?
+    {
+        if (audio.len() + chunk.len()) as u64 > VOICE_MAX_BYTES {
+            return Err("That voice message is too large (limit 2 MB).");
+        }
+        audio.extend_from_slice(&chunk);
+    }
+    Ok(audio)
+}
+
+async fn handle_voice(
+    state: AppState,
+    config: Config,
+    token: String,
+    chat_id: i64,
+    voice: VoiceNote,
+) {
+    let Some(session_id) = config.session_id.clone() else {
+        send(
+            &token,
+            chat_id,
+            "Choose a thread first: /threads, then /use N.",
+        )
+        .await;
+        return;
+    };
+    if voice.duration > VOICE_MAX_SECONDS
+        || voice.file_size.is_some_and(|size| size > VOICE_MAX_BYTES)
+    {
+        send(
+            &token,
+            chat_id,
+            "That voice message is too long (limit 2 minutes, 2 MB). Send text instead.",
+        )
+        .await;
+        return;
+    }
+    let audio = match download_voice(&token, &voice.file_id).await {
+        Ok(audio) => audio,
+        Err(message) => {
+            send(&token, chat_id, message).await;
+            return;
+        }
+    };
+    let transcript = match crate::transcribe::transcribe(audio, "voice.ogg", None, Some("local"))
+        .await
+    {
+        Ok(result) => result
+            .text
+            .trim()
+            .chars()
+            .take(VOICE_TRANSCRIPT_CHARS)
+            .collect::<String>(),
+        Err(_) => {
+            send(
+                &token,
+                chat_id,
+                "Voice messages need a local Whisper server on this computer; audio is never sent to a cloud service. Send text instead.",
+            )
+            .await;
+            return;
+        }
+    };
+    if transcript.is_empty() {
+        send(
+            &token,
+            chat_id,
+            "I could not hear any speech in that voice message.",
+        )
+        .await;
+        return;
+    }
+    send(&token, chat_id, &format!("Heard: {transcript}")).await;
+    relay_reply(state, config.owner, session_id, token, chat_id, transcript).await;
 }
 
 async fn handle(state: &AppState, config: &mut Config, token: &str, chat_id: i64, text: &str) {
@@ -552,13 +790,33 @@ async fn run(state: AppState, user_id: String) {
             save_offset(&data_dir, &user_id, offset);
             let inbound = classify_update(update);
             let chat_id = match &inbound {
-                Inbound::Text { chat_id, .. } | Inbound::Attachment { chat_id } => *chat_id,
+                Inbound::Text { chat_id, .. }
+                | Inbound::Voice { chat_id, .. }
+                | Inbound::Attachment { chat_id } => *chat_id,
                 Inbound::Ignore => continue,
             };
             if config.chat_id == Some(chat_id) {
                 match inbound {
                     Inbound::Text { text, .. } => {
                         handle(&state, &mut config, &token, chat_id, &text).await
+                    }
+                    Inbound::Voice {
+                        file_id,
+                        file_size,
+                        duration,
+                        ..
+                    } => {
+                        tokio::spawn(handle_voice(
+                            state.clone(),
+                            config.clone(),
+                            token.clone(),
+                            chat_id,
+                            VoiceNote {
+                                file_id,
+                                file_size,
+                                duration,
+                            },
+                        ));
                     }
                     _ => {
                         send(
@@ -726,6 +984,8 @@ pub fn routes() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[test]
     fn reads_bot_commands_and_plain_messages() {
@@ -952,6 +1212,7 @@ mod tests {
         use axum::{http::StatusCode, routing::post};
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        let _env = ENV_LOCK.lock().await;
         let hits = Arc::new(AtomicUsize::new(0));
         let seen = hits.clone();
         let app = Router::new().route(
@@ -982,6 +1243,205 @@ mod tests {
         assert_eq!(
             (retry_after, delivered, hits.load(Ordering::SeqCst)),
             (Some(0), true, 2)
+        );
+    }
+
+    type Sent = std::sync::Arc<Mutex<Vec<Value>>>;
+
+    async fn mock_telegram(
+        fail_sends: bool,
+        voice_bytes: Vec<u8>,
+        advertised_size: u64,
+    ) -> (Sent, u16) {
+        use axum::{extract::Path as UrlPath, http::StatusCode, routing::post};
+        let sent: Sent = Default::default();
+        let log = sent.clone();
+        let app = Router::new()
+            .route(
+                "/bot{token}/sendMessage",
+                post(move |UrlPath(token): UrlPath<String>, Json(body): Json<Value>| {
+                    let log = log.clone();
+                    async move {
+                        log.lock().unwrap().push(json!({ "token": token, "body": body }));
+                        if fail_sends {
+                            (
+                                StatusCode::BAD_REQUEST,
+                                Json(json!({ "ok": false, "description": "chat not found" })),
+                            )
+                        } else {
+                            (StatusCode::OK, Json(json!({ "ok": true, "result": {} })))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/bot{token}/getFile",
+                post(move |Json(body): Json<Value>| async move {
+                    let path = match body["file_id"].as_str() {
+                        Some("evil") => "../secret",
+                        _ => "voice/file_1.oga",
+                    };
+                    Json(json!({ "ok": true, "result": { "file_path": path, "file_size": advertised_size } }))
+                }),
+            )
+            .route(
+                "/file/bot{token}/voice/file_1.oga",
+                axum::routing::get(move || {
+                    let bytes = voice_bytes.clone();
+                    async move { bytes }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (sent, port)
+    }
+
+    #[tokio::test]
+    async fn owner_send_reaches_only_the_paired_chat_in_bounded_chunks() {
+        let _env = ENV_LOCK.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let (sent, port) = mock_telegram(false, vec![], 0).await;
+        std::env::set_var("TELEGRAM_API_BASE", format!("http://127.0.0.1:{port}"));
+        seed_paired_for_test(data.path(), "alice", "111:alice-secret", Some(42), true);
+        seed_paired_for_test(data.path(), "bob", "222:bob-secret", Some(77), true);
+        let text = format!("{}\n{}", "a".repeat(3000), "b".repeat(20_000));
+        let result = send_to_owner(data.path(), "alice", &text).await;
+        std::env::remove_var("TELEGRAM_API_BASE");
+        let log = sent.lock().unwrap();
+        let total: usize = log
+            .iter()
+            .map(|entry| entry["body"]["text"].as_str().unwrap().chars().count())
+            .sum();
+        assert_eq!(
+            (
+                result,
+                log.iter()
+                    .map(|entry| entry["token"].to_string())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                log.iter()
+                    .map(|entry| entry["body"]["chat_id"].to_string())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                log.iter().all(
+                    |entry| entry["body"]["text"].as_str().unwrap().chars().count()
+                        <= MESSAGE_LIMIT
+                ),
+                total <= OWNER_SEND_CHARS + "\n[truncated]".len(),
+                log.last().unwrap()["body"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("[truncated]"),
+            ),
+            (
+                Ok(()),
+                ["\"111:alice-secret\"".to_owned()].into(),
+                ["42".to_owned()].into(),
+                true,
+                true,
+                true
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn owner_send_refuses_without_a_paired_enabled_owner_and_never_leaks_the_token() {
+        let _env = ENV_LOCK.lock().await;
+        let data = tempfile::tempdir().unwrap();
+        let (sent, port) = mock_telegram(true, vec![], 0).await;
+        std::env::set_var("TELEGRAM_API_BASE", format!("http://127.0.0.1:{port}"));
+        seed_paired_for_test(data.path(), "unpaired", "1:tok", None, true);
+        seed_paired_for_test(data.path(), "off", "2:tok", Some(5), false);
+        seed_paired_for_test(data.path(), "rejected", "3:topsecret", Some(6), true);
+        let results = [
+            send_to_owner(data.path(), "nobody", "x").await,
+            send_to_owner(data.path(), "unpaired", "x").await,
+            send_to_owner(data.path(), "off", "x").await,
+            send_to_owner(data.path(), "rejected", "x").await,
+        ];
+        std::env::remove_var("TELEGRAM_API_BASE");
+        let reasons: Vec<_> = results
+            .iter()
+            .map(|result| result.unwrap_err().reason())
+            .collect();
+        assert_eq!(
+            (
+                results,
+                sent.lock().unwrap().len(),
+                reasons.iter().any(|reason| reason.contains("topsecret")),
+                reasons.iter().map(|_| ()).count(),
+            ),
+            (
+                [
+                    Err(OwnerSendError::NotConnected),
+                    Err(OwnerSendError::NotPaired),
+                    Err(OwnerSendError::Disabled),
+                    Err(OwnerSendError::Rejected)
+                ],
+                3,
+                false,
+                4
+            )
+        );
+    }
+
+    #[test]
+    fn classifies_voice_messages_with_their_limits() {
+        assert_eq!(
+            classify_update(&update(
+                "private",
+                json!({ "voice": { "file_id": "abc", "file_size": 1234, "duration": 5 } })
+            )),
+            Inbound::Voice {
+                chat_id: 7,
+                file_id: "abc".into(),
+                file_size: Some(1234),
+                duration: 5
+            }
+        );
+    }
+
+    #[test]
+    fn telegram_file_paths_cannot_escape_the_file_endpoint() {
+        assert_eq!(
+            [
+                "voice/file_1.oga",
+                "../secret",
+                "/etc/passwd",
+                "a//b",
+                "a b",
+                ""
+            ]
+            .map(safe_file_path),
+            [true, false, false, false, false, false]
+        );
+    }
+
+    #[tokio::test]
+    async fn voice_download_is_size_bounded_by_metadata_and_by_body() {
+        let _env = ENV_LOCK.lock().await;
+        let small = vec![7u8; 1000];
+        let (_, port) = mock_telegram(false, small.clone(), 1000).await;
+        let (_, lying) = mock_telegram(false, vec![0u8; (VOICE_MAX_BYTES + 1) as usize], 10).await;
+        let (_, big) = mock_telegram(false, small.clone(), VOICE_MAX_BYTES + 1).await;
+        let fetch = |port: u16, id: &'static str| async move {
+            std::env::set_var("TELEGRAM_API_BASE", format!("http://127.0.0.1:{port}"));
+            download_voice("T", id).await
+        };
+        let results = (
+            fetch(port, "ok").await,
+            fetch(lying, "ok").await,
+            fetch(big, "ok").await,
+            fetch(port, "evil").await,
+        );
+        std::env::remove_var("TELEGRAM_API_BASE");
+        assert_eq!(
+            results,
+            (
+                Ok(small),
+                Err("That voice message is too large (limit 2 MB)."),
+                Err("That voice message is too large (limit 2 MB)."),
+                Err("Telegram returned an unusable file location.")
+            )
         );
     }
 }

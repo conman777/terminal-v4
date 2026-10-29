@@ -7,12 +7,15 @@ mod background_actor;
 #[cfg(unix)]
 #[cfg_attr(not(test), allow(dead_code))]
 mod background_completion;
+#[cfg(unix)]
+mod background_turn;
 #[cfg(test)]
 mod claude_regressions;
 mod codex;
 #[cfg(test)]
 mod codex_queue_prerequisites;
 pub(crate) mod context;
+pub(crate) mod guest_share;
 mod images;
 #[cfg(unix)]
 #[path = "structured/ownership/live.rs"]
@@ -9776,9 +9779,9 @@ impl V4Job {
                 sink: sink.clone(),
                 controller: controller.clone(),
             });
-            #[cfg(all(test, unix))]
+            #[cfg(unix)]
             let _background_turn = match (&work, manager.inner.background_processes.get()) {
-                (V4Work::Turn(options), Some(background)) => {
+                (V4Work::Turn(options), Some(background)) if background.commands_enabled() => {
                     options.local_authority.clone().and_then(|authority| {
                         let scope = ActionScope {
                             owner: owner.clone(),
@@ -9786,7 +9789,7 @@ impl V4Job {
                             turn_id: turn_id.clone(),
                         };
                         let turn = Arc::new(
-                            background_actor::background_turn::BackgroundTurn::new(
+                            background_turn::BackgroundTurn::new(
                                 manager.clone(),
                                 background.clone(),
                                 scope,
