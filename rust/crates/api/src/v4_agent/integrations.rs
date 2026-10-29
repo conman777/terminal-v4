@@ -93,7 +93,7 @@ fn declaration_schemas(
     }
     if browser_enabled {
         result.push(web_extract::definition());
-        result.extend(browser::definitions().into_iter().map(|mut tool| {
+        result.extend(browser::definitions().into_iter().filter(|tool| !shared_browser || !browser::isolated_only(tool["name"].as_str().unwrap_or(""))).map(|mut tool| {
             if shared_browser {
                 match tool["name"].as_str().unwrap_or("") {
                     "browser_open" => tool["description"] = json!("Open an approved URL in a new tab in the in-app browser shared with the human user. Requires approval of this exact action."),
@@ -170,6 +170,14 @@ pub(super) fn approval_review(
         } else {
             "V4's isolated browser profile".to_owned()
         };
+        if name == "browser_dialog" {
+            scope.push_str(
+                "; accepts or dismisses the next JavaScript dialog opened by the reviewed page",
+            );
+        }
+        if name == "browser_console" {
+            scope.push_str("; reads recent console output of the reviewed page, which may contain sensitive text");
+        }
         if name == "browser_get_images" {
             scope.push_str("; lists image URLs and alternative text, including hidden images; URLs may contain sensitive query values");
         }
@@ -543,14 +551,7 @@ impl Integrations {
                 browser_review_config(data, owner, &config, false, None),
             )?;
             let revision = browser::settings_revision(data, owner)?;
-            if matches!(
-                name,
-                "browser_get_images"
-                    | "browser_snapshot"
-                    | "browser_select"
-                    | "browser_wait"
-                    | "browser_evaluate"
-            ) {
+            if browser::is_document_tool(name) {
                 let fingerprint =
                     serde_json::to_vec(&config).map_err(|_| "Invalid browser configuration")?;
                 let (_, client) = self.browser.as_ref().filter(|(previous, client)| previous == &fingerprint && client.matches_scope(data, owner, workspace))
@@ -778,14 +779,7 @@ impl Integrations {
             {
                 return Err("Browser settings changed; request a fresh approval".into());
             }
-            if matches!(
-                name,
-                "browser_get_images"
-                    | "browser_snapshot"
-                    | "browser_select"
-                    | "browser_wait"
-                    | "browser_evaluate"
-            ) {
+            if browser::is_document_tool(name) {
                 let target = review
                     .and_then(|review| review.isolated_document.as_ref())
                     .ok_or("A reviewed browser document is required for this read")?;

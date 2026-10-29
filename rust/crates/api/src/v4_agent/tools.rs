@@ -4,6 +4,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+#[path = "file_patch.rs"]
+mod file_patch;
 #[cfg(all(test, unix))]
 #[path = "tools/search_tests.rs"]
 mod search_tests;
@@ -20,6 +22,7 @@ pub(super) fn definitions() -> Vec<Value> {
         ("write_file", "Create or replace a workspace file. Existing parent directories are required. Never edit unrelated user work.", json!({"path":{"type":"string"},"content":{"type":"string"}}),vec!["path","content"]),
         ("replace_text", "Replace literal occurrences in a workspace file. Defaults to exactly one match; set expected_count to replace exactly that many matches. Fails if the count differs.", json!({"path":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"expected_count":{"type":"integer","minimum":1,"maximum":1000}}),vec!["path","old","new"]),
         ("run_command", "Run a shell command in the workspace only after the user approves that exact command. Unattended tasks cannot approve commands. Maximum 60 seconds.", json!({"command":{"type":"string"}}),vec!["command"]),
+        ("apply_patch", file_patch::DESCRIPTION, file_patch::properties(), vec!["path","hunks"]),
     ].into_iter().map(|(name,description,properties,required)| json!({"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
 }
 fn protected(name: &str) -> bool {
@@ -301,6 +304,7 @@ pub(super) fn file_tool(root: &Path, name: &str, input: &Value) -> Result<String
             Ok(json!({"entries":rows,"limit":500}).to_string())
         }
         "write_file" => write(&path, text(input, "content")?),
+        "apply_patch" => file_patch::apply(&path, input),
         "replace_text" => {
             let content = read(&path)?;
             let old = text(input, "old")?;

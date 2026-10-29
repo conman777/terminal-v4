@@ -79,6 +79,15 @@ pub(crate) struct BackgroundSnapshot {
     pub stderr_truncated: bool,
     pub output_withheld: bool,
 }
+/// Metadata-only hint that a command reached its committed terminal outcome.
+/// It carries no command or output; the ledger remains the source of truth.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BackgroundCompletion {
+    pub scope: BackgroundScope,
+    pub action_id: String,
+    pub state: BackgroundState,
+}
+const COMPLETION_BACKLOG: usize = 64;
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
@@ -128,6 +137,7 @@ pub(crate) struct BackgroundProcesses {
         )>,
     >,
     ledger: Arc<Ledger>,
+    completions: tokio::sync::broadcast::Sender<BackgroundCompletion>,
     recovery_blocked: std::sync::atomic::AtomicBool,
     unconfirmed: Arc<Mutex<bool>>,
     running_limits: (
@@ -173,6 +183,54 @@ impl BackgroundProcesses {
         operation: uuid::Uuid,
         acknowledged: bool,
     ) -> Result<usize, String> {
+        self.review_unknown_owner_with(
+            app,
+            owner,
+            authority,
+            request,
+            operation,
+            acknowledged,
+            false,
+        )
+    }
+
+    /// Attests an owner's unknown receipts without a logout cleanup request.
+    /// It needs a live direct credential and no cleanup hold for the owner;
+    /// launch admission serializes against the same control-database write
+    /// transaction. The caller must run it on a blocking worker.
+    #[cfg(unix)]
+    pub(crate) fn review_unknown_owner_standalone(
+        &self,
+        app: &crate::state::AppState,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        operation: uuid::Uuid,
+        acknowledged: bool,
+    ) -> Result<usize, String> {
+        let request = format!("standalone-{operation}");
+        self.review_unknown_owner_with(
+            app,
+            owner,
+            authority,
+            &request,
+            operation,
+            acknowledged,
+            true,
+        )
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::too_many_arguments)]
+    fn review_unknown_owner_with(
+        &self,
+        app: &crate::state::AppState,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        request: &str,
+        operation: uuid::Uuid,
+        acknowledged: bool,
+        standalone: bool,
+    ) -> Result<usize, String> {
         if !acknowledged {
             return Err("Explicit background process acknowledgment is required".into());
         }
@@ -207,7 +265,11 @@ impl BackgroundProcesses {
         let result = app.with_owner_review(owner, authority, |tx, auth_check| {
             let check = || {
                 auth_check()?;
-                gate.validate_review_transaction(tx, owner, request)?;
+                if standalone {
+                    gate.validate_standalone_review_transaction(tx, owner)?;
+                } else {
+                    gate.validate_review_transaction(tx, owner, request)?;
+                }
                 if self.ledger.installation_binding()?.as_deref() != Some(binding.as_slice()) {
                     return Err("Background ledger identity changed".into());
                 }
@@ -337,6 +399,41 @@ impl BackgroundProcesses {
         manager.owner_gate = Some(gate);
         Ok(manager)
     }
+    /// Lagging subscribers may miss events, so a consumer must reconcile
+    /// through `wait` or `snapshot` before relying on delivery.
+    pub(crate) fn subscribe_completions(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<BackgroundCompletion> {
+        self.completions.subscribe()
+    }
+
+    /// Read-only settlement query: true while any command in the session is
+    /// running or its outcome is unreviewed. Failing to read the ledger is
+    /// reported as an error, which a caller must treat as outstanding work.
+    pub(crate) fn session_has_outstanding(
+        &self,
+        owner: &str,
+        session: &str,
+    ) -> Result<bool, String> {
+        if owner.is_empty()
+            || session.is_empty()
+            || owner.len() > 256
+            || session.len() > 256
+            || owner.chars().any(char::is_control)
+            || session.chars().any(char::is_control)
+        {
+            return Err("Invalid background session".into());
+        }
+        if *self
+            .unconfirmed
+            .lock()
+            .map_err(|_| "Background cleanup is unconfirmed")?
+        {
+            return Ok(true);
+        }
+        self.ledger.has_unknown(Some((owner, session)))
+    }
+
     #[cfg(unix)]
     pub(crate) fn owner_cleanup_unconfirmed(&self, owner: &str) -> Result<bool, String> {
         if owner.trim().is_empty() || owner.len() > 256 || owner.chars().any(char::is_control) {
@@ -550,6 +647,7 @@ impl BackgroundProcesses {
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
             ledger: Arc::new(Ledger::create(path)?),
+            completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(false),
             unconfirmed: Arc::new(Mutex::new(false)),
             running_limits: Self::default_running_limits(),
@@ -587,6 +685,7 @@ impl BackgroundProcesses {
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
             ledger,
+            completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(recovery_blocked),
             unconfirmed: Arc::new(Mutex::new(false)),
             running_limits: Self::default_running_limits(),
@@ -914,6 +1013,7 @@ impl BackgroundProcesses {
         let stderr = child.stderr.take().expect("piped stderr");
         let (cancel, cancel_rx) = watch::channel(false);
         let (done, _) = watch::channel(false);
+        let completion_scope = request.scope.clone();
         let entry = Arc::new(Entry {
             scope: request.scope,
             state: Mutex::new(BackgroundState::Running),
@@ -928,6 +1028,8 @@ impl BackgroundProcesses {
             }
             entry.cancel.send_replace(true);
         }
+        let completions = self.completions.clone();
+        let completion_action = request.action_id.clone();
         let worker_entry = entry.clone();
         let worker_ledger = self.ledger.clone();
         let worker_key = key.clone();
@@ -967,8 +1069,13 @@ impl BackgroundProcesses {
                 }
                 Err(_) => BackgroundState::Unknown,
             };
-            *worker_entry.state.lock().unwrap() = state;
+            *worker_entry.state.lock().unwrap() = state.clone();
             worker_entry.done.send_replace(true);
+            let _ = completions.send(BackgroundCompletion {
+                scope: completion_scope,
+                action_id: completion_action,
+                state,
+            });
         });
         registry.entries.insert(key, entry);
         registry.workers.push(worker);
@@ -1502,6 +1609,9 @@ async fn run(
 #[cfg(all(test, unix))]
 #[path = "background_lifecycle_tests.rs"]
 mod lifecycle_tests;
+#[cfg(test)]
+#[path = "background_review_tests.rs"]
+mod review_tests;
 #[cfg(test)]
 #[path = "background_process_tests.rs"]
 mod tests;

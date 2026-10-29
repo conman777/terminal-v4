@@ -12,6 +12,8 @@ mod compaction;
 pub(crate) mod context;
 #[cfg(unix)]
 mod delegation_inline;
+#[cfg(unix)]
+mod delegation_lifeline;
 #[cfg(any(test, unix))]
 #[allow(dead_code)]
 pub(crate) mod delegation_outbox;
@@ -2089,6 +2091,10 @@ async fn run_inner(
     integrations: &mut integrations::Integrations,
 ) -> Result<i32, String> {
     let options = options(arguments)?;
+    #[cfg(unix)]
+    if matches!(options.tool_policy, ToolPolicy::ReadOnlyChild) {
+        delegation_lifeline::watch_parent()?;
+    }
     let workspace =
         std::fs::canonicalize(std::env::current_dir().map_err(|_| "Workspace unavailable")?)
             .map_err(|_| "Workspace unavailable")?;

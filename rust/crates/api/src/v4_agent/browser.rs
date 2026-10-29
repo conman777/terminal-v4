@@ -422,13 +422,169 @@ struct Request {
     response: oneshot::Sender<Result<Value, String>>,
     lease: Option<Arc<std::fs::File>>,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Attached {
     session: String,
     page: bool,
     ready: bool,
     error: Option<String>,
     main_contexts: HashMap<String, MainContext>,
+    console: VecDeque<ConsoleEntry>,
+    dialogs: VecDeque<DialogEntry>,
+    dialog_policy: Option<DialogPolicy>,
+}
+#[derive(Clone, Debug)]
+struct ConsoleEntry {
+    context: u64,
+    level: String,
+    text: String,
+}
+#[derive(Clone, Debug)]
+struct DialogPolicy {
+    accept: bool,
+    prompt: Option<String>,
+    origin: String,
+    expires: tokio::time::Instant,
+}
+#[derive(Clone, Debug)]
+struct DialogEntry {
+    origin: String,
+    kind: String,
+    message: String,
+    accepted: bool,
+}
+const MAX_CONSOLE_ENTRIES: usize = 200;
+const MAX_CONSOLE_TEXT: usize = 500;
+const MAX_CONSOLE_RETURN: u64 = 100;
+const MAX_DIALOG_ENTRIES: usize = 10;
+const DIALOG_POLICY_TTL: Duration = Duration::from_secs(60);
+
+fn clip(value: &str, max: usize) -> String {
+    value.chars().take(max).collect()
+}
+fn console_argument(arg: &Value) -> String {
+    match arg.get("value") {
+        Some(Value::String(text)) => clip(text, MAX_CONSOLE_TEXT),
+        Some(Value::Null) | None => arg["description"]
+            .as_str()
+            .or_else(|| arg["type"].as_str())
+            .map(|text| clip(text, MAX_CONSOLE_TEXT))
+            .unwrap_or_default(),
+        Some(other) => clip(&other.to_string(), MAX_CONSOLE_TEXT),
+    }
+}
+fn console_entry_from_api(params: &Value) -> Option<ConsoleEntry> {
+    let text = params["args"]
+        .as_array()?
+        .iter()
+        .take(8)
+        .map(console_argument)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(ConsoleEntry {
+        context: params["executionContextId"].as_u64()?,
+        level: match params["type"].as_str()? {
+            "warning" => "warning".into(),
+            "error" | "assert" => "error".into(),
+            "debug" => "debug".into(),
+            "info" => "info".into(),
+            _ => "log".into(),
+        },
+        text: clip(&text, MAX_CONSOLE_TEXT),
+    })
+}
+fn console_entry_from_exception(params: &Value) -> Option<ConsoleEntry> {
+    let details = &params["exceptionDetails"];
+    let text = details["exception"]["description"]
+        .as_str()
+        .or_else(|| details["text"].as_str())
+        .unwrap_or("Uncaught exception");
+    Some(ConsoleEntry {
+        context: details["executionContextId"].as_u64()?,
+        level: "error".into(),
+        text: clip(text, MAX_CONSOLE_TEXT),
+    })
+}
+fn record_console(attached: &mut Attached, entry: ConsoleEntry) {
+    attached.console.push_back(entry);
+    while attached.console.len() > MAX_CONSOLE_ENTRIES {
+        attached.console.pop_front();
+    }
+}
+fn redact_console(text: &str) -> String {
+    use std::sync::OnceLock;
+    static PAIR: OnceLock<regex_lite::Regex> = OnceLock::new();
+    static BEARER: OnceLock<regex_lite::Regex> = OnceLock::new();
+    static OPAQUE: OnceLock<regex_lite::Regex> = OnceLock::new();
+    let pair = PAIR.get_or_init(|| {
+        regex_lite::Regex::new(r#"(?i)((?:pass(?:word|wd)?|secret|token|api[_-]?key|auth(?:orization)?|cookie|session(?:id)?|credential|private[_-]?key)["']?\s*[:=]\s*["']?)(?:(?:bearer|basic)\s+)?[^\s"'&,;}]+"#).unwrap()
+    });
+    let bearer = BEARER.get_or_init(|| {
+        regex_lite::Regex::new(r"(?i)(bearer|basic)\s+[A-Za-z0-9._~+/=-]+").unwrap()
+    });
+    let opaque = OPAQUE.get_or_init(|| regex_lite::Regex::new(r"[A-Za-z0-9_\-+/=.]{32,}").unwrap());
+    let text = pair.replace_all(text, "${1}[redacted]");
+    let text = bearer.replace_all(&text, "${1} [redacted]");
+    opaque
+        .replace_all(&text, |found: &regex_lite::Captures| {
+            let word = &found[0];
+            if word.bytes().any(|b| b.is_ascii_digit())
+                && word.bytes().any(|b| b.is_ascii_alphabetic())
+            {
+                "[redacted]".to_owned()
+            } else {
+                word.to_owned()
+            }
+        })
+        .into_owned()
+}
+fn page_origin(url: &str) -> String {
+    if url == "about:blank" {
+        return "null".into();
+    }
+    url::Url::parse(url)
+        .map(|url| url.origin().ascii_serialization())
+        .unwrap_or_default()
+}
+fn record_dialog(
+    attached: &mut Attached,
+    params: &Value,
+    now: tokio::time::Instant,
+) -> (bool, Option<String>) {
+    let origin = page_origin(params["url"].as_str().unwrap_or(""));
+    let kind = params["type"].as_str().unwrap_or("alert");
+    if attached
+        .dialog_policy
+        .as_ref()
+        .is_some_and(|policy| policy.expires <= now)
+    {
+        attached.dialog_policy = None;
+    }
+    let decision = if attached
+        .dialog_policy
+        .as_ref()
+        .is_some_and(|policy| !origin.is_empty() && policy.origin == origin)
+    {
+        attached.dialog_policy.take()
+    } else {
+        None
+    };
+    let accepted = decision.as_ref().is_some_and(|policy| policy.accept);
+    attached.dialogs.push_back(DialogEntry {
+        origin,
+        kind: clip(kind, 32),
+        message: clip(params["message"].as_str().unwrap_or(""), MAX_CONSOLE_TEXT),
+        accepted,
+    });
+    while attached.dialogs.len() > MAX_DIALOG_ENTRIES {
+        attached.dialogs.pop_front();
+    }
+    let prompt = if accepted && kind == "prompt" {
+        decision.and_then(|policy| policy.prompt)
+    } else {
+        None
+    };
+    (accepted, prompt)
 }
 #[derive(Clone, Debug)]
 struct MainContext {
@@ -704,7 +860,7 @@ async fn cdp_actor(
                             let kind=params["targetInfo"]["type"].as_str().unwrap_or("");
                             let too_many=targets.lock().map(|map|(map.len()>=MAX_TARGETS || kind=="page" && map.values().filter(|value|value.page).count()>=MAX_TABS) && !map.contains_key(target)).unwrap_or(true);
                             if too_many {queue.push_back(Outgoing{method:"Target.closeTarget".into(),params:json!({"targetId":target}),session:None,reply:Reply::Internal});continue;}
-                            if let Ok(mut map)=targets.lock(){map.insert(target.into(),Attached{session:attached.into(),page:kind=="page",ready:false,error:None,main_contexts:HashMap::new()});}
+                            if let Ok(mut map)=targets.lock(){map.insert(target.into(),Attached{session:attached.into(),page:kind=="page",ready:false,error:None,main_contexts:HashMap::new(),..Default::default()});}
                             let mut steps=setup_steps(kind);let(method,params)=steps.pop_front().unwrap();queue.push_back(Outgoing{method:method.into(),params,session:Some(attached.into()),reply:Reply::Setup{target:target.into(),session:attached.into(),steps}});
                         },
                         "Target.detachedFromTarget"=>{let detached=value["params"]["sessionId"].as_str();if let Ok(mut map)=targets.lock(){map.retain(|_,v|Some(v.session.as_str())!=detached);}changed.notify_waiters();},
@@ -730,7 +886,16 @@ async fn cdp_actor(
                             queue.push_back(Outgoing{method:method.into(),params,session,reply:Reply::Internal});
                         },
                         "Fetch.authRequired"=>queue.push_back(Outgoing{method:"Fetch.continueWithAuth".into(),params:json!({"requestId":value["params"]["requestId"],"authChallengeResponse":{"response":"CancelAuth"}}),session,reply:Reply::Internal}),
-                        "Page.javascriptDialogOpening"=>queue.push_back(Outgoing{method:"Page.handleJavaScriptDialog".into(),params:json!({"accept":false}),session,reply:Reply::Internal}),
+                        "Page.javascriptDialogOpening"=>{
+                            let (accept,prompt)=session.as_deref().and_then(|current|targets.lock().ok().and_then(|mut map|map.values_mut().find(|v|v.session==current).map(|attached|record_dialog(attached,&value["params"],tokio::time::Instant::now())))).unwrap_or((false,None));
+                            let mut params=json!({"accept":accept});
+                            if let Some(prompt)=prompt{params["promptText"]=json!(prompt);}
+                            queue.push_back(Outgoing{method:"Page.handleJavaScriptDialog".into(),params,session,reply:Reply::Internal});
+                        },
+                        "Runtime.consoleAPICalled"|"Runtime.exceptionThrown"=>{
+                            let entry=if method=="Runtime.consoleAPICalled"{console_entry_from_api(&value["params"])}else{console_entry_from_exception(&value["params"])};
+                            if let (Some(current),Some(entry))=(session.as_deref(),entry){if let Ok(mut map)=targets.lock(){if let Some(attached)=map.values_mut().find(|v|v.session==current){record_console(attached,entry);}}}
+                        },
                         _=>{}
                     }
                     if queue.len()>MAX_PENDING {failure="Browser event rate exceeded its limit".into();break;}
@@ -1467,6 +1632,8 @@ pub(crate) fn definitions() -> Vec<Value> {
         ("browser_navigate","Navigate a V4 tab to an approved origin. Requires user approval.",json!({"url":string(),"tabId":tab()}),vec!["url"]),
         ("browser_snapshot","Read visible document text and labeled elements with stable refs. Password values are redacted. Requires user approval.",json!({"tabId":tab()}),vec![]),
         ("browser_get_images","List image URLs and alternative text from the current page, including non-visible images. URLs may contain sensitive query values. Does not fetch images. Requires user approval.",json!({"tabId":tab()}),vec![]),
+        ("browser_console","Read recent console messages and uncaught errors from the reviewed page document (bounded, secrets heuristically redacted, read-only). Message text is untrusted page content. Isolated V4 browser only. Requires user approval.",json!({"level":string(),"limit":{"type":"integer"},"tabId":tab()}),vec![]),
+        ("browser_dialog","Arm a one-time decision for the next JavaScript dialog (alert/confirm/prompt/beforeunload) opened by the reviewed page: action accept or dismiss, optional promptText when accepting. Dialogs are otherwise dismissed automatically and cannot be reversed. Expires after 60 seconds. Isolated V4 browser only. Requires user approval of the exact decision.",json!({"action":string(),"promptText":string(),"tabId":tab()}),vec!["action"]),
         ("browser_click","Click an element ref from the latest document snapshot. Stale or hidden refs are rejected. Requires user approval.",json!({"ref":string(),"tabId":tab()}),vec!["ref"]),
         ("browser_type","Type text into an editable element ref, replacing its existing value unless clear=false. Does not submit automatically. Requires user approval.",json!({"ref":string(),"text":string(),"clear":{"type":"boolean"},"tabId":tab()}),vec!["ref","text"]),
         ("browser_select","Select one option by value in a select element ref. Requires user approval.",json!({"ref":string(),"value":string(),"tabId":tab()}),vec!["ref","value"]),
@@ -1480,6 +1647,21 @@ pub(crate) fn definitions() -> Vec<Value> {
         ("browser_close","Close one V4 tab using tabId, or close the V4 browser process and delete its private profile. Requires user approval.",json!({"tabId":tab()}),vec![]),
     ];
     rows.into_iter().map(|(name,description,properties,required)|json!({"name":name,"description":description,"parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})).collect()
+}
+pub(crate) fn is_document_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_get_images"
+            | "browser_snapshot"
+            | "browser_select"
+            | "browser_wait"
+            | "browser_evaluate"
+            | "browser_console"
+            | "browser_dialog"
+    )
+}
+pub(crate) fn isolated_only(name: &str) -> bool {
+    matches!(name, "browser_console" | "browser_dialog")
 }
 pub(crate) fn handles(name: &str) -> bool {
     definitions().iter().any(|row| row["name"] == name) || cfg!(test) && name == "browser_press"
@@ -1545,6 +1727,36 @@ pub(crate) fn validate_arguments(name: &str, input: &Value) -> Result<(), String
         };
         if !valid {
             return Err(format!("Invalid browser argument type: {key}"));
+        }
+    }
+    if name == "browser_dialog" {
+        let action = text(input, "action", 16)?;
+        if !matches!(action, "accept" | "dismiss") {
+            return Err("Dialog action must be accept or dismiss".into());
+        }
+        if input.get("promptText").is_some() {
+            if action != "accept" {
+                return Err("promptText is only valid when accepting".into());
+            }
+            text(input, "promptText", 1000)?;
+        }
+    }
+    if name == "browser_console" {
+        if let Some(level) = input.get("level") {
+            if !matches!(
+                level.as_str(),
+                Some("all" | "error" | "warning" | "info" | "log" | "debug")
+            ) {
+                return Err("Console level must be all, error, warning, info, log or debug".into());
+            }
+        }
+        if let Some(limit) = input.get("limit") {
+            if !limit
+                .as_u64()
+                .is_some_and(|limit| (1..=MAX_CONSOLE_RETURN).contains(&limit))
+            {
+                return Err("Console limit must be 1-100".into());
+            }
         }
     }
     if name == "browser_press" {
@@ -1962,7 +2174,7 @@ impl BrowserClient {
                 .origin()
                 .ascii_serialization()
         };
-        let main_context = if name == "browser_evaluate" {
+        let main_context = if matches!(name, "browser_evaluate" | "browser_console") {
             Some(
                 reviewed_main_context(cdp, &tab, &session, frame, context, &marker, &origin)
                     .await?,
@@ -2078,6 +2290,11 @@ impl BrowserClient {
             }
             return Ok(value);
         }
+        if matches!(name, "browser_console" | "browser_dialog") {
+            self.evaluate_reviewed_document(review, "true", lease)
+                .await?;
+            return self.observe_reviewed_document(name, input, review);
+        }
         let script = match name {
             "browser_get_images" => IMAGE_INVENTORY.to_owned(),
             "browser_snapshot" => {
@@ -2136,6 +2353,81 @@ impl BrowserClient {
         self.evaluate_reviewed_document(review, &script, lease)
             .await
     }
+    fn observe_reviewed_document(
+        &self,
+        name: &str,
+        input: &Value,
+        review: &IsolatedDocumentReview,
+    ) -> Result<Value, String> {
+        let browser = self
+            .browser
+            .as_ref()
+            .filter(|browser| {
+                browser.identity == review.browser && browser.ready && !browser.retiring
+            })
+            .ok_or("The reviewed browser session changed; request fresh approval")?;
+        let mut targets = browser
+            .cdp()?
+            .targets
+            .lock()
+            .map_err(|_| "Browser state unavailable")?;
+        let attached = targets
+            .get_mut(&review.tab)
+            .filter(|attached| attached.session == review.session)
+            .ok_or("The reviewed browser tab changed; request fresh approval")?;
+        if name == "browser_dialog" {
+            let accept = text(input, "action", 16)? == "accept";
+            attached.dialog_policy = Some(DialogPolicy {
+                accept,
+                prompt: input
+                    .get("promptText")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                origin: review.origin.clone(),
+                expires: tokio::time::Instant::now() + DIALOG_POLICY_TTL,
+            });
+            return Ok(
+                json!({"armed":true,"action":if accept{"accept"}else{"dismiss"},"expiresInSeconds":DIALOG_POLICY_TTL.as_secs(),"note":"Applies once to the next JavaScript dialog from this reviewed page origin; a dialog already shown was dismissed automatically."}),
+            );
+        }
+        let main = review
+            .main_context
+            .as_deref()
+            .and_then(|unique| {
+                attached
+                    .main_contexts
+                    .values()
+                    .find(|context| context.unique_id == unique)
+            })
+            .map(|context| context.id)
+            .ok_or("The reviewed browser document changed; request fresh approval")?;
+        let level = input.get("level").and_then(Value::as_str).unwrap_or("all");
+        let limit = input
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .min(MAX_CONSOLE_RETURN) as usize;
+        let matching: Vec<_> = attached
+            .console
+            .iter()
+            .filter(|entry| entry.context == main && (level == "all" || entry.level == level))
+            .collect();
+        let skipped = matching.len().saturating_sub(limit);
+        let messages: Vec<Value> = matching
+            .into_iter()
+            .skip(skipped)
+            .map(|entry| json!({"level":entry.level,"text":redact_console(&entry.text)}))
+            .collect();
+        let dialogs: Vec<Value> = attached
+            .dialogs
+            .iter()
+            .filter(|dialog| dialog.origin == review.origin)
+            .map(|dialog| json!({"type":dialog.kind,"message":redact_console(&clip(&dialog.message, 300)),"accepted":dialog.accepted}))
+            .collect();
+        Ok(
+            json!({"messages":messages,"olderOmitted":skipped,"dialogs":dialogs,"note":"Console text is untrusted page content; secret-looking values are redacted heuristically."}),
+        )
+    }
     async fn evaluate_reviewed_document(
         &self,
         review: &IsolatedDocumentReview,
@@ -2171,6 +2463,17 @@ impl BrowserClient {
             .get("value")
             .cloned()
             .ok_or_else(|| "Browser document result is unavailable".into())
+    }
+    #[cfg(test)]
+    async fn execute_review_for_test(
+        &mut self,
+        name: &str,
+        input: &Value,
+        review: &IsolatedDocumentReview,
+    ) -> Result<Value, String> {
+        let lease = Arc::new(browser_settings_lease(&self.data, &self.owner)?);
+        self.execute_reviewed_document(name, input, review, lease)
+            .await
     }
     #[cfg(test)]
     async fn read_reviewed_images_for_test(
@@ -2332,14 +2635,7 @@ impl BrowserClient {
                     .into(),
             );
         }
-        if matches!(
-            name,
-            "browser_snapshot"
-                | "browser_get_images"
-                | "browser_select"
-                | "browser_wait"
-                | "browser_evaluate"
-        ) {
+        if is_document_tool(name) {
             return Err("A reviewed browser document is required for this action".into());
         }
         if name == "browser_close" && input.get("tabId").is_none() {
@@ -2475,8 +2771,7 @@ impl BrowserClient {
                 }
                 browser.navigate(&session, url).await
             }
-            "browser_snapshot" | "browser_get_images" | "browser_select" | "browser_wait"
-            | "browser_evaluate" => {
+            _ if is_document_tool(name) => {
                 Err("A reviewed browser document is required for this action".into())
             }
             "browser_screenshot" => {
@@ -2948,6 +3243,7 @@ pub(crate) async fn cleanup_test_client(
             ready: true,
             error: None,
             main_contexts: HashMap::new(),
+            ..Default::default()
         },
     );
     let directory = config_directory(data, owner).unwrap().join("profiles");
@@ -4048,6 +4344,212 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
         assert!(save_config(data.path(), "owner", &BrowserConfig::default()).is_err());
         assert_eq!(std::fs::read_to_string(target).unwrap(), "sentinel");
     }
+    mod console_and_dialog {
+        use super::*;
+
+        fn api(context: u64, kind: &str, args: Value) -> Value {
+            json!({"executionContextId":context,"type":kind,"args":args})
+        }
+
+        #[test]
+        fn redact_console_hides_credentials_and_opaque_tokens() {
+            let cases = [
+                ("login password=hunter2 ok", "login password=[redacted] ok"),
+                (
+                    "Authorization: Bearer abc.def-123",
+                    "Authorization: [redacted]",
+                ),
+                ("{\"api_key\":\"k-9\"}", "{\"api_key\":\"[redacted]\"}"),
+                ("GET /x?token=abc&page=2", "GET /x?token=[redacted]&page=2"),
+                (
+                    "id 0123456789abcdef0123456789abcdef0123 end",
+                    "id [redacted] end",
+                ),
+                ("plain message about forms", "plain message about forms"),
+            ];
+            for (input, expected) in cases {
+                assert_eq!(redact_console(input), expected, "{input}");
+            }
+        }
+
+        #[test]
+        fn console_entries_are_bounded_and_keyed_by_execution_context() {
+            let long = "x".repeat(MAX_CONSOLE_TEXT * 3);
+            let entry = console_entry_from_api(&api(
+                7,
+                "warning",
+                json!([{"type":"string","value":long},{"type":"number","value":4},{"type":"object","description":"Object"}]),
+            ))
+            .unwrap();
+            assert_eq!(
+                (
+                    entry.context,
+                    entry.level.as_str(),
+                    entry.text.chars().count()
+                ),
+                (7, "warning", MAX_CONSOLE_TEXT)
+            );
+            let exception = console_entry_from_exception(&json!({"exceptionDetails":{"executionContextId":9,"text":"Uncaught","exception":{"description":"Error: boom\n at x"}}})).unwrap();
+            assert_eq!(
+                (
+                    exception.context,
+                    exception.level.as_str(),
+                    exception.text.as_str()
+                ),
+                (9, "error", "Error: boom\n at x")
+            );
+            assert!(console_entry_from_api(&json!({"type":"log","args":[]})).is_none());
+            let mut attached = Attached::default();
+            for index in 0..MAX_CONSOLE_ENTRIES + 5 {
+                record_console(
+                    &mut attached,
+                    ConsoleEntry {
+                        context: 1,
+                        level: "log".into(),
+                        text: index.to_string(),
+                    },
+                );
+            }
+            assert_eq!(
+                (
+                    attached.console.len(),
+                    attached.console.front().unwrap().text.as_str()
+                ),
+                (MAX_CONSOLE_ENTRIES, "5")
+            );
+        }
+
+        fn dialog(url: &str, kind: &str) -> Value {
+            json!({"url":url,"type":kind,"message":"Proceed?"})
+        }
+        fn armed(
+            accept: bool,
+            prompt: Option<&str>,
+            expires: tokio::time::Instant,
+        ) -> Option<DialogPolicy> {
+            Some(DialogPolicy {
+                accept,
+                prompt: prompt.map(str::to_owned),
+                origin: "http://127.0.0.1:1".into(),
+                expires,
+            })
+        }
+
+        #[test]
+        fn dialogs_default_to_dismiss_and_armed_decisions_are_one_shot_for_the_reviewed_origin() {
+            let now = tokio::time::Instant::now();
+            let later = now + Duration::from_secs(30);
+            let mut attached = Attached::default();
+            assert_eq!(
+                record_dialog(
+                    &mut attached,
+                    &dialog("http://127.0.0.1:1/a", "confirm"),
+                    now
+                ),
+                (false, None)
+            );
+            attached.dialog_policy = armed(true, Some("typed"), later);
+            assert_eq!(
+                record_dialog(
+                    &mut attached,
+                    &dialog("http://127.0.0.1:2/a", "prompt"),
+                    now
+                ),
+                (false, None)
+            );
+            assert!(attached.dialog_policy.is_some());
+            assert_eq!(
+                record_dialog(
+                    &mut attached,
+                    &dialog("http://127.0.0.1:1/b", "prompt"),
+                    now
+                ),
+                (true, Some("typed".into()))
+            );
+            assert!(attached.dialog_policy.is_none());
+            attached.dialog_policy = armed(true, Some("typed"), later);
+            assert_eq!(
+                record_dialog(
+                    &mut attached,
+                    &dialog("http://127.0.0.1:1/b", "confirm"),
+                    now
+                ),
+                (true, None)
+            );
+            attached.dialog_policy = armed(true, None, now);
+            assert_eq!(
+                record_dialog(
+                    &mut attached,
+                    &dialog("http://127.0.0.1:1/b", "confirm"),
+                    now + Duration::from_secs(1)
+                ),
+                (false, None)
+            );
+            assert!(attached.dialog_policy.is_none());
+            for _ in 0..MAX_DIALOG_ENTRIES + 3 {
+                record_dialog(&mut attached, &dialog("http://127.0.0.1:1/b", "alert"), now);
+            }
+            assert_eq!(attached.dialogs.len(), MAX_DIALOG_ENTRIES);
+        }
+
+        #[test]
+        fn argument_validation_rejects_unsupported_console_and_dialog_inputs() {
+            for (name, input) in [
+                ("browser_console", json!({})),
+                (
+                    "browser_console",
+                    json!({"level":"error","limit":100,"tabId":"t"}),
+                ),
+                (
+                    "browser_dialog",
+                    json!({"action":"accept","promptText":"x"}),
+                ),
+                ("browser_dialog", json!({"action":"dismiss"})),
+            ] {
+                assert_eq!(validate_arguments(name, &input), Ok(()), "{name} {input}");
+            }
+            for (name, input) in [
+                ("browser_console", json!({"level":"trace"})),
+                ("browser_console", json!({"limit":0})),
+                ("browser_console", json!({"limit":101})),
+                ("browser_console", json!({"ref":"x"})),
+                ("browser_dialog", json!({})),
+                ("browser_dialog", json!({"action":"maybe"})),
+                (
+                    "browser_dialog",
+                    json!({"action":"dismiss","promptText":"x"}),
+                ),
+                (
+                    "browser_dialog",
+                    json!({"action":"accept","promptText":"x".repeat(1001)}),
+                ),
+            ] {
+                assert!(validate_arguments(name, &input).is_err(), "{name} {input}");
+            }
+        }
+
+        #[test]
+        fn new_tools_are_isolated_document_tools_and_never_available_to_read_only_children() {
+            for name in ["browser_console", "browser_dialog"] {
+                assert!(
+                    handles(name) && is_document_tool(name) && isolated_only(name),
+                    "{name}"
+                );
+                assert!(
+                    !crate::v4_agent::ToolPolicy::ReadOnlyChild.allows(name),
+                    "{name}"
+                );
+            }
+            assert!(!isolated_only("browser_snapshot"));
+            for tool in definitions() {
+                assert!(
+                    !crate::v4_agent::ToolPolicy::ReadOnlyChild
+                        .allows(tool["name"].as_str().unwrap()),
+                    "{tool}"
+                );
+            }
+        }
+    }
     mod protocol_io {
         use super::*;
 
@@ -4283,6 +4785,7 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
                     ready: true,
                     error: None,
                     main_contexts: HashMap::new(),
+                    ..Default::default()
                 },
             );
             client.browser.as_mut().unwrap().cdp = Some(cdp);
@@ -5033,6 +5536,72 @@ printf '%s\n%s\n' '{port}' '/devtools/browser/cleanup-fixture' > "$profile/DevTo
                 }
             });
             (format!("http://{address}"), server, blocked)
+        }
+        #[tokio::test]
+        async fn console_and_dialog_tools_are_bound_to_the_reviewed_document() {
+            let Some(executable) = executable() else {
+                eprintln!("V4 browser fixture skipped: set V4_TEST_BROWSER_BIN");
+                return;
+            };
+            let (origin, server, _blocked) = fixture().await;
+            let data = tempfile::tempdir().unwrap();
+            let workspace = tempfile::tempdir().unwrap();
+            let mut client = BrowserClient::new(
+                data.path(),
+                "console-review-owner",
+                workspace.path(),
+                BrowserConfig {
+                    enabled: true,
+                    executable: Some(executable),
+                    allowed_origins: vec![origin.clone()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let result: Result<(), String> = async {
+                client.dispatch("browser_open", &json!({"url":format!("{origin}/")}), true).await?;
+                client.dispatch("browser_evaluate", &json!({"script":"console.log('hello', 3, 'password=hunter2');console.error('bad thing');setTimeout(()=>{throw new Error('later boom')},0);true"}), true).await?;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let input = json!({});
+                let review = client.review_document("browser_console", &input).await?;
+                let read = client.execute_review_for_test("browser_console", &input, &review).await?;
+                let texts: Vec<_> = read["messages"].as_array().unwrap().iter().map(|row| (row["level"].as_str().unwrap(), row["text"].as_str().unwrap().lines().next().unwrap().to_owned())).collect();
+                assert_eq!(
+                    texts,
+                    vec![
+                        ("log", "hello 3 password=[redacted]".to_owned()),
+                        ("error", "bad thing".to_owned()),
+                        ("error", "Error: later boom".to_owned()),
+                    ]
+                );
+                let errors = client.execute_review_for_test("browser_console", &json!({"level":"error","limit":1}), &review).await?;
+                assert_eq!((errors["messages"].as_array().unwrap().len(), errors["olderOmitted"].clone()), (1, json!(1)));
+
+                let dismissed = client.dispatch("browser_evaluate", &json!({"script":"confirm('Proceed?')"}), true).await?;
+                assert_eq!(dismissed, json!(false));
+                let dialog_review = client.review_document("browser_dialog", &json!({"action":"accept"})).await?;
+                let armed = client.execute_review_for_test("browser_dialog", &json!({"action":"accept"}), &dialog_review).await?;
+                assert_eq!(armed["armed"], json!(true));
+                assert_eq!(client.dispatch("browser_evaluate", &json!({"script":"confirm('Proceed?')"}), true).await?, json!(true));
+                assert_eq!(client.dispatch("browser_evaluate", &json!({"script":"confirm('Again?')"}), true).await?, json!(false));
+                let logged = client.execute_review_for_test("browser_console", &input, &review).await?;
+                let dialogs: Vec<_> = logged["dialogs"].as_array().unwrap().iter().map(|row| (row["message"].as_str().unwrap().to_owned(), row["accepted"].as_bool().unwrap())).collect();
+                assert_eq!(
+                    dialogs,
+                    vec![("Proceed?".to_owned(), false), ("Proceed?".to_owned(), true), ("Again?".to_owned(), false)]
+                );
+
+                client.dispatch("browser_navigate", &json!({"url":format!("{origin}/second")}), true).await?;
+                assert!(client.execute_review_for_test("browser_console", &input, &review).await.is_err());
+                assert!(client.execute_review_for_test("browser_dialog", &json!({"action":"accept"}), &dialog_review).await.is_err());
+                let fresh = client.review_document("browser_console", &input).await?;
+                let after = client.execute_review_for_test("browser_console", &input, &fresh).await?;
+                assert_eq!(after["messages"], json!([]));
+                Ok(())
+            }.await;
+            client.close().await.unwrap();
+            server.abort();
+            result.unwrap();
         }
         #[tokio::test]
         async fn image_review_is_bound_to_the_isolated_document() {

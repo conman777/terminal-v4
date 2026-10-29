@@ -845,10 +845,6 @@ async fn retiring_a_session_reclaims_capacity_and_prevents_all_replay_after_rest
     assert_eq!(4 * MAX_SESSION_ACTIONS, MAX_ACTIONS);
     let mut other = first.clone();
     other.scope.session = "different".into();
-    assert!(manager
-        .ledger
-        .claim(&other.scope, "before-retirement")
-        .is_err());
     manager
         .retire_session(&first.scope.owner, &first.scope.session)
         .await

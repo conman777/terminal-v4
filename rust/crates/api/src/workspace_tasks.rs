@@ -18,6 +18,68 @@ pub(crate) use schedule_change::{
 };
 
 const TASK_LIMIT: usize = 200;
+const RECEIPT_LIMIT: usize = 512 * 1024;
+const COMPACT_RESULT_LIMIT: usize = 16 * 1024;
+const WORKER_PROTOCOL: u64 = 1;
+
+fn compact_receipt(record: &TaskRecord) -> TaskRecord {
+    let mut compact = record.clone();
+    let mut end = COMPACT_RESULT_LIMIT.min(compact.result.len());
+    while !compact.result.is_char_boundary(end) {
+        end -= 1;
+    }
+    compact.result.truncate(end);
+    compact.output.clear();
+    compact.output_truncated = true;
+    let keep = compact.events.len().saturating_sub(5);
+    compact.events.drain(..keep);
+    let note = "Result truncated: the full outcome could not be stored.";
+    compact.error = Some(match compact.error.take() {
+        Some(existing) => format!("{existing} {note}"),
+        None => note.into(),
+    });
+    compact
+}
+
+fn ensure_worker_protocol(data_dir: &FsPath) -> Result<(), ApiError> {
+    use std::io::Write;
+    let directory = data_dir.join("workspace-tasks");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| ApiError::internal("Task storage unavailable"))?;
+    let path = directory.join("worker-protocol.json");
+    let current = match std::fs::read(&path) {
+        Ok(bytes) => Some(
+            serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|value| value.get("protocol").and_then(|v| v.as_u64()))
+                .ok_or_else(|| {
+                    ApiError::internal(
+                        "Task worker protocol marker is unreadable; refusing to start",
+                    )
+                })?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(ApiError::internal("Task storage unavailable")),
+    };
+    match current {
+        Some(found) if found > WORKER_PROTOCOL => Err(ApiError::internal(
+            "This data directory was written by a newer task worker; refusing to start an older one",
+        )),
+        Some(found) if found == WORKER_PROTOCOL => Ok(()),
+        _ => {
+            let mut temporary = tempfile::NamedTempFile::new_in(&directory)
+                .map_err(|_| ApiError::internal("Task storage unavailable"))?;
+            temporary
+                .write_all(format!("{{\"protocol\":{WORKER_PROTOCOL}}}").as_bytes())
+                .and_then(|_| temporary.as_file().sync_all())
+                .map_err(|_| ApiError::internal("Task storage unavailable"))?;
+            temporary
+                .persist(&path)
+                .map_err(|_| ApiError::internal("Task storage unavailable"))?;
+            Ok(())
+        }
+    }
+}
 const SCHEDULE_LIMIT: usize = 20;
 const OUTPUT_LIMIT: usize = 65_536;
 
@@ -312,7 +374,11 @@ fn retain_completion(data_dir: &FsPath, owner: &str, record: TaskRecord) -> std:
         let directory = path.parent().unwrap();
         std::fs::create_dir_all(directory)?;
         let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
-        temporary.write_all(&serde_json::to_vec(&record)?)?;
+        let bytes = serde_json::to_vec(&record)?;
+        if bytes.len() > RECEIPT_LIMIT {
+            return Err(std::io::Error::other("Completion receipt is too large"));
+        }
+        temporary.write_all(&bytes)?;
         temporary.as_file().sync_all()?;
         temporary.persist(&path).map_err(|error| error.error)?;
         #[cfg(unix)]
@@ -3226,6 +3292,7 @@ fn worker_lease(data_dir: &FsPath) -> Result<std::fs::File, ApiError> {
     let file = lock_file(data_dir, "worker.lock")?;
     file.try_lock()
         .map_err(|_| ApiError::internal("Another task worker owns this data directory"))?;
+    ensure_worker_protocol(data_dir)?;
     Ok(file)
 }
 
@@ -4572,6 +4639,121 @@ mod worker_durability_tests {
             (task.id, TaskStatus::Completed)
         );
     }
+    #[tokio::test]
+    async fn oversized_outcome_survives_as_a_truncated_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = fixture_store(dir.path(), "owner", &[dir.path()]);
+        let mut task = store.tasks[0].clone();
+        task.result = "x".repeat(600 * 1024);
+        transition(&mut task, TaskStatus::Completed, "finished", now_ms());
+        persist_completion_receipt(dir.path().into(), "owner".into(), task.clone()).await;
+        let recovered = completion_records(dir.path(), "owner");
+        assert_eq!(
+            (
+                recovered.len(),
+                recovered[0].id,
+                recovered[0].status.clone(),
+                recovered[0].result.len() <= COMPACT_RESULT_LIMIT,
+                recovered[0]
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("truncated")),
+            ),
+            (1, task.id, TaskStatus::Completed, true, true)
+        );
+    }
+
+    #[test]
+    fn worker_protocol_marker_is_written_and_newer_data_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker_path = dir.path().join("workspace-tasks/worker-protocol.json");
+        ensure_worker_protocol(dir.path()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(&marker_path).unwrap()
+            )
+            .unwrap(),
+            serde_json::json!({"protocol": WORKER_PROTOCOL})
+        );
+        std::fs::write(
+            &marker_path,
+            format!("{{\"protocol\":{}}}", WORKER_PROTOCOL + 1),
+        )
+        .unwrap();
+        assert!(ensure_worker_protocol(dir.path())
+            .unwrap_err()
+            .message
+            .contains("newer"));
+        std::fs::write(&marker_path, "garbage").unwrap();
+        assert!(ensure_worker_protocol(dir.path()).is_err());
+    }
+
+    #[test]
+    fn older_protocol_marker_is_upgraded_under_the_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("workspace-tasks")).unwrap();
+        let marker_path = dir.path().join("workspace-tasks/worker-protocol.json");
+        std::fs::write(&marker_path, "{\"protocol\":0}").unwrap();
+        ensure_worker_protocol(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&marker_path).unwrap(),
+            format!("{{\"protocol\":{WORKER_PROTOCOL}}}")
+        );
+    }
+
+    #[test]
+    fn second_lease_is_refused_until_first_is_released() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = worker_lease(dir.path()).unwrap();
+        assert!(worker_lease(dir.path()).is_err());
+        drop(first);
+        assert!(worker_lease(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn downtime_leaves_one_catch_up_run_and_durable_next_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut store = fixture_store(dir.path(), "owner", &[workspace.path()]);
+        store.tasks.clear();
+        store.schedules.push(ScheduleRecord {
+            id: Uuid::new_v4(),
+            name: "Daily".into(),
+            input: TaskInput {
+                workspace_path: workspace.path().to_string_lossy().into_owned(),
+                provider: "codex".into(),
+                prompt: "Review".into(),
+                model: None,
+                parent_session_id: None,
+                parent_task_id: None,
+            },
+            interval_seconds: 60,
+            at: None,
+            run_once_at: None,
+            enabled: true,
+            next_run_at: Some(1),
+            last_run_at: None,
+            last_task_id: None,
+            created_at: 1,
+        });
+        write_store(dir.path(), &store).unwrap();
+        let first = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let second = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let persisted = read_store(dir.path(), "owner").unwrap();
+        assert_eq!(
+            (
+                first.len(),
+                second.len(),
+                persisted.tasks.len(),
+                persisted.schedules[0]
+                    .next_run_at
+                    .is_some_and(|next| next > now_ms()),
+                persisted.schedules[0].last_task_id,
+            ),
+            (1, 0, 1, true, Some(first[0].1.id))
+        );
+    }
+
     fn fixture_store(data_dir: &FsPath, owner: &str, workspaces: &[&FsPath]) -> TaskStore {
         let mut store = TaskStore {
             owner_id: owner.into(),
@@ -4918,6 +5100,10 @@ pub fn start_worker(state: AppState) -> bool {
             }
             match worker_lease(&data_dir) {
                 Ok(lease) => break lease,
+                Err(error) if error.message.contains("refusing") => {
+                    tracing::error!(error = %error.message, "Workspace task worker not started; see docs/development/WORKER_UPGRADE.md");
+                    return;
+                }
                 Err(error) => {
                     tracing::warn!(error = %error.message, "Workspace task worker waiting for lease")
                 }
@@ -5200,9 +5386,13 @@ async fn persist_completion_receipt(data_dir: PathBuf, owner: String, record: Ta
         let directory = data_dir.clone();
         let user = owner.clone();
         let saved = record.clone();
-        if tokio::task::spawn_blocking(move || retain_completion(&directory, &user, saved))
-            .await
-            .is_ok_and(|result| result.is_ok())
+        let compact = compact_receipt(&saved);
+        if tokio::task::spawn_blocking(move || {
+            retain_completion(&directory, &user, saved.clone())
+                .or_else(|_| retain_completion(&directory, &user, compact))
+        })
+        .await
+        .is_ok_and(|result| result.is_ok())
         {
             return;
         }

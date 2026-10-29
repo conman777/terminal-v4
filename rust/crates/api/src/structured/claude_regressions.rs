@@ -276,6 +276,7 @@ fn shared_browser_keeps_native_permissions_and_adds_only_its_named_mcp_server() 
     assert_eq!(allowed[1].split(',').collect::<Vec<_>>(), expected);
     let mut advertised = crate::v4_agent::browser::definitions()
         .iter()
+        .filter(|tool| !crate::v4_agent::browser::isolated_only(tool["name"].as_str().unwrap()))
         .map(|tool| {
             format!(
                 "mcp__terminal_v4_browser__{}",

@@ -10,12 +10,16 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use terminal_v4_core::StructuredSessionEvent;
 
 const POLL_SECONDS: u64 = 25;
 const MESSAGE_LIMIT: usize = 4000;
 const REPLY_WAIT: Duration = Duration::from_secs(30 * 60);
+const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
+const PAIRING_MAX_ATTEMPTS: u32 = 5;
+const MAX_BACKOFF_SECONDS: u64 = 60;
+const SEND_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,7 +32,14 @@ struct Config {
     enabled: bool,
 }
 
-static PAIRING_CODES: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+struct PairingCode {
+    code: String,
+    issued: Instant,
+    attempts: u32,
+}
+
+static PAIRING_CODES: LazyLock<Mutex<HashMap<String, PairingCode>>> =
+    LazyLock::new(Default::default);
 static THREAD_CHOICES: LazyLock<Mutex<HashMap<String, Vec<String>>>> =
     LazyLock::new(Default::default);
 static RUNNING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
@@ -116,43 +127,192 @@ fn save_config(data_dir: &Path, config: &Config) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn call(token: &str, method: &str, body: Value, timeout: Duration) -> Result<Value, String> {
+#[derive(Debug)]
+struct TelegramError {
+    message: String,
+    retry_after: Option<u64>,
+}
+
+impl TelegramError {
+    fn new(message: &str) -> Self {
+        Self {
+            message: message.to_owned(),
+            retry_after: None,
+        }
+    }
+}
+
+async fn call(
+    token: &str,
+    method: &str,
+    body: Value,
+    timeout: Duration,
+) -> Result<Value, TelegramError> {
     let response = reqwest::Client::new()
         .post(format!("{}/bot{token}/{method}", api_base()))
         .timeout(timeout)
         .json(&body)
         .send()
         .await
-        .map_err(|_| "Telegram could not be reached".to_string())?;
+        .map_err(|_| TelegramError::new("Telegram could not be reached"))?;
     let value: Value = response
         .json()
         .await
-        .map_err(|_| "Telegram returned an unexpected reply".to_string())?;
+        .map_err(|_| TelegramError::new("Telegram returned an unexpected reply"))?;
     if value["ok"] != true {
-        return Err(value["description"]
-            .as_str()
-            .unwrap_or("Telegram refused the request")
-            .to_owned());
+        return Err(TelegramError {
+            message: value["description"]
+                .as_str()
+                .unwrap_or("Telegram refused the request")
+                .to_owned(),
+            retry_after: value["parameters"]["retry_after"].as_u64(),
+        });
     }
     Ok(value["result"].clone())
 }
 
-async fn send(token: &str, chat_id: i64, text: &str) {
-    for part in chunks(text) {
-        let _ = call(
+fn backoff(failures: u32) -> Duration {
+    let seconds = 1u64
+        .checked_shl(failures.min(10))
+        .unwrap_or(MAX_BACKOFF_SECONDS)
+        .clamp(2, MAX_BACKOFF_SECONDS);
+    Duration::from_secs(seconds)
+}
+
+async fn send_part(token: &str, chat_id: i64, part: &str) -> bool {
+    for attempt in 0..SEND_ATTEMPTS {
+        match call(
             token,
             "sendMessage",
             json!({ "chat_id": chat_id, "text": part }),
             Duration::from_secs(20),
         )
-        .await;
+        .await
+        {
+            Ok(_) => return true,
+            Err(error) if attempt + 1 < SEND_ATTEMPTS => {
+                let wait = error.retry_after.map_or(Duration::from_secs(1), |seconds| {
+                    Duration::from_secs(seconds.min(30))
+                });
+                tokio::time::sleep(wait).await;
+            }
+            Err(_) => {}
+        }
     }
+    false
+}
+
+async fn send(token: &str, chat_id: i64, text: &str) {
+    for part in chunks(text) {
+        if !send_part(token, chat_id, &part).await {
+            return;
+        }
+    }
+}
+
+fn offset_path(data_dir: &Path, user_id: &str) -> PathBuf {
+    config_path(data_dir, user_id).with_extension("offset")
+}
+
+fn load_offset(data_dir: &Path, user_id: &str) -> i64 {
+    std::fs::read_to_string(offset_path(data_dir, user_id))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .filter(|offset| *offset >= 0)
+        .unwrap_or(0)
+}
+
+fn save_offset(data_dir: &Path, user_id: &str, offset: i64) {
+    let path = offset_path(data_dir, user_id);
+    let Some(parent) = path.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
+    if let Ok(file) = tempfile::NamedTempFile::new_in(parent) {
+        if std::fs::write(file.path(), offset.to_string()).is_ok() {
+            let _ = file.persist(&path);
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Inbound {
+    Ignore,
+    Text { chat_id: i64, text: String },
+    Attachment { chat_id: i64 },
+}
+
+fn classify_update(update: &Value) -> Inbound {
+    let message = &update["message"];
+    let (Some(chat_id), Some("private")) = (
+        message["chat"]["id"].as_i64(),
+        message["chat"]["type"].as_str(),
+    ) else {
+        return Inbound::Ignore;
+    };
+    if let Some(text) = message["text"].as_str() {
+        return Inbound::Text {
+            chat_id,
+            text: text.to_owned(),
+        };
+    }
+    let has_attachment = ["photo", "document", "voice", "audio", "video", "video_note"]
+        .iter()
+        .any(|key| !message[*key].is_null());
+    if has_attachment {
+        Inbound::Attachment { chat_id }
+    } else {
+        Inbound::Ignore
+    }
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |diff, (x, y)| diff | (x ^ y))
+            == 0
+}
+
+fn check_pairing(
+    codes: &mut HashMap<String, PairingCode>,
+    user_id: &str,
+    supplied: &str,
+    now: Instant,
+) -> bool {
+    let Some(entry) = codes.get_mut(user_id) else {
+        return false;
+    };
+    if now.saturating_duration_since(entry.issued) > PAIRING_TTL {
+        codes.remove(user_id);
+        return false;
+    }
+    if constant_time_eq(&entry.code, supplied) {
+        codes.remove(user_id);
+        return true;
+    }
+    entry.attempts += 1;
+    if entry.attempts >= PAIRING_MAX_ATTEMPTS {
+        codes.remove(user_id);
+    }
+    false
+}
+
+fn approval_notice(tool_name: &str) -> String {
+    format!(
+        "Approval needed for {tool_name}. Approve or deny it in the Terminal v4 app; it cannot be approved from Telegram."
+    )
 }
 
 fn pairing_code(user_id: &str) -> String {
     let code = format!("{:06}", rand_code());
     if let Ok(mut codes) = PAIRING_CODES.lock() {
-        codes.insert(user_id.to_owned(), code.clone());
+        codes.insert(
+            user_id.to_owned(),
+            PairingCode {
+                code: code.clone(),
+                issued: Instant::now(),
+                attempts: 0,
+            },
+        );
     }
     code
 }
@@ -168,7 +328,7 @@ fn status(data_dir: &Path, user_id: &str) -> Value {
         Some(config) => json!({
             "configured": true, "botName": config.bot_name, "paired": config.chat_id.is_some(),
             "sessionId": config.session_id, "enabled": config.enabled,
-            "pairingCode": config.chat_id.is_none().then(|| PAIRING_CODES.lock().ok().and_then(|codes| codes.get(user_id).cloned())).flatten(),
+            "pairingCode": config.chat_id.is_none().then(|| PAIRING_CODES.lock().ok().and_then(|codes| codes.get(user_id).filter(|entry| entry.issued.elapsed() <= PAIRING_TTL).map(|entry| entry.code.clone()))).flatten(),
         }),
     }
 }
@@ -211,6 +371,17 @@ async fn relay_reply(
                 }
                 StructuredSessionEvent::Error { message, .. } => {
                     reply = format!("Error: {message}")
+                }
+                StructuredSessionEvent::ApprovalRequired { tool_name, .. } => {
+                    send(&token, chat_id, &approval_notice(&tool_name)).await;
+                }
+                StructuredSessionEvent::InputRequired { .. } => {
+                    send(
+                        &token,
+                        chat_id,
+                        "The thread is asking a question. Answer it in the Terminal v4 app.",
+                    )
+                    .await;
                 }
                 StructuredSessionEvent::TurnCompleted { .. }
                 | StructuredSessionEvent::SessionEnded { .. } => break,
@@ -339,7 +510,8 @@ async fn handle(state: &AppState, config: &mut Config, token: &str, chat_id: i64
 
 async fn run(state: AppState, user_id: String) {
     let data_dir = state.config().data_dir.clone();
-    let mut offset = 0i64;
+    let mut offset = load_offset(&data_dir, &user_id);
+    let mut failures = 0u32;
     loop {
         let Some(mut config) = load_config(&data_dir, &user_id).filter(|config| config.enabled)
         else {
@@ -353,36 +525,64 @@ async fn run(state: AppState, user_id: String) {
         let updates = call(
             &token,
             "getUpdates",
-            json!({ "offset": offset, "timeout": POLL_SECONDS }),
+            json!({ "offset": offset, "timeout": POLL_SECONDS, "allowed_updates": ["message"] }),
             Duration::from_secs(POLL_SECONDS + 10),
         )
         .await;
-        let Ok(updates) = updates else {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-            continue;
+        let updates = match updates {
+            Ok(updates) => {
+                failures = 0;
+                updates
+            }
+            Err(error) => {
+                failures += 1;
+                let wait = error
+                    .retry_after
+                    .map_or_else(|| backoff(failures), |s| Duration::from_secs(s.min(300)));
+                tokio::time::sleep(wait).await;
+                continue;
+            }
         };
         for update in updates.as_array().into_iter().flatten() {
-            offset = offset.max(update["update_id"].as_i64().unwrap_or(0) + 1);
-            let (Some(chat_id), Some(text)) = (
-                update["message"]["chat"]["id"].as_i64(),
-                update["message"]["text"].as_str(),
-            ) else {
+            let update_id = update["update_id"].as_i64().unwrap_or(0);
+            if update_id < offset {
                 continue;
+            }
+            offset = update_id + 1;
+            save_offset(&data_dir, &user_id, offset);
+            let inbound = classify_update(update);
+            let chat_id = match &inbound {
+                Inbound::Text { chat_id, .. } | Inbound::Attachment { chat_id } => *chat_id,
+                Inbound::Ignore => continue,
             };
             if config.chat_id == Some(chat_id) {
-                handle(&state, &mut config, &token, chat_id, text).await;
+                match inbound {
+                    Inbound::Text { text, .. } => {
+                        handle(&state, &mut config, &token, chat_id, &text).await
+                    }
+                    _ => {
+                        send(
+                            &token,
+                            chat_id,
+                            "Attachments are not forwarded to threads yet. Send text instead.",
+                        )
+                        .await
+                    }
+                }
             } else if config.chat_id.is_none() {
-                let expected = PAIRING_CODES
-                    .lock()
-                    .ok()
-                    .and_then(|codes| codes.get(&user_id).cloned());
-                if matches!(parse_command(text), Command::Pair(code) if expected.as_deref() == Some(code.as_str()))
-                {
+                let Inbound::Text { text, .. } = inbound else {
+                    continue;
+                };
+                let paired = match parse_command(&text) {
+                    Command::Pair(code) => PAIRING_CODES
+                        .lock()
+                        .map(|mut codes| check_pairing(&mut codes, &user_id, &code, Instant::now()))
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if paired {
                     config.chat_id = Some(chat_id);
                     let _ = save_config(&data_dir, &config);
-                    if let Ok(mut codes) = PAIRING_CODES.lock() {
-                        codes.remove(&user_id);
-                    }
                     send(
                         &token,
                         chat_id,
@@ -451,7 +651,7 @@ async fn connect(
     }
     let me = call(token, "getMe", json!({}), Duration::from_secs(15))
         .await
-        .map_err(ApiError::bad_request)?;
+        .map_err(|error| ApiError::bad_request(error.message))?;
     let cipher = VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
     let data_dir = state.config().data_dir.clone();
     save_config(
@@ -506,6 +706,10 @@ async fn disconnect(
 ) -> Json<Value> {
     let data_dir = state.config().data_dir.clone();
     let _ = std::fs::remove_file(config_path(&data_dir, &user.user_id));
+    let _ = std::fs::remove_file(offset_path(&data_dir, &user.user_id));
+    if let Ok(mut codes) = PAIRING_CODES.lock() {
+        codes.remove(&user.user_id);
+    }
     Json(status(&data_dir, &user.user_id))
 }
 
@@ -583,6 +787,201 @@ mod tests {
                 status(data.path(), "owner")["botName"].clone(),
             ),
             (false, "123:secret".to_owned(), true, json!("my_bot"))
+        );
+    }
+
+    fn update(chat_type: &str, extra: Value) -> Value {
+        let mut message = json!({ "chat": { "id": 7, "type": chat_type } });
+        message
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        json!({ "update_id": 1, "message": message })
+    }
+
+    #[test]
+    fn classifies_only_private_chat_updates() {
+        assert_eq!(
+            [
+                classify_update(&update("private", json!({ "text": "hi" }))),
+                classify_update(&update("group", json!({ "text": "hi" }))),
+                classify_update(&update("private", json!({ "photo": [{}] }))),
+                classify_update(&update("private", json!({ "sticker": {} }))),
+                classify_update(&json!({ "update_id": 2, "edited_message": {} })),
+            ],
+            [
+                Inbound::Text {
+                    chat_id: 7,
+                    text: "hi".into()
+                },
+                Inbound::Ignore,
+                Inbound::Attachment { chat_id: 7 },
+                Inbound::Ignore,
+                Inbound::Ignore,
+            ]
+        );
+    }
+
+    fn code_for(user: &str, code: &str, issued: Instant) -> HashMap<String, PairingCode> {
+        HashMap::from([(
+            user.to_owned(),
+            PairingCode {
+                code: code.to_owned(),
+                issued,
+                attempts: 0,
+            },
+        )])
+    }
+
+    #[test]
+    fn pairing_code_is_single_use() {
+        let now = Instant::now();
+        let mut codes = code_for("u", "123456", now);
+        assert_eq!(
+            (
+                check_pairing(&mut codes, "u", "123456", now),
+                check_pairing(&mut codes, "u", "123456", now)
+            ),
+            (true, false)
+        );
+    }
+
+    #[test]
+    fn pairing_code_expires() {
+        let issued = Instant::now();
+        let mut codes = code_for("u", "123456", issued);
+        let late = issued + PAIRING_TTL + Duration::from_secs(1);
+        assert_eq!(
+            (check_pairing(&mut codes, "u", "123456", late), codes.len()),
+            (false, 0)
+        );
+    }
+
+    #[test]
+    fn pairing_code_is_burned_after_too_many_wrong_guesses() {
+        let now = Instant::now();
+        let mut codes = code_for("u", "123456", now);
+        for guess in 0..PAIRING_MAX_ATTEMPTS {
+            assert!(!check_pairing(
+                &mut codes,
+                "u",
+                &format!("00000{guess}"),
+                now
+            ));
+        }
+        assert_eq!(
+            (check_pairing(&mut codes, "u", "123456", now), codes.len()),
+            (false, 0)
+        );
+    }
+
+    #[test]
+    fn pairing_rejects_unknown_user_and_length_mismatch() {
+        let now = Instant::now();
+        let mut codes = code_for("u", "123456", now);
+        assert_eq!(
+            (
+                check_pairing(&mut codes, "other", "123456", now),
+                check_pairing(&mut codes, "u", "12345", now),
+                check_pairing(&mut codes, "u", "", now),
+            ),
+            (false, false, false)
+        );
+    }
+
+    #[test]
+    fn offset_survives_restart_and_ignores_garbage() {
+        let data = tempfile::tempdir().unwrap();
+        assert_eq!(load_offset(data.path(), "u"), 0);
+        save_offset(data.path(), "u", 42);
+        let restored = load_offset(data.path(), "u");
+        std::fs::write(offset_path(data.path(), "u"), "junk").unwrap();
+        assert_eq!(
+            (
+                restored,
+                load_offset(data.path(), "u"),
+                load_offset(data.path(), "v")
+            ),
+            (42, 0, 0)
+        );
+    }
+
+    #[test]
+    fn backoff_grows_and_is_capped() {
+        assert_eq!(
+            [0, 1, 2, 3, 10, 40].map(|n| backoff(n).as_secs()),
+            [2, 2, 4, 8, 60, 60]
+        );
+    }
+
+    #[test]
+    fn approval_notice_points_to_the_app_and_leaks_no_input() {
+        let notice = approval_notice("bash");
+        assert_eq!(
+            (
+                notice.contains("bash"),
+                notice.contains("Terminal v4 app"),
+                notice.contains("cannot be approved from Telegram")
+            ),
+            (true, true, true)
+        );
+    }
+
+    #[test]
+    fn chunking_handles_edges() {
+        let exact = "a".repeat(MESSAGE_LIMIT);
+        let over = "é".repeat(MESSAGE_LIMIT + 1);
+        let lines = format!("{}\n{}\n", "x".repeat(MESSAGE_LIMIT - 1), "y");
+        assert_eq!(
+            (
+                chunks("").len(),
+                chunks("  \n").len(),
+                chunks(&exact).len(),
+                chunks(&over)
+                    .iter()
+                    .map(|p| p.chars().count())
+                    .collect::<Vec<_>>(),
+                chunks(&lines).len(),
+            ),
+            (0, 0, 1, vec![MESSAGE_LIMIT, 1], 2)
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_rate_limited_sends_and_reads_retry_after() {
+        use axum::{http::StatusCode, routing::post};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = hits.clone();
+        let app = Router::new().route(
+            "/botT/sendMessage",
+            post(move || {
+                let seen = seen.clone();
+                async move {
+                    if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            Json(json!({ "ok": false, "description": "slow down", "parameters": { "retry_after": 0 } })),
+                        )
+                    } else {
+                        (StatusCode::OK, Json(json!({ "ok": true, "result": {} })))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        std::env::set_var("TELEGRAM_API_BASE", format!("http://127.0.0.1:{port}"));
+        let failed = call("T", "sendMessage", json!({}), Duration::from_secs(5)).await;
+        let retry_after = failed.err().and_then(|error| error.retry_after);
+        hits.store(0, Ordering::SeqCst);
+        let delivered = send_part("T", 1, "hello").await;
+        std::env::remove_var("TELEGRAM_API_BASE");
+        assert_eq!(
+            (retry_after, delivered, hits.load(Ordering::SeqCst)),
+            (Some(0), true, 2)
         );
     }
 }

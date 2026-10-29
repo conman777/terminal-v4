@@ -78,6 +78,45 @@ impl DelegationSupervisor {
         }).collect())
     }
 
+    /// Finished results the owner has not received in a parent queue, including
+    /// those of a deleted parent. Unlike `pending_owner_reviews`, these need no
+    /// recovery decision; they are surfaced so the result is not silently lost.
+    pub(crate) async fn retained_owner_results(
+        &self,
+        owner: &str,
+        request: Uuid,
+        verify_hold: impl FnOnce(&str, Uuid) -> Result<()>,
+    ) -> Result<Vec<serde_json::Value>> {
+        const PREVIEW_CHARS: usize = 4000;
+        if !valid_identity(owner) || request.is_nil() {
+            return Err("Invalid owner cleanup request".into());
+        }
+        let _cleanup = self.lock_owner_cleanup(owner).await?;
+        verify_hold(owner, request)?;
+        let records = self.outbox.list(owner)?;
+        Ok(records
+            .into_iter()
+            .filter(|record| record.receipt.is_none())
+            .filter_map(|record| {
+                let terminal = record.terminal?;
+                let binding = record.binding;
+                let truncated = terminal.result.chars().count() > PREVIEW_CHARS;
+                Some(serde_json::json!({
+                    "childOperationId": binding.operation_id,
+                    "taskId": binding.task,
+                    "childSessionId": binding.child_session,
+                    "parentSessionId": binding.parent_session,
+                    "workspacePath": binding.workspace,
+                    "provider": binding.provider,
+                    "model": binding.model,
+                    "outcome": terminal.outcome,
+                    "result": terminal.result.chars().take(PREVIEW_CHARS).collect::<String>(),
+                    "resultTruncated": truncated,
+                }))
+            })
+            .collect())
+    }
+
     pub(crate) async fn review_held_child(
         self: &Arc<Self>,
         app: crate::state::AppState,
@@ -567,6 +606,94 @@ mod tests {
             .unwrap(),
             crate::workspace_tasks::TaskStatus::Running
         );
+    }
+
+    #[tokio::test]
+    async fn finished_undelivered_result_is_surfaced_for_cleanup_review_until_delivered() {
+        let (_root, _workspace, outbox, binding) = held_recovery_fixture().await;
+        let supervisor = Arc::new(DelegationSupervisor::new(Arc::clone(&outbox)).unwrap());
+        let request = Uuid::new_v4();
+        assert!(supervisor
+            .retained_owner_results("owner", request, |_, _| Ok(()))
+            .await
+            .unwrap()
+            .is_empty());
+        supervisor
+            .recover_held_owner("owner", request, |_, _| Ok(()))
+            .await
+            .unwrap();
+        let pending = supervisor
+            .pending_owner_reviews("owner", request, |_, _| Ok(()))
+            .await
+            .unwrap();
+        assert!(pending.is_empty());
+
+        let results = supervisor
+            .retained_owner_results("owner", request, |_, _| Ok(()))
+            .await
+            .unwrap();
+        assert_eq!(
+            results,
+            vec![serde_json::json!({
+                "childOperationId": binding.operation_id,
+                "taskId": binding.task,
+                "childSessionId": binding.child_session,
+                "parentSessionId": binding.parent_session,
+                "workspacePath": binding.workspace,
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "outcome": "interrupted",
+                "result": outbox
+                    .read("owner", binding.operation_id)
+                    .unwrap()
+                    .unwrap()
+                    .terminal
+                    .unwrap()
+                    .result,
+                "resultTruncated": false,
+            })]
+        );
+        assert!(supervisor
+            .retained_owner_results("foreign", request, |_, _| Ok(()))
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(supervisor
+            .retained_owner_results("owner", request, |_, _| Err("hold changed".into()))
+            .await
+            .is_err());
+
+        let terminal = outbox
+            .read("owner", binding.operation_id)
+            .unwrap()
+            .unwrap()
+            .terminal
+            .unwrap();
+        let crate::followup_queue::QueueOperation::Enqueue { item_id, .. } =
+            terminal.mutation.operation
+        else {
+            unreachable!()
+        };
+        let receipt = crate::followup_queue::MutationReceipt {
+            operation_id: binding.operation_id,
+            queue_revision: terminal.mutation.expected_queue_revision + 1,
+            item_id: Some(item_id),
+            item_revision: Some(1),
+        };
+        outbox
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE records SET receipt=?2 WHERE operation_id=?1",
+                params![binding.operation_id.to_string(), encode(&receipt).unwrap()],
+            )
+            .unwrap();
+        assert!(supervisor
+            .retained_owner_results("owner", request, |_, _| Ok(()))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

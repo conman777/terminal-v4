@@ -1538,6 +1538,8 @@ impl Outbox {
         .map_err(|_| "Cannot open outbox database")?;
         limit_database(&db)?;
         db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; BEGIN IMMEDIATE; CREATE TABLE records (owner TEXT NOT NULL, operation_id TEXT NOT NULL, child TEXT NOT NULL, task TEXT NOT NULL, binding TEXT NOT NULL, terminal TEXT, receipt TEXT, child_proof TEXT, delivery_attempted INTEGER NOT NULL DEFAULT 0 CHECK(delivery_attempted IN (0, 1)), PRIMARY KEY(owner, operation_id), UNIQUE(owner, child), UNIQUE(owner, task)); PRAGMA user_version=6; COMMIT;").map_err(|_| "Cannot initialize outbox database")?;
+        db.execute_batch(prune::SCHEMA)
+            .map_err(|_| "Cannot initialize outbox database")?;
         File::open(path)
             .and_then(|f| f.sync_all())
             .map_err(|_| "Cannot sync outbox directory")?;
@@ -1606,10 +1608,12 @@ impl Outbox {
         if version != 6 || integrity != "ok" {
             return Err("Outbox database is incomplete or corrupt".into());
         }
+        db.execute_batch(prune::SCHEMA)
+            .map_err(|_| "Cannot upgrade outbox database")?;
         let count: i64 = db
             .query_row("SELECT count(*) FROM records", [], |r| r.get(0))
             .map_err(|_| "Invalid outbox schema")?;
-        if count > MAX_RECORDS {
+        if count > MAX_RECORDS || prune::tombstone_count(&db)? > prune::MAX_TOMBSTONES {
             return Err("Outbox record capacity exceeded".into());
         }
         let invalid_attempts: i64 = db.query_row("SELECT count(*) FROM records WHERE delivery_attempted NOT IN (0, 1) OR delivery_attempted IS NULL OR (delivery_attempted = 1 AND terminal IS NULL)", [], |row| row.get(0)).map_err(|_| "Invalid outbox schema")?;
@@ -1679,11 +1683,17 @@ impl Outbox {
                 Err("Delegation binding conflict".into())
             };
         }
-        let count: i64 = tx
+        if let Some(admission) = prune::replayed(&tx, b)? {
+            return Ok(admission);
+        }
+        let mut count: i64 = tx
             .query_row("SELECT count(*) FROM records", [], |r| r.get(0))
             .map_err(|_| "Cannot check outbox capacity")?;
         if count >= MAX_RECORDS {
-            return Err("Outbox capacity exhausted; receipts retained".into());
+            count -= prune::prune_delivered(&tx)?;
+        }
+        if count >= MAX_RECORDS {
+            return Err("Outbox capacity exhausted; undelivered results retained".into());
         }
         tx.execute(
             "INSERT INTO records(owner,operation_id,child,task,binding) VALUES(?1,?2,?3,?4,?5)",
@@ -1855,9 +1865,9 @@ impl Outbox {
         if child.approved.binding() != binding || Path::new(&binding.data_root) != self.data_root {
             return Err("Delegation binding changed".into());
         }
+        super::delegation_lifeline::arm(child.command.as_std_mut());
         child
             .command
-            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
@@ -2000,6 +2010,7 @@ impl Outbox {
         #[cfg(windows)]
         let tree = crate::process_tree::ProcessTree::attach(&child)
             .map_err(|_| "Delegated child cleanup could not be confirmed")?;
+        let _lifeline = child.stdin.take();
         let stdout = child
             .stdout
             .take()
@@ -2815,6 +2826,10 @@ fn check_file(path: &Path) -> Result<()> {
 #[path = "delegation_owner_cleanup.rs"]
 pub(crate) mod owner_cleanup_prototype;
 
+#[cfg(unix)]
+#[path = "delegation_prune.rs"]
+mod prune;
+
 #[cfg(all(test, unix))]
 #[path = "delegation_lifecycle_tests.rs"]
 mod lifecycle_tests;
@@ -3118,10 +3133,11 @@ mod tests {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         prepared.command = fixture;
-        let (running_task, child) = outbox
+        let (running_task, mut child) = outbox
             .launch_prepared_held_child(&binding, prepared, &Cancellation::default())
             .await
             .unwrap();
+        let _lifeline = child.stdin.take();
         assert_eq!(
             running_task.status,
             crate::workspace_tasks::TaskStatus::Running

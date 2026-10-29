@@ -150,7 +150,6 @@ async fn concurrent_codex_retries_have_one_durable_acceptance() {
 }
 
 #[tokio::test]
-#[ignore = "structured session ownership is not fenced across managers"]
 async fn two_managers_do_not_accept_the_same_codex_request_twice() {
     let data = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();

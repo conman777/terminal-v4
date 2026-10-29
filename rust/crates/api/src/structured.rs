@@ -29,6 +29,9 @@ mod ownership;
 #[cfg(unix)]
 pub(crate) mod ownership_recovery;
 pub(crate) mod queue;
+mod request_ledger;
+#[cfg(all(test, unix))]
+mod request_ledger_tests;
 #[cfg(all(test, unix))]
 mod session_read_auth_tests;
 #[cfg(test)]
@@ -1105,19 +1108,21 @@ impl StructuredSessionManager {
         };
         let supervisor = self.cleanup_supervisor().await?;
         let hold = cleanup.clone();
+        let verify_hold = move |owner: &str, request: Uuid| match hold.pending(owner)? {
+            Some(current) if current.id() == request => Ok(()),
+            _ => Err("Owner cleanup request changed".into()),
+        };
         let children = supervisor
-            .pending_owner_reviews(owner, request.id(), move |owner, request| {
-                match hold.pending(owner)? {
-                    Some(current) if current.id() == request => Ok(()),
-                    _ => Err("Owner cleanup request changed".into()),
-                }
-            })
+            .pending_owner_reviews(owner, request.id(), verify_hold.clone())
+            .await?;
+        let results = supervisor
+            .retained_owner_results(owner, request.id(), verify_hold)
             .await?;
         if cleanup.pending(owner)? != Some(request.clone()) {
             return Err("Owner cleanup request changed".into());
         }
         Ok(Some(
-            serde_json::json!({"requestId":request.id(),"children":children}),
+            serde_json::json!({"requestId":request.id(),"children":children,"results":results}),
         ))
     }
 
@@ -1732,6 +1737,14 @@ impl StructuredSessionManager {
                             .parent_has_outstanding(user_id, &state.id, incarnation.0)
                             .ok()
                             == Some(false)
+                            && self
+                                .inner
+                                .background_processes
+                                .get()
+                                .is_none_or(|processes| {
+                                    processes.session_has_outstanding(user_id, &state.id).ok()
+                                        == Some(false)
+                                })
                     }
                     _ => false,
                 };
@@ -2453,6 +2466,17 @@ impl StructuredSessionManager {
                 {
                     return Err("Finish or resolve this thread's work before settling it".into());
                 }
+                if let Some(processes) = self.inner.background_processes.get() {
+                    if processes
+                        .session_has_outstanding(user_id, &state.id)
+                        .map_err(|_| "Settlement is unavailable on this server")?
+                    {
+                        return Err(
+                            "Finish or review this thread's background commands before settling it"
+                                .into(),
+                        );
+                    }
+                }
                 let queue_state = queue::lifecycle_queue_state(self, &state)?;
                 let lifecycle = thread_lifecycle::project(
                     &state.events,
@@ -2957,6 +2981,7 @@ impl StructuredSessionManager {
                 user_id,
                 id,
                 text,
+                None,
                 session.session.clone(),
                 None,
                 None,
@@ -2965,7 +2990,7 @@ impl StructuredSessionManager {
             )
             .await;
         drop(session);
-        result
+        result.map(|_| ())
     }
 
     fn spawn_native_provider(
@@ -3038,12 +3063,13 @@ impl StructuredSessionManager {
         user_id: &str,
         id: &str,
         text: &str,
+        request_id: Option<&str>,
         session: Arc<StructuredLiveSession>,
         authority: Option<&crate::auth::LocalAuthority>,
         paired: Option<&crate::auth::PairedInputAuthority>,
         prepared: Option<&PairedSnapshot>,
         app_state: Option<&crate::state::AppState>,
-    ) -> Result<(), String> {
+    ) -> Result<StructuredReceipt, String> {
         #[cfg(unix)]
         let pump_permit = self.internal_admission()?;
         let mut state = if prepared.is_some() {
@@ -3056,6 +3082,29 @@ impl StructuredSessionManager {
         };
         if prepared.is_some_and(|snapshot| !snapshot.matches(&state)) {
             return Err("Session changed while preparing the message; try again".into());
+        }
+        let request_id = request_id
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .map(|value| value.to_string());
+        let text_digest = request_ledger::text_digest(&normalize_structured_input_message(text));
+        let _lease = request_ledger::acquire_lease(&self.inner.config, user_id, id)?;
+        let events_on_disk =
+            request_ledger::events_ahead_of(&self.inner.config, user_id, id, &state.events)?;
+        if let Some(request_id) = request_id.as_deref() {
+            if let Some(intent) =
+                request_ledger::find_intent(&self.inner.config, user_id, id, request_id)?
+            {
+                if intent.text_sha256 != text_digest {
+                    return Err("requestId was already used with different text".into());
+                }
+                let events = events_on_disk.as_deref().unwrap_or(&state.events);
+                if let Some(receipt) = request_ledger::accepted_receipt(events, &intent) {
+                    return Ok(receipt);
+                }
+            }
+        }
+        if events_on_disk.is_some() {
+            return Err("Session changed in another manager; reload and try again".into());
         }
         if state.deleting || state.retiring || state.process.is_some() {
             return Err(
@@ -3078,6 +3127,14 @@ impl StructuredSessionManager {
             .checked_add(1)
             .ok_or("Session generation exhausted")?;
         let message_id = Uuid::new_v4().to_string();
+        let intent = request_id.map(|request_id| request_ledger::IntentRecord {
+            request_id,
+            message_id: message_id.clone(),
+            text_sha256: text_digest,
+        });
+        if let Some(intent) = &intent {
+            request_ledger::record_intent(&self.inner.config, user_id, id, intent)?;
+        }
         let accepted = StructuredSessionEvent::MessageCompleted {
             ts: now_ts(),
             seq: next_session_seq(&state.events)?,
@@ -3204,6 +3261,10 @@ impl StructuredSessionManager {
         let controller = spawned.controller.clone();
         state.process = Some(controller.clone());
         state.updated_at = iso_timestamp();
+        let receipt = intent
+            .as_ref()
+            .and_then(|intent| request_ledger::accepted_receipt(&state.events, intent))
+            .unwrap_or_else(StructuredReceipt::legacy);
         drop(state);
         let manager = self.clone();
         let user_id = user_id.to_owned();
@@ -3226,7 +3287,7 @@ impl StructuredSessionManager {
             let _ = manager.clear_generation(&user_id, &id, generation).await;
         });
         pending_start.commit();
-        Ok(())
+        Ok(receipt)
     }
 
     async fn submit_codex(
@@ -3270,13 +3331,24 @@ impl StructuredSessionManager {
                 "Session changed while preparing the message; try again",
             ));
         }
-        if let Some((receipt, previous)) = receipt_from_events(&state.events, &request_id) {
+        let _lease = request_ledger::acquire_lease(&self.inner.config, user_id, id)
+            .map_err(StructuredControlError::conflict)?;
+        let events_on_disk =
+            request_ledger::events_ahead_of(&self.inner.config, user_id, id, &state.events)
+                .map_err(StructuredControlError::internal)?;
+        let known_events = events_on_disk.as_deref().unwrap_or(&state.events);
+        if let Some((receipt, previous)) = receipt_from_events(known_events, &request_id) {
             if previous != text {
                 return Err(StructuredControlError::conflict(
                     "requestId was already accepted with different text",
                 ));
             }
             return Ok(receipt);
+        }
+        if events_on_disk.is_some() {
+            return Err(StructuredControlError::conflict(
+                "Session changed in another manager; reload and try again",
+            ));
         }
         if unresolved_codex_approval(&state.events) {
             return Err(StructuredControlError::conflict(
@@ -4483,19 +4555,21 @@ impl StructuredSessionManager {
                 ));
             }
             drop(state);
-            self.send_native_message(
-                user_id,
-                id,
-                text,
-                session.clone(),
-                authority,
-                paired,
-                prepared.as_ref(),
-                app_state,
-            )
-            .await
-            .map_err(StructuredControlError::conflict)?;
-            return Ok(StructuredReceipt::legacy());
+            let receipt = self
+                .send_native_message(
+                    user_id,
+                    id,
+                    text,
+                    request_id,
+                    session.clone(),
+                    authority,
+                    paired,
+                    prepared.as_ref(),
+                    app_state,
+                )
+                .await
+                .map_err(StructuredControlError::conflict)?;
+            return Ok(receipt);
         }
         let request_id = Uuid::parse_str(
             request_id

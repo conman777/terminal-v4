@@ -303,6 +303,34 @@ impl OwnerGate {
         Ok(())
     }
 
+    #[cfg(unix)]
+    pub(super) fn validate_standalone_review_transaction(
+        &self,
+        tx: &Transaction<'_>,
+        owner: &str,
+    ) -> Result<(), String> {
+        validate(owner, "standalone-review")?;
+        self.identity
+            .as_ref()
+            .ok_or("Background control database identity unavailable")?
+            .validate(tx)?;
+        let ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM background_ledger_installation WHERE id=1 AND state='ready')", [], |row| row.get(0)).map_err(|_| "Cannot inspect background review installation")?;
+        let background_held: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM background_owner_holds WHERE owner=?1)",
+                [owner],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Cannot inspect background review hold")?;
+        let structured_held: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='structured_owner_holds') AND EXISTS(SELECT 1 FROM structured_owner_holds WHERE owner=?1)", [owner], |row| row.get(0)).map_err(|_| "Cannot inspect owner cleanup hold")?;
+        if !ready || background_held || structured_held {
+            return Err(
+                "Standalone background review is unavailable; use the cleanup review".into(),
+            );
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn with_review_hold<T>(
         &self,

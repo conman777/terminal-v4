@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{fs::File, path::Path, sync::Mutex};
 
 pub(super) const MAX_RETIRED_SESSIONS: i64 = 4096;
+pub(super) const MIN_RETAINED_PER_SESSION: i64 = 8;
 #[cfg(unix)]
 pub(super) const LEDGER_BUSY: &str = "Background receipt ledger already in use";
 
@@ -388,6 +389,26 @@ impl Ledger {
         )
         .map_err(|_| "Cannot check retired background session".into())
     }
+    /// Drops the oldest finished receipts in a scope, never one of a session's
+    /// newest `MIN_RETAINED_PER_SESSION`, and never an unfinished, unknown or
+    /// reviewed-unknown claim.
+    fn prune_terminal(
+        tx: &rusqlite::Transaction<'_>,
+        condition: &str,
+        key: &[u8],
+        need: i64,
+    ) -> Result<usize, String> {
+        if need <= 0 {
+            return Ok(0);
+        }
+        tx.execute(
+            &format!(
+                "DELETE FROM receipts WHERE rowid IN (SELECT r.rowid FROM receipts r WHERE {condition} AND r.state IN ('exited','cancelled','timed_out','failed_to_start') AND (SELECT COUNT(*) FROM receipts n WHERE n.session_key=r.session_key AND n.rowid>r.rowid) >= {MIN_RETAINED_PER_SESSION} ORDER BY r.rowid ASC LIMIT ?2)"
+            ),
+            params![key, need],
+        )
+        .map_err(|_| "Cannot prune finished background receipts".into())
+    }
     pub(super) fn claim(
         &self,
         scope: &BackgroundScope,
@@ -437,23 +458,48 @@ impl Ledger {
                 return Err("Legacy action already accepted; replay rejected".into());
             }
         }
-        let count: i64 = tx
-            .query_row("SELECT COUNT(*) FROM receipts", [], |r| r.get(0))
-            .map_err(|_| "Cannot check background action capacity")?;
-        if count >= MAX_ACTIONS as i64 {
+        let owner_key = Self::hash_parts(&[&scope.owner]);
+        let counts = |tx: &rusqlite::Transaction<'_>| -> Result<(i64, i64, i64), String> {
+            let total: i64 = tx
+                .query_row("SELECT COUNT(*) FROM receipts", [], |r| r.get(0))
+                .map_err(|_| "Cannot check background action capacity")?;
+            let (owner_count, session_count): (i64, i64) = tx
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(session_key=?2),0) FROM receipts WHERE owner_key=?1",
+                    params![owner_key, session_key],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .map_err(|_| "Cannot check background action capacity")?;
+            Ok((total, owner_count, session_count))
+        };
+        let (_, _, session_count) = counts(&tx)?;
+        Self::prune_terminal(
+            &tx,
+            "r.session_key=?1",
+            &session_key,
+            session_count - MAX_SESSION_ACTIONS as i64 + 1,
+        )?;
+        let (_, owner_count, _) = counts(&tx)?;
+        Self::prune_terminal(
+            &tx,
+            "r.owner_key=?1",
+            &owner_key,
+            owner_count - MAX_OWNER_ACTIONS as i64 + 1,
+        )?;
+        let (total, _, _) = counts(&tx)?;
+        Self::prune_terminal(
+            &tx,
+            "?1 IS NOT NULL",
+            &owner_key,
+            total - MAX_ACTIONS as i64 + 1,
+        )?;
+        let (total, owner_count, session_count) = counts(&tx)?;
+        if total >= MAX_ACTIONS as i64 {
             return Err("Background action receipt capacity exhausted".into());
         }
-        let owner_key = Self::hash_parts(&[&scope.owner]);
-        let (owner_count, session_count): (i64, i64) = tx
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(session_key=?2),0) FROM receipts WHERE owner_key=?1",
-                params![owner_key, session_key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map_err(|_| "Cannot check background action capacity")?;
         if owner_count >= MAX_OWNER_ACTIONS as i64 || session_count >= MAX_SESSION_ACTIONS as i64 {
             return Err(
-                "Background action capacity for this account or conversation is exhausted; delete the conversation to release it"
+                "Background action capacity for this account or conversation is exhausted; resolve unfinished commands or delete the conversation to release it"
                     .into(),
             );
         }
