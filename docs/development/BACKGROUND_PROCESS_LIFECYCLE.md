@@ -1,8 +1,8 @@
 # Background process lifecycle prototype
 
-The Unix runtime reopens and retains an existing background-process manager;
-it does not provision a fresh installation or expose background command tools.
-An unavailable or remotely owned existing manager makes session deletion fail
+The Unix runtime provisions or reopens and retains a background-process
+manager. The agent-facing command tools are off unless an operator opts in with
+`TERMINAL_V4_BACKGROUND_COMMANDS=1` (see "Enabling"). An unavailable or remotely owned existing manager makes session deletion fail
 closed; a later deletion attempt can reacquire the existing ledger after its
 remote owner exits. Its implementation
 starts each approved command in a new session and keeps a
@@ -22,12 +22,12 @@ An explicit authorized review can still attest an unknown receipt after a
 shutdown attempt reports unconfirmed cleanup; the stopped manager remains
 closed to new actions, and a later shutdown attempt can verify the review.
 
-The test-only tool layer includes a separate reviewed-output action. Status and
+The tool layer includes a separate reviewed-output action. Status and
 wait withhold process bytes. The output action shows the owning user the exact
 bounded stdout/stderr snapshot and returns only that approved snapshot to the
 agent; denial, cancellation, another owner's scope, or session retirement does
 not release it. Output is held in memory only and cannot be recovered after a
-restart. This action is not registered in the production agent.
+restart. The action is offered only when the tools are enabled.
 
 A test-only provisioning experiment stores an `initializing` marker in the
 application SQLite database before creating the ledger, and marks it `ready`
@@ -46,8 +46,8 @@ when it holds the ledger (an installation owned by another live process is
 completion on a dedicated thread before the manager is bound, so nothing can
 launch first. A recovery failure is logged and leaves the claims unknown. The
 completion consumer, the registry-lock fix and the retention policy below are
-in place. The command tools are still not registered in production; see
-"Enablement decision" at the end. The lifeline and the recovery policy are
+in place. The command tools are registered only when explicitly enabled; see
+"Enabling" and "Enablement decision" at the end. The lifeline and the recovery policy are
 implemented only on Unix, and the existing receipt implementation fails closed
 outside Unix.
 
@@ -61,7 +61,7 @@ cancel, timeout, deletion, logout, shutdown and recovery, and the
 `unverifiable` and review paths exist because of that. The kernel start-time
 check protects against PID reuse only where the platform reports it.
 
-The structured-session launch actor is test-only. It requests a decision
+The structured-session launch actor requests a decision
 through its bound structured approval gate and produces a private, single-use
 start receipt only after approval. The receipt retains the prepared command,
 workspace, credential generation, durable session incarnation and expiry; the
@@ -74,8 +74,8 @@ is attempted. These checks assume a stable, private data root and workspace: a
 hostile same-user swap between the final identity check and the operating-system
 spawn is not prevented.
 
-The agent loop reaches commands only through that actor. Each structured V4 turn
-binds a per-turn actor to its resources; the tool layer has no other path to the
+The agent loop reaches commands only through that actor. Each structured V4 turn,
+when the setting below is on, binds a per-turn actor to its resources; the tool layer has no other path to the
 process manager, so start, status, wait, cancel and output review all use the
 actor's approval, owner-generation, credential-expiry, session-incarnation and
 checkpoint fences. The older direct-manager wrapper is kept only for manager-level
@@ -147,7 +147,7 @@ marker once. A deleted session's markers are removed by retirement. The
 optional worker (`start_background_completion_worker`) wakes on the in-process
 completion hint and every 30 seconds, and ends when the manager is shut down
 or dropped; it starts only if `BackgroundProcesses::enable_commands` was
-called, which production does not do. A marker whose owner stays held or whose
+called, which production does only when the setting below is on. A marker whose owner stays held or whose
 session stays unusable remains pending until pruned with its receipt.
 
 `session_has_outstanding(owner, session)` is a read-only ledger query,
@@ -268,8 +268,8 @@ receipt keeps its owner's request held; another owner's cleanup can proceed.
 The controlled manager also offers a supervised polling loop, but no production
 service starts it yet. Holds are capped at 4,096 and never silently evicted.
 
-The command tools remain test-only; manager reopening and reviewed logout
-cleanup are available in the Unix runtime. All cooperating servers must use the same intact, durable
+Manager reopening and reviewed logout
+cleanup are available in the Unix runtime; the command tools are opt-in. All cooperating servers must use the same intact, durable
 control database and the one retained ledger manager; the trusted bootstrap
 must create the control table only once and must not recreate lost state. The
 caller must authenticate the owner and derive its scope from trusted session
@@ -279,7 +279,7 @@ separately authenticated release is designed. Old binaries do not honor this
 gate, and the design does not protect a rolled-back database or a swapped data
 root. The new owner-scoped receipt field means old experimental ledger schemas
 fail closed and require explicit migration. Deletion also needs the separate
-structured-session actor fence. Production tools remain disabled.
+structured-session actor fence. Production tools are off unless enabled.
 
 The test-only same-process coordinator can use one exact logout request ID for
 the background hold and validate an instance-bound cleanup receipt before
@@ -324,25 +324,55 @@ function on a blocking worker through the structured manager's bound background
 manager, and the owner-cleanup recovery panel would need a standalone entry
 point showing the owner's unknown count (`owner_cleanup_unconfirmed`).
 
-Enablement decision. The background command tools stay disabled in production
-(no opt-in setting is wired, so there is no way to turn them on by accident).
-The recovery, session-retirement, completion-consumer, launch-locking and
-retention requirements are met and tested, and a real structured turn driven by
-a scripted provider covers launch, status, wait, cancel and reviewed output.
-Registration is blocked by these specific gaps:
+Enabling. The tools are registered only when the server process starts with
+`TERMINAL_V4_BACKGROUND_COMMANDS=1` (exactly `1`; `true`, `0` and an empty value
+leave them off). The switch is read once by `AppState::new_runtime` (tests use
+`new_runtime_with_background_commands`), after startup recovery and after the
+manager is bound. It is deliberately not a per-user settings-store field: the
+settings routes are patchable from the web UI, and permission to run host
+commands is an operator decision made with a restart. When off, no `background_*`
+tool is advertised, no per-turn actor is bound, `BackgroundTurn::new` refuses to
+build, any model-issued call is rejected as unavailable before any approval, and
+the completion worker is not started. When on, `StructuredSessionManager::
+enable_background_commands` calls `enable_commands()` and starts the completion
+worker (it fails closed and leaves the tools off when there is no manager or no
+async runtime). Read-only delegated children never see the tools: the
+`ToolPolicy::ReadOnlyChild` allowlist excludes every `background_*` name, they
+are not advertised, and a forced call is answered with "Tool denied by read-only
+child policy". There is no live toggle; turning it off needs a restart, and
+processes that are still running are handled by the normal shutdown and recovery
+paths.
 
-- The agent-turn binding and the tool layer are compiled only for tests:
-  `structured/background_actor.rs` and the turn binding in `V4Job::spawn`
-  (`cfg(all(test, unix))`), `start_for_actor`, `access_for_actor` and
-  `output_for_actor` (`cfg(all(test, unix))`), `bind_background_actor` in
-  `v4_agent/interaction.rs`, and the tool definition, dispatch and
-  non-cancellable-operation clauses in `v4_agent/mod.rs`. Those files are shared
-  with other work and were not changed here.
-- Restart, session deletion and logout are verified at the actor and manager
-  level (durable outcomes after restart, reaping on deletion, status, wait and
-  cancel refusing after logout) but not yet through the full scripted-provider
-  turn. All eight paths must pass that way before registration.
-- The enabling switch must be a runtime setting that defaults off, must never
-  apply to read-only child turns (the existing `ToolPolicy::Standard` check
-  already excludes them), and must call `enable_commands` so the completion
-  worker runs.
+Verification. Tests in `structured/background_runtime_tests.rs` drive real
+turns from a scripted provider through the actor with approvals decided through
+the structured approval route and real subprocesses: completion notice
+delivered once, metadata only, to the owning session only; read-only child
+policy; capacity refused before approval (and a freed slot reused); denied start
+and denied output; changed session incarnation rejects status, cancel, output
+and start until restored; another session of the same owner cannot see or cancel
+an action; session deletion reaps the process, writes the tombstone and refuses
+a stale actor's start; logout blocks launches, releases no output and stops the
+owner's commands; restart keeps durable outcomes and pending markers (delivered
+once), a crash-left unknown claim blocks new starts until the standalone review
+route clears it; and an isolated child process driving the real HTTP routes
+shows the tools absent by default and for `true`/`0`/empty, present with `1`, and
+a host that aborts mid-command being recovered at the next startup (group gone,
+receipt cancelled, a new launch allowed, one notice). The earlier
+`background_actor_launch_tests.rs` real-turn test still covers
+start/status/wait/cancel/reviewed output in one turn.
+
+Known limits that remain with the setting on: this is not an OS sandbox
+(see "Process containment limits"); descendants that leave the process group
+are unreachable; output exists only in memory and only the newest 16 finished
+commands per session keep it; an actor action that overlaps the session's
+lifecycle lock (for example the completion worker writing a notice at that
+moment) fails with "Session is busy; retry background action" and the model must
+retry; after an unclean host exit the structured ownership review must be
+completed before a held completion notice is delivered, and the worker retries
+every 30 seconds; the spawn cannot be abandoned mid-call; Windows is unsupported.
+
+Enablement decision. The setting exists and defaults off; it should stay off
+until an operator has accepted the limits above. Every guarantee listed under
+"Verification" is established and green, so enabling it is supported, not
+experimental. Live-provider verification (a real model choosing to call the
+tools) has not been done.

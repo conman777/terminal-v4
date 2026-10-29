@@ -9,6 +9,9 @@ directory at the same time.
 - `workspace-tasks/worker.lock` is an exclusive file lock. A second worker
   (same or different build that includes the lease) waits and takes over only
   after the first process exits.
+- Protocol history: 1 introduced the marker and the outcome journal; 2 adds the
+  schedule `deliverTo` field and the per-task delivery marker. A worker built
+  for protocol 1 refuses to start against data a protocol 2 worker has written.
 - `workspace-tasks/worker-protocol.json` records `{"protocol": N}`. A worker
   acquires the lock first, then:
   - creates or upgrades the marker when it is absent or older;
@@ -90,11 +93,34 @@ its `skill` label.
 
 ## Messaging delivery
 
-Not implemented. `telegram_gateway.rs` exposes no owner-bound send entry point
-(its sender, configuration and token handling are private). Delivery needs a
-small `pub(crate)` function there, for example one that sends text to the
-owner's paired chat and reports whether it was sent; the worker could then call
-it after `persist_final_record`.
+A schedule created with `deliverTo: telegram` (the agent's `create_schedule`
+shows it in the approval text; `POST`/`PATCH /api/workspace/schedules` and the
+Tasks panel toggle set it) copies the target onto every task it queues. When
+such a task reaches any terminal state (completed, failed, cancelled,
+interrupted) the worker sends a redacted summary (schedule name, status, up to
+3000 characters of the final text, or the error) to the owner's paired chat
+with `telegram_gateway::send_to_owner`, which refuses unless that owner has an
+enabled, paired Telegram configuration.
+
+The task record carries the durable marker (`deliverTo`, `deliveryStatus`,
+`deliveryReason`, `deliveryAttemptedAt`, `deliveryAt`):
+
+- `pending` without `deliveryAttemptedAt`: not yet claimed. A worker that
+  takes over after `kill -9` between completion and delivery sends it once.
+- The claim writes `deliveryAttemptedAt` to the store before any network call.
+  If a worker dies after that, the next worker cannot know whether Telegram
+  received the message, so it records `failed` ("may or may not have been sent,
+  so it was not sent again") instead of sending a duplicate. Delivery is
+  therefore at-most-once per run.
+- `delivered`; `skipped` with a reason (not connected, gateway off, no chat
+  paired); `failed` with a reason (Telegram rejected the message after three
+  attempts, or the saved token could not be read). Neither is retried later.
+
+Delivery runs beside task execution, never blocks a task's completion and holds
+the same worker lease, so two workers cannot both deliver. A stale completion
+receipt cannot reset a recorded delivery. An older build that rewrites the store
+drops the delivery fields. Shutdown waits up to five seconds for sends in
+progress.
 
 ## Multi-process coverage
 
@@ -103,7 +129,11 @@ worker processes on one temporary data directory, with a fake `codex` (via
 `CODEX_BIN`): two contending workers run a due schedule once and the standby
 takes over after `kill -9`; an older worker refuses a newer protocol marker;
 shutdown mid-run stops the agent process and is not re-run; owner-store loss
-(mid-run and after completion) is journaled and replayed by the next worker.
+(mid-run and after completion) is journaled and replayed by the next worker;
+Telegram delivery (against a local mock server, never the real API) happens
+once with two contending workers, once after `kill -9` between completion and
+delivery, never twice after `kill -9` during a send, and is skipped with a
+reason when no chat is paired.
 
 ## Known limits
 
