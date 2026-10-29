@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../test/managedChromium';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 let browser, server, origin, context, first, second, requests, held, consumed, apiRequests;
@@ -39,7 +40,7 @@ beforeAll(async () => {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
 });
 afterAll(async () => { await browser?.close(); server?.closeAllConnections(); await new Promise(resolve => server?.close(resolve)); });
 beforeEach(async () => {

@@ -19,7 +19,7 @@ vi.mock('@xterm/xterm', () => ({ Terminal: class {
   onData(fn) { this.data = fn; return { dispose() {} }; }
   onResize() { return { dispose() {} }; }
   onScroll(fn) { this.scroll = fn; return { dispose() {} }; }
-  attachCustomKeyEventHandler() {}
+  attachCustomKeyEventHandler(fn) { this.keyHandler = fn; }
   attachCustomWheelEventHandler(fn) { this.wheel = fn; }
   loadAddon() {} focus() {} blur() {} refresh() {} resize() {} dispose() {}
   hasSelection() { return false; }
@@ -85,6 +85,20 @@ describe('TerminalChat paste and retained history', () => {
     busy.unmount(); elsewhere.remove(); fx.terms.length = 0;
     const { term } = await mount();
     expect([keptFocus, document.activeElement === term.textarea]).toEqual([true, true]);
+  });
+
+  it('lets keyboard users leave the terminal with Control+M, then sends Tab to the shell again', async () => {
+    const { term } = await mount();
+    const key = (init) => ({ type: 'keydown', defaultPrevented: false, ctrlKey: false, metaKey: false, shiftKey: false, ...init });
+    expect(term.keyHandler(key({ key: 'Tab' }))).toBe(true);
+    expect(term.textarea.getAttribute('aria-description')).toMatch(/Control\+M/);
+    expect(term.keyHandler(key({ key: 'm', ctrlKey: true }))).toBe(false);
+    expect([term.keyHandler(key({ key: 'Tab' })), term.keyHandler(key({ key: 'Tab', shiftKey: true }))]).toEqual([false, false]);
+    expect(term.textarea.getAttribute('aria-description')).toMatch(/Tab moves focus/);
+    expect(term.keyHandler(key({ key: 'a' }))).toBe(true);
+    expect(term.keyHandler(key({ key: 'm', ctrlKey: true }))).toBe(false);
+    expect(term.keyHandler(key({ key: 'Tab' }))).toBe(true);
+    expect(term.textarea.getAttribute('aria-description')).toMatch(/Control\+M/);
   });
 
   it('announces history loading without putting terminal output in a live region', async () => {

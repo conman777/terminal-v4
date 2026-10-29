@@ -23,13 +23,28 @@ function parseChildren(value, requestId) {
   return value.children;
 }
 
+function parseResults(value) {
+  if (value?.results === undefined) return [];
+  if (!Array.isArray(value.results) || value.results.length > 1000) throw new Error('Invalid results');
+  return value.results.map(item => {
+    const text = ['childOperationId', 'taskId', 'childSessionId', 'parentSessionId', 'workspacePath', 'provider', 'model', 'outcome'];
+    if (!uuid.test(item?.childOperationId || '') || !text.every(key => typeof item[key] === 'string' && item[key].length <= 4096)
+      || typeof item.result !== 'string' || item.result.length > 20000 || typeof item.resultTruncated !== 'boolean') throw new Error('Invalid result');
+    return item;
+  });
+}
+
+function loadResults(body) {
+  try { return { results: parseResults(body), resultsError: false }; } catch { return { results: [], resultsError: true }; }
+}
+
 function matchesReceipt(receipt, requestId, id, child) {
   return receipt?.status === 'reviewed' && receipt.requestId === requestId && receipt.operationId === id
     && receipt.childOperationId === child.childOperationId && receipt.taskId === child.taskId && receipt.childSessionId === child.childSessionId;
 }
 
 export default function DelegationCleanupReview({ requestId, onReviewed }) {
-  const [children, setChildren] = useState([]), [selected, setSelected] = useState(null);
+  const [children, setChildren] = useState([]), [results, setResults] = useState([]), [resultsError, setResultsError] = useState(false), [selected, setSelected] = useState(null);
   const [checked, setChecked] = useState(false), [busy, setBusy] = useState(false), [blocked, setBlocked] = useState([]), [error, setError] = useState('');
   const active = useRef(null), locked = useRef(false), callback = useRef(onReviewed);
   callback.current = onReviewed;
@@ -39,14 +54,15 @@ export default function DelegationCleanupReview({ requestId, onReviewed }) {
     const current = () => mounted && !controller.signal.aborted && isAuthScopeCurrent(auth);
     const task = { auth, signal: controller.signal, current };
     active.current = task; locked.current = false;
-    setChildren([]); setSelected(null); setChecked(false); setBlocked([]); setBusy(false); setError('');
-    const unsubscribe = subscribeAuth(() => { if (!isAuthScopeCurrent(auth)) { controller.abort(); if (mounted) { setChildren([]); setSelected(null); setError(''); } } });
+    setChildren([]); setResults([]); setResultsError(false); setSelected(null); setChecked(false); setBlocked([]); setBusy(false); setError('');
+    const unsubscribe = subscribeAuth(() => { if (!isAuthScopeCurrent(auth)) { controller.abort(); if (mounted) { setChildren([]); setResults([]); setResultsError(false); setSelected(null); setError(''); } } });
     (async () => {
       try {
         const response = await apiFetch('/api/structured/owner-cleanup/delegation-children', { home: true, signal: task.signal, cache: 'no-store' });
         if (!response.ok) throw new Error('List unavailable');
-        const items = parseChildren(await response.json(), requestId);
-        if (current()) setChildren(items);
+        const body = await response.json();
+        const items = parseChildren(body, requestId), shown = loadResults(body);
+        if (current()) { setChildren(items); setResults(shown.results); setResultsError(shown.resultsError); }
       } catch { if (current()) setError('Delegated children could not be loaded. Check cleanup status before continuing.'); }
     })();
     return () => { mounted = false; controller.abort(); unsubscribe(); if (active.current === task) active.current = null; };
@@ -67,10 +83,11 @@ export default function DelegationCleanupReview({ requestId, onReviewed }) {
       if (checkOnly && response.status === 404) {
         const list = await apiFetch('/api/structured/owner-cleanup/delegation-children', { home: true, signal: task.signal, cache: 'no-store' });
         if (!list.ok) throw new Error('List unavailable');
-        const items = parseChildren(await list.json(), requestId);
+        const listed = await list.json();
+        const items = parseChildren(listed, requestId), shown = loadResults(listed);
         if (!task.current()) return;
         if (!items.some(item => ['childOperationId', 'taskId', 'childSessionId', 'workspacePath', 'provider', 'model'].every(key => item[key] === child[key]))) throw new Error('Child changed');
-        setChildren(items); setBlocked(ids => ids.filter(value => value !== child.childOperationId));
+        setChildren(items); setResults(shown.results); setResultsError(shown.resultsError); setBlocked(ids => ids.filter(value => value !== child.childOperationId));
         setError('No review receipt is available yet. A previous request may still arrive; retry uses the same review identity.');
         return;
       }
@@ -93,5 +110,14 @@ export default function DelegationCleanupReview({ requestId, onReviewed }) {
       <button type="button" disabled={busy} onClick={() => perform(child, true)}>Check review status</button>
     </div>)}
     {error && <p role="alert">{error}</p>}
+    {resultsError && <p role="alert">Finished delegated results could not be read. Check the server before relying on them.</p>}
+    {results.length > 0 && <section aria-label="Finished delegated results">
+      <p>These delegated tasks finished but their results were not delivered to a session. Reviewing a child does not discard them; the text is the delegated agent's own output and is not verified.</p>
+      {results.map(item => <div key={item.childOperationId}>
+        <p>{item.provider} · {item.model}<br />{item.workspacePath}<br />Task: {item.taskId}<br />Parent session: {item.parentSessionId}<br />Outcome: {item.outcome}</p>
+        <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.result}</pre>
+        {item.resultTruncated && <p>This result was shortened for display.</p>}
+      </div>)}
+    </section>}
   </div>;
 }

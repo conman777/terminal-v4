@@ -2179,9 +2179,21 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     };
 
+    let tabMovesFocus = false;
+    const describeTabBehavior = () => term.textarea?.setAttribute('aria-description', tabMovesFocus
+      ? 'Tab moves focus out of the terminal. Press Control+M to send Tab to the shell again.'
+      : 'Tab is sent to the shell. Press Control+M to let Tab move focus out of the terminal.');
+
     term.attachCustomKeyEventHandler((event) => {
       if (event.defaultPrevented) return false;
       const normalizedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
+
+      if (event.type === 'keydown' && event.ctrlKey && !event.metaKey && !event.shiftKey && normalizedKey === 'm') {
+        tabMovesFocus = !tabMovesFocus;
+        describeTabBehavior();
+        return false;
+      }
+      if (tabMovesFocus && event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) return false;
 
       // Copy terminal selection instead of sending SIGINT when text is selected.
       if ((event.ctrlKey || event.metaKey) && normalizedKey === 'c' && term.hasSelection()) {
@@ -2261,6 +2273,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         container.removeChild(container.firstChild);
       }
       term.open(container);
+      describeTabBehavior();
       setHostReadyVersion((version) => version + 1);
       // A newly opened primary terminal takes the keyboard unless the user is already typing elsewhere.
       if (isPrimaryRef.current && !isMobile && inputEnabled !== false && term.textarea

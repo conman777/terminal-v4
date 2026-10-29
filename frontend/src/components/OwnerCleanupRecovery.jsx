@@ -3,6 +3,7 @@ import { apiFetch } from '../utils/api';
 import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { getActiveEnvironment } from '../utils/remoteEnvironments';
 import { sha256Bytes } from '../utils/sha256';
+import BackgroundCommandReview from './BackgroundCommandReview';
 import DelegationCleanupReview from './DelegationCleanupReview';
 import OwnershipRecovery from './OwnershipRecovery';
 import './OwnerCleanupRecovery.css';
@@ -29,7 +30,7 @@ function parseStatus(value) {
     || ![...resourceStates, 'not_installed'].includes(value.resources.background)) throw new Error('Invalid cleanup status');
   if (value.state === 'complete' && (value.resources.structured !== 'confirmed' || value.resources.delegation !== 'confirmed'
     || !['confirmed', 'not_installed'].includes(value.resources.background))) throw new Error('Inconsistent cleanup status');
-  return { state: value.state, requestId: value.requestId, backgroundReview: value.backgroundReview || 'none', delegationReview: value.delegationReview || 'none', resources: value.resources };
+  return { backgroundUnknown: value.backgroundUnknown === true, state: value.state, requestId: value.requestId, backgroundReview: value.backgroundReview || 'none', delegationReview: value.delegationReview || 'none', resources: value.resources };
 }
 
 export default function OwnerCleanupRecovery({ onResolved }) {
@@ -57,7 +58,7 @@ export default function OwnerCleanupRecovery({ onResolved }) {
         if (response.status === 404) return;
         if (!response.ok) throw new Error('Status unavailable');
         const status = parseStatus(await response.json());
-        if (current() && (status.state !== 'complete' || status.backgroundReview === 'user_attested' || status.delegationReview === 'user_attested')) setView(status);
+        if (current() && (status.state !== 'complete' || status.backgroundUnknown || status.backgroundReview === 'user_attested' || status.delegationReview === 'user_attested')) setView(status);
       } catch { if (current()) setView({ state: 'error' }); }
     })();
     return () => { mounted = false; controller.abort(); unsubscribe(); if (active.current === task) active.current = null; };
@@ -128,6 +129,7 @@ export default function OwnerCleanupRecovery({ onResolved }) {
 
   if (!view) return null;
   const pending = view.state === 'pending', complete = view.state === 'complete';
+  if (complete && view.backgroundUnknown && view.backgroundReview !== 'user_attested' && view.delegationReview !== 'user_attested') return <BackgroundCommandReview />;
   return <section className="owner-cleanup-recovery" aria-label="Sign-out cleanup" role="region">
     <p role={view.state === 'error' || view.state === 'unavailable' ? 'alert' : 'status'}>
       {complete ? (view.backgroundReview === 'user_attested' ? 'You confirmed background processes stopped during a previous cleanup review. The server did not verify the processes or their outcomes.' : 'Sign-out cleanup is complete.') : pending ? 'Sign-out cleanup is still pending. Work may still be stopping.' : 'Sign-out cleanup could not be confirmed. Check the server before continuing.'}

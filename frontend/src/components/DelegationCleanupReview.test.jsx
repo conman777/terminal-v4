@@ -84,4 +84,29 @@ describe('delegation cleanup review', () => {
     fireEvent.click(checkbox); fireEvent.click(checkbox);
     expect(confirm).toBeDisabled();
   });
+
+  const finished = { childOperationId: 'a3a6e1c0-1b3f-4a43-9c51-5a8f3d0f7e11', taskId: 'task-done', childSessionId: 'session-done', parentSessionId: 'parent-gone', workspacePath: '/fixture/done', provider: 'fixture-provider', model: 'fixture-model', outcome: 'completed', result: '<b>finished text</b>', resultTruncated: true };
+
+  it('shows retained finished results as plain text and marks truncation', async () => {
+    apiFetch.mockResolvedValueOnce(response(200, { requestId, children: [], results: [finished] }));
+    render(<DelegationCleanupReview requestId={requestId} />);
+    const section = await screen.findByRole('region', { name: 'Finished delegated results' });
+    expect(section).toHaveTextContent('<b>finished text</b>');
+    expect(section).toHaveTextContent(/Outcome: completed/);
+    expect(section).toHaveTextContent(/shortened for display/i);
+    expect(section.querySelector('b')).toBeNull();
+  });
+
+  it('does not invent results and reports unreadable ones without hiding children', async () => {
+    apiFetch.mockResolvedValueOnce(response(200, { requestId, children: [child] }));
+    const view = render(<DelegationCleanupReview requestId={requestId} />);
+    await screen.findByText(/\/fixture\/workspace/);
+    expect(screen.queryByRole('region', { name: 'Finished delegated results' })).not.toBeInTheDocument();
+    view.unmount();
+    apiFetch.mockReset().mockResolvedValueOnce(response(200, { requestId, children: [child], results: [{ ...finished, resultTruncated: 'no' }] }));
+    render(<DelegationCleanupReview requestId={requestId} />);
+    expect(await screen.findByText(/\/fixture\/workspace/)).toBeVisible();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/results could not be read/i);
+    expect(screen.queryByRole('region', { name: 'Finished delegated results' })).not.toBeInTheDocument();
+  });
 });

@@ -77,7 +77,7 @@ for (const viewport of [{ width: 320, height: 568 }, { width: 393, height: 684 }
         await expect(terminal).toBeVisible();
         await expect(terminal.locator('.terminal-chat')).toBeVisible();
         await expect(terminal.getByRole('tab', { name: 'Terminal 1', exact: true })).toBeVisible();
-        expect(terminalRequests).toEqual([{ cwd: session.cwd, title: 'Terminal' }]);
+        expect(terminalRequests).toEqual([{ cwd: session.cwd, title: 'Terminal', companionOf: session.id, requestId: expect.stringMatching(/^[0-9a-f-]{36}$/i) }]);
         const terminalBounds = await terminal.boundingBox();
         expect(terminalBounds!.height).toBeGreaterThan(80);
         await page.screenshot({ path: testInfo.outputPath('thread-terminal.png') });

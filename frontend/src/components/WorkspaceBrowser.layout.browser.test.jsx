@@ -1,3 +1,4 @@
+import { managedChromiumPath } from '../test/managedChromium';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -46,7 +47,7 @@ beforeAll(async () => {
   script = execFileSync(process.execPath, ['-e', `(${compileFixture.toString()})()`, resolve(process.cwd(), 'src/components')], { cwd: process.cwd(), encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   styles = (await Promise.all(['WorkspaceBrowser.css', 'WorkspacePanel.css'].map(file => readFile(resolve(process.cwd(), 'src/components', file), 'utf8')))).join('\n');
   previewStyles = (await Promise.all(['styles.css', 'ProUI.css', 'WorkspaceUI.css', 'components/DesktopComposer.css', 'components/preview/PreviewPanel.css'].map(file => readFile(resolve(process.cwd(), 'src', file), 'utf8')))).join('\n');
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
 });
 afterAll(async () => { await browser?.close(); });
 

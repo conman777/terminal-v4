@@ -154,4 +154,18 @@ describe('owner cleanup recovery', () => {
     await act(async () => { old.resolve(response(200, state('pending'))); await old.promise; });
     expect(screen.queryByRole('region', { name: 'Sign-out cleanup' })).not.toBeInTheDocument();
   });
+
+  it('offers the standalone background command review only when a completed cleanup reports unknown commands', async () => {
+    apiFetch.mockImplementation(async url => url === '/api/structured/background-review' ? response(200, { unknown: true }) : response(200, { ...state('complete', 'confirmed'), backgroundUnknown: true }));
+    render(<OwnerCleanupRecovery />);
+    expect(await screen.findByRole('button', { name: /confirm background command review/i })).toBeVisible();
+    expect(screen.queryByText(/cleanup is complete/i)).not.toBeInTheDocument();
+  });
+
+  it('shows nothing for a completed cleanup without unknown commands', async () => {
+    apiFetch.mockResolvedValue(response(200, state('complete', 'confirmed')));
+    render(<OwnerCleanupRecovery />);
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('region')).not.toBeInTheDocument();
+  });
 });
