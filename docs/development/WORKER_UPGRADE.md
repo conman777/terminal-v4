@@ -55,6 +55,56 @@ hours. A schedule whose previous task is still in flight is overlap, not a
 missed run. Both fields are absent from stored records until first used, so
 older stores load unchanged (an older build that rewrites a store drops them).
 
+## Cron schedules
+
+`at.cron` holds a standard 5-field expression (minute hour day-of-month month
+day-of-week; lists, ranges, steps, `jan`..`dec`, `sun`..`sat`, `7` for Sunday;
+when both day fields are restricted either may match). It is evaluated in the
+schedule's IANA `timeZone`, or its fixed `utcOffsetMinutes`. `hour`, `minute`
+and `weekdays` must be absent or empty when `cron` is set; an expression with no
+reachable date within eight years is rejected. A time inside a spring-forward
+gap runs once at the first instant after the gap. A repeated fall-back hour
+runs once, at its first occurrence. Cron schedules use the advanced storage
+format, so a build without cron support fails closed instead of misreading
+them. Calendar (`hour`/`minute`/`weekdays`) schedules keep their earlier
+behaviour: a gap day is skipped.
+
+## Last outcome
+
+`list_schedules` and `GET /api/workspace/tasks` add `lastStatus` (the status of
+the schedule's most recent task) and `lastError` (that task's error, or its
+non-zero exit code; redacted and capped at 500 characters). They are derived
+from the owner's own task store when listing and are never persisted. They are
+absent when the schedule has not run or its last task was deleted. `missedRuns`
+and `lastMissedAt` are omitted while zero or unset.
+
+## Skill jobs
+
+`create_schedule` accepts `skillRef` (`workspace:<id>` or `account:<id>`, from
+`discover_skills`) and optional `skillInput` instead of `prompt`. The saved
+skill's instructions become the task prompt, the approval shows that exact
+prompt, and the record keeps `skill` (`skillRef`, `name`, `revision` = SHA-256
+of the instructions). The task is an ordinary unattended task, so the existing
+policy applies (no commands or MCP calls). Editing a schedule's prompt clears
+its `skill` label.
+
+## Messaging delivery
+
+Not implemented. `telegram_gateway.rs` exposes no owner-bound send entry point
+(its sender, configuration and token handling are private). Delivery needs a
+small `pub(crate)` function there, for example one that sends text to the
+owner's paired chat and reports whether it was sent; the worker could then call
+it after `persist_final_record`.
+
+## Multi-process coverage
+
+`workspace_tasks::worker_process_tests` re-executes the test binary as real
+worker processes on one temporary data directory, with a fake `codex` (via
+`CODEX_BIN`): two contending workers run a due schedule once and the standby
+takes over after `kill -9`; an older worker refuses a newer protocol marker;
+shutdown mid-run stops the agent process and is not re-run; owner-store loss
+(mid-run and after completion) is journaled and replayed by the next worker.
+
 ## Known limits
 
 - If the owner store, every receipt and the journal all fail, the worker
@@ -66,5 +116,12 @@ older stores load unchanged (an older build that rewrites a store drops them).
 - A checkpoint already in progress at shutdown is awaited (bounded by the
   ten-second shutdown wait); one still waiting for the lock is abandoned and
   the task is recorded as interrupted before launch.
-- `list_schedules` reports next/last run and missed-run fields but not the last
-  task's status or error; those require the task store and remain a gap.
+- Cron expressions use wall-clock matching: a fall-back repeated hour fires
+  only for its first occurrence, so a wildcard-minute job does not run again
+  during the repeated hour.
+- A skill job runs a snapshot of the saved skill's instructions taken at
+  review. Later edits to the skill do not change the schedule; support files
+  are not included.
+- A task that loses access to its owner store mid-run is stopped and recorded
+  as `failed` ("Task storage became unavailable"); the outcome is journaled
+  and replayed, never re-run.

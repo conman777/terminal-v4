@@ -334,7 +334,7 @@ What changed, by blocker:
   `delete_session`. Delete holds the lease and removes the lease and native
   request-ledger files at the end (`request_ledger::remove_session_files`); a
   contended lease makes delete fail with a retryable error and keeps the session.
-  Provider callbacks (`record_event_generation`) still do not take the lease.
+  Provider callbacks (`record_event_generation`) still do not take the lease (see below for why).
 - Scope/holds: for an opted-in Codex session `scope` uses `QueueScope::new_native`,
   and `hold_session` (Stop/delete/logout cleanup), `hold_generation`, `drain`,
   settlement queue state and a new `check_native_admission` (called from
@@ -346,7 +346,7 @@ What changed, by blocker:
   skips (item stays pending, no hold) when an approval is unresolved/pending
   (`unresolved_codex_approval`, `has_pending_request`) or a workspace-activity
   writer is active. It never answers or bypasses an approval. A skipped drain is
-  retried only by the next idle boundary or an explicit Wake.
+  rescheduled when the fence clears (see "Fence rescheduling" below).
 - Authority: native dispatch goes through `submit_queued`; the item's signed proof is
   verified against the stored session incarnation and the credential is
   re-admitted atomically with the journal write via the bound `LocalAdmission`
@@ -359,10 +359,71 @@ What changed, by blocker:
   DispatchError, never auto-replayed). If the on-disk journal is ahead of the
   manager the queue is held and the drain fails closed.
 
-Remaining limits: a drain skipped by the approval or workspace fence is not
-rescheduled when the fence clears; provider callbacks are not under the lease and
-concurrent managers on one data directory remain unsupported; no live-provider or
-separate-process verification of this path; the live owner guard is still not
-bound for ordinary loading; Claude native is not covered (its sends have a
-receipt but no idle boundary); the UI/routes were not exercised for native
-sessions beyond the existing queue routes.
+Fence rescheduling: a drain skipped by the approval or workspace-activity fence
+registers one retry task per (data directory, owner, session)
+(`native_queue::schedule_retry`). It wakes on an approval-resolving event
+(`ApprovalResolved`, `ApprovalDecisionReviewed`, `TurnCompleted`, `SessionEnded`
+persisted by `persist_event_with_admission`), on workspace writer release
+(`workspace_activity::enter_wait`), or on a bounded 5 second fallback timer, and
+re-evaluates the fence each time (no busy loop). It ends without draining when
+the queue is held, empty or no longer running, the generation changed, a
+process is running, or the session is retiring/deleted/gone; a hold taken while
+fenced is therefore never drained. When the fence clears it calls the normal
+`drain`, which still reserves under the dispatch gate and never answers an
+approval. The retry task is not durable: after a crash the restart hold applies.
+
+Claude native queue (separate opt-in `TERMINAL_V4_NATIVE_CLAUDE_QUEUE=1` plus the
+same Cargo feature; only for non-V4 `claude` sessions):
+
+- Idle boundary: the Claude pump calls `native_queue::turn_finished` after
+  `clear_generation`. A drain happens only when the last user message is followed
+  by `SessionEnded` with reason `completed` and no `Error` event. Reason
+  `interrupted`/`error`, an error event, or a stream that ends with no
+  `SessionEnded` holds the queue (Manual).
+- Reconcile after a crash: the queue item's durable `input_request_id` is the
+  Claude `requestId`, so `native_queue::canonical_receipt` looks it up in the
+  request ledger. Intent plus the journaled user message means Accepted (the
+  receipt reuses the message ID as the queue turn ID, since Claude has no turn
+  ID); intent without the message, or no intent, means absent, returning the item
+  to Pending with a DispatchError hold; a journaled message whose text differs
+  from the item holds the queue for review. Nothing is replayed automatically.
+- `send_native_message` calls `check_native_admission` (a running queue with
+  items fences a direct send; a restart hold blocks it) and queued dispatch uses
+  the same signed-authority verification as Codex.
+
+Lease and provider callbacks (`record_event_generation`): deliberately not under
+the session lease. The lease is a non-blocking advisory `flock` taken per
+operation; callbacks run concurrently with the submit, approval and input
+operations that already hold it, and a callback that failed to get it would be
+treated as a persistence failure and kill the running provider. A blocking or
+retrying acquire cannot be proven deadlock-free because approval operations hold
+the lease across work that depends on later callbacks, and holding the lease for
+the whole turn would conflict with in-process approvals. Callback writes are
+instead fenced by the single actor state mutex in a process and, across
+managers, by the storage cursor identity/length checks, which fail closed (a
+stale manager's callback returns an error and leaves the journal unchanged;
+covered by `provider_callback_from_a_stale_manager_fails_closed_without_touching_the_journal`).
+Note that a second manager loading the session itself appends an interrupted
+outcome and rewrites the checkpoint, so concurrent managers on one data directory
+remain unsupported.
+
+Verified through real manager paths (tests in `native_queue_tests.rs`, Codex and
+Claude): Stop (`interrupt`), owner cleanup after logout (`service_owner_cleanup`,
+the same `close_matching` the logout worker runs), delete, graceful `shutdown`
+followed by a restarted manager (restart hold, nothing dispatched), settlement
+(native sessions cannot be settled at all, so a queue is never settled away),
+and signed-authority dispatch. Credentials: a signed item dispatches once and is
+refused after logout; an unproven item (what a paired credential or a legacy
+client writes, since paired mutations never carry a proof) and an item signed for
+another incarnation are refused at dispatch and held with a DispatchError hold
+(never dispatched, never re-signed); a missing incarnation holds. The shared
+queue code path (`queue_mutate_authorized`, paired guard, expiry/revocation
+rechecks) is the one exercised by the V4 paired tests; no separate native paired
+HTTP test exists.
+
+Remaining limits: concurrent managers on one data directory remain unsupported;
+no live-provider or separate-process verification of this path; the live owner
+guard is still not bound for ordinary loading; the retry task and dispatch
+permit are in-process only; the UI/routes were not exercised for native
+sessions beyond the existing queue routes. The feature stays opt-in: Cargo
+feature plus a runtime variable per provider, and no default build enables it.

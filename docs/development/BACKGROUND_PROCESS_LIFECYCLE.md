@@ -39,13 +39,27 @@ cleanup. On Unix, the original ledger owner explicitly releases its locks on
 drop so a forked child cannot accidentally retain them; a child cannot release
 the parent's locks. This is not confirmation that a child process has stopped.
 
-Before enabling the tools, call `bootstrap::open_or_provision` at trusted
-startup (it exists, is tested for restart, crash-in-the-middle and lost-state
-refusal), call `recover_unconfirmed` once before accepting launches, wire a
-completion consumer, and consult `session_has_outstanding` from thread
-settlement. Validate platform-specific behavior; the lifeline and the recovery
-policy are implemented only on Unix, and the existing receipt implementation
-fails closed outside Unix.
+Startup and enablement status. `AppState::new_runtime` calls
+`bootstrap::open_or_provision` (or reopens the existing installation) and, only
+when it holds the ledger (an installation owned by another live process is
+`Busy` and is neither recovered nor used), runs `recover_unconfirmed` to
+completion on a dedicated thread before the manager is bound, so nothing can
+launch first. A recovery failure is logged and leaves the claims unknown. The
+completion consumer, the registry-lock fix and the retention policy below are
+in place. The command tools are still not registered in production; see
+"Enablement decision" at the end. The lifeline and the recovery policy are
+implemented only on Unix, and the existing receipt implementation fails closed
+outside Unix.
+
+Process containment limits. This is not an OS sandbox. A command runs with the
+server user's privileges, a cleared environment (a short allow list of
+variables), null standard input and the approved workspace as its working
+directory; it can read and write anything that user can. Containment is a new
+session and process group plus a lifeline monitor. Descendants that leave the
+group (`setsid`, double fork into another group, daemons) are unreachable by
+cancel, timeout, deletion, logout, shutdown and recovery, and the
+`unverifiable` and review paths exist because of that. The kernel start-time
+check protects against PID reuse only where the platform reports it.
 
 The structured-session launch actor is test-only. It requests a decision
 through its bound structured approval gate and produces a private, single-use
@@ -113,17 +127,47 @@ atomically so concurrent drainers receive disjoint markers. Markers survive
 restart. Markers are bounded by the receipt caps: pruning a finished receipt
 or retiring its session also deletes its marker, so a marker that nothing
 drained can be dropped; the ledger via status or wait stays authoritative.
-Delivery after `drain` is at most once, so a consumer that must not lose a
-notice should peek, inject, then acknowledge. Nothing in the agent loop or queue
-consumes markers yet: a future delivery step must check owner, session
-incarnation and checkpoint before injecting a completion notice, and must never
-inject output without the reviewed-output action. `session_has_outstanding(owner, session)` is a read-only ledger query,
+Delivery after `drain` is at most once, so the consumer peeks, injects, then
+acknowledges.
+
+Completion consumer (`structured/background_completion.rs`).
+`deliver_background_completions` peeks a page of markers and, per marker:
+discards it (acknowledge, no notice) when it has no session incarnation, the
+session no longer exists for that owner, or the live or stored incarnation or
+workspace differs; holds it (left pending, retried) when the owner is held or
+logged out, the background session is closed or retired, the session is being
+deleted or retired, the stored checkpoint cannot be read, or the write fails;
+otherwise appends one `system` message to the owning session and acknowledges
+it. The message is metadata only (action ID, outcome phrase, a pointer to the
+reviewed-output action) and never contains process output. Its message ID is
+derived from the action ID, so a crash between the append and the
+acknowledgment re-appends the identical event, which the session log treats as
+a no-op: the effect is exactly once, and concurrent consumers acknowledge a
+marker once. A deleted session's markers are removed by retirement. The
+optional worker (`start_background_completion_worker`) wakes on the in-process
+completion hint and every 30 seconds, and ends when the manager is shut down
+or dropped; it starts only if `BackgroundProcesses::enable_commands` was
+called, which production does not do. A marker whose owner stays held or whose
+session stays unusable remains pending until pruned with its receipt.
+
+`session_has_outstanding(owner, session)` is a read-only ledger query,
 true while any command in the session is running or has an unreviewed outcome
-(including after a crash) or the manager has unconfirmed cleanup. It is not yet
-called by thread settlement: structured.rs must consult it next to
-`parent_has_outstanding` in the settle branch of the thread update
-(refusing settlement on true or on error) and in the inventory lifecycle
-projection where `delegation_quiet` is computed.
+(including after a crash) or the manager has unconfirmed cleanup. Thread
+settlement and the inventory lifecycle projection in structured.rs consult it
+next to `parent_has_outstanding` and refuse settlement on true or on error.
+
+Output and retention policy. Each of stdout and stderr keeps at most 64 KiB in
+memory per command (`OUTPUT_LIMIT`; the rest is dropped and flagged
+truncated); nothing is written to disk and status and wait never return it.
+Per session, only the 16 newest finished commands keep their output in memory
+(`MAX_RETAINED_FINISHED`); older entries, and their finished worker handles,
+are evicted when the next command is admitted, and status for them is answered
+from the durable ledger (state only, output withheld). Running commands and
+entries whose cleanup is unconfirmed or unknown are never evicted. Durable
+receipts and pending markers keep the caps described above (32 per session, 64
+per owner, 128 in total, oldest finished pruned first). The resulting worst case is
+therefore 8 live plus 16 retained finished entries per session, each with at
+most 128 KiB of output.
 
 Launch admission no longer holds a control-database transaction (or the gate
 connection) while the spawn callback runs. `OwnerGate::admit_launch` checks the
@@ -142,11 +186,21 @@ a local Stop hold, another owner's hold, an unrelated authorization check and an
 unrelated write transaction all complete in well under two seconds, and that
 the late child is then stopped and recorded as cancelled.
 
-Remaining limits: the spawn itself cannot be abandoned (the callback borrows
+Remaining limit: the spawn itself cannot be abandoned (the callback borrows
 the command), so an over-budget launch is detected after it returns rather than
-interrupted. The launching `start` call still holds the manager's registry
-lock, so status, cancel and owner-hold servicing on the same manager wait for
-that one launch (fail-fast actor paths return "busy; retry" instead).
+interrupted. The spawn no longer runs under the manager's registry lock. Admission
+checks the manager, session and capacity under the lock and reserves a
+launching slot that counts against the live-process caps, then releases the lock
+for the claim, spawn and identity recording. Status, wait, cancel, owner-hold
+servicing and the actor paths therefore proceed during a stalled launch (the
+actor paths no longer report "busy; retry" because of it). The entry is
+inserted afterwards under the lock; if the manager or the session was closed
+meanwhile, the launch is reported as revoked and the child is stopped. Session
+cleanup and shutdown wait for in-flight launches of the affected scope before
+snapshotting entries, `recover_unconfirmed` refuses to run while a launch is in
+flight, and a stalled spawn still delays deletion of its own session (not other
+sessions) until it returns. The spawn callback itself is synchronous, so a
+runtime with a single worker thread is stalled by it.
 
 On Unix, deletion holds a shared provisioning lock and an exclusive hashed
 owner/session stripe until it finishes. First provisioning holds the same
@@ -167,8 +221,14 @@ launch in flight in any process therefore makes retirement fail with a retry,
 and after retirement no actor in any process can launch for that owner/session
 even if it still holds a stale in-memory view. The tombstone is permanent and
 capped at 4,096. It is enforced only when the ledger lives under
-`<data>/background-processes` (the provisioned layout); callers must run
-retirement as the last step of deletion and treat an error as a failed delete.
+`<data>/background-processes` (the provisioned layout); session deletion in
+structured.rs runs `cleanup_session` and then `retire_session` after the native
+conversation is removed and before the session file is removed, and a failure
+fails the delete. A runtime test deletes a session through the manager and
+checks the tombstone and that a stale start is refused. Logout deliberately does
+not write a tombstone: the tombstone is permanent and logout is reversible, so
+logout relies on the shared owner hold, which blocks every launch until it is
+released.
 Two-process tests cover a holder blocking retirement and a retired session
 rejecting later launches. Stripe collisions fail with a retry rather than
 waiting.
@@ -263,3 +323,26 @@ yet. A route would mirror `review_background` in structured/ownership_recovery.r
 function on a blocking worker through the structured manager's bound background
 manager, and the owner-cleanup recovery panel would need a standalone entry
 point showing the owner's unknown count (`owner_cleanup_unconfirmed`).
+
+Enablement decision. The background command tools stay disabled in production
+(no opt-in setting is wired, so there is no way to turn them on by accident).
+The recovery, session-retirement, completion-consumer, launch-locking and
+retention requirements are met and tested, and a real structured turn driven by
+a scripted provider covers launch, status, wait, cancel and reviewed output.
+Registration is blocked by these specific gaps:
+
+- The agent-turn binding and the tool layer are compiled only for tests:
+  `structured/background_actor.rs` and the turn binding in `V4Job::spawn`
+  (`cfg(all(test, unix))`), `start_for_actor`, `access_for_actor` and
+  `output_for_actor` (`cfg(all(test, unix))`), `bind_background_actor` in
+  `v4_agent/interaction.rs`, and the tool definition, dispatch and
+  non-cancellable-operation clauses in `v4_agent/mod.rs`. Those files are shared
+  with other work and were not changed here.
+- Restart, session deletion and logout are verified at the actor and manager
+  level (durable outcomes after restart, reaping on deletion, status, wait and
+  cancel refusing after logout) but not yet through the full scripted-provider
+  turn. All eight paths must pass that way before registration.
+- The enabling switch must be a runtime setting that defaults off, must never
+  apply to read-only child turns (the existing `ToolPolicy::Standard` check
+  already excludes them), and must call `enable_commands` so the completion
+  worker runs.
