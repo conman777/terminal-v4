@@ -96,6 +96,8 @@ where
                 "runOnceAt": record.run_once_at,
                 "nextRunAt": record.next_run_at,
                 "lastRunAt": record.last_run_at,
+                "missedRuns": record.missed_runs,
+                "lastMissedAt": record.last_missed_at,
                 "lastTaskId": record.last_task_id,
                 "createdAt": record.created_at,
             }))
@@ -130,6 +132,8 @@ mod tests {
             last_run_at: None,
             last_task_id: None,
             created_at: 1,
+            missed_runs: 0,
+            last_missed_at: None,
         }
     }
 

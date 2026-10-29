@@ -812,6 +812,21 @@ async fn cross_process_logout(
     } else {
         Some(crate::v4_agent::delegation_outbox::provision_supervisor(data.path()).unwrap())
     };
+    let mut background = if install_background {
+        let preinstall = crate::state::AppState::new(AppConfig {
+            data_dir: data.path().into(),
+            jwt_secret: "cleanup-cross-process".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut db = preinstall.lock_db().unwrap();
+        Some(Arc::new(
+            crate::v4_agent::background_process::bootstrap::open_or_provision(data.path(), &mut db)
+                .unwrap(),
+        ))
+    } else {
+        None
+    };
     let state = crate::state::AppState::new_runtime(AppConfig {
         data_dir: data.path().into(),
         jwt_secret: "cleanup-cross-process".into(),
@@ -829,16 +844,6 @@ async fn cross_process_logout(
     let manager = state.structured_session_manager();
     enable_cleanup_fixture(&state);
     let cleanup = manager.owner_cleanup_for_test().unwrap();
-    let mut background = if install_background {
-        let mut db = state.lock_db().unwrap();
-        let manager = Arc::new(
-            crate::v4_agent::background_process::bootstrap::open_or_provision(data.path(), &mut db)
-                .unwrap(),
-        );
-        Some(manager)
-    } else {
-        None
-    };
     if bind_background {
         manager
             .bind_background_processes(background.as_ref().unwrap().clone())

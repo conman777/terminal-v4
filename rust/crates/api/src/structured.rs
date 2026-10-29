@@ -18,6 +18,9 @@ pub(crate) mod live_ownership;
 mod logout_regressions;
 #[cfg(unix)]
 mod native_launch;
+mod native_queue;
+#[cfg(all(test, unix, feature = "native-codex-queue-preview"))]
+mod native_queue_tests;
 #[cfg(all(test, unix))]
 mod owner_admission;
 #[cfg(unix)]
@@ -3034,7 +3037,19 @@ impl StructuredSessionManager {
         app_state: Option<&crate::state::AppState>,
         action: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, String>,
     ) -> Result<T, String> {
-        let app_state = app_state.ok_or("Credential admission unavailable")?;
+        let Some(app_state) = app_state else {
+            let admission = self
+                .inner
+                .local_admission
+                .get()
+                .ok_or("Credential admission unavailable")?;
+            self.validate_live_owner(owner)?;
+            let (result, confirmed) = admission.accept(owner, authority, action)?;
+            if !confirmed && result.is_ok() {
+                tracing::warn!("Queued credential outcome uncertain after native acceptance");
+            }
+            return result;
+        };
         let manager_root = self
             .inner
             .config
@@ -3350,6 +3365,7 @@ impl StructuredSessionManager {
                 "Session changed in another manager; reload and try again",
             ));
         }
+        queue::check_native_admission(self, &state, &request_id, &text)?;
         if unresolved_codex_approval(&state.events) {
             return Err(StructuredControlError::conflict(
                 "An approval outcome is uncertain; review it before starting another turn",
@@ -3554,7 +3570,13 @@ impl StructuredSessionManager {
                             break;
                         }
                     }
-                    let _ = manager.clear_generation(&owner, &id, generation).await;
+                    if manager
+                        .clear_generation(&owner, &id, generation)
+                        .await
+                        .is_ok()
+                    {
+                        let _ = native_queue::turn_finished(manager, owner, id, generation).await;
+                    }
                 });
                 pending_start.commit();
             }
@@ -3686,6 +3708,7 @@ impl StructuredSessionManager {
                         let text = text.to_owned();
                         #[cfg(test)]
                         let manager = self.clone();
+                        let lease_config = self.inner.config.clone();
                         let worker = tokio::spawn(async move {
                             let _session = session;
                             #[cfg(test)]
@@ -3738,6 +3761,11 @@ impl StructuredSessionManager {
                                             "The session changed before input delivery".into()
                                         );
                                     }
+                                    let _lease = request_ledger::acquire_lease(
+                                        &lease_config,
+                                        &owner,
+                                        &session_id,
+                                    )?;
                                     let (_, expires) = authority
                                         .valid_for(&owner, crate::v4_agent::interaction::now_ms())
                                         .ok_or("Credential expired before input delivery")?;
@@ -3792,6 +3820,7 @@ impl StructuredSessionManager {
                     let text = text.to_owned();
                     #[cfg(test)]
                     let manager = self.clone();
+                    let lease_config = self.inner.config.clone();
                     let worker = tokio::spawn(async move {
                         let _permit = permit;
                         #[cfg(test)]
@@ -3830,6 +3859,8 @@ impl StructuredSessionManager {
                                 if !valid {
                                     return Err("The session changed before input delivery".into());
                                 }
+                                let _lease =
+                                    request_ledger::acquire_lease(&lease_config, &owner, &session_id)?;
                                 let delivery = if let Some(authority) = &authority {
                                     let (_, expires) = authority
                                         .valid_for(&owner, crate::v4_agent::interaction::now_ms())
@@ -3857,6 +3888,7 @@ impl StructuredSessionManager {
                 }
                 #[cfg(not(unix))]
                 let _ = (generation, incarnation, delivery_token);
+                let _lease = request_ledger::acquire_lease(&self.inner.config, user_id, id)?;
                 return process
                     .send_input(text)
                     .await
@@ -4531,6 +4563,14 @@ impl StructuredSessionManager {
             ));
         }
         if state.provider == "codex" && !image_route {
+            #[cfg(unix)]
+            let queued_authority = if queued && native_queue::enabled_for(&state) {
+                native_queue::dispatch_authority(self, &state, request_id, text)?
+            } else {
+                None
+            };
+            #[cfg(unix)]
+            let authority = queued_authority.as_ref().or(authority);
             drop(state);
             let result = self
                 .submit_codex(
@@ -5536,6 +5576,8 @@ impl StructuredSessionManager {
         for_session: bool,
         reservation: Option<(&str, &str)>,
     ) -> Result<(), StructuredControlError> {
+        let _lease = request_ledger::acquire_lease(&self.inner.config, &state.user_id, &state.id)
+            .map_err(StructuredControlError::conflict)?;
         if state.events.iter().any(|event| matches!(event,
             StructuredSessionEvent::ApprovalDecisionStarted { approval_id: id, .. } | StructuredSessionEvent::ApprovalDecisionReviewed { approval_id: id, .. } if id == approval_id)) {
             return Err(StructuredControlError::conflict("This approval cannot be replayed; check the conversation and review its outcome"));
@@ -5756,6 +5798,9 @@ impl StructuredSessionManager {
                         code: "reservation_not_started",
                         message: "Session is busy; try again".into(),
                     })?;
+                let _lease =
+                    request_ledger::acquire_lease(&manager.inner.config, &owner, &current.id)
+                        .map_err(StructuredControlError::conflict)?;
                 context.check().map_err(StructuredControlError::conflict)?;
                 if current.provider != "codex" {
                     return Err(StructuredControlError::not_found());
@@ -5873,6 +5918,7 @@ impl StructuredSessionManager {
             }
             manager.validate_live_owner(&owner).map_err(StructuredControlError::internal)?;
             let mut current = session.state.try_lock().map_err(|_| StructuredControlError::conflict("Session is busy; try again"))?;
+            let _lease = request_ledger::acquire_lease(&manager.inner.config, &owner, &current.id).map_err(StructuredControlError::conflict)?;
             if current.provider != "codex" { return Err(StructuredControlError::not_found()); }
             let turn_id = current.events.iter().find_map(|event| match event {
                 StructuredSessionEvent::ApprovalDecisionReserved { approval_id: id, turn_id, .. } | StructuredSessionEvent::ApprovalDecisionStarted { approval_id: id, turn_id, .. } if id == &approval_id => Some(turn_id.clone()),
@@ -6332,6 +6378,7 @@ impl StructuredSessionManager {
             )?;
         #[cfg(unix)]
         self.ensure_background_for_deletion().await?;
+        let lease = request_ledger::acquire_lease(&self.inner.config, user_id, id)?;
         let (process, resources, prior_deleting, prior_retiring) = {
             let mut state = session.state.lock().await;
             let prior = (state.deleting, state.retiring);
@@ -6401,6 +6448,11 @@ impl StructuredSessionManager {
         state.generation = state.generation.saturating_add(1);
         state.process = None;
         self.inner.sessions.lock().await.remove(id);
+        if let Err(error) =
+            request_ledger::remove_session_files(&self.inner.config, user_id, id, &lease)
+        {
+            tracing::warn!(%error, "Cannot remove deleted session lease and request ledger");
+        }
         #[cfg(unix)]
         if let Some(supervisor) = self.inner.delegation_supervisor.get() {
             supervisor.release_retired_session(user_id, id);

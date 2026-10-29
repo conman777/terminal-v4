@@ -17,6 +17,14 @@ pub(crate) struct OwnerGate {
 }
 const MAX_OWNER_HOLDS: i64 = 4096;
 
+use super::background_process::LaunchAdmission;
+
+enum AdmissionCheck {
+    Open,
+    Held,
+    Stale,
+}
+
 pub(crate) fn hold_logout_if_installed_with_request(
     tx: &Transaction<'_>,
     owner: &str,
@@ -502,8 +510,84 @@ impl OwnerGate {
         Ok(())
     }
 
-    // The IMMEDIATE transaction keeps the shared write lock through spawn. If
-    // its commit fails after spawn the caller must retain and stop the child.
+    /// Two-phase launch admission. Neither phase holds a database transaction
+    /// or the connection while `launch` runs, so Stop, logout holds and
+    /// unrelated authorization are never delayed by a slow spawn. Admission is
+    /// checked before the launch and confirmed again after it: a hold or
+    /// generation change in between, or a launch that overran `budget`,
+    /// yields `Revoked` and the caller must stop and track the child.
+    pub(crate) fn admit_launch<T>(
+        &self,
+        owner: &str,
+        generation: Option<i64>,
+        budget: Duration,
+        launch: impl FnOnce() -> Result<T, String>,
+    ) -> Result<(T, LaunchAdmission), String> {
+        validate(owner, "admission")?;
+        if generation.is_some_and(|generation| generation < 0) {
+            return Err("Invalid background authorization generation".into());
+        }
+        match self.check_admission(owner, generation)? {
+            AdmissionCheck::Open => {}
+            AdmissionCheck::Held => return Err("Background actions are held for this owner".into()),
+            AdmissionCheck::Stale => return Err("Background authorization has been revoked".into()),
+        }
+        let started = std::time::Instant::now();
+        let child = launch()?;
+        let verdict = if started.elapsed() > budget {
+            LaunchAdmission::Revoked
+        } else {
+            match self.check_admission(owner, generation) {
+                Ok(AdmissionCheck::Open) => LaunchAdmission::Confirmed,
+                Ok(_) => LaunchAdmission::Revoked,
+                Err(_) => LaunchAdmission::Uncertain,
+            }
+        };
+        Ok((child, verdict))
+    }
+
+    fn check_admission(
+        &self,
+        owner: &str,
+        generation: Option<i64>,
+    ) -> Result<AdmissionCheck, String> {
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|_| "Background owner control unavailable")?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "Background owner control unavailable")?;
+        let held: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM background_owner_holds WHERE owner=?1)",
+                [owner],
+                |row| row.get(0),
+            )
+            .map_err(|_| "Cannot inspect background owner hold")?;
+        let mut outcome = if held {
+            AdmissionCheck::Held
+        } else {
+            AdmissionCheck::Open
+        };
+        if let (false, Some(generation)) = (held, generation) {
+            let current: i64 = tx.query_row(
+                "SELECT COALESCE((SELECT generation FROM auth_generations WHERE user_id=?1), 0)",
+                [owner],
+                |row| row.get(0),
+            ).map_err(|_| "Cannot inspect background authorization generation")?;
+            if generation != current {
+                outcome = AdmissionCheck::Stale;
+            }
+        }
+        tx.commit()
+            .map_err(|_| "Background owner control unavailable")?;
+        Ok(outcome)
+    }
+
+    // The IMMEDIATE transaction keeps the shared write lock through the
+    // closure; use it only for short in-memory work, never a spawn. If its
+    // commit fails the caller must retain and stop any child.
     pub(super) fn admit<T>(
         &self,
         owner: &str,

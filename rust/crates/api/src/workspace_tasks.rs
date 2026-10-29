@@ -275,6 +275,14 @@ pub struct ScheduleRecord {
     pub last_run_at: Option<u64>,
     pub last_task_id: Option<Uuid>,
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub missed_runs: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_missed_at: Option<u64>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -389,6 +397,116 @@ fn retain_completion(data_dir: &FsPath, owner: &str, record: TaskRecord) -> std:
         Ok(())
     };
     save()
+}
+
+#[derive(Serialize, Deserialize)]
+struct JournalEntry {
+    owner: String,
+    record: TaskRecord,
+}
+
+fn journal_path(data_dir: &FsPath) -> PathBuf {
+    data_dir
+        .join("workspace-tasks")
+        .join("outcome-journal.jsonl")
+}
+
+fn journal_guard(data_dir: &FsPath) -> std::io::Result<std::fs::File> {
+    let file = lock_file(data_dir, "outcome-journal.lock")
+        .map_err(|error| std::io::Error::other(error.message))?;
+    file.lock()?;
+    Ok(file)
+}
+
+fn append_outcome_journal(
+    data_dir: &FsPath,
+    owner: &str,
+    record: &TaskRecord,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let encode = |record: &TaskRecord| {
+        serde_json::to_vec(&JournalEntry {
+            owner: owner.into(),
+            record: record.clone(),
+        })
+        .map_err(std::io::Error::other)
+    };
+    let mut line = encode(record)?;
+    if line.len() > RECEIPT_LIMIT {
+        line = encode(&compact_receipt(record))?;
+    }
+    if line.len() > RECEIPT_LIMIT {
+        return Err(std::io::Error::other("Outcome journal entry is too large"));
+    }
+    line.push(b'\n');
+    let _guard = journal_guard(data_dir)?;
+    let path = journal_path(data_dir);
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    file.write_all(&line)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(path.parent().unwrap())?.sync_all()?;
+    Ok(())
+}
+
+fn read_outcome_journal(data_dir: &FsPath) -> Vec<JournalEntry> {
+    let Ok(bytes) = std::fs::read(journal_path(data_dir)) else {
+        return Vec::new();
+    };
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<JournalEntry>(line).ok())
+        .filter(|entry| entry.record.status.terminal())
+        .collect()
+}
+
+fn apply_outcome_journal(store: &mut TaskStore, entries: &[JournalEntry]) {
+    for entry in entries.iter().filter(|entry| entry.owner == store.owner_id) {
+        if let Some(task) = store
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == entry.record.id)
+            .filter(|task| !task.status.terminal())
+        {
+            merge_completion(task, entry.record.clone());
+        }
+    }
+}
+
+fn settle_outcome_journal(
+    data_dir: &FsPath,
+    settled: &std::collections::HashSet<(String, Uuid)>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    if settled.is_empty() {
+        return Ok(());
+    }
+    let _guard = journal_guard(data_dir)?;
+    let remaining: Vec<_> = read_outcome_journal(data_dir)
+        .into_iter()
+        .filter(|entry| !settled.contains(&(entry.owner.clone(), entry.record.id)))
+        .collect();
+    let path = journal_path(data_dir);
+    if remaining.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    let directory = path.parent().unwrap();
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    for entry in remaining {
+        temporary.write_all(&serde_json::to_vec(&entry).map_err(std::io::Error::other)?)?;
+        temporary.write_all(b"\n")?;
+    }
+    temporary.as_file().sync_all()?;
+    temporary.persist(&path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(directory)?.sync_all()?;
+    Ok(())
 }
 
 fn read_store(data_dir: &FsPath, user_id: &str) -> Result<TaskStore, ApiError> {
@@ -742,6 +860,8 @@ mod read_only_schedule_tests {
                 last_run_at: None,
                 last_task_id: None,
                 created_at: 1,
+                missed_runs: 0,
+                last_missed_at: None,
             }],
         }
     }
@@ -1354,6 +1474,48 @@ fn queue_due_schedules(store: &mut TaskStore, now: u64, can_queue: impl Fn(&Task
     }
 }
 
+const MIN_GRACE_MS: u64 = 120_000;
+const MAX_GRACE_MS: u64 = 7_200_000;
+
+fn missed_run_grace_ms(schedule: &ScheduleRecord) -> u64 {
+    if schedule.at.is_some() || schedule.run_once_at.is_some() {
+        return MAX_GRACE_MS;
+    }
+    schedule
+        .interval_seconds
+        .saturating_mul(500)
+        .clamp(MIN_GRACE_MS, MAX_GRACE_MS)
+}
+
+fn skip_stale_runs(store: &mut TaskStore, now: u64) {
+    for index in 0..store.schedules.len() {
+        let schedule = &store.schedules[index];
+        let Some(due) = schedule.next_run_at.filter(|_| schedule.enabled) else {
+            continue;
+        };
+        if now.saturating_sub(due) <= missed_run_grace_ms(schedule)
+            || store
+                .tasks
+                .iter()
+                .any(|task| task.schedule_id == Some(schedule.id) && !task.status.terminal())
+        {
+            continue;
+        }
+        let skipped = if schedule.at.is_none() && schedule.run_once_at.is_none() {
+            (now - due) / schedule.interval_seconds.max(1).saturating_mul(1000) + 1
+        } else {
+            1
+        };
+        let next = schedule.next_after(now);
+        let one_shot = schedule.run_once_at.is_some();
+        let schedule = &mut store.schedules[index];
+        schedule.missed_runs = schedule.missed_runs.saturating_add(skipped);
+        schedule.last_missed_at = Some(now);
+        schedule.enabled = !one_shot;
+        schedule.next_run_at = (!one_shot).then_some(next);
+    }
+}
+
 fn recover_interrupted(store: &mut TaskStore, now: u64) {
     for task in &mut store.tasks {
         if task.child_session_id.is_none()
@@ -1638,6 +1800,8 @@ mod unit_tests {
             last_run_at: None,
             last_task_id: None,
             created_at: 0,
+            missed_runs: 0,
+            last_missed_at: None,
         })
         .unwrap();
         value["runOnceAt"] = 1.into();
@@ -1763,6 +1927,8 @@ mod unit_tests {
             last_run_at: None,
             last_task_id: None,
             created_at: 1,
+            missed_runs: 0,
+            last_missed_at: None,
         });
         queue_due_schedules(&mut store, now, |_| true);
         queue_due_schedules(&mut store, now + 60_000, |_| true);
@@ -2149,6 +2315,8 @@ mod persisted_io_tests {
             last_run_at: None,
             last_task_id: None,
             created_at: 0,
+            missed_runs: 0,
+            last_missed_at: None,
         };
         for schedule in [
             base.clone(),
@@ -4105,6 +4273,8 @@ pub(crate) async fn create_owner_schedule(
             last_run_at: None,
             last_task_id: None,
             created_at: now,
+            missed_runs: 0,
+            last_missed_at: None,
         };
         let mut schedule = schedule;
         schedule.next_run_at = schedule.enabled.then(|| {
@@ -4179,6 +4349,8 @@ pub(crate) async fn prepare_reviewed_schedule(
         last_run_at: None,
         last_task_id: None,
         created_at: now,
+        missed_runs: 0,
+        last_missed_at: None,
     };
     schedule.next_run_at = schedule.enabled.then(|| {
         schedule
@@ -4446,13 +4618,17 @@ fn claim_tasks(
         .iter()
         .map(|p| workspace_key(&p.to_string_lossy()))
         .collect();
+    let journal = read_outcome_journal(data_dir);
+    let mut settled = std::collections::HashSet::new();
     for mut store in load_owner_stores(data_dir)? {
         let original = serde_json::to_vec(&store)
             .map_err(|_| ApiError::internal("Task storage unavailable"))?;
         let now = now_ms();
+        apply_outcome_journal(&mut store, &journal);
         if recover {
             recover_interrupted(&mut store, now);
         }
+        skip_stale_runs(&mut store, now);
         queue_due_schedules(&mut store, now, |input| {
             crate::workspace_activity::enter(FsPath::new(&input.workspace_path)).is_ok()
         });
@@ -4491,11 +4667,20 @@ fn claim_tasks(
                 continue;
             }
         }
+        settled.extend(
+            journal
+                .iter()
+                .filter(|entry| entry.owner == store.owner_id)
+                .map(|entry| (entry.owner.clone(), entry.record.id)),
+        );
         selected.extend(
             claimed
                 .into_iter()
                 .map(|(_, task)| (store.owner_id.clone(), task)),
         );
+    }
+    if let Err(error) = settle_outcome_journal(data_dir, &settled) {
+        tracing::warn!(error = %error, "Applied task outcomes could not be cleared from the journal; they are idempotent");
     }
     Ok(selected)
 }
@@ -4588,6 +4773,7 @@ mod worker_durability_tests {
         let id = task.id;
         let obstruction = dir.path().join("workspace-tasks/completions");
         std::fs::write(&obstruction, "blocked").unwrap();
+        std::fs::create_dir(journal_path(dir.path())).unwrap();
         let running = tokio::spawn(interrupt_before_launch(
             dir.path().into(),
             "owner".into(),
@@ -4615,6 +4801,7 @@ mod worker_durability_tests {
         std::fs::write(store_path(dir.path(), "owner"), "corrupt").unwrap();
         let obstruction = dir.path().join("workspace-tasks/completions");
         std::fs::write(&obstruction, "blocked").unwrap();
+        std::fs::create_dir(journal_path(dir.path())).unwrap();
         let running = tokio::spawn(persist_final_record(
             dir.path().into(),
             "owner".into(),
@@ -4710,17 +4897,12 @@ mod worker_durability_tests {
         assert!(worker_lease(dir.path()).is_ok());
     }
 
-    #[test]
-    fn downtime_leaves_one_catch_up_run_and_durable_next_slot() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = tempfile::tempdir().unwrap();
-        let mut store = fixture_store(dir.path(), "owner", &[workspace.path()]);
-        store.tasks.clear();
-        store.schedules.push(ScheduleRecord {
+    fn schedule_fixture(workspace: &FsPath, next_run_at: u64) -> ScheduleRecord {
+        ScheduleRecord {
             id: Uuid::new_v4(),
             name: "Daily".into(),
             input: TaskInput {
-                workspace_path: workspace.path().to_string_lossy().into_owned(),
+                workspace_path: workspace.to_string_lossy().into_owned(),
                 provider: "codex".into(),
                 prompt: "Review".into(),
                 model: None,
@@ -4731,26 +4913,329 @@ mod worker_durability_tests {
             at: None,
             run_once_at: None,
             enabled: true,
-            next_run_at: Some(1),
+            next_run_at: Some(next_run_at),
             last_run_at: None,
             last_task_id: None,
             created_at: 1,
-        });
-        write_store(dir.path(), &store).unwrap();
-        let first = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
-        let second = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+            missed_runs: 0,
+            last_missed_at: None,
+        }
+    }
+
+    fn store_with_schedule(
+        data_dir: &FsPath,
+        workspace: &FsPath,
+        schedule: ScheduleRecord,
+    ) -> TaskStore {
+        let mut store = fixture_store(data_dir, "owner", &[workspace]);
+        store.tasks.clear();
+        store.schedules.push(schedule);
+        write_store(data_dir, &store).unwrap();
+        store
+    }
+
+    #[test]
+    fn long_downtime_reports_missed_runs_instead_of_one_silent_catch_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let before = now_ms();
+        store_with_schedule(
+            dir.path(),
+            workspace.path(),
+            schedule_fixture(workspace.path(), 1),
+        );
+        let claimed = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
         let persisted = read_store(dir.path(), "owner").unwrap();
+        let schedule = &persisted.schedules[0];
         assert_eq!(
             (
-                first.len(),
-                second.len(),
+                claimed.len(),
                 persisted.tasks.len(),
-                persisted.schedules[0]
-                    .next_run_at
-                    .is_some_and(|next| next > now_ms()),
-                persisted.schedules[0].last_task_id,
+                schedule.missed_runs >= before / 60_000,
+                schedule.last_missed_at.is_some_and(|at| at >= before),
+                schedule.next_run_at.is_some_and(|next| next > before),
+                schedule.last_task_id,
+                schedule.enabled,
             ),
-            (1, 0, 1, true, Some(first[0].1.id))
+            (0, 0, true, true, true, None, true)
+        );
+    }
+
+    #[test]
+    fn runs_within_the_grace_window_still_run_and_are_not_reported_missed() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let late = now_ms() - (MIN_GRACE_MS - 30_000);
+        store_with_schedule(
+            dir.path(),
+            workspace.path(),
+            schedule_fixture(workspace.path(), late),
+        );
+        let claimed = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let schedule = &read_store(dir.path(), "owner").unwrap().schedules[0];
+        assert_eq!(
+            (claimed.len(), schedule.missed_runs, schedule.last_missed_at),
+            (1, 0, None)
+        );
+    }
+
+    #[test]
+    fn stale_one_shot_is_recorded_missed_disabled_and_never_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut schedule = schedule_fixture(workspace.path(), 1);
+        schedule.run_once_at = Some(1);
+        schedule.interval_seconds = 0;
+        store_with_schedule(dir.path(), workspace.path(), schedule);
+        let claimed = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let persisted = read_store(dir.path(), "owner").unwrap();
+        let schedule = &persisted.schedules[0];
+        assert_eq!(
+            (
+                claimed.len(),
+                persisted.tasks.len(),
+                schedule.enabled,
+                schedule.next_run_at,
+                schedule.missed_runs,
+                schedule.last_missed_at.is_some(),
+            ),
+            (0, 0, false, None, 1, true)
+        );
+    }
+
+    #[test]
+    fn stale_calendar_run_is_recorded_missed_and_rescheduled() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut schedule = schedule_fixture(workspace.path(), 1);
+        schedule.at = Some(CalendarTime {
+            hour: 9,
+            minute: 0,
+            weekdays: vec![0, 1, 2, 3, 4, 5, 6],
+            utc_offset_minutes: 0,
+            time_zone: None,
+        });
+        store_with_schedule(dir.path(), workspace.path(), schedule);
+        let before = now_ms();
+        let claimed = claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let schedule = &read_store(dir.path(), "owner").unwrap().schedules[0];
+        assert_eq!(
+            (
+                claimed.len(),
+                schedule.missed_runs,
+                schedule.next_run_at.is_some_and(|next| next > before),
+            ),
+            (0, 1, true)
+        );
+    }
+
+    #[test]
+    fn stale_run_with_a_task_still_in_flight_is_overlap_not_a_missed_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let schedule = schedule_fixture(workspace.path(), 1);
+        let id = schedule.id;
+        let mut store = store_with_schedule(dir.path(), workspace.path(), schedule);
+        let input = store.schedules[0].input.clone();
+        let mut running = enqueue(&mut store, input, Some(id), 0).unwrap();
+        transition(&mut running, TaskStatus::Running, "running", 1);
+        store.tasks[0].status = TaskStatus::Running;
+        skip_stale_runs(&mut store, now_ms());
+        assert_eq!(store.schedules[0].missed_runs, 0);
+    }
+
+    #[test]
+    fn schedule_records_without_missed_run_fields_round_trip_unchanged() {
+        let workspace = tempfile::tempdir().unwrap();
+        let record = schedule_fixture(workspace.path(), 5);
+        let value = serde_json::to_value(&record).unwrap();
+        assert!(value.get("missedRuns").is_none() && value.get("lastMissedAt").is_none());
+        let loaded: ScheduleRecord = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            (
+                loaded.missed_runs,
+                loaded.last_missed_at,
+                serde_json::to_value(&loaded).unwrap()
+            ),
+            (0, None, value)
+        );
+    }
+
+    #[test]
+    fn schedule_with_a_non_terminal_task_never_queues_a_duplicate() {
+        let workspace = tempfile::tempdir().unwrap();
+        for one_shot in [false, true] {
+            let mut schedule = schedule_fixture(workspace.path(), 100);
+            if one_shot {
+                schedule.run_once_at = Some(100);
+            }
+            let id = schedule.id;
+            let mut store = TaskStore {
+                owner_id: "owner".into(),
+                ..Default::default()
+            };
+            store.schedules.push(schedule);
+            for status in [
+                TaskStatus::Queued,
+                TaskStatus::Running,
+                TaskStatus::Cancelling,
+            ] {
+                store.tasks.clear();
+                let input = store.schedules[0].input.clone();
+                enqueue(&mut store, input, Some(id), 0).unwrap();
+                store.tasks[0].status = status;
+                queue_due_schedules(&mut store, 200, |_| true);
+                assert_eq!(
+                    (
+                        store.tasks.len(),
+                        store.schedules[0].last_task_id,
+                        store.schedules[0].enabled,
+                        store.schedules[0].next_run_at,
+                    ),
+                    (
+                        1,
+                        None,
+                        true,
+                        if one_shot {
+                            Some(100)
+                        } else {
+                            Some(200 + 60_000)
+                        }
+                    )
+                );
+                store.schedules[0].next_run_at = Some(100);
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outcome_survives_total_store_and_receipt_failure_across_restart() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        fixture_store(dir.path(), "owner", &[workspace.path()]);
+        let (_, mut task) = claim_tasks(dir.path(), false, &Default::default(), 1)
+            .unwrap()
+            .remove(0);
+        let good_store = std::fs::read(store_path(dir.path(), "owner")).unwrap();
+        task.result = "kept answer".into();
+        transition(&mut task, TaskStatus::Completed, "finished", now_ms());
+        std::fs::write(store_path(dir.path(), "owner"), "corrupt").unwrap();
+        let obstruction = dir.path().join("workspace-tasks/completions");
+        std::fs::write(&obstruction, "blocked").unwrap();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            persist_final_record(dir.path().into(), "owner".into(), task.clone()),
+        )
+        .await
+        .expect("an outcome with a working journal must not wait forever");
+        let mut torn = std::fs::OpenOptions::new()
+            .append(true)
+            .open(journal_path(dir.path()))
+            .unwrap();
+        std::io::Write::write_all(&mut torn, b"{\"owner\":\"owner\",\"rec").unwrap();
+        drop(torn);
+
+        std::fs::write(store_path(dir.path(), "owner"), good_store).unwrap();
+        std::fs::remove_file(obstruction).unwrap();
+        claim_tasks(dir.path(), true, &Default::default(), 3).unwrap();
+        let recovered = read_store(dir.path(), "owner").unwrap();
+        assert_eq!(
+            (
+                recovered.tasks[0].status.clone(),
+                recovered.tasks[0].result.clone(),
+                recovered.tasks[0].error.clone(),
+                journal_path(dir.path()).exists(),
+            ),
+            (TaskStatus::Completed, "kept answer".into(), None, false)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn outcome_with_no_writable_target_is_only_unknown_after_restart() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        fixture_store(dir.path(), "owner", &[workspace.path()]);
+        let (_, mut task) = claim_tasks(dir.path(), false, &Default::default(), 1)
+            .unwrap()
+            .remove(0);
+        transition(&mut task, TaskStatus::Completed, "finished", now_ms());
+        std::fs::write(store_path(dir.path(), "owner"), "corrupt").unwrap();
+        std::fs::write(dir.path().join("workspace-tasks/completions"), "blocked").unwrap();
+        std::fs::create_dir(journal_path(dir.path())).unwrap();
+        let pending = tokio::spawn(persist_final_record(
+            dir.path().into(),
+            "owner".into(),
+            task,
+        ));
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!pending.is_finished());
+        pending.abort();
+        let mut store = fixture_store(dir.path(), "owner", &[workspace.path()]);
+        store.tasks[0].status = TaskStatus::Running;
+        recover_interrupted(&mut store, now_ms());
+        assert_eq!(store.tasks[0].status, TaskStatus::Interrupted);
+        assert!(store.tasks[0]
+            .events
+            .last()
+            .unwrap()
+            .message
+            .contains("outcome unknown"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_during_a_started_checkpoint_waits_for_it_and_keeps_the_outcome() {
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            assert!(std::process::Command::new("git")
+                .current_dir(workspace.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success())
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.name", "Tests"]);
+        git(&["config", "user.email", "tests@example.test"]);
+        std::fs::write(workspace.path().join("note.txt"), "initial\n").unwrap();
+        git(&["add", "note.txt"]);
+        git(&["commit", "-m", "initial"]);
+        fixture_store(dir.path(), "owner", &[workspace.path()]);
+        let (_, task) = claim_tasks(dir.path(), false, &Default::default(), 1)
+            .unwrap()
+            .remove(0);
+        let task_id = task.id;
+        let (stop, mut shutdown) = tokio::sync::watch::channel(false);
+        let data = dir.path().to_path_buf();
+        let checkpoint = tokio::spawn(async move {
+            save_task_checkpoint(&data, "owner", &task, true, &mut shutdown).await
+        });
+        tokio::task::yield_now().await;
+        stop.send(true).unwrap();
+        let saved = tokio::time::timeout(Duration::from_secs(10), checkpoint)
+            .await
+            .expect("an already-started checkpoint must finish within the shutdown bound")
+            .unwrap();
+        let stored = read_store(dir.path(), "owner").unwrap();
+        let record = stored.tasks.iter().find(|task| task.id == task_id).unwrap();
+        let finished = saved && record.before_checkpoint_id.is_some();
+        let declined = !saved && record.before_checkpoint_id.is_none();
+        assert!(finished || declined);
+        let mut interrupted = record.clone();
+        transition(
+            &mut interrupted,
+            TaskStatus::Interrupted,
+            "shutdown",
+            now_ms(),
+        );
+        persist_final_record(dir.path().into(), "owner".into(), interrupted).await;
+        assert_eq!(
+            read_store(dir.path(), "owner").unwrap().tasks[0].status,
+            TaskStatus::Interrupted
         );
     }
 
@@ -5390,6 +5875,7 @@ async fn persist_completion_receipt(data_dir: PathBuf, owner: String, record: Ta
         if tokio::task::spawn_blocking(move || {
             retain_completion(&directory, &user, saved.clone())
                 .or_else(|_| retain_completion(&directory, &user, compact))
+                .or_else(|_| append_outcome_journal(&directory, &user, &saved))
         })
         .await
         .is_ok_and(|result| result.is_ok())

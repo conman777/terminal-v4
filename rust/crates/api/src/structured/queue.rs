@@ -152,13 +152,21 @@ pub(crate) fn manager_boot_id(manager: &StructuredSessionManager) -> Uuid {
     }
     boot_id()
 }
+fn queue_supported(state: &StructuredSessionState) -> bool {
+    crate::v4_agent::supports(&state.provider) || super::native_queue::enabled_for(state)
+}
 fn scope(state: &StructuredSessionState) -> Result<QueueScope, StructuredControlError> {
-    if !crate::v4_agent::supports(&state.provider) {
-        return Err(StructuredControlError::conflict(
-            "Follow-up queues are available only in V4 conversations",
-        ));
+    if crate::v4_agent::supports(&state.provider) {
+        return QueueScope::new(&state.user_id, FsPath::new(&state.cwd), &state.id)
+            .map_err(control_error);
     }
-    QueueScope::new(&state.user_id, FsPath::new(&state.cwd), &state.id).map_err(control_error)
+    if super::native_queue::enabled_for(state) {
+        return QueueScope::new_native(&state.user_id, FsPath::new(&state.cwd), &state.id)
+            .map_err(control_error);
+    }
+    Err(StructuredControlError::conflict(
+        "Follow-up queues are available only in V4 conversations",
+    ))
 }
 
 #[cfg(unix)]
@@ -255,6 +263,9 @@ fn reconcile(
     manager: &StructuredSessionManager,
     state: &StructuredSessionState,
 ) -> Result<QueueSnapshot, StructuredControlError> {
+    if super::native_queue::enabled_for(state) {
+        super::native_queue::ensure_disk_not_ahead(manager, state, &store(manager))?;
+    }
     reconcile_with_store(&store(manager), state)
 }
 
@@ -313,8 +324,30 @@ pub(super) fn check_admission(
     check_snapshot_admission(manager, state, request_id, text, snapshot)
 }
 
+/// Called by Codex submit after request dedupe, while the parent state and session lease are held.
+pub(super) fn check_native_admission(
+    manager: &StructuredSessionManager,
+    state: &StructuredSessionState,
+    request_id: &str,
+    text: &str,
+) -> Result<(), StructuredControlError> {
+    if !super::native_queue::enabled_for(state) {
+        return Ok(());
+    }
+    native_admission(manager, state, request_id, text)
+}
+
 #[cfg(test)]
 fn check_native_admission_prototype(
+    manager: &StructuredSessionManager,
+    state: &StructuredSessionState,
+    request_id: &str,
+    text: &str,
+) -> Result<(), StructuredControlError> {
+    native_admission(manager, state, request_id, text)
+}
+
+fn native_admission(
     manager: &StructuredSessionManager,
     state: &StructuredSessionState,
     request_id: &str,
@@ -454,7 +487,7 @@ fn drain_at_revision(
         let _gate = queue_gate.lock().await;
         let state = session.state.lock().await;
         if state.user_id != owner
-            || !crate::v4_agent::supports(&state.provider)
+            || !queue_supported(&state)
             || state.generation != expected_generation
             || state.retiring
             || state.deleting
@@ -467,6 +500,18 @@ fn drain_at_revision(
             return Ok(());
         }
         let scope = scope(&state).map_err(|error| error.message)?;
+        if super::native_queue::enabled_for(&state) {
+            match super::native_queue::drain_gate(&state) {
+                super::native_queue::DrainGate::Proceed => {}
+                super::native_queue::DrainGate::Skip => return Ok(()),
+                super::native_queue::DrainGate::Hold => {
+                    return store(&manager)
+                        .hold(&scope, HoldReason::Manual)
+                        .map(|_| ())
+                        .map_err(|error| format!("{error:?}"));
+                }
+            }
+        }
         let reservation = store(&manager)
             .reserve_next(
                 &scope,
@@ -553,7 +598,7 @@ pub(super) async fn hold_generation(
     let queue_gate = gate(manager, owner, session_id).map_err(|error| error.message)?;
     let _gate = queue_gate.lock().await;
     let state = session.state.lock().await;
-    if state.generation != expected_generation || !crate::v4_agent::supports(&state.provider) {
+    if state.generation != expected_generation || !queue_supported(&state) {
         return Ok(());
     }
     store(manager)
@@ -577,7 +622,7 @@ pub(super) async fn hold_session(
     let queue_gate = gate(manager, owner, session_id).map_err(|error| error.message)?;
     let _gate = queue_gate.lock().await;
     let state = session.state.lock().await;
-    if !crate::v4_agent::supports(&state.provider) {
+    if !queue_supported(&state) {
         return Ok(());
     }
     store(manager)

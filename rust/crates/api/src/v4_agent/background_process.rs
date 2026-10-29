@@ -1,9 +1,9 @@
 //! Durable, scoped claims and process-local execution. The caller must authenticate
 //! the scope and obtain exact per-action approval before `start`. No command or
-//! output is persisted. Unfinished claims remain unknown after a crash; no replay
-//! or PID-based recovery is attempted. Reopening an unfinished or invalid
-//! receipt blocks new actions until recovery is confirmed; no recovery override
-//! is implemented. Creation must only be used for an explicitly provisioned new
+//! output is persisted. Unfinished claims remain unknown after a crash and are
+//! never replayed. Reopening an unfinished or invalid receipt blocks new actions
+//! until `recover_unconfirmed` (identity-checked) or an authorized review
+//! resolves it. Creation must only be used for an explicitly provisioned new
 //! ledger; reopening never creates missing state.
 //! Await shutdown before stopping the runtime.
 //! Unix ancestry tracking cannot guarantee containment of an unobserved escape.
@@ -11,6 +11,14 @@
 pub(crate) mod bootstrap;
 #[path = "background_process_ledger.rs"]
 mod ledger;
+#[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "background_recovery.rs"]
+mod recovery;
+#[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
+#[path = "background_session_fence.rs"]
+pub(crate) mod session_fence;
 #[cfg(unix)]
 pub(crate) use super::background_owner_gate as owner_gate;
 #[path = "background_tool.rs"]
@@ -43,6 +51,16 @@ pub(super) const MAX_SESSION_ACTIONS: usize = 32;
 /// so a slot is released as soon as its worker commits a terminal outcome.
 const MAX_RUNNING_PER_OWNER: usize = 8;
 const MAX_RUNNING_TOTAL: usize = 32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LaunchAdmission {
+    Confirmed,
+    Revoked,
+    Uncertain,
+}
+const LAUNCH_BUDGET: Duration = Duration::from_secs(10);
+const COMPLETION_PAGE: usize = 64;
+const RECOVERY_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BackgroundScope {
@@ -88,6 +106,12 @@ pub(crate) struct BackgroundCompletion {
     pub state: BackgroundState,
 }
 const COMPLETION_BACKLOG: usize = 64;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RecoveryReport {
+    pub killed: usize,
+    pub already_stopped: usize,
+    pub unresolved: usize,
+}
 #[derive(Default)]
 struct Output {
     bytes: Vec<u8>,
@@ -139,6 +163,7 @@ pub(crate) struct BackgroundProcesses {
     ledger: Arc<Ledger>,
     completions: tokio::sync::broadcast::Sender<BackgroundCompletion>,
     recovery_blocked: std::sync::atomic::AtomicBool,
+    launch_budget_ms: std::sync::atomic::AtomicU64,
     unconfirmed: Arc<Mutex<bool>>,
     running_limits: (
         std::sync::atomic::AtomicUsize,
@@ -407,6 +432,87 @@ impl BackgroundProcesses {
         self.completions.subscribe()
     }
 
+    /// Persisted completion markers, oldest first and bounded per page. Each
+    /// is written in the same transaction as the terminal outcome. A consumer
+    /// must check owner, session incarnation and checkpoint before injecting a
+    /// notice and must acknowledge a marker only after deciding to deliver it.
+    pub(crate) fn pending_completions(&self) -> Result<Vec<(i64, BackgroundCompletion)>, String> {
+        self.ledger.pending_completions(COMPLETION_PAGE)
+    }
+
+    /// True for exactly one caller per marker.
+    pub(crate) fn acknowledge_completion(&self, seq: i64) -> Result<bool, String> {
+        self.ledger.acknowledge_completion(seq)
+    }
+
+    /// Atomically takes up to one page of markers; each is returned once.
+    pub(crate) fn drain_pending_completions(&self) -> Result<Vec<BackgroundCompletion>, String> {
+        self.ledger.drain_completions(COMPLETION_PAGE)
+    }
+
+    /// Resolves receipts a crash left unfinished. Only a process whose PID,
+    /// process group and start time still match is signalled; a missing
+    /// identity, a mismatch, or survivors of a vanished leader stay unknown
+    /// for authorized review. Run at trusted startup before launching.
+    #[cfg(unix)]
+    pub(crate) async fn recover_unconfirmed(&self) -> Result<RecoveryReport, String> {
+        let registry = self.registry.lock().await;
+        let mut report = RecoveryReport::default();
+        for (key, identity) in self.ledger.recovery_candidates()? {
+            if registry.entries.contains_key(&key) {
+                continue;
+            }
+            let Some((pid, pgid, Some(started))) = identity else {
+                self.ledger.note_recovery(
+                    &key,
+                    if identity.is_some() {
+                        "unverifiable"
+                    } else {
+                        "no_identity"
+                    },
+                )?;
+                report.unresolved += 1;
+                continue;
+            };
+            let verdict = tokio::task::spawn_blocking(move || {
+                recovery::verify_and_kill(
+                    &recovery::ProcessIdentity { pid, pgid, started },
+                    RECOVERY_GRACE,
+                )
+            })
+            .await
+            .map_err(|_| "Background recovery was interrupted")?;
+            if verdict.resolves() {
+                self.ledger.finish_launched(
+                    &key,
+                    &BackgroundState::Cancelled,
+                    Some(verdict.name()),
+                )?;
+                if verdict == recovery::Verdict::Killed {
+                    report.killed += 1;
+                } else {
+                    report.already_stopped += 1;
+                }
+            } else {
+                self.ledger.note_recovery(&key, verdict.name())?;
+                report.unresolved += 1;
+            }
+        }
+        self.recovery_blocked.store(
+            self.ledger.has_unknown(None)?,
+            std::sync::atomic::Ordering::Release,
+        );
+        Ok(report)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_launch_budget_for_test(&self, budget: Duration) {
+        self.launch_budget_ms.store(
+            budget.as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
     /// Read-only settlement query: true while any command in the session is
     /// running or its outcome is unreviewed. Failing to read the ledger is
     /// reported as an error, which a caller must treat as outstanding work.
@@ -649,6 +755,7 @@ impl BackgroundProcesses {
             ledger: Arc::new(Ledger::create(path)?),
             completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(false),
+            launch_budget_ms: std::sync::atomic::AtomicU64::new(LAUNCH_BUDGET.as_millis() as u64),
             unconfirmed: Arc::new(Mutex::new(false)),
             running_limits: Self::default_running_limits(),
             #[cfg(unix)]
@@ -687,6 +794,7 @@ impl BackgroundProcesses {
             ledger,
             completions: tokio::sync::broadcast::channel(COMPLETION_BACKLOG).0,
             recovery_blocked: std::sync::atomic::AtomicBool::new(recovery_blocked),
+            launch_budget_ms: std::sync::atomic::AtomicU64::new(LAUNCH_BUDGET.as_millis() as u64),
             unconfirmed: Arc::new(Mutex::new(false)),
             running_limits: Self::default_running_limits(),
             #[cfg(unix)]
@@ -899,6 +1007,15 @@ impl BackgroundProcesses {
         if expires_at <= super::interaction::now_ms() {
             return Err("Approval expired".into());
         }
+        #[cfg(unix)]
+        let _fence = match self.ledger.data_root() {
+            Some(root) => Some(session_fence::acquire_launch(
+                root,
+                &request.scope.owner,
+                &request.scope.session,
+            )?),
+            None => None,
+        };
         self.ensure_authorized(&request.scope, request.authorization_generation)?;
         // The claim is committed before any process can start. Ambiguous failures
         // retain the claim instead of allowing a potentially duplicate execution.
@@ -951,48 +1068,82 @@ impl BackgroundProcesses {
         }
         // The claim and command preparation can take time. This is the launch
         // admission point; an abandoned claim is never replayed.
-        let launch = {
-            // Serialize spawn with receipt persistence, but do not hold the
-            // cancellation gate while waiting for a slow receipt.
-            match self.unconfirmed.lock() {
-                Ok(unconfirmed) if !*unconfirmed => {
-                    let mut launch = Some(launch);
-                    let mut run = || {
-                        cancellation.admit(|| {
-                            if expires_at <= super::interaction::now_ms() {
-                                return Err("Background action expired before launch".into());
-                            }
-                            launch.take().ok_or("Background launch already consumed")?(&mut command)
-                        })
-                    };
-                    #[cfg(unix)]
-                    {
-                        if let Some(gate) = &self.owner_gate {
-                            match request.authorization_generation {
-                                Some(generation) => {
-                                    gate.admit_generation(&request.scope.owner, generation, run)
-                                }
-                                None => Err("Background authorization is unavailable".into()),
-                            }
-                        } else {
-                            run().map(|child| (child, true))
-                        }
+        let launch_blocked = self.unconfirmed.lock().map(|flag| *flag).unwrap_or(true);
+        let launch = if launch_blocked {
+            Err("Background recovery is unconfirmed; new actions are unavailable".into())
+        } else {
+            let mut launch = Some(launch);
+            let mut run = || {
+                cancellation.admit(|| {
+                    if expires_at <= super::interaction::now_ms() {
+                        return Err("Background action expired before launch".into());
                     }
-                    #[cfg(not(unix))]
-                    {
-                        run().map(|child| (child, true))
+                    launch.take().ok_or("Background launch already consumed")?(&mut command)
+                })
+            };
+            #[cfg(unix)]
+            {
+                if let Some(gate) = &self.owner_gate {
+                    match request.authorization_generation {
+                        Some(generation) => gate.admit_launch(
+                            &request.scope.owner,
+                            Some(generation),
+                            Duration::from_millis(
+                                self.launch_budget_ms
+                                    .load(std::sync::atomic::Ordering::Relaxed),
+                            ),
+                            run,
+                        ),
+                        None => Err("Background authorization is unavailable".into()),
                     }
+                } else {
+                    run().map(|child| (child, LaunchAdmission::Confirmed))
                 }
-                _ => Err("Background recovery is unconfirmed; new actions are unavailable".into()),
+            }
+            #[cfg(not(unix))]
+            {
+                run().map(|child| (child, LaunchAdmission::Confirmed))
             }
         };
-        let (mut child, admission_confirmed) = match launch {
+        let (mut child, mut admission) = match launch {
             Ok(result) => result,
             Err(error) => {
                 self.finish_unstarted_claim(&key)?;
                 return Err(error);
             }
         };
+        if admission == LaunchAdmission::Confirmed
+            && self.unconfirmed.lock().map(|flag| *flag).unwrap_or(true)
+        {
+            admission = LaunchAdmission::Revoked;
+        }
+        #[cfg(unix)]
+        {
+            let pid = child.id().and_then(|pid| i32::try_from(pid).ok());
+            let recorded = match pid {
+                Some(pid) => {
+                    let identity = recovery::capture(pid as u32);
+                    self.ledger.record_launch(
+                        &key,
+                        &request.scope,
+                        &request.action_id,
+                        pid,
+                        identity.map_or(pid, |identity| identity.pgid),
+                        identity.map(|identity| identity.started),
+                    )
+                }
+                None => Err("Background process identity is unavailable".into()),
+            };
+            if recorded.is_err() {
+                registry.shutdown_failed = true;
+                if let Ok(mut unconfirmed) = self.unconfirmed.lock() {
+                    *unconfirmed = true;
+                }
+                let _ = child.start_kill();
+                let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
+                return Err("Cannot record background process; cleanup is unconfirmed".into());
+            }
+        }
         #[cfg(unix)]
         let tree = crate::process_tree::ProcessTree::attach_new_process_group(&child);
         #[cfg(windows)]
@@ -1022,10 +1173,12 @@ impl BackgroundProcesses {
             cancel,
             done,
         });
-        if !admission_confirmed {
+        if admission == LaunchAdmission::Uncertain {
             if let Ok(mut unconfirmed) = self.unconfirmed.lock() {
                 *unconfirmed = true;
             }
+        }
+        if admission != LaunchAdmission::Confirmed {
             entry.cancel.send_replace(true);
         }
         let completions = self.completions.clone();
@@ -1060,7 +1213,10 @@ impl BackgroundProcesses {
                     ) {
                         *unconfirmed = true;
                     }
-                    if worker_ledger.finish(&worker_key, &state).is_ok() {
+                    if worker_ledger
+                        .finish_launched(&worker_key, &state, None)
+                        .is_ok()
+                    {
                         state
                     } else {
                         *unconfirmed = true;
@@ -1079,11 +1235,18 @@ impl BackgroundProcesses {
         });
         registry.entries.insert(key, entry);
         registry.workers.push(worker);
-        if !admission_confirmed {
-            return Err(
+        match admission {
+            LaunchAdmission::Confirmed => {}
+            LaunchAdmission::Revoked => {
+                return Err(
+                    "Background authorization changed during launch; the process is being stopped"
+                        .into(),
+                )
+            }
+            LaunchAdmission::Uncertain => return Err(
                 "Background action started but admission is unconfirmed; cleanup is in progress"
                     .into(),
-            );
+            ),
         }
         Ok(BackgroundSnapshot {
             state: BackgroundState::Running,
@@ -1455,6 +1618,10 @@ impl BackgroundProcesses {
         self.cleanup_session(owner, session).await?;
         let mut registry = self.registry.lock().await;
         self.ledger.retire_session(owner, session)?;
+        #[cfg(unix)]
+        if let Some(root) = self.ledger.data_root() {
+            session_fence::retire(root, owner, session)?;
+        }
         registry
             .entries
             .retain(|_, entry| entry.scope.owner != owner || entry.scope.session != session);
@@ -1606,6 +1773,9 @@ async fn run(
     state
 }
 
+#[cfg(all(test, unix))]
+#[path = "background_hardening_tests.rs"]
+mod hardening_tests;
 #[cfg(all(test, unix))]
 #[path = "background_lifecycle_tests.rs"]
 mod lifecycle_tests;

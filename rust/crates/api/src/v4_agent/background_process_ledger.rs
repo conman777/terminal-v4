@@ -11,6 +11,7 @@ use std::{fs::File, path::Path, sync::Mutex};
 
 pub(super) const MAX_RETIRED_SESSIONS: i64 = 4096;
 pub(super) const MIN_RETAINED_PER_SESSION: i64 = 8;
+const MAX_PENDING_PAGE: usize = 64;
 #[cfg(unix)]
 pub(super) const LEDGER_BUSY: &str = "Background receipt ledger already in use";
 
@@ -212,6 +213,12 @@ impl Ledger {
             .map_err(|_| "Background review ledger is invalid")?;
         db.prepare("SELECT owner_key,request,operation,count FROM owner_review_operations LIMIT 0")
             .map_err(|_| "Background review ledger is invalid")?;
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS launched_processes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, pid INTEGER NOT NULL, pgid INTEGER NOT NULL, started_sec INTEGER, started_usec INTEGER);
+             CREATE TABLE IF NOT EXISTS recovery_outcomes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, outcome TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS pending_completions(seq INTEGER PRIMARY KEY AUTOINCREMENT, key BLOB NOT NULL UNIQUE, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, state TEXT NOT NULL, code INTEGER);",
+        )
+        .map_err(|_| "Cannot initialize background recovery tables")?;
         for dir in [Some(path), path.parent()].into_iter().flatten() {
             File::open(dir)
                 .and_then(|file| file.sync_all())
@@ -244,6 +251,11 @@ impl Ledger {
             },
             owner_pid: unsafe { libc::getpid() },
         })
+    }
+
+    #[cfg(unix)]
+    pub(super) fn data_root(&self) -> Option<&Path> {
+        self.quiescence_root.as_deref()
     }
 
     #[cfg(unix)]
@@ -493,6 +505,8 @@ impl Ledger {
             &owner_key,
             total - MAX_ACTIONS as i64 + 1,
         )?;
+        tx.execute_batch("DELETE FROM pending_completions WHERE key NOT IN (SELECT key FROM receipts); DELETE FROM recovery_outcomes WHERE key NOT IN (SELECT key FROM receipts);")
+            .map_err(|_| "Cannot prune background completions")?;
         let (total, owner_count, session_count) = counts(&tx)?;
         if total >= MAX_ACTIONS as i64 {
             return Err("Background action receipt capacity exhausted".into());
@@ -559,20 +573,23 @@ impl Ledger {
             params![session_key],
         )
         .map_err(|_| "Cannot release background receipts")?;
+        for table in [
+            "pending_completions",
+            "recovery_outcomes",
+            "launched_processes",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE session_key=?1"),
+                params![session_key],
+            )
+            .map_err(|_| "Cannot release background receipts")?;
+        }
         tx.commit()
             .map_err(|_| "Cannot commit background retirement")?;
         Ok(())
     }
     pub(super) fn finish(&self, key: &[u8], state: &BackgroundState) -> Result<(), String> {
-        let (name, code) = match state {
-            BackgroundState::Exited { code } => ("exited", *code),
-            BackgroundState::Cancelled => ("cancelled", None),
-            BackgroundState::TimedOut => ("timed_out", None),
-            BackgroundState::FailedToStart => ("failed_to_start", None),
-            BackgroundState::CleanupUnconfirmed
-            | BackgroundState::Unknown
-            | BackgroundState::Running => ("unknown", None),
-        };
+        let (name, code) = Self::state_columns(state);
         let db = self
             .db
             .lock()
@@ -587,6 +604,228 @@ impl Ledger {
             return Err("Background claim is missing or already complete".into());
         }
         Ok(())
+    }
+    /// Commits the terminal outcome and, in the same transaction, the pending
+    /// completion marker for a launched process.
+    pub(super) fn finish_launched(
+        &self,
+        key: &[u8],
+        state: &BackgroundState,
+        recovery: Option<&str>,
+    ) -> Result<(), String> {
+        let (name, code) = Self::state_columns(state);
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "Cannot commit background outcome")?;
+        let updated = tx
+            .execute(
+                "UPDATE receipts SET state=?2,code=?3 WHERE key=?1 AND state='unknown'",
+                params![key, name, code],
+            )
+            .map_err(|_| "Cannot commit background outcome")?;
+        if updated != 1 {
+            return Err("Background claim is missing or already complete".into());
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO pending_completions(key,session_key,owner,session,workspace,incarnation,action_id,state,code) SELECT key,session_key,owner,session,workspace,incarnation,action_id,?2,?3 FROM launched_processes WHERE key=?1",
+            params![key, name, code],
+        )
+        .map_err(|_| "Cannot persist background completion")?;
+        if let Some(outcome) = recovery {
+            tx.execute(
+                "INSERT OR REPLACE INTO recovery_outcomes(key,session_key,outcome) SELECT key,session_key,?2 FROM launched_processes WHERE key=?1",
+                params![key, outcome],
+            )
+            .map_err(|_| "Cannot persist background recovery outcome")?;
+        }
+        tx.execute("DELETE FROM launched_processes WHERE key=?1", params![key])
+            .map_err(|_| "Cannot clear background process identity")?;
+        tx.commit()
+            .map_err(|_| "Cannot commit background outcome".into())
+    }
+    pub(super) fn record_launch(
+        &self,
+        key: &[u8],
+        scope: &BackgroundScope,
+        action_id: &str,
+        pid: i32,
+        pgid: i32,
+        started: Option<(i64, i64)>,
+    ) -> Result<(), String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let workspace = scope.workspace.to_str().ok_or("Invalid workspace path")?;
+        db.execute(
+            "INSERT INTO launched_processes(key,session_key,owner,session,workspace,incarnation,action_id,pid,pgid,started_sec,started_usec) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11 WHERE EXISTS(SELECT 1 FROM receipts WHERE key=?1 AND state='unknown')",
+            params![
+                key,
+                Self::hash_parts(&[&scope.owner, &scope.session]),
+                scope.owner,
+                scope.session,
+                workspace,
+                scope.incarnation.map(|value| value.to_string()),
+                action_id,
+                pid,
+                pgid,
+                started.map(|value| value.0),
+                started.map(|value| value.1),
+            ],
+        )
+        .map_err(|_| "Cannot record background process identity")?;
+        Ok(())
+    }
+    /// Unreviewed unknown receipts with their recorded process identity;
+    /// the identity is `None` when no start time could be captured.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn recovery_candidates(
+        &self,
+    ) -> Result<Vec<(Vec<u8>, Option<(i32, i32, Option<(i64, i64)>)>)>, String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let mut query = db
+            .prepare(
+                "SELECT r.key,l.pid,l.pgid,l.started_sec,l.started_usec FROM receipts r LEFT JOIN launched_processes l ON l.key=r.key WHERE r.state='unknown' AND NOT EXISTS (SELECT 1 FROM owner_reviewed_receipts reviewed WHERE reviewed.key=r.key) ORDER BY r.rowid LIMIT 4096",
+            )
+            .map_err(|_| "Cannot inspect background recovery")?;
+        let rows = query
+            .query_map([], |row| {
+                let pid: Option<i32> = row.get(1)?;
+                let pgid: Option<i32> = row.get(2)?;
+                let sec: Option<i64> = row.get(3)?;
+                let usec: Option<i64> = row.get(4)?;
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    pid.zip(pgid).map(|(pid, pgid)| (pid, pgid, sec.zip(usec))),
+                ))
+            })
+            .map_err(|_| "Cannot inspect background recovery")?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| "Cannot inspect background recovery".into())
+    }
+    pub(super) fn note_recovery(&self, key: &[u8], outcome: &str) -> Result<(), String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        db.execute(
+            "INSERT OR REPLACE INTO recovery_outcomes(key,session_key,outcome) SELECT key,session_key,?2 FROM receipts WHERE key=?1",
+            params![key, outcome],
+        )
+        .map_err(|_| "Cannot persist background recovery outcome")?;
+        Ok(())
+    }
+    #[cfg(test)]
+    pub(super) fn recovery_outcome(&self, key: &[u8]) -> Result<Option<String>, String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        db.query_row(
+            "SELECT outcome FROM recovery_outcomes WHERE key=?1",
+            params![key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| "Cannot read background recovery outcome".into())
+    }
+    pub(super) fn pending_completions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(i64, super::BackgroundCompletion)>, String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        Self::read_pending(&db, limit)
+    }
+    fn read_pending(
+        db: &Connection,
+        limit: usize,
+    ) -> Result<Vec<(i64, super::BackgroundCompletion)>, String> {
+        let mut query = db
+            .prepare("SELECT seq,owner,session,workspace,incarnation,action_id,state,code FROM pending_completions ORDER BY seq LIMIT ?1")
+            .map_err(|_| "Cannot inspect background completions")?;
+        let rows = query
+            .query_map([limit.min(MAX_PENDING_PAGE) as i64], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<i32>>(7)?,
+                ))
+            })
+            .map_err(|_| "Cannot inspect background completions")?;
+        let mut completions = Vec::new();
+        for row in rows {
+            let (seq, owner, session, workspace, incarnation, action_id, state, code) =
+                row.map_err(|_| "Cannot inspect background completions")?;
+            completions.push((
+                seq,
+                super::BackgroundCompletion {
+                    scope: BackgroundScope {
+                        owner,
+                        session,
+                        workspace: workspace.into(),
+                        incarnation: incarnation
+                            .map(|value| uuid::Uuid::parse_str(&value))
+                            .transpose()
+                            .map_err(|_| "Invalid background completion")?,
+                    },
+                    action_id,
+                    state: Self::state_from(&state, code)?,
+                },
+            ));
+        }
+        Ok(completions)
+    }
+    /// Removes the marker; true for exactly one caller per marker.
+    pub(super) fn acknowledge_completion(&self, seq: i64) -> Result<bool, String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        db.execute("DELETE FROM pending_completions WHERE seq=?1", params![seq])
+            .map(|removed| removed == 1)
+            .map_err(|_| "Cannot acknowledge background completion".into())
+    }
+    /// Atomically reads and removes up to `limit` markers in order.
+    pub(super) fn drain_completions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<super::BackgroundCompletion>, String> {
+        let mut db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| "Cannot drain background completions")?;
+        let taken = Self::read_pending(&tx, limit)?;
+        if let Some((last, _)) = taken.last() {
+            tx.execute(
+                "DELETE FROM pending_completions WHERE seq<=?1",
+                params![last],
+            )
+            .map_err(|_| "Cannot drain background completions")?;
+        }
+        tx.commit()
+            .map_err(|_| "Cannot drain background completions")?;
+        Ok(taken
+            .into_iter()
+            .map(|(_, completion)| completion)
+            .collect())
     }
     pub(super) fn read(
         &self,
@@ -607,15 +846,29 @@ impl Ledger {
             .optional()
             .map_err(|_| "Cannot read background receipt")?;
         match receipt {
-            Some((state, code)) => match state.as_str() {
-                "exited" => Ok(BackgroundState::Exited { code }),
-                "cancelled" => Ok(BackgroundState::Cancelled),
-                "timed_out" => Ok(BackgroundState::TimedOut),
-                "failed_to_start" => Ok(BackgroundState::FailedToStart),
-                "unknown" => Ok(BackgroundState::Unknown),
-                _ => Err("Invalid background receipt".into()),
-            },
+            Some((state, code)) => Self::state_from(&state, code),
             None => Err("Background action not found".into()),
+        }
+    }
+    fn state_from(state: &str, code: Option<i32>) -> Result<BackgroundState, String> {
+        match state {
+            "exited" => Ok(BackgroundState::Exited { code }),
+            "cancelled" => Ok(BackgroundState::Cancelled),
+            "timed_out" => Ok(BackgroundState::TimedOut),
+            "failed_to_start" => Ok(BackgroundState::FailedToStart),
+            "unknown" => Ok(BackgroundState::Unknown),
+            _ => Err("Invalid background receipt".into()),
+        }
+    }
+    fn state_columns(state: &BackgroundState) -> (&'static str, Option<i32>) {
+        match state {
+            BackgroundState::Exited { code } => ("exited", *code),
+            BackgroundState::Cancelled => ("cancelled", None),
+            BackgroundState::TimedOut => ("timed_out", None),
+            BackgroundState::FailedToStart => ("failed_to_start", None),
+            BackgroundState::CleanupUnconfirmed
+            | BackgroundState::Unknown
+            | BackgroundState::Running => ("unknown", None),
         }
     }
 }

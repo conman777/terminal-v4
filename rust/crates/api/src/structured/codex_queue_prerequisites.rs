@@ -910,7 +910,10 @@ async fn guarded_manager_crash_requires_explicit_epoch_review_before_restore() {
 }
 
 #[tokio::test]
-#[ignore = "Native Codex queue admission is not integrated yet"]
+#[cfg_attr(
+    not(feature = "native-codex-queue-preview"),
+    ignore = "Native Codex queue admission is not integrated yet"
+)]
 async fn existing_running_queue_fences_direct_codex_admission() {
     let data = tempfile::tempdir().unwrap();
     let workspace = tempfile::tempdir().unwrap();
@@ -926,6 +929,8 @@ async fn existing_running_queue_fences_direct_codex_admission() {
         )
         .await
         .unwrap();
+    #[cfg(all(unix, feature = "native-codex-queue-preview"))]
+    native_queue::opt_in("owner", &session.id);
     let scope = QueueScope::new("owner", workspace.path(), &session.id).unwrap();
     let store = QueueStore::new(data.path(), queue::boot_id());
     let revision = store.load(&scope).unwrap().revision;

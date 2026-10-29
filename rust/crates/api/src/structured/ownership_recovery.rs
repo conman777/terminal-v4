@@ -39,6 +39,10 @@ pub(crate) fn routes() -> Router<AppState> {
             post(review_background),
         )
         .route(
+            "/api/structured/background-review",
+            get(background_review_status).post(review_background_standalone),
+        )
+        .route(
             "/api/structured/owner-cleanup/delegation-children",
             get(delegation_children),
         )
@@ -216,6 +220,92 @@ async fn review_background(
 }
 
 #[cfg(unix)]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StandaloneBackgroundReview {
+    operation_id: Uuid,
+    acknowledged: bool,
+}
+
+#[cfg(unix)]
+fn bound_background(
+    app: &AppState,
+) -> Result<std::sync::Arc<crate::v4_agent::background_process::BackgroundProcesses>, ApiError> {
+    app.structured_session_manager()
+        .inner
+        .background_processes
+        .get()
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("Background commands are not enabled"))
+}
+
+#[cfg(unix)]
+async fn background_review_status(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<
+    (
+        [(header::HeaderName, &'static str); 1],
+        Json<serde_json::Value>,
+    ),
+    ApiError,
+> {
+    let background = bound_background(&app)?;
+    let unknown =
+        tokio::task::spawn_blocking(move || background.owner_cleanup_unconfirmed(&user.user_id))
+            .await
+            .map_err(|_| ApiError::internal("Cannot inspect background commands"))?
+            .map_err(|_| ApiError::internal("Cannot inspect background commands"))?;
+    Ok((
+        [(header::CACHE_CONTROL, "private, no-store")],
+        Json(serde_json::json!({"unknown":unknown})),
+    ))
+}
+
+#[cfg(unix)]
+async fn review_background_standalone(
+    State(app): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<crate::auth::LocalAuthority>>,
+    Json(review): Json<StandaloneBackgroundReview>,
+) -> Result<
+    (
+        [(header::HeaderName, &'static str); 1],
+        Json<serde_json::Value>,
+    ),
+    ApiError,
+> {
+    if !review.acknowledged || review.operation_id.is_nil() {
+        return Err(ApiError::bad_request(
+            "Explicit acknowledgment and valid review identity are required",
+        ));
+    }
+    let authority = authority
+        .map(|Extension(value)| value)
+        .ok_or_else(|| ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "A direct owner login is required".into(),
+        })?;
+    let background = bound_background(&app)?;
+    let operation = review.operation_id;
+    let count = tokio::task::spawn_blocking(move || {
+        background.review_unknown_owner_standalone(&app, &user.user_id, &authority, operation, true)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Background review outcome is uncertain"))?
+    .map_err(|_| ApiError {
+        status: StatusCode::CONFLICT,
+        message: "Background review could not be confirmed; check status before retrying".into(),
+    })?;
+    Ok((
+        [(header::CACHE_CONTROL, "private, no-store")],
+        Json(
+            serde_json::json!({"status":"reviewed","operationId":operation,"reviewedCount":count}),
+        ),
+    ))
+}
+
+#[cfg(unix)]
 async fn cleanup_retry(
     State(app): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
@@ -247,11 +337,22 @@ async fn cleanup_status(
     ApiError,
 > {
     let manager = app.structured_session_manager();
-    let status = tokio::task::spawn_blocking(move || manager.owner_cleanup_status(&user.user_id))
-        .await
-        .map_err(|_| ApiError::internal("Cannot inspect owner cleanup"))?
-        .map_err(|_| ApiError::internal("Cannot inspect owner cleanup"))?
-        .ok_or_else(|| ApiError::not_found("Owner cleanup is not enabled"))?;
+    let background = manager.inner.background_processes.get().cloned();
+    let status = tokio::task::spawn_blocking(move || {
+        let Some(mut status) = manager.owner_cleanup_status(&user.user_id)? else {
+            return Ok(None);
+        };
+        if let Some(unknown) = background
+            .and_then(|background| background.owner_cleanup_unconfirmed(&user.user_id).ok())
+        {
+            status["backgroundUnknown"] = serde_json::Value::Bool(unknown);
+        }
+        Ok::<_, String>(Some(status))
+    })
+    .await
+    .map_err(|_| ApiError::internal("Cannot inspect owner cleanup"))?
+    .map_err(|_| ApiError::internal("Cannot inspect owner cleanup"))?
+    .ok_or_else(|| ApiError::not_found("Owner cleanup is not enabled"))?;
     Ok(([(header::CACHE_CONTROL, "private, no-store")], Json(status)))
 }
 

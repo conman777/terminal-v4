@@ -7,6 +7,7 @@ license.workspace = true
 [features]
 supervised-input-preview = []
 queued-authority-preview = []
+native-codex-queue-preview = ["queued-authority-preview"]
 
 [dependencies]
 base64 = "0.22"

@@ -105,6 +105,26 @@ pub(super) fn acquire_lease(
     Ok(SessionLease {})
 }
 
+pub(super) fn remove_session_files(
+    config: &AppConfig,
+    user_id: &str,
+    id: &str,
+    _held: &SessionLease,
+) -> Result<(), String> {
+    for (kind, extension) in [
+        ("structured-native-requests", "jsonl"),
+        ("structured-session-leases", "lock"),
+    ] {
+        let path = session_file(config, kind, user_id, id, extension)?;
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn events_ahead_of(
     config: &AppConfig,
     user_id: &str,

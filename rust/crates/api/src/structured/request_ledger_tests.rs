@@ -359,3 +359,71 @@ fn ledger_ignores_a_torn_final_record_and_compacts_when_full() {
         )
     );
 }
+
+fn lease_and_ledger(data: &Path, id: &str) -> (PathBuf, PathBuf) {
+    let config = AppConfig {
+        data_dir: data.to_path_buf(),
+        ..Default::default()
+    };
+    (
+        request_ledger::session_file(&config, "structured-session-leases", "owner", id, "lock")
+            .unwrap(),
+        request_ledger::session_file(&config, "structured-native-requests", "owner", id, "jsonl")
+            .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn delete_removes_the_lease_and_request_ledger() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let manager = manager(data.path(), &starts);
+    let id = claude_session(&manager, workspace.path()).await;
+    manager
+        .submit("owner", &id, "hello", Some(&Uuid::new_v4().to_string()))
+        .await
+        .unwrap();
+    let (lease, ledger) = lease_and_ledger(data.path(), &id);
+    assert!(lease.exists() && ledger.exists());
+    manager.delete_session("owner", &id).await.unwrap();
+    assert!(!lease.exists() && !ledger.exists());
+    assert!(manager.get_session("owner", &id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn delete_is_refused_while_another_manager_holds_the_lease() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let manager = manager(data.path(), &starts);
+    let id = claude_session(&manager, workspace.path()).await;
+    let held = request_ledger::acquire_lease(&manager.inner.config, "owner", &id).unwrap();
+    assert!(manager.delete_session("owner", &id).await.is_err());
+    assert!(manager.get_session("owner", &id).await.unwrap().is_some());
+    drop(held);
+    manager.delete_session("owner", &id).await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_input_to_a_running_provider_is_fenced_by_the_session_lease() {
+    let data = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let manager = manager(data.path(), &starts);
+    let id = claude_session(&manager, workspace.path()).await;
+    manager
+        .submit("owner", &id, "hello", Some(&Uuid::new_v4().to_string()))
+        .await
+        .unwrap();
+    let held = request_ledger::acquire_lease(&manager.inner.config, "owner", &id).unwrap();
+    assert!(manager
+        .send_input("owner", &id, "typed", false)
+        .await
+        .is_err());
+    drop(held);
+    manager
+        .send_input("owner", &id, "typed", false)
+        .await
+        .unwrap();
+}

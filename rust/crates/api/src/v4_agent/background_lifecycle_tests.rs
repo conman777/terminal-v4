@@ -131,8 +131,9 @@ async fn first_provisioning_in_another_process_fences_session_deletion_until_it_
     use std::process::{Command, Stdio};
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("data");
-    let state = crate::state::AppState::new_runtime(AppConfig {
+    let state = crate::state::AppState::new(AppConfig {
         data_dir: data.clone(),
+        jwt_secret: "provision-fence".into(),
         ..Default::default()
     })
     .unwrap();

@@ -410,3 +410,318 @@ fn pruning_keeps_a_newest_window_per_session_and_other_sessions_untouched() {
         .find(|index| manager.ledger.claim(&base, &format!("m-{index}")).is_err());
     assert_eq!(exhausted, Some(MAX_SESSION_ACTIONS - 20));
 }
+
+#[cfg(unix)]
+mod standalone_review_routes {
+    use super::*;
+    use axum::{body::Body, http::Request, Extension};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    const URL: &str = "/api/structured/background-review";
+
+    fn router(
+        app: &crate::state::AppState,
+        authority: Option<crate::auth::LocalAuthority>,
+    ) -> axum::Router {
+        let router = crate::structured::ownership_recovery::routes().layer(Extension(
+            crate::auth::AuthenticatedUser {
+                user_id: "owner".into(),
+                username: "owner".into(),
+            },
+        ));
+        match authority {
+            Some(value) => router.layer(Extension(value)),
+            None => router,
+        }
+        .with_state(app.clone())
+    }
+
+    async fn post(
+        app: &crate::state::AppState,
+        authority: Option<crate::auth::LocalAuthority>,
+        body: serde_json::Value,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let response = router(app, authority)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(URL)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    async fn unknown(app: &crate::state::AppState) -> (bool, axum::http::StatusCode) {
+        let response = router(app, None)
+            .oneshot(Request::builder().uri(URL).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+        (value["unknown"].as_bool().unwrap_or(false), status)
+    }
+
+    async fn bound_with_unknown(
+        root: &std::path::Path,
+    ) -> (crate::state::AppState, Arc<BackgroundProcesses>) {
+        let (app, first) = provisioned(root).await;
+        let crashed = action(root, "crashed", "touch replayed");
+        first
+            .ledger
+            .claim(&crashed.scope, &crashed.action_id)
+            .unwrap();
+        drop(first);
+        let manager = {
+            let mut db = app.lock_db().unwrap();
+            Arc::new(bootstrap::open_or_provision(root, &mut db).unwrap())
+        };
+        app.structured_session_manager()
+            .bind_background_processes(manager.clone())
+            .unwrap();
+        (app, manager)
+    }
+
+    #[tokio::test]
+    async fn route_reports_unknown_and_reviews_idempotently() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (app, manager) = bound_with_unknown(&root).await;
+        assert_eq!(unknown(&app).await, (true, axum::http::StatusCode::OK));
+        let operation = uuid::Uuid::new_v4();
+        let body = serde_json::json!({"operationId":operation,"acknowledged":true});
+        let expected =
+            serde_json::json!({"status":"reviewed","operationId":operation,"reviewedCount":1});
+        assert_eq!(
+            post(&app, Some(authority(0, future())), body.clone()).await,
+            (axum::http::StatusCode::OK, expected.clone())
+        );
+        assert_eq!(
+            post(&app, Some(authority(0, future())), body).await,
+            (axum::http::StatusCode::OK, expected)
+        );
+        assert_eq!(unknown(&app).await, (false, axum::http::StatusCode::OK));
+        assert!(!root.join("replayed").exists());
+        manager.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn cleanup_status_reports_unknown_commands_for_the_standalone_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (app, manager) = bound_with_unknown(&root).await;
+        app.structured_session_manager()
+            .bind_live_ownership()
+            .unwrap();
+        app.structured_session_manager()
+            .bind_owner_cleanup(app.provision_owner_cleanup().unwrap())
+            .unwrap();
+        let fetch = || async {
+            let response = router(&app, None)
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/structured/owner-cleanup")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+        let before = fetch().await;
+        assert_eq!(
+            (before["state"].clone(), before["backgroundUnknown"].clone()),
+            ("complete".into(), true.into())
+        );
+        post(
+            &app,
+            Some(authority(0, future())),
+            serde_json::json!({"operationId":uuid::Uuid::new_v4(),"acknowledged":true}),
+        )
+        .await;
+        assert_eq!(fetch().await["backgroundUnknown"], false);
+        manager.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn route_refuses_bad_requests_and_stale_credentials_without_attesting() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (app, manager) = bound_with_unknown(&root).await;
+        let operation = uuid::Uuid::new_v4();
+        let body = |acknowledged: bool, operation: uuid::Uuid| serde_json::json!({"operationId":operation,"acknowledged":acknowledged});
+        let fresh = || Some(authority(0, future()));
+        assert_eq!(
+            post(&app, fresh(), body(false, operation)).await.0,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post(&app, fresh(), body(true, uuid::Uuid::nil())).await.0,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            post(
+                &app,
+                fresh(),
+                serde_json::json!({"operationId":operation,"acknowledged":true,"extra":1})
+            )
+            .await
+            .0,
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            post(&app, None, body(true, operation)).await.0,
+            axum::http::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            post(&app, Some(authority(1, future())), body(true, operation))
+                .await
+                .0,
+            axum::http::StatusCode::CONFLICT
+        );
+        assert_eq!(
+            post(&app, Some(authority(0, 0)), body(true, operation))
+                .await
+                .0,
+            axum::http::StatusCode::CONFLICT
+        );
+        assert!(manager.ledger.has_unknown_owner("owner").unwrap());
+        manager.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn route_refuses_while_a_process_runs_and_when_commands_are_not_enabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (app, manager) = provisioned(&root).await;
+        app.structured_session_manager()
+            .bind_background_processes(manager.clone())
+            .unwrap();
+        let running = action(&root, "running", "sleep 30");
+        manager
+            .start(running.clone(), Some(&running))
+            .await
+            .unwrap();
+        let mut late = running.clone();
+        late.action_id = "late".into();
+        manager.ledger.claim(&late.scope, &late.action_id).unwrap();
+        let body = serde_json::json!({"operationId":uuid::Uuid::new_v4(),"acknowledged":true});
+        let refused = post(&app, Some(authority(0, future())), body.clone()).await;
+        assert_eq!(refused.0, axum::http::StatusCode::CONFLICT);
+        assert!(manager.ledger.has_unknown_owner("owner").unwrap());
+        manager
+            .cancel(&running.scope, &running.action_id)
+            .await
+            .ok();
+        manager.shutdown().await.ok();
+
+        let other = tempfile::tempdir().unwrap();
+        let unbound = crate::state::AppState::new(terminal_v4_core::AppConfig {
+            data_dir: other.path().canonicalize().unwrap(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(unknown(&unbound).await.1, axum::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            post(&unbound, Some(authority(0, future())), body).await.0,
+            axum::http::StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[cfg(unix)]
+mod startup_provisioning {
+    use terminal_v4_core::AppConfig;
+
+    async fn runtime(config: &AppConfig) -> crate::state::AppState {
+        for _ in 0..100 {
+            if let Ok(state) = crate::state::AppState::new_runtime(config.clone()) {
+                return state;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("runtime did not start");
+    }
+
+    fn config(root: &std::path::Path) -> AppConfig {
+        AppConfig {
+            data_dir: root.to_path_buf(),
+            ..Default::default()
+        }
+    }
+
+    fn ledger_identity(root: &std::path::Path) -> (u64, u64) {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(root.join("background-processes/receipts.sqlite3")).unwrap();
+        (meta.dev(), meta.ino())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_install_provisions_and_restart_reopens_the_same_ledger() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let first = runtime(&config(&root)).await;
+        let manager = first.structured_session_manager();
+        assert!(manager.background_processes_for_test().is_some());
+        let identity = ledger_identity(&root);
+        manager.shutdown().await.unwrap();
+        drop(manager);
+        drop(first);
+
+        let second = runtime(&config(&root)).await;
+        let manager = second.structured_session_manager();
+        assert!(manager.background_processes_for_test().is_some());
+        assert_eq!(ledger_identity(&root), identity);
+        manager.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn interrupted_or_lost_installation_leaves_the_feature_unavailable_not_the_server_down() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let first = runtime(&config(&root)).await;
+        let manager = first.structured_session_manager();
+        let database = first.lock_db().unwrap().path().unwrap().to_string();
+        manager.shutdown().await.unwrap();
+        drop(manager);
+        drop(first);
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE background_ledger_installation SET state='initializing' WHERE id=1",
+                [],
+            )
+            .unwrap();
+        let identity = ledger_identity(&root);
+
+        let interrupted = runtime(&config(&root)).await;
+        let manager = interrupted.structured_session_manager();
+        assert!(manager.background_processes_for_test().is_none());
+        assert_eq!(ledger_identity(&root), identity);
+        manager.shutdown().await.ok();
+        drop(manager);
+        drop(interrupted);
+
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE background_ledger_installation SET state='ready' WHERE id=1",
+                [],
+            )
+            .unwrap();
+        std::fs::remove_dir_all(root.join("background-processes")).unwrap();
+        let lost = runtime(&config(&root)).await;
+        let manager = lost.structured_session_manager();
+        assert!(manager.background_processes_for_test().is_none());
+        assert!(!root.join("background-processes").exists());
+        manager.shutdown().await.ok();
+    }
+}

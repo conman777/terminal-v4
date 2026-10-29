@@ -814,6 +814,8 @@ mod edit_tests {
             last_run_at: None,
             last_task_id: None,
             created_at: now,
+            missed_runs: 0,
+            last_missed_at: None,
         };
         let at = CalendarTime {
             hour: 2,

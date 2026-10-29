@@ -289,7 +289,19 @@ impl AppState {
                 }
                 Ok(
                     crate::v4_agent::background_process::bootstrap::ExistingInstallation::Absent,
-                ) => {}
+                ) => match state.provision_background() {
+                    Ok(background) => manager.bind_background_processes(Arc::new(background))?,
+                    Err(error) => {
+                        tracing::warn!(%error, "Background process provisioning failed");
+                        match state.open_existing_background() {
+                            Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Absent) => {}
+                            Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Available(background)) => {
+                                manager.bind_background_processes(Arc::new(background))?
+                            }
+                            _ => manager.mark_background_unavailable(),
+                        }
+                    }
+                },
                 Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Busy) => {
                     manager.mark_background_unavailable();
                     tracing::warn!("Background process manager is owned by another server");
@@ -431,6 +443,26 @@ impl AppState {
         let result = crate::v4_agent::background_process::bootstrap::open_existing(
             &self.config().data_dir,
             &db,
+        )?;
+        fence.validate(&db)?;
+        Ok(result)
+    }
+
+    #[cfg(unix)]
+    fn provision_background(
+        &self,
+    ) -> Result<crate::v4_agent::background_process::BackgroundProcesses, String> {
+        let fence = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _guard = fence.acquire()?;
+        let mut db = self.lock_db()?;
+        fence.validate(&db)?;
+        let result = crate::v4_agent::background_process::bootstrap::open_or_provision(
+            &self.config().data_dir,
+            &mut db,
         )?;
         fence.validate(&db)?;
         Ok(result)

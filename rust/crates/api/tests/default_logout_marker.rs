@@ -21,6 +21,8 @@ fn default_logout_marker_fixture() {
         return;
     };
     let root = Path::new(&root);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _enter = runtime.enter();
     let state = ApiState::new_runtime(AppConfig {
         data_dir: root.into(),
         jwt_secret: SECRET.into(),
@@ -35,6 +37,8 @@ fn default_logout_marker_fixture() {
 #[test]
 fn default_build_process_honors_existing_input_installation() {
     let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _enter = runtime.enter();
     let state = ApiState::new_runtime(AppConfig {
         data_dir: root.path().into(),
         jwt_secret: SECRET.into(),
