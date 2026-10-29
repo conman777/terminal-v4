@@ -70,7 +70,7 @@ describe.runIf(process.env.E2E_WEBSOCKET_LAYOUT === '1')('WebSocketTab actual Ch
         expect(list.overflowY).toBe('auto');
         expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
       }
-      expect(metrics.background).toBe(theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(31, 31, 31)');
+      expect(metrics.background).toBe(theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(16, 16, 16)');
       const scroll = await page.evaluate(() => {
         const [connectionsList, messagesList] = document.querySelectorAll('.websocket-tab__scroll');
         connectionsList.scrollTop = connectionsList.scrollHeight;

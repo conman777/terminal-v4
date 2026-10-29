@@ -1,6 +1,7 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../test/managedChromium';
 import { render } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LightweightMarkdown } from './LightweightMarkdown';
@@ -18,9 +19,7 @@ beforeAll(async () => {
   view.unmount();
   css = (await Promise.all(['styles.css', 'ProUI.css', 'WorkspaceShell.css', 'WorkspaceUI.css', 'components/LightweightMarkdown.css']
     .map(file => readFile(resolve(process.cwd(), 'src', file), 'utf8')))).join('\n');
-  const runtime = resolve(process.cwd(), '../.runtime/browser');
-  const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-  browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
   await mkdir(evidence, { recursive: true });
 });
 afterAll(async () => { await browser?.close(); });

@@ -63,6 +63,7 @@ export default function ThreadsSidebar({
   pinnedSessions,
   archivedSessions,
   sessionLoadError = false,
+  sessionsLoading = false,
   activeSessionId,
   currentSessionId = activeSessionId,
   latestAssistantText,
@@ -375,7 +376,8 @@ export default function ThreadsSidebar({
 
             <div className="pro-tree-section threads-recent">
               {recentSessions.filter(session => !snoozedIds.has(session.id) && !settledIds.has(session.id) && !workingIds.has(session.id)).map(renderCard)}
-              {!hasAnyThread && !sessionLoadError && <div className="pro-empty-state">{normalizedQuery ? 'No matching thread names or projects' : projectFilter ? 'No matching threads' : 'No threads yet'}</div>}
+              {!hasAnyThread && !sessionLoadError && sessionsLoading && <div className="pro-empty-state" role="status">Loading threads…</div>}
+              {!hasAnyThread && !sessionLoadError && !sessionsLoading && <div className="pro-empty-state">{normalizedQuery ? 'No matching thread names or projects' : projectFilter ? 'No matching threads' : 'No threads yet'}</div>}
             </div>
 
             {snoozedSessions.length > 0 && <section className="pro-tree-section threads-snoozed" aria-label="Snoozed threads">

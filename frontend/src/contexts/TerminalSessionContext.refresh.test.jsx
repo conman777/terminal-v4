@@ -11,9 +11,10 @@ vi.mock('./FolderContext', () => ({
 vi.mock('../utils/api', () => ({ apiFetch, apiGet: vi.fn() }));
 
 function Consumer() {
-  const { loadingSessions, sessions } = useTerminalSession();
+  const { loadingSessions, sessions, selectSession } = useTerminalSession();
   return (
     <>
+      <button type="button" onClick={() => selectSession('session-1')}>select</button>
       <span data-testid="loading-state">{loadingSessions ? 'loading' : 'idle'}</span>
       <span data-testid="session-ids">{sessions.map(session => session.id).join(',')}</span>
     </>
@@ -117,5 +118,23 @@ describe('TerminalSessionContext background refresh', () => {
     await waitFor(() => expect(screen.getByTestId('session-ids')).toHaveTextContent('session-newer'));
     await act(async () => { stateResponses[0].resolve(json({ sessions: [{ id: 'session-older', isActive: true }] })); });
     expect(screen.getByTestId('session-ids')).toHaveTextContent('session-newer');
+  });
+
+  it('still shows the initial inventory when the user selects a thread while it is loading', async () => {
+    const initialTerminals = deferred();
+    apiFetch.mockImplementation(async url => {
+      if (url === '/api/terminal') return initialTerminals.promise;
+      if (url === '/api/structured/sessions?view=inventory') return json([]);
+      if (isStateUrl(url)) return new Promise(() => {});
+      throw new Error(`unexpected request ${url}`);
+    });
+
+    render(<TerminalSessionProvider><Consumer /></TerminalSessionProvider>);
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/terminal'));
+    await act(async () => { screen.getByText('select').click(); });
+    await act(async () => { initialTerminals.resolve(json({ sessions: [{ id: 'session-1', isActive: true }] })); });
+
+    await waitFor(() => expect(screen.getByTestId('session-ids')).toHaveTextContent('session-1'));
+    expect(screen.getByTestId('loading-state')).toHaveTextContent('idle');
   });
 });

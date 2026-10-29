@@ -111,6 +111,7 @@ function MobileThreadRenameDialog({sessionId, initialTitle, pending, onSave, onC
 export function MobileHeader({
   activeSessions = [],
   sessionLoadError = false,
+  sessionsLoading = false,
   activeSessionId,
   onSelectSession,
   onSelectHistoryResult,
@@ -790,6 +791,7 @@ export function MobileHeader({
         previewUrl={previewUrl}
         activeSessions={visibleActiveSessions}
         sessionLoadError={sessionLoadError}
+        sessionsLoading={sessionsLoading}
         archivedSessions={archivedSessions}
         onUnarchiveSession={onUnarchiveSession}
         activeSessionId={isWorkspaceStart ? null : activeSessionId}

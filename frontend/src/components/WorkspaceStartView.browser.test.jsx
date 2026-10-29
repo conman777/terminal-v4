@@ -1,13 +1,15 @@
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../test/managedChromium';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { setUser } from '../utils/auth';
 import { WorkspaceStartView } from './WorkspaceStartView';
 
 const mocks = vi.hoisted(() => ({ available: false, upload: vi.fn() }));
 vi.mock('../utils/api', () => ({ apiFetch: async url => ({ ok: true, json: async () => String(url).startsWith('/api/agent/catalog')
-  ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'codex', available: mocks.available, status: 'not-installed', capabilities: { structured: true },
+  ? { agents: [{ id: 'codex', label: 'Codex', runtime: 'v4', available: mocks.available, status: 'not-installed', capabilities: { structured: true },
     models: [{ id: 'synthetic-model', label: 'Synthetic model', default: true }] }] } : {} }), uploadScreenshot: (...args) => mocks.upload(...args) }));
 vi.mock('../contexts/AutocorrectContext', () => ({ useAutocorrect: () => ({ autocorrectEnabled: false, toggleAutocorrect() {} }) }));
 vi.mock('../hooks/useAutocorrectInput', () => ({ useAutocorrectInput: () => ({ handleKeyDown() {}, handleSelectionChange() {} }) }));
@@ -16,15 +18,13 @@ vi.mock('./TerminalMicButton', () => ({ TerminalMicButton: () => null }));
 const enabled = process.env.E2E_CHAT_LAYOUT === '1';
 const evidence = resolve(process.cwd(), '../output/overnight-polish-20261025/chat');
 let browser, css;
-beforeEach(() => { localStorage.clear(); mocks.available = false; mocks.upload.mockReset(); });
+beforeEach(() => { localStorage.clear(); setUser({ id: 'fixture-user' }); mocks.available = false; mocks.upload.mockReset(); });
 beforeAll(async () => {
   if (!enabled) return;
   css = (await Promise.all(['styles.css', 'ProUI.css', 'WorkspaceShell.css', 'WorkspaceUI.css', 'components/DesktopComposer.css',
     'components/ComposerPicker.css', 'components/AgentModelPicker.css', 'components/ModelSettingsPopover.css']
     .map(file => readFile(resolve(process.cwd(), 'src', file), 'utf8')))).join('\n');
-  const runtime = resolve(process.cwd(), '../.runtime/browser');
-  const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-  browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
   await mkdir(evidence, { recursive: true });
 });
 afterAll(async () => { await browser?.close(); });
@@ -38,7 +38,7 @@ describe.skipIf(!enabled)('workspace launch prerequisites with managed Chromium'
     fireEvent.change(composer, { target: { value: 'Use the screenshot to fix this' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
     fireEvent.drop(composer.closest('form'), { dataTransfer: { types: ['Files'], files: [new File(['synthetic'], 'start-image.png', { type: 'image/png' })] } });
-    const message = 'Images cannot be attached on this screen. Start with text, or use a conversation that supports images.';
+    const message = 'Images cannot be attached on this screen. Open a conversation to add images.';
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
     expect(mocks.upload).not.toHaveBeenCalled();
     expect(submit).not.toHaveBeenCalled();

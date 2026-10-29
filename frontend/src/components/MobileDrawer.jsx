@@ -110,6 +110,7 @@ export function MobileDrawer({
   activeSessions = [],
   archivedSessions = [],
   sessionLoadError = false,
+  sessionsLoading = false,
   onUnarchiveSession,
   activeSessionId,
   sessionActivity,
@@ -530,7 +531,7 @@ export function MobileDrawer({
           <div className="mobile-drawer-header-top">
             <div className="mobile-drawer-header-copy">
               <h2>Workspace</h2>
-              <span>{sessionLoadError ? 'Load failed' : `${activeSessions.length} active`}</span>
+              <span>{sessionLoadError ? 'Load failed' : sessionsLoading && activeSessions.length === 0 ? 'Loading…' : `${activeSessions.length} active`}</span>
             </div>
             {serverControl && <div className="mobile-drawer-server-control">{serverControl}</div>}
             <button ref={closeButtonRef} className="mobile-drawer-close-modern" onClick={onClose} aria-label="Close menu">
@@ -584,7 +585,8 @@ export function MobileDrawer({
                 <div className="mobile-drawer-section-collapsible-modern"><span className="collapsible-title-modern">Settled</span></div>
                 {renderThreadGroups(settledGroups)}
               </section>}
-              {visibleThreadGroups.length === 0 && !sessionLoadError && (
+              {visibleThreadGroups.length === 0 && !sessionLoadError && sessionsLoading && <div className="md-empty-state" role="status">Loading threads…</div>}
+              {visibleThreadGroups.length === 0 && !sessionLoadError && !sessionsLoading && (
                 <div className="md-empty-state">{threadSearch.trim() ? 'No matching active thread names or projects' : 'No active threads'}</div>
               )}
               {visibleArchived.length > 0 && <section aria-label="Archived threads">

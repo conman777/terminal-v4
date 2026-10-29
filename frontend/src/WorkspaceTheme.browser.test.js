@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from './test/managedChromium';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 // Palette sampled from T3 Code (Beta) 0.1.2 running on macOS and its shipped tokens.
@@ -21,9 +22,7 @@ const MARKUP = `<div class="environment-shell environment-workspace">
 let browser, css;
 beforeAll(async () => {
   css = (await Promise.all(STYLESHEETS.map(file => readFile(resolve(process.cwd(), 'src', file), 'utf8')))).join('\n');
-  const runtime = resolve(process.cwd(), '../.runtime/browser');
-  const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-  browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
 });
 afterAll(async () => { await browser?.close(); });
 

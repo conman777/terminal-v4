@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../../../test/managedChromium';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { PerformanceTab } from '../PerformanceTab';
@@ -14,9 +15,7 @@ describe.runIf(process.env.E2E_PERFORMANCE_LAYOUT === '1')('PerformanceTab actua
     css = (await Promise.all(['../../../styles.css', '../../../WorkspaceUI.css', '../../../devtools.css', '../PerformanceTab.css'].map(path =>
       readFile(new URL(path, import.meta.url), 'utf8')
     ))).join('\n');
-    const runtime = resolve(process.cwd(), '../.runtime/browser');
-    const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-    browser = await chromium.launch({ executablePath: process.env.E2E_LOCAL_BROWSER || resolve(runtime, manifest.chromium), headless: true });
+    browser = await chromium.launch({ executablePath: process.env.E2E_LOCAL_BROWSER || await managedChromiumPath(), headless: true });
   });
   afterAll(async () => { await browser?.close(); });
 
@@ -69,7 +68,7 @@ describe.runIf(process.env.E2E_PERFORMANCE_LAYOUT === '1')('PerformanceTab actua
       console.info(JSON.stringify({ theme, width, touch, geometry }));
       expect(geometry).toMatchObject({ top: 36, bottom: 280, height: 244, overflowY: 'auto', gridDisplay: 'grid', scrollable: true, horizontalOverflow: false, coarse: touch });
       expect(geometry.columns).toBe(width === 980 ? 3 : width === 520 ? 2 : 1);
-      expect(geometry.background).toBe(theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(31, 31, 31)');
+      expect(geometry.background).toBe(theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(16, 16, 16)');
       expect(geometry.statuses).toEqual(geometry.expectedStatuses);
       for (const button of geometry.buttons) {
         expect(button.native).toBe(true);

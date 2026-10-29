@@ -118,6 +118,7 @@
 .workspace-start-base input:focus-visible, .workspace-start-base select:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
 .workspace-start-composer-shell .desktop-status-bar.desktop-status-bar-shell { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
 .workspace-start-composer-shell .desktop-status-bar .status-composer-shell { box-sizing: border-box; max-width: 100% !important; min-height: 112px; border: 1px solid var(--border-default) !important; background: var(--bg-surface) !important; border-radius: var(--ui-composer-radius, 12px) !important; box-shadow: none !important; padding: 12px !important; gap: 8px !important; }
+.workspace-start-composer-shell .desktop-status-bar .status-composer-shell:focus-within { border-color: var(--accent-primary) !important; }
 .workspace-start-composer-shell .desktop-status-bar .status-composer-input { min-height: 48px !important; height: 48px; max-height: 160px !important; padding: 2px; font-size: var(--workspace-composer-font-size, 13px) !important; line-height: 1.6 !important; }
 .workspace-start-composer-shell .status-bar-right { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; border-top: none !important; padding-top: 0 !important; }
 .workspace-start-controls { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }

@@ -1936,6 +1936,7 @@ function AppContent({ serverControl }) {
           <WorkspacePanel kind="navigation" collapsed={sidebarCollapsed} reserveSpace={showBrowser && !browserExpanded && !fullscreenPaneId && (viewportWidth || window.innerWidth) > 980 ? 720 : 640} onResize={requestMainTerminalFit}>
           <ThreadsSidebar
             sessionLoadError={Boolean(sessionLoadError)}
+            sessionsLoading={Boolean(loadingSessions)}
             onOpenWorkspaceStart={() => { cancelHistoryNavigation(); setShowWorkspaceStart(true); }}
             serverControl={serverControl}
             workspacePath={navigationWorkspacePath}
@@ -2155,6 +2156,7 @@ function AppContent({ serverControl }) {
         <div className="main-pane">
             <MobileHeader
             sessionLoadError={Boolean(sessionLoadError)}
+            sessionsLoading={Boolean(loadingSessions)}
             serverControl={serverControl}
             workspaceActions={projectNavigationActions}
             onFindInThread={() => setFindInThreadOpen(true)}

@@ -1,4 +1,5 @@
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../../../test/managedChromium';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -70,9 +71,7 @@ describe.runIf(process.env.E2E_CONSOLE_HEIGHT === '1')('live DevToolsPanel bound
       createHash('sha256').update(await readFile(resolve(frontend, 'src', name))).digest('hex')])));
     await mkdir(evidence, { recursive: true });
     await writeFile(resolve(evidence, `browser-${stage}-sources.json`), JSON.stringify(sourceHashes, null, 2));
-    const runtime = resolve(frontend, '../.runtime/browser');
-    const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-    browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+    browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
   }, 30000);
 
   afterAll(async () => { await browser?.close(); });

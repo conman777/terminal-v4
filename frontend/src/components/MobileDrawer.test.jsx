@@ -85,6 +85,16 @@ describe('MobileDrawer', () => {
     expect(screen.queryByRole('region', { name: 'Snoozed threads' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Snoozed work/ })).toBeVisible();
   });
+  it('announces loading instead of an empty thread list while sessions load', () => {
+    const props = buildProps({ activeSessions: [], sessionsGroupedByProject: [], sessionsLoading: true });
+    const { rerender } = render(<MobileDrawer {...props} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading threads…');
+    expect(screen.queryByText('No active threads')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 active')).not.toBeInTheDocument();
+    rerender(<MobileDrawer {...props} sessionsLoading={false} />);
+    expect(screen.getByText('No active threads')).toBeVisible();
+    expect(screen.queryByText('Loading threads…')).not.toBeInTheDocument();
+  });
   it('does not present a failed session inventory as an empty thread list', () => {
     const props = buildProps({ activeSessions: [], sessionsGroupedByProject: [], sessionLoadError: true });
     const { rerender } = render(<MobileDrawer {...props} />);

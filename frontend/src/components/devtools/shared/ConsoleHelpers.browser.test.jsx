@@ -1,4 +1,5 @@
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../../../test/managedChromium';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -50,9 +51,7 @@ describe.runIf(process.env.E2E_CONSOLE_HELPERS === '1')('live React ConsoleTab s
     css = (await Promise.all(['styles.css', 'WorkspaceUI.css', 'devtools.css', 'components/devtools/ConsoleTab.css',
       ...['JsonTreeView', 'LogViewer', 'FilterBar'].map(name => `components/devtools/shared/${name}.css`)]
       .map(name => readFile(resolve(frontend, 'src', name), 'utf8')))).join('\n');
-    const runtime = resolve(frontend, '../.runtime/browser');
-    const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-    browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+    browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
     await mkdir(evidence, { recursive: true });
   }, 30000);
 

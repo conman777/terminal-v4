@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../../../test/managedChromium';
 import { mkdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { ConsoleTab } from '../ConsoleTab';
@@ -11,9 +12,7 @@ describe.runIf(process.env.E2E_CONSOLE_LAYOUT === '1')('ConsoleTab expanded-log 
     css = (await Promise.all(['../../../styles.css', '../../../WorkspaceUI.css', '../../../devtools.css', '../ConsoleTab.css'].map(path =>
       readFile(new URL(path, import.meta.url), 'utf8')
     ))).join('\n');
-    const runtime = resolve(process.cwd(), '../.runtime/browser');
-    const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-    browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+    browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
   });
   afterAll(async () => { await browser?.close(); });
 

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { managedChromiumPath } from '../test/managedChromium';
 import { render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthModal } from './ProviderAuthModal';
@@ -30,9 +31,7 @@ beforeAll(async () => {
     'styles.css', 'ProUI.css', 'WorkspaceShell.css', 'components/AccountAccess.css',
     'components/ProviderAuthModal.css', 'WorkspaceUI.css',
   ].map(file => readFile(resolve(process.cwd(), 'src', file), 'utf8')))).join('\n');
-  const runtime = resolve(process.cwd(), '../.runtime/browser');
-  const manifest = JSON.parse(await readFile(resolve(runtime, 'runtime.json'), 'utf8'));
-  browser = await chromium.launch({ executablePath: resolve(runtime, manifest.chromium), headless: true });
+  browser = await chromium.launch({ executablePath: await managedChromiumPath(), headless: true });
 });
 afterAll(async () => {
   await browser?.close();

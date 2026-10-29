@@ -416,6 +416,16 @@ describe('ThreadsSidebar', () => {
     expect(screen.getByText('No threads yet')).toBeInTheDocument();
   });
 
+  it('announces loading instead of claiming there are no threads while sessions load', () => {
+    const props = buildProps({ projects: [], sessionsGroupedByProject: [], pinnedSessions: [], archivedSessions: [], sessionsLoading: true });
+    const { rerender } = render(<ThreadsSidebar {...props} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading threads…');
+    expect(screen.queryByText('No threads yet')).not.toBeInTheDocument();
+    rerender(<ThreadsSidebar {...props} sessionsLoading={false} />);
+    expect(screen.getByText('No threads yet')).toBeInTheDocument();
+    expect(screen.queryByText('Loading threads…')).not.toBeInTheDocument();
+  });
+
   it('lists manually added projects without sessions in the project filter', () => {
     render(<ThreadsSidebar {...buildProps({ projects: [{ path: 'C:\\manual-project', name: 'manual-project' }], sessionsGroupedByProject: [], pinnedSessions: [], archivedSessions: [] })} />);
     expect(openProjects()).toHaveTextContent('manual-project');

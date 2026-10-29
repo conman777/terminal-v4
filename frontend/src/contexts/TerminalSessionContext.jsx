@@ -89,6 +89,7 @@ export function TerminalSessionProvider({ children }) {
   const selectionGenerationRef = useRef(0);
   const inventoryGenerationRef = useRef(0);
   const inventorySeqRef = useRef(0);
+  const loadRequestRef = useRef(0);
   const appliedInventorySeqRef = useRef(0);
 
   const captureSelection = useCallback(() => {
@@ -305,10 +306,13 @@ export function TerminalSessionProvider({ children }) {
     const inventoryGeneration = ++inventoryGenerationRef.current;
     const inventorySeq = ++inventorySeqRef.current;
     const selectionGeneration = selectionGenerationRef.current;
+    const isInitialLoad = !hasLoadedOnceRef.current;
+    const loadRequest = ++loadRequestRef.current;
     const current = () => isMountedRef.current && !environmentSignal.current.aborted && isAuthScopeCurrent(auth)
-      && inventoryGenerationRef.current === inventoryGeneration
       && appliedInventorySeqRef.current <= inventorySeq
-      && selectionGenerationRef.current === selectionGeneration;
+      && (isInitialLoad
+        ? loadRequestRef.current === loadRequest
+        : inventoryGenerationRef.current === inventoryGeneration && selectionGenerationRef.current === selectionGeneration);
     // Only show loading indicator on first load to avoid flashing the terminal
     if (!hasLoadedOnceRef.current) {
       setLoadingSessions(true);
