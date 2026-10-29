@@ -248,4 +248,23 @@ describe('advanced schedule capability', () => {
     await screen.findByText(/Advanced scheduling is unavailable/);
     expect(apiFetch.mock.calls.filter(([url, options]) => url === '/api/workspace/schedules' && options?.method === 'POST')).toEqual([]);
   });
+
+  it('shows each schedule\'s last result, last error and missed runs from the task list', async () => {
+    const failed = { ...task, id: 'task-bad', status: 'failed', error: 'Agent exited with code 2', result: '', output: '' };
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ tasks: [failed], schedules: [
+      { ...schedule, enabled: true, lastRunAt: 1000, lastTaskId: 'task-bad', missedRuns: 3, lastMissedAt: 2000 },
+      { ...schedule, id: 'schedule-two', name: 'Nightly', lastRunAt: 1000, lastTaskId: 'gone' },
+      { ...schedule, id: 'schedule-three', name: 'Fresh', missedRuns: 1 },
+    ] }) });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText(/Last error: Agent exited with code 2/);
+    const texts = [...document.querySelectorAll('.workspace-schedule-last, .workspace-schedule-missed')].map(node => node.textContent.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}.*?(?= ·|\)|$)/g, 'DATE'));
+    expect(texts).toEqual([
+      expect.stringContaining('· failed'),
+      expect.stringMatching(/^Missed 3 scheduled runs while the app server was not running \(latest /),
+      expect.stringContaining('result unavailable'),
+      'Never run',
+      expect.stringMatching(/^Missed 1 scheduled run while/),
+    ]);
+  });
 });

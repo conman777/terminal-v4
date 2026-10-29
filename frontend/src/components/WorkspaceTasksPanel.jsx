@@ -36,6 +36,14 @@ export function describeSchedule(schedule, showZone = false) {
   return `${days} at ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}${showZone ? ` ${zone}` : ''}`;
 }
 
+export function describeLastRun(schedule, tasks) {
+  if (!schedule.lastRunAt) return { text: 'Never run', error: '' };
+  const when = new Date(schedule.lastRunAt).toLocaleString();
+  const task = schedule.lastTaskId ? tasks.find(item => item.id === schedule.lastTaskId) : null;
+  if (!task) return { text: `Last run ${when} · result unavailable (the task was removed or is not listed)`, error: '' };
+  return { text: `Last run ${when} · ${task.status}`, error: task.status === 'completed' ? '' : task.error || '' };
+}
+
 export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onInsertPrompt, latestAssistantText = '' }) {
   const [tasks, setTasks] = useState([]);
   const [agents, setAgents] = useState(null);
@@ -217,6 +225,8 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
             <div className="workspace-task-record-heading"><strong>{schedule.name}</strong><span>{schedule.runOnceAt != null && schedule.lastTaskId ? 'Triggered' : schedule.enabled ? 'Enabled' : 'Paused'}</span></div>
             <p>{schedule.provider} · {describeSchedule(schedule, true)}</p>
             {schedule.nextRunAt && <small>Next run: {new Date(schedule.nextRunAt).toLocaleString()}</small>}
+            {(() => { const last = describeLastRun(schedule, tasks); return <><small className="workspace-schedule-last">{last.text}</small>{last.error && <p className="workspace-task-error">Last error: {last.error}</p>}</>; })()}
+            {schedule.missedRuns > 0 && <small className="workspace-schedule-missed">{`Missed ${schedule.missedRuns} scheduled ${schedule.missedRuns === 1 ? 'run' : 'runs'} while the app server was not running${schedule.lastMissedAt ? ` (latest ${new Date(schedule.lastMissedAt).toLocaleString()})` : ''}.`}</small>}
             <div className="workspace-task-actions">
               {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={(schedule.enabled ? 'Pause ' : 'Enable ') + schedule.name} onClick={() => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { enabled: !schedule.enabled } })}>{schedule.enabled ? 'Pause' : 'Enable'}</button>}
               {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={'Run ' + schedule.name + ' now'} onClick={() => mutate('/api/workspace/schedules/' + schedule.id + '/run', { method: 'POST' })}>Run now</button>}

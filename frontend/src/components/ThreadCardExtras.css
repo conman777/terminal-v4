@@ -1,0 +1,21 @@
+.thread-pr, .thread-editor { display: grid; gap: 4px; min-width: 0; }
+.thread-pr-actions, .thread-editor-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 8px; }
+.thread-pr-actions button, .thread-pr-confirm button {
+  padding: 5px 10px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-elevated);
+  color: var(--text-primary); font: 12px/1.3 var(--font-ui); cursor: pointer;
+}
+.thread-pr-actions button[aria-pressed="true"] { border-color: var(--accent-primary); }
+.thread-pr-actions button:disabled, .thread-pr-confirm button:disabled { opacity: .55; cursor: default; }
+.thread-pr-confirm { display: grid; gap: 6px; padding: 6px 8px; margin: 0 8px; border: 1px solid var(--border-default); border-radius: 8px; }
+.thread-pr-confirm label { display: grid; gap: 4px; font-size: 12px; }
+.thread-pr-confirm select, .thread-editor select { box-sizing: border-box; max-width: 100%; padding: 4px 6px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-base); color: var(--text-primary); font: inherit; }
+.thread-pr > p, .thread-editor > p { padding: 0 8px; }
+.thread-editor-row { flex-wrap: nowrap; }
+.thread-editor-row .thread-details-row { flex: 1; min-width: 0; }
+.thread-editor-row select { flex: 0 1 96px; min-width: 0; }
+@media (pointer: coarse) {
+  .thread-pr-actions button, .thread-pr-confirm button, .thread-editor select { min-height: 44px; }
+}
+.project-script-edit { width: auto; padding: 0 8px; font: 12px var(--font-ui); }
+.project-script-form button[type="button"] { background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border-default); }
+.workspace-schedule-missed { color: var(--warning, var(--text-secondary)); }

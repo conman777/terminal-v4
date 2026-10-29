@@ -9,6 +9,7 @@ import { getEnvironmentStorage, getActiveEnvironment, getEnvironmentSignal, subs
 import { captureAuthScope, isAuthScopeCurrent } from './utils/auth';
 import { shouldInitializeWorkspacePane } from './utils/paneSessionAssignments';
 import { resolveAgentSessionLaunch } from './utils/agentLauncher';
+import { recordThreadLineage } from './utils/threadLineageApi';
 import { reopenWorkspaceSession } from './utils/workspaceNavigation';
 import { isStructuredSessionId } from './utils/structuredSessions';
 import { busyTransitions, notifyAgent } from './utils/agentNotifications';
@@ -1387,6 +1388,7 @@ function AppContent({ serverControl }) {
     if (!session?.cwd) return;
     handleSubmitWorkspaceStartPrompt(prompt, { path: session.cwd, agentId: session.runtime === 'codex' ? 'codex' : session.aiType,
       selection: session.model ? { model: session.model, reasoning: session.reasoning || '' } : undefined })
+      .then(result => { if (result?.sessionId && session.id) return recordThreadLineage(result.sessionId, session.id, 'fork'); })
       .catch(error => console.error('Failed to start the new thread', error));
   }, [handleSubmitWorkspaceStartPrompt]);
 

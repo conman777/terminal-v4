@@ -7,6 +7,7 @@ import { getSessionDisplayInfo } from '../utils/sessionDisplay';
 import { isStructuredSessionId } from '../utils/structuredSessions';
 import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { promptCustomSnoozeSeconds, settlementUnavailableReason, snoozeChoices } from '../utils/snoozeChoices';
 import './MobileUI.css';
 
 const EDGE_SWIPE_ZONE_PX = 28;
@@ -360,7 +361,7 @@ export function MobileHeader({
     const unsubscribeEnvironment = subscribeEnvironment(scopeChanged);
     return () => { snoozeRequestRef.current = null; unsubscribeAuth(); unsubscribeEnvironment(); };
   }, []);
-  const handleSnoozeFromMenu = async (sessionId, snoozed) => {
+  const handleSnoozeFromMenu = async (sessionId, snoozed, seconds = 3600) => {
     const lifecycle = activeVisibleSession?.threadLifecycle;
     if (snoozeRequestRef.current || !onUpdateThreadMetadata || activeVisibleSession?.id !== sessionId
       || activeVisibleSession.thread?.archived || lifecycle?.supported !== true
@@ -370,15 +371,26 @@ export function MobileHeader({
     const request = { auth: captureAuthScope(), environment: getEnvironmentSignal() };
     snoozeRequestRef.current = request;
     setSnoozePending(true);
-    setSnoozeFeedback({ sessionId, snoozed, error: null });
+    setSnoozeFeedback({ sessionId, snoozed, seconds, error: null });
     try {
-      await onUpdateThreadMetadata(sessionId, snoozed ? { wakeSnooze: true } : { snoozeForSeconds: 3600 });
+      await onUpdateThreadMetadata(sessionId, snoozed ? { wakeSnooze: true } : { snoozeForSeconds: seconds });
       if (snoozeRequestRef.current === request && snoozeScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setSnoozeFeedback(null);
     } catch (failure) {
-      if (snoozeRequestRef.current === request && snoozeScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setSnoozeFeedback({ sessionId, snoozed, error: `Could not ${snoozed ? 'wake' : 'snooze'} thread. ${failure?.message || 'Try again.'}` });
+      if (snoozeRequestRef.current === request && snoozeScopeRef.current === scope && !request.environment.aborted && isAuthScopeCurrent(request.auth)) setSnoozeFeedback({ sessionId, snoozed, seconds, error: `Could not ${snoozed ? 'wake' : 'snooze'} thread. ${failure?.message || 'Try again.'}` });
     } finally {
       if (snoozeRequestRef.current === request) { snoozeRequestRef.current = null; setSnoozePending(false); }
     }
+  };
+
+  const handleCustomSnoozeFromMenu = sessionId => {
+    let seconds;
+    try {
+      seconds = promptCustomSnoozeSeconds();
+    } catch (failure) {
+      setSnoozeFeedback({ sessionId, snoozed: false, error: `Could not snooze thread. ${failure.message}` });
+      return;
+    }
+    if (seconds !== null) handleSnoozeFromMenu(sessionId, false, seconds);
   };
 
   const handleSettlementFromMenu = async (sessionId, settled) => {
@@ -560,6 +572,16 @@ export function MobileHeader({
       disabled: snoozePending,
       onClick: () => handleSnoozeFromMenu(activeVisibleSession.id, Boolean(activeVisibleSession.threadLifecycle.snoozed)),
     } : null,
+    ...(activeVisibleSession && isStructuredSessionId(activeVisibleSession.id) && !activeVisibleSession.thread?.archived && !isPreviewView
+      && onUpdateThreadMetadata && activeVisibleSession.threadLifecycle?.supported === true && !activeVisibleSession.threadLifecycle.snoozed
+      && !activeVisibleSession.threadLifecycle.requiresAttention ? [
+      ...snoozeChoices().slice(1).map(choice => ({
+        label: choice.label,
+        disabled: snoozePending,
+        onClick: () => handleSnoozeFromMenu(activeVisibleSession.id, false, choice.seconds),
+      })),
+      { label: 'Snooze for custom time…', disabled: snoozePending, onClick: () => handleCustomSnoozeFromMenu(activeVisibleSession.id) },
+    ] : []),
     activeVisibleSession?.runtime === 'v4' && !activeVisibleSession.thread?.archived && !isPreviewView
       && onUpdateThreadMetadata && activeVisibleSession.threadLifecycle?.settlementSupported === true
       && activeVisibleSession.threadLifecycle.requiresAttention === false
@@ -567,6 +589,12 @@ export function MobileHeader({
       label: activeVisibleSession.threadLifecycle.settled ? 'Un-settle thread' : 'Settle thread',
       disabled: snoozePending,
       onClick: () => handleSettlementFromMenu(activeVisibleSession.id, Boolean(activeVisibleSession.threadLifecycle.settled)),
+    } : null,
+    activeVisibleSession && !activeVisibleSession.thread?.archived && !isPreviewView && activeVisibleSession.threadLifecycle?.requiresAttention !== true
+      && settlementUnavailableReason(activeVisibleSession) ? {
+      label: 'Settling unavailable',
+      disabled: true,
+      description: settlementUnavailableReason(activeVisibleSession),
     } : null,
     activeVisibleSession && !activeVisibleSession.thread?.archived && !isPreviewView ? {
       label: 'Close thread',
@@ -707,7 +735,7 @@ export function MobileHeader({
                       }}
                     >
                       {item.icon && <span aria-hidden="true">{item.icon}</span>}
-                      <span>{item.label}</span>
+                      <span>{item.label}{item.description && <small className="mobile-header-overflow-note">{item.description}</small>}</span>
                     </button>
                   ))}
                 </div>
@@ -752,7 +780,7 @@ export function MobileHeader({
           <div className="mobile-header-close-feedback" role="group" aria-label={snoozeFeedback.kind === 'settlement' ? 'Thread settlement status' : 'Thread snooze status'} aria-busy={snoozePending}>
             {snoozeFeedback.error ? <>
               <p role="alert">{snoozeFeedback.error}</p>
-              <button type="button" aria-label={snoozeFeedback.kind === 'settlement' ? 'Retry settlement change' : 'Retry snooze change'} onClick={() => snoozeFeedback.kind === 'settlement' ? handleSettlementFromMenu(snoozeFeedback.sessionId, snoozeFeedback.settled) : handleSnoozeFromMenu(snoozeFeedback.sessionId, snoozeFeedback.snoozed)}>Retry</button>
+              <button type="button" aria-label={snoozeFeedback.kind === 'settlement' ? 'Retry settlement change' : 'Retry snooze change'} onClick={() => snoozeFeedback.kind === 'settlement' ? handleSettlementFromMenu(snoozeFeedback.sessionId, snoozeFeedback.settled) : snoozeFeedback.snoozed || snoozeFeedback.seconds ? handleSnoozeFromMenu(snoozeFeedback.sessionId, snoozeFeedback.snoozed, snoozeFeedback.seconds) : handleCustomSnoozeFromMenu(snoozeFeedback.sessionId)}>Retry</button>
               <button type="button" aria-label={snoozeFeedback.kind === 'settlement' ? 'Dismiss settlement error' : 'Dismiss snooze error'} onClick={() => setSnoozeFeedback(null)}>Dismiss</button>
             </> : <p role="status">{snoozeFeedback.kind === 'settlement' ? (snoozeFeedback.settled ? 'Un-settling' : 'Settling') : (snoozeFeedback.snoozed ? 'Waking' : 'Snoozing')} thread…</p>}
           </div>

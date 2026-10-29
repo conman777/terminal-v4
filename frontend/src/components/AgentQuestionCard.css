@@ -25,3 +25,8 @@
 .agent-question-actions .agent-question-send { border-color: transparent; background: var(--accent-fill); color: var(--accent-fill-foreground); }
 .agent-question-actions button:disabled { opacity: .55; cursor: default; }
 @media (pointer: coarse) { .agent-question-option, .agent-question-actions button { min-height: 44px; } }
+
+.agent-question-counter { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agent-question-key { flex: none; min-width: 18px; padding: 0 4px; border: 1px solid var(--border-default); border-radius: 4px; color: var(--text-secondary); font: inherit; font-size: 11px; text-align: center; }
+.agent-question-key.active { border-color: var(--accent-primary); color: var(--text-primary); }
+@media (max-width: 440px) { .agent-question-options, .agent-question-option { min-width: 0; max-width: 100%; } .agent-question-option span { min-width: 0; overflow-wrap: anywhere; } }

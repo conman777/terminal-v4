@@ -8,6 +8,11 @@ import { normalizeProjectPath } from '../utils/projectPaths';
 import { useProjectBranches } from '../hooks/useProjectBranches';
 import { projectNameFromPath } from '../utils/projectBadge';
 import { isSettledThread, isSnoozedThread } from '../utils/threadLifecycle';
+import { applyProjectOrder, moveRelative, stepTarget } from '../utils/threadOrder';
+import { useThreadOrder } from '../hooks/useThreadOrder';
+import { useSnoozeExpiry } from '../hooks/useSnoozeExpiry';
+import ThreadLineageDialog from './ThreadLineageDialog';
+import './ThreadRelations.css';
 import './ThreadsSidebar.css';
 import { WorkspaceToolsButton } from './WorkspaceToolsButton';
 import { WorkspaceProfileButton } from './WorkspaceProfileButton';
@@ -125,6 +130,10 @@ export default function ThreadsSidebar({
     return () => document.removeEventListener('pointerdown', closeAccountMenu);
   }, []);
   const { theme, toggleTheme } = useTheme();
+  const threadOrder = useThreadOrder();
+  const [relatedFor, setRelatedFor] = useState(null);
+  const [dragState, setDragState] = useState(null);
+  const [moveAnnouncement, setMoveAnnouncement] = useState('');
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
   const projectGroups = useMemo(() => (
@@ -205,16 +214,18 @@ export default function ThreadsSidebar({
     && (matchesSessionQuery(session, normalizedQuery) || matchingProjects.has(sessionProjectPath(session)));
 
   const pinnedIds = useMemo(() => new Set(pinnedSessions.map(session => session.id)), [pinnedSessions]);
-  const recentSessions = useMemo(() => (
+  const activityOrderedSessions = useMemo(() => (
     visibleProjectGroups.flatMap(group => group.sessions)
       .filter(session => !pinnedIds.has(session.id) && isVisible(session))
       .sort((a, b) => activityTime(b) - activityTime(a))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ), [visibleProjectGroups, projectFilter, normalizedQuery, matchingProjects, pinnedIds]);
+  const recentSessions = useMemo(() => applyProjectOrder(activityOrderedSessions, threadOrder.orders, sessionProjectPath), [activityOrderedSessions, threadOrder.orders]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const filteredPinnedSessions = useMemo(() => pinnedSessions.filter(isVisible), [pinnedSessions, projectFilter, normalizedQuery, matchingProjects]);
+  const filteredPinnedSessions = useMemo(() => applyProjectOrder(pinnedSessions.filter(isVisible), threadOrder.orders, sessionProjectPath), [pinnedSessions, projectFilter, normalizedQuery, matchingProjects, threadOrder.orders]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const filteredArchivedSessions = useMemo(() => archivedSessions.filter(isVisible), [archivedSessions, projectFilter, normalizedQuery, matchingProjects]);
+  useSnoozeExpiry([...filteredPinnedSessions, ...recentSessions]);
   const snoozedSessions = [...filteredPinnedSessions, ...recentSessions]
     .filter(session => isSnoozedThread(session, sessionActivity?.[session.id]));
   const snoozedIds = new Set(snoozedSessions.map(session => session.id));
@@ -249,7 +260,70 @@ export default function ThreadsSidebar({
     return result;
   };
 
-  const renderCard = session => {
+  const allKnownSessions = useMemo(() => [...new Map([
+    ...visibleProjectGroups.flatMap(group => group.allSessions), ...pinnedSessions, ...archivedSessions,
+  ].map(session => [session.id, session])).values()], [visibleProjectGroups, pinnedSessions, archivedSessions]);
+
+  const commitMove = (session, path, targetId, after) => {
+    const current = applyProjectOrder(allKnownSessions.filter(item => !item.thread?.archived && sessionProjectPath(item) === path).sort((a, b) => activityTime(b) - activityTime(a)), threadOrder.orders, sessionProjectPath).map(item => item.id);
+    const next = moveRelative(current, session.id, targetId, after);
+    if (!next) return Promise.resolve({ ok: true });
+    restoreThreadFocusRef.current = session.id;
+    setMoveAnnouncement(`Moved ${session.thread?.topic || session.title || 'thread'} to position ${next.indexOf(session.id) + 1} of ${next.length}`);
+    return threadOrder.reorder(path, next);
+  };
+
+  const reorderFor = (session, list) => {
+    const path = sessionProjectPath(session);
+    if (!threadOrder.ready || !path || session.thread?.archived) return null;
+    const pinned = Boolean(session.thread?.pinned);
+    const siblings = list.filter(other => sessionProjectPath(other) === path && Boolean(other.thread?.pinned) === pinned && !other.thread?.archived).map(other => other.id);
+    if (siblings.length < 2) return null;
+    const up = stepTarget(siblings, session.id, -1);
+    const down = stepTarget(siblings, session.id, 1);
+    const mark = dragState?.mark?.id === session.id ? (dragState.mark.after ? 'after' : 'before') : null;
+    const accepts = Boolean(dragState && dragState.id !== session.id && dragState.siblings.includes(session.id));
+    return {
+      draggable: true,
+      dragging: dragState?.id === session.id,
+      dropMark: mark,
+      canMoveUp: Boolean(up),
+      canMoveDown: Boolean(down),
+      onMove: delta => {
+        const step = delta < 0 ? up : down;
+        return step ? commitMove(session, path, step.targetId, step.after) : Promise.resolve({ ok: true });
+      },
+      onDragStart: event => {
+        event.dataTransfer?.setData('text/plain', session.id);
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+        setDragState({ id: session.id, siblings, mark: null });
+      },
+      onDragOver: event => {
+        if (!accepts) return;
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        const rect = event.currentTarget.getBoundingClientRect();
+        const after = (Number.isFinite(event.clientY) ? event.clientY : 0) > rect.top + rect.height / 2;
+        setDragState(current => (current?.mark?.id === session.id && current.mark.after === after ? current : { ...current, mark: { id: session.id, after } }));
+      },
+      onDragLeave: event => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        setDragState(current => (current?.mark?.id === session.id ? { ...current, mark: null } : current));
+      },
+      onDrop: event => {
+        if (!accepts) return;
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        const after = dragState.mark?.id === session.id ? dragState.mark.after : (Number.isFinite(event.clientY) ? event.clientY : 0) > rect.top + rect.height / 2;
+        const dragged = allKnownSessions.find(item => item.id === dragState.id);
+        setDragState(null);
+        if (dragged) commitMove(dragged, path, session.id, after);
+      },
+      onDragEnd: () => setDragState(null),
+    };
+  };
+
+  const renderCard = (session, _index, list = []) => {
     const path = sessionProjectPath(session);
     return (
       <ThreadsSessionItem
@@ -278,6 +352,8 @@ export default function ThreadsSidebar({
         onTopicChange={onTopicChange}
         onRenameSession={onRenameSession}
         onClose={onCloseSession}
+        reorder={reorderFor(session, list)}
+        onShowRelated={setRelatedFor}
       />
     );
   };
@@ -297,6 +373,17 @@ export default function ThreadsSidebar({
         <span>Thread archived</span>
         <button type="button" onClick={() => { onUnarchiveSession?.(archivedNotice.id); setArchivedNotice(null); }}>Undo</button>
       </div>}
+      {threadOrder.error && !isCollapsed && <div className="thread-reorder-notice" role="status">
+        <span>{threadOrder.error}</span>
+        <button type="button" onClick={threadOrder.clearError}>Dismiss</button>
+      </div>}
+      <div className="threads-sr-only" aria-live="polite">{moveAnnouncement}</div>
+      {relatedFor && allKnownSessions.some(session => session.id === relatedFor) && <ThreadLineageDialog
+        session={allKnownSessions.find(session => session.id === relatedFor)}
+        sessions={allKnownSessions}
+        onOpen={onSelectSession}
+        onClose={() => { restoreThreadFocusRef.current = relatedFor; setRelatedFor(null); }}
+      />}
       {!isCollapsed && (
         <div className="pro-sidebar-panel">
           <div className="pro-sidebar-header">

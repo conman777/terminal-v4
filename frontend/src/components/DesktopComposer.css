@@ -322,3 +322,17 @@
   content: ''; width: 1px; height: 16px; margin: 0 6px; background: var(--border-default); align-self: center;
 }
 .workspace-composer .session-composer-actions { display: inline-flex; align-items: center; }
+
+.composer-context-chips { list-style: none; margin: 0; padding: 4px 8px 0; display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
+.composer-context-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 2px 4px 2px 8px; border: 1px solid var(--border-color, rgba(128, 128, 128, 0.4)); border-radius: 999px; font-size: 12px; background: var(--bg-secondary, transparent); }
+.composer-context-chip-kind { flex: none; color: var(--text-muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.04em; }
+.composer-context-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-context-chip-warning { flex: none; color: var(--danger, #d33); }
+.composer-context-chip.unavailable { border-color: var(--danger, #d33); }
+.composer-context-chip button { flex: none; min-width: 24px; min-height: 24px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; line-height: 1; }
+.composer-add-to-chat { padding: 2px 8px; font-size: 12px; border-radius: 6px; cursor: pointer; }
+@media (max-width: 768px), (pointer: coarse) {
+  .composer-context-chip button { min-width: 44px; min-height: 44px; margin: -10px -4px -10px 0; }
+  .composer-context-chip { padding-left: 10px; }
+  .composer-context-chip-label { max-width: 40vw; }
+}

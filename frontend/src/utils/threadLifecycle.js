@@ -1,7 +1,8 @@
 export function isSnoozedThread(session) {
   const lifecycle = session?.threadLifecycle;
   return typeof session?.id === 'string' && session.id.startsWith('ss-') && lifecycle?.supported === true
-    && lifecycle.snoozed === true && lifecycle.requiresAttention === false;
+    && lifecycle.snoozed === true && lifecycle.requiresAttention === false
+    && !(Number.isFinite(lifecycle.snoozedUntilMs) && lifecycle.snoozedUntilMs <= Date.now());
 }
 
 export function isSettledThread(session, activity) {

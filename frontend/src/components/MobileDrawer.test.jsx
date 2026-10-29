@@ -85,6 +85,21 @@ describe('MobileDrawer', () => {
     expect(screen.queryByRole('region', { name: 'Snoozed threads' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Snoozed work/ })).toBeVisible();
   });
+  it('wakes a snoozed conversation into the inbox when its snooze expires, without a refresh', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const session = { id: 'ss-a', title: 'Snoozed work', threadLifecycle: { supported: true, snoozed: true, requiresAttention: false, snoozedUntilMs: 1_003_000 } };
+      const props = buildProps({ activeSessions: [session], sessionsGroupedByProject: [{ projectName: 'Project', sessions: [session] }] });
+      render(<MobileDrawer {...props} />);
+      expect(screen.getByRole('region', { name: 'Snoozed threads' })).toHaveTextContent('Snoozed work');
+      act(() => { vi.advanceTimersByTime(3_100); });
+      expect(screen.queryByRole('region', { name: 'Snoozed threads' })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Snoozed work/ })).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('announces loading instead of an empty thread list while sessions load', () => {
     const props = buildProps({ activeSessions: [], sessionsGroupedByProject: [], sessionsLoading: true });
     const { rerender } = render(<MobileDrawer {...props} />);
@@ -168,7 +183,7 @@ describe('MobileDrawer', () => {
     const sessions = [{ id: 'a', title: 'First' }, { id: 'b', title: 'Pinned', thread: { pinned: true } }, { id: 'c', title: 'Last' }];
     render(<MobileDrawer {...buildProps({ activeSessions: sessions, sessionsGroupedByProject: [{ projectName: 'Project', sessions }] })} />);
     const dialog = screen.getByRole('dialog', { name: 'Mobile menu' });
-    const rows = [...dialog.querySelectorAll('.mobile-drawer-project-sessions-modern > button')];
+    const rows = [...dialog.querySelectorAll('.mobile-drawer-project-sessions-modern .mobile-drawer-thread-item-modern')];
     expect(rows.map(row => row.querySelector('.thread-item-title-modern').textContent)).toEqual(['Pinned', 'First', 'Last']);
     expect(rows[0].querySelector('[aria-label="Pinned thread"]')).toBeInTheDocument();
   });
@@ -335,7 +350,7 @@ describe('MobileDrawer', () => {
     render(<MobileDrawer {...props} />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'needle' } });
     const result = await screen.findByRole('button', { name: /Saved thread.*Found the needle/ });
-    const [url, options] = apiFetchMock.mock.calls[0];
+    const [url, options] = apiFetchMock.mock.calls.find(([requested]) => requested.startsWith('/api/workspace/history'));
     expect(url).toBe('/api/workspace/history?q=needle&limit=20');
     expect(options.signal).toBeInstanceOf(AbortSignal);
     fireEvent.click(result);
@@ -345,7 +360,7 @@ describe('MobileDrawer', () => {
 
   it('aborts stale searches and ignores responses after the query changes or drawer closes', async () => {
     const pending = [];
-    apiFetchMock.mockImplementation((url, options) => new Promise(resolve => pending.push({ url, signal: options.signal, resolve })));
+    apiFetchMock.mockImplementation((url, options) => (url.startsWith('/api/thread-order') ? Promise.resolve({ ok: false, json: async () => ({}) }) : new Promise(resolve => pending.push({ url, signal: options.signal, resolve }))));
     const props = buildProps();
     const view = render(<MobileDrawer {...props} />);
     const search = screen.getByRole('searchbox', { name: 'Search threads' });
@@ -362,7 +377,7 @@ describe('MobileDrawer', () => {
 
   it('clears saved results and aborts the request when the environment changes', async () => {
     const pending = [];
-    apiFetchMock.mockImplementation((url, options) => new Promise(resolve => pending.push({ signal: options.signal, resolve })));
+    apiFetchMock.mockImplementation((url, options) => (url.startsWith('/api/thread-order') ? Promise.resolve({ ok: false, json: async () => ({}) }) : new Promise(resolve => pending.push({ signal: options.signal, resolve }))));
     const view = render(<MobileDrawer {...buildProps()} />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'needle' } });
     await waitFor(() => expect(pending).toHaveLength(1));

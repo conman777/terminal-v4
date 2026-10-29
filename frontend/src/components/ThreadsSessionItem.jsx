@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
 import { ProjectBadge } from './ProjectBadge';
+import { promptCustomSnoozeSeconds, settlementUnavailableReason, snoozeChoices } from '../utils/snoozeChoices';
 
 function formatRelativeTime(isoString) {
   if (!isoString) return '';
@@ -34,6 +35,8 @@ export default function ThreadsSessionItem({
   onMarkUnread,
   onUpdateThreadMetadata,
   onItemRef,
+  reorder = null,
+  onShowRelated,
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
@@ -146,15 +149,27 @@ export default function ThreadsSessionItem({
   };
 
   const folderPath = session.thread?.projectPath || session.cwd || '';
+  const settleBlockedReason = !isArchived && lifecycle?.requiresAttention !== true ? settlementUnavailableReason(session) : null;
+  const navigationItems = [
+    ...(onShowRelated ? [{ label: 'Related threads', action: () => onShowRelated(session.id) }] : []),
+    ...(reorder?.canMoveUp ? [{ label: 'Move up', action: () => reorder.onMove(-1) }] : []),
+    ...(reorder?.canMoveDown ? [{ label: 'Move down', action: () => reorder.onMove(1) }] : []),
+  ];
   const menuItems = [
     { label: 'Rename session', action: startRename },
     { label: isPinned ? 'Unpin' : 'Pin', action: () => (isPinned ? onUnpin : onPin)?.(session.id) },
     { label: isArchived ? 'Unarchive' : 'Archive', action: () => (isArchived ? onUnarchive : onArchive)?.(session.id) },
     ...(onUpdateThreadMetadata && typeof session.id === 'string' && session.id.startsWith('ss-') && !isArchived && lifecycle?.supported === true && (lifecycle.snoozed || !lifecycle.requiresAttention)
-      ? [{ label: lifecycle.snoozed ? 'Wake thread' : 'Snooze for one hour', action: () => onUpdateThreadMetadata(session.id, lifecycle.snoozed ? { wakeSnooze: true } : { snoozeForSeconds: 3600 }) }] : []),
+      ? (lifecycle.snoozed
+        ? [{ label: 'Wake thread', action: () => onUpdateThreadMetadata(session.id, { wakeSnooze: true }) }]
+        : [
+          ...snoozeChoices().map(choice => ({ label: choice.label, action: () => onUpdateThreadMetadata(session.id, { snoozeForSeconds: choice.seconds }) })),
+          { label: 'Snooze for custom time…', action: () => { const seconds = promptCustomSnoozeSeconds(); return seconds === null ? undefined : onUpdateThreadMetadata(session.id, { snoozeForSeconds: seconds }); } },
+        ]) : []),
     ...(onUpdateThreadMetadata && session.runtime === 'v4' && !isArchived && lifecycle?.settlementSupported === true
       && (lifecycle.settled || lifecycle.canSettle === true) && lifecycle.requiresAttention === false
       ? [{ label: lifecycle.settled ? 'Un-settle thread' : 'Settle thread', action: () => onUpdateThreadMetadata(session.id, { settled: !lifecycle.settled }) }] : []),
+    ...(settleBlockedReason ? [{ label: 'Settling unavailable', disabled: true, title: settleBlockedReason }] : []),
     ...(onMarkUnread && !hasActivity ? [{ label: 'Mark as unread', action: () => onMarkUnread(session.id) }] : []),
     ...(folderPath ? [{ label: 'Copy folder path', action: () => navigator.clipboard?.writeText(folderPath) }] : []),
     ...(branch ? [{ label: 'Copy branch name', action: () => navigator.clipboard?.writeText(branch) }] : []),
@@ -165,7 +180,14 @@ export default function ThreadsSessionItem({
   return (
     <div
       ref={onItemRef}
-      className={`threads-session-item threads-card ${isActive ? 'active' : (!isEditing && !actionError ? 'compact' : '')} ${isArchived ? 'archived' : ''}`}
+      className={`threads-session-item threads-card ${isActive ? 'active' : (!isEditing && !actionError ? 'compact' : '')} ${isArchived ? 'archived' : ''}${reorder?.dragging ? ' thread-reorder-dragging' : ''}${reorder?.dropMark ? ` thread-reorder-over-${reorder.dropMark}` : ''}`}
+      draggable={reorder?.draggable && !isEditing ? true : undefined}
+      data-thread-id={session.id}
+      onDragStart={reorder?.draggable ? event => reorder.onDragStart(event) : undefined}
+      onDragOver={reorder?.draggable ? event => reorder.onDragOver(event) : undefined}
+      onDragLeave={reorder?.draggable ? event => reorder.onDragLeave(event) : undefined}
+      onDrop={reorder?.draggable ? event => reorder.onDrop(event) : undefined}
+      onDragEnd={reorder?.draggable ? event => reorder.onDragEnd(event) : undefined}
       aria-busy={Boolean(pendingAction)}
       onClick={event => { if (!event.target.closest('button, input')) onSelect?.(session.id); }}
       onDoubleClick={event => {
@@ -218,6 +240,10 @@ export default function ThreadsSessionItem({
             onClick={() => onSelect?.(session.id)}
             onKeyDown={event => {
               if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openMenu(event);
+              if (event.altKey && reorder && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+                event.preventDefault();
+                reorder.onMove(event.key === 'ArrowUp' ? -1 : 1);
+              }
             }}
           >
             <span className="threads-session-topic">{topic}</span>
@@ -269,13 +295,13 @@ export default function ThreadsSessionItem({
           onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) closeMenu(); }}
           onKeyDown={event => {
             if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(true); return; }
-            const buttons = [...event.currentTarget.querySelectorAll('button')];
+            const buttons = [...event.currentTarget.querySelectorAll('button:not(:disabled)')];
             const index = buttons.indexOf(document.activeElement);
             const next = {ArrowDown: (index + 1) % buttons.length, ArrowUp: (index + buttons.length - 1) % buttons.length, Home: 0, End: buttons.length - 1}[event.key];
             if (next !== undefined) { event.preventDefault(); buttons[next].focus(); }
           }}
         >
-          {menuItems.map(item => <button key={item.label} type="button" role="menuitem" className={item.danger ? 'danger' : undefined} onClick={() => {
+          {[...navigationItems, ...menuItems].map(item => <button key={item.label} type="button" role="menuitem" className={item.danger ? 'danger' : undefined} disabled={item.disabled} title={item.title} onClick={() => {
             closeMenu(true);
             if (item.label === 'Rename session') startRename();
             else runAction(item.label, item.action);

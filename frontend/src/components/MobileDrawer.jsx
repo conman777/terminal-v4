@@ -6,7 +6,14 @@ import { downloadProjectArchive } from '../utils/projectArchiveDownload';
 import { apiFetch } from '../utils/api';
 import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { isSettledThread, isSnoozedThread } from '../utils/threadLifecycle';
+import { useSnoozeExpiry } from '../hooks/useSnoozeExpiry';
+import { applyProjectOrder, moveRelative, stepTarget } from '../utils/threadOrder';
+import { normalizeProjectPath } from '../utils/projectPaths';
+import { useThreadOrder } from '../hooks/useThreadOrder';
+import { useTouchReorder } from '../hooks/useTouchReorder';
+import ThreadLineageDialog from './ThreadLineageDialog';
 import './MobileUI.css';
+import './ThreadRelations.css';
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return null;
@@ -126,6 +133,9 @@ export function MobileDrawer({
   const threadNodesRef = useRef(new Map());
   const restoreThreadFocusRef = useRef(null);
   const restoreRequestRef = useRef(null);
+  const threadOrder = useThreadOrder({ enabled: isOpen });
+  const [relatedFor, setRelatedFor] = useState(null);
+  const [moveAnnouncement, setMoveAnnouncement] = useState('');
   const [restorePendingId, setRestorePendingId] = useState(null);
   const [restoreError, setRestoreError] = useState(null);
   const [archivedExpanded, setArchivedExpanded] = useState(false);
@@ -181,16 +191,44 @@ export function MobileDrawer({
     return groups
       .map((group) => ({
         ...group,
-        sessions: (group.sessions || []).filter((session) => {
-          if (session.thread?.archived) return false;
+        sessions: applyProjectOrder((group.sessions || []).filter(session => !session.thread?.archived), threadOrder.orders, () => normalizeProjectPath(group.projectPath), { pinnedFirst: true }).filter((session) => {
           const display = getSessionDisplayInfo(session, 'Terminal');
           return !query || [group.projectName, group.projectPath, display.primaryLabel, display.secondaryLabel, display.projectPath, session.title]
             .some(value => typeof value === 'string' && value.toLowerCase().includes(query));
-        }).sort((a, b) => Number(Boolean(b.thread?.pinned)) - Number(Boolean(a.thread?.pinned)))
+        })
       }))
       .filter((group) => group.sessions.length > 0);
-  }, [sessionsGroupedByProject, activeSessions, threadSearch]);
+  }, [sessionsGroupedByProject, activeSessions, threadSearch, threadOrder.orders]);
 
+  const projectIdsByKey = useMemo(() => {
+    const ids = new Map();
+    for (const group of sessionsGroupedByProject || []) {
+      const key = normalizeProjectPath(group.projectPath);
+      if (!key) continue;
+      const live = (group.sessions || []).filter(session => !session.thread?.archived);
+      ids.set(key, applyProjectOrder(live, threadOrder.orders, () => key, { pinnedFirst: true }).map(session => session.id));
+    }
+    return ids;
+  }, [sessionsGroupedByProject, threadOrder.orders]);
+  const allKnownSessions = useMemo(() => [...new Map([
+    ...activeSessions, ...archivedSessions, ...(sessionsGroupedByProject || []).flatMap(group => group.sessions || []),
+  ].map(session => [session.id, session])).values()], [activeSessions, archivedSessions, sessionsGroupedByProject]);
+  const commitMove = (session, key, targetId, after) => {
+    const next = moveRelative(projectIdsByKey.get(key) || [], session.id, targetId, after);
+    if (!next) return Promise.resolve({ ok: true });
+    restoreThreadFocusRef.current = session.id;
+    setMoveAnnouncement(`Moved ${getSessionDisplayInfo(session, 'Terminal').primaryLabel} to position ${next.indexOf(session.id) + 1} of ${next.length}`);
+    return threadOrder.reorder(key, next);
+  };
+  const reorderTargets = useRef({});
+  const touchReorder = useTouchReorder({
+    onDrop: (id, targetId, after) => {
+      const entry = reorderTargets.current[id];
+      if (entry) commitMove(entry.session, entry.key, targetId, after);
+    },
+  });
+
+  const snoozeTick = useSnoozeExpiry(activeSessions);
   const { workingGroups, snoozedGroups, settledGroups, otherGroups, workingCount } = useMemo(() => {
     const workingGroups = [];
     const snoozedGroups = [];
@@ -218,7 +256,7 @@ export function MobileDrawer({
       if (other.length) otherGroups.push({ ...group, sessions: other });
     }
     return { workingGroups, snoozedGroups, settledGroups, otherGroups, workingCount };
-  }, [visibleThreadGroups, sessionActivity, activeSessionId, sessionLoadError]);
+  }, [visibleThreadGroups, sessionActivity, activeSessionId, sessionLoadError, snoozeTick]);
 
   useLayoutEffect(() => {
     const id = restoreThreadFocusRef.current;
@@ -414,6 +452,15 @@ export function MobileDrawer({
       </div>
       <div className="mobile-drawer-project-sessions-modern">
         {group.sessions.map((session) => {
+          const key = normalizeProjectPath(group.projectPath);
+          const pinned = Boolean(session.thread?.pinned);
+          const siblings = group.sessions.filter(other => Boolean(other.thread?.pinned) === pinned).map(other => other.id);
+          const canReorder = threadOrder.ready && Boolean(key) && siblings.length > 1;
+          if (canReorder) reorderTargets.current[session.id] = { session, key };
+          const armed = touchReorder.armedId === session.id;
+          const mark = touchReorder.mark?.id === session.id ? (touchReorder.mark.after ? 'after' : 'before') : null;
+          const up = canReorder ? stepTarget(siblings, session.id, -1) : null;
+          const down = canReorder ? stepTarget(siblings, session.id, 1) : null;
           const display = getSessionDisplayInfo(session, 'Terminal');
           const subtitle = getCompactSessionSubtitle(session, 'Terminal');
           const lastActivity = sessionActivity?.[session.id]?.lastActivity || session.updatedAt;
@@ -422,7 +469,9 @@ export function MobileDrawer({
           const hasAttention = Boolean(sessionActivity?.[session.id]?.needsAttention);
           const isBusy = typeof sessionActivity?.[session.id]?.isBusy === 'boolean' ? sessionActivity[session.id].isBusy : Boolean(session.isBusy);
           const needsRecovery = ['cleanup_required', 'reconciliation_required'].includes(session.status) || session.threadLifecycle?.requiresAttention === true;
-          return <button key={session.id} ref={node => {
+          const title = display.primaryLabel;
+          return <div key={session.id} className={`md-thread-row${armed ? ' thread-reorder-armed thread-reorder-active' : ''}${mark ? ` thread-reorder-over-${mark}` : ''}`} data-reorder-id={session.id} {...(canReorder ? touchReorder.bind(session.id, siblings) : {})}>
+            <div className="md-thread-row-main"><button ref={node => {
             const previous = threadNodesRef.current.get(session.id);
             if (node) threadNodesRef.current.set(session.id, node);
             else {
@@ -431,7 +480,7 @@ export function MobileDrawer({
             }
           }} type="button" className={`mobile-drawer-thread-item-modern${isActive ? ' active' : ''}`} aria-current={isActive ? 'true' : undefined} onClick={() => handleSelectSession(session.id)}>
             <div className="thread-item-main-modern">
-              <span className="thread-item-title-modern">{display.primaryLabel}</span>
+              <span id={`md-thread-title-${session.id}`} className="thread-item-title-modern">{display.primaryLabel}</span>
               {subtitle && <span className="thread-item-subtitle-modern">{subtitle}</span>}
             </div>
             <div className="thread-item-meta-modern">
@@ -439,7 +488,17 @@ export function MobileDrawer({
               <SessionStateIndicator isBusy={isBusy} needsRecovery={needsRecovery} showReady={!isBusy && hasAttention && !isActive} />
               {relativeTime && <span className="thread-item-time-modern">{relativeTime}</span>}
             </div>
-          </button>;
+          </button>
+            <button type="button" className="md-thread-related" aria-label="Thread options" aria-describedby={`md-thread-title-${session.id}`} aria-expanded={armed} onClick={() => (armed ? touchReorder.disarm() : touchReorder.arm(session.id))}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
+            </button></div>
+            {armed && <div className="thread-reorder-bar" role="group" aria-label={`Organize ${title}`}>
+              {up && <button type="button" onClick={() => commitMove(session, key, up.targetId, up.after)}>Move up</button>}
+              {down && <button type="button" onClick={() => commitMove(session, key, down.targetId, down.after)}>Move down</button>}
+              <button type="button" onClick={() => { touchReorder.disarm(); setRelatedFor(session.id); }}>Related threads</button>
+              <button type="button" onClick={touchReorder.disarm}>Done</button>
+            </div>}
+          </div>;
         })}
       </div>
     </div>
@@ -562,6 +621,8 @@ export function MobileDrawer({
               {threadSearch && <button type="button" className="md-clear-thread-search" aria-label="Clear thread search" onClick={() => { setThreadSearch(''); threadSearchRef.current?.focus(); }}>×</button>}
             </div>
             <div className="mobile-drawer-threads-modern">
+              {threadOrder.error && <div className="thread-reorder-notice" role="status"><span>{threadOrder.error}</span><button type="button" onClick={threadOrder.clearError}>Dismiss</button></div>}
+              <div className="threads-sr-only" aria-live="polite">{moveAnnouncement}</div>
               {sessionLoadError && <div className="md-empty-state">Thread list may be incomplete</div>}
               {threadSearch.trim() && <section aria-label="Saved conversation results" className="md-history-results">
                 <div className="mobile-drawer-section-title-modern">Conversation content</div>
@@ -805,6 +866,12 @@ export function MobileDrawer({
           </button>
         </div>
       </div>
+      {relatedFor && allKnownSessions.some(session => session.id === relatedFor) && <ThreadLineageDialog
+        session={allKnownSessions.find(session => session.id === relatedFor)}
+        sessions={allKnownSessions}
+        onOpen={handleSelectSession}
+        onClose={() => { restoreThreadFocusRef.current = relatedFor; setRelatedFor(null); }}
+      />}
     </>
   );
 }

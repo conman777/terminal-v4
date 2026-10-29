@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../utils/api';
+import './ThreadCardExtras.css';
 
 const icon = <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m7 6 6 6-6 6M13 18h6" /></svg>;
 
@@ -10,6 +11,7 @@ export function ProjectScripts({ cwd, onRun }) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [error, setError] = useState('');
+  const [editing, setEditing] = useState(null);
   const url = `/api/workspace/scripts?${new URLSearchParams({ path: cwd })}`;
 
   useEffect(() => {
@@ -26,9 +28,19 @@ export function ProjectScripts({ cwd, onRun }) {
     setScripts(data.scripts);
     return true;
   };
-  const add = async event => {
+  const submit = async event => {
     event.preventDefault();
-    if (await save([...(scripts || []), { name: name.trim(), command: command.trim() }])) { setName(''); setCommand(''); }
+    const entry = { name: name.trim(), command: command.trim() };
+    const next = editing === null ? [...(scripts || []), entry] : scripts.map((script, position) => (position === editing ? entry : script));
+    if (await save(next)) { setName(''); setCommand(''); setEditing(null); }
+  };
+  const edit = index => { setError(''); setEditing(index); setName(scripts[index].name); setCommand(scripts[index].command); };
+  const cancelEdit = () => { setEditing(null); setName(''); setCommand(''); setError(''); };
+  const remove = async index => {
+    if (await save(scripts.filter((_, position) => position !== index))) {
+      if (editing === index) cancelEdit();
+      else if (editing !== null && editing > index) setEditing(editing - 1);
+    }
   };
 
   return (
@@ -42,13 +54,15 @@ export function ProjectScripts({ cwd, onRun }) {
             <button type="button" className="project-script-run" aria-label={`Run ${script.name}`} title={script.command} onClick={() => onRun?.(script)}>
               <span>{script.name}</span><small>{script.command}</small>
             </button>
-            <button type="button" className="project-script-remove" aria-label={`Remove ${script.name}`} onClick={() => save(scripts.filter((_, position) => position !== index))}>×</button>
+            <button type="button" className="project-script-remove project-script-edit" aria-label={`Edit ${script.name}`} onClick={() => edit(index)}>Edit</button>
+            <button type="button" className="project-script-remove" aria-label={`Remove ${script.name}`} onClick={() => remove(index)}>×</button>
           </div>
         ))}
-        <form className="project-script-form" onSubmit={add}>
+        <form className="project-script-form" onSubmit={submit}>
           <input aria-label="Script name" placeholder="Name" value={name} maxLength={60} onChange={event => setName(event.target.value)} />
           <input aria-label="Command" placeholder="Command, e.g. npm run dev" value={command} maxLength={2000} onChange={event => setCommand(event.target.value)} />
-          <button type="submit" disabled={!name.trim() || !command.trim()}>Add script</button>
+          <button type="submit" disabled={!name.trim() || !command.trim()}>{editing === null ? 'Add script' : 'Save script'}</button>
+          {editing !== null && <button type="button" onClick={cancelEdit}>Cancel edit</button>}
         </form>
         {error && <p role="alert" className="thread-git-note thread-git-error">{error}</p>}
       </div>}

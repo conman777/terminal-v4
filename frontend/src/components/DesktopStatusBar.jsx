@@ -9,6 +9,9 @@ import { uploadAttachment, uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
 import { insertMention, mentionQuery, useFileMentions } from '../hooks/useFileMentions';
+import { ContextChips } from './composer-context/ContextChips';
+import { addContext, buildPullRequestContext, buildThreadContext, joinContext, redactContextBlocks, removeContext, splitContext } from './composer-context/composerContext';
+import { readPromptHistory, recordPrompt, stepPromptHistory } from './composer-context/promptHistory';
 import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { ProviderAuthModal } from './ProviderAuthModal';
@@ -55,6 +58,7 @@ function rawTextOffset(text, domOffset) {
  * Shows connection status, current directory, git branch, and action buttons.
  */
 const NO_SKILLS = [];
+const NO_MENTIONS = [];
 
 export function DesktopStatusBar({
   sessionId,
@@ -76,6 +80,8 @@ export function DesktopStatusBar({
   mentionRoot = '',
   allowAnyFile = false,
   mentionFiles: providedMentionFiles,
+  mentionThreads = NO_MENTIONS,
+  mentionPullRequests = NO_MENTIONS,
   onSelectAiType,
   onAddCustomAiCommand,
   composerValue = '',
@@ -118,6 +124,13 @@ export function DesktopStatusBar({
   const composerInputRef = useRef(null);
   const transcriptDraftRef = useRef(null);
   transcriptDraftRef.current = { sessionId, composerValue, onComposerChange };
+  const { chips: contextChips, text: draftText } = splitContext(composerValue);
+  const setDraftText = (next) => onComposerChange?.(joinContext(contextChips, next));
+  const historyIndexRef = useRef(-1);
+  const historyRecalledRef = useRef('');
+  useEffect(() => { historyIndexRef.current = -1; }, [sessionId]);
+  const isContextUnavailable = (chip) => (chip.kind === 'thread' ? !mentionThreads.some(thread => thread.id === chip.id)
+    : chip.kind === 'pr' ? !mentionPullRequests.some(pr => pr.id === chip.id) : false);
   const contextTriggerRef = useRef(null);
   const contextPanelRef = useRef(null);
   const composerActionsRef = useRef(null);
@@ -249,13 +262,13 @@ export function DesktopStatusBar({
     if (!input) return;
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
-  }, [composerValue, isMobile]);
+  }, [draftText, isMobile]);
   const {
     handleKeyDown: autocorrectKeyDown,
     handleSelectionChange: handleAutocorrectSelectionChange
   } = useAutocorrectInput(
-    composerValue,
-    (nextValue) => onComposerChange?.(typeof nextValue === 'function' ? nextValue(composerValue) : nextValue),
+    draftText,
+    (nextValue) => setDraftText(typeof nextValue === 'function' ? nextValue(draftText) : nextValue),
     autocorrectEnabled
   );
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
@@ -366,19 +379,29 @@ export function DesktopStatusBar({
     ? showComposerFooter
     : Boolean(cwd || runtimeInfo?.label || currentGitBranch || gitBranch || gitBranches.length);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
-  const activeMention = mentionRoot ? mentionQuery(composerValue) : null;
+  const hasMentionSources = Boolean(mentionRoot) || mentionThreads.length > 0 || mentionPullRequests.length > 0;
+  const activeMention = hasMentionSources ? mentionQuery(draftText) : null;
   const fetchedMentionFiles = useFileMentions(providedMentionFiles ? '' : mentionRoot, activeMention);
   const mentionFiles = providedMentionFiles ?? fetchedMentionFiles;
   const slashSuggestions = useMemo(
-    () => activeMention != null
-      ? mentionFiles.map(file => ({ cmd: `@${file}`, desc: 'File', insert: insertMention(composerValue, file) }))
-      : getComposerSlashSuggestions(composerValue, activeRuntimeProviderId, customAiProviders, skills),
-    [activeMention, activeRuntimeProviderId, composerValue, customAiProviders, mentionFiles, skills]
+    () => {
+      if (activeMention == null) return getComposerSlashSuggestions(draftText, activeRuntimeProviderId, customAiProviders, skills);
+      const needle = activeMention.toLowerCase();
+      const withoutQuery = draftText.replace(/@[^\s@]*$/, '');
+      const references = [
+        ...mentionThreads.map(thread => ({ desc: 'Thread', chip: buildThreadContext(thread) })),
+        ...mentionPullRequests.map(pr => ({ desc: 'Pull request', chip: buildPullRequestContext(pr) })),
+      ].filter(({ chip }) => chip && (chip.label.toLowerCase().includes(needle) || chip.id.toLowerCase().includes(needle))).slice(0, 8)
+        .map(({ chip, desc }) => ({ key: `${chip.kind}:${chip.id}`, cmd: `@${chip.label}`, desc, insert: addContext(joinContext(contextChips, withoutQuery), chip) }));
+      const files = mentionFiles.map(file => ({ cmd: `@${file}`, desc: 'File', insert: joinContext(contextChips, insertMention(draftText, file)) }));
+      return [...references, ...files];
+    },
+    [activeMention, activeRuntimeProviderId, composerValue, customAiProviders, mentionFiles, mentionThreads, mentionPullRequests, skills]
   );
 
   useEffect(() => {
     setSelectedSlashIndex(0);
-  }, [composerValue, slashSuggestions.length]);
+  }, [draftText, slashSuggestions.length]);
 
   useEffect(() => {
     if (!isAiMenuOpen) return undefined;
@@ -436,15 +459,23 @@ export function DesktopStatusBar({
     if (event?.type === 'submit' && event.target !== event.currentTarget) return;
     event?.preventDefault?.();
     if (composerDisabled || composerSubmitDisabled || isInterrupting || requiresCleanup || voiceBusy) return;
+    if (splitContext(typeof submittedValue === 'string' ? submittedValue : '').chips.some(isContextUnavailable)) {
+      setUploadError('Remove unavailable thread or pull request references before sending.');
+      return;
+    }
+    if (typeof submittedValue === 'string') submittedValue = redactContextBlocks(submittedValue);
     if (!userImages && (isPreparingLegacyImage || legacyImageWorkRef.current?.view === pickerViewRef.current && legacyImageWorkRef.current.pending > 0)) return;
     if (userImages) {
       if (!canSubmitComposer || !sameImageView(userImages)) return;
+      recordPrompt(sessionId, submittedValue);
       onComposerSubmit?.(typeof submittedValue === 'string' ? submittedValue : '');
       return;
     }
     if (!attachmentsEnabled && composerAttachments.length) { setUploadError('Remove attachments before sending this conversation.'); return; }
     const nextValue = typeof submittedValue === 'string' ? submittedValue : '';
     if (!nextValue.trim() && composerAttachments.length === 0) return;
+    recordPrompt(sessionId, nextValue);
+    historyIndexRef.current = -1;
     onComposerSubmit?.(nextValue);
   }
 
@@ -566,20 +597,34 @@ export function DesktopStatusBar({
         event.preventDefault();
         const suggestion = slashSuggestions[selectedSlashIndex];
         if (suggestion.insert) onComposerChange?.(suggestion.insert);
-        else handleComposerSubmit(event, suggestion.cmd);
+        else handleComposerSubmit(event, joinContext(contextChips, suggestion.cmd));
         return;
       }
 
       if (event.key === 'Tab' && !event.shiftKey) {
         event.preventDefault();
-        onComposerChange?.(slashSuggestions[selectedSlashIndex].insert ?? `${slashSuggestions[selectedSlashIndex].cmd} `);
+        onComposerChange?.(slashSuggestions[selectedSlashIndex].insert ?? joinContext(contextChips, `${slashSuggestions[selectedSlashIndex].cmd} `));
         return;
+      }
+    }
+
+    if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey && !userImages) {
+      const browsing = historyIndexRef.current !== -1 && event.currentTarget.value === historyRecalledRef.current;
+      if (event.currentTarget.value === '' || browsing) {
+        const step = stepPromptHistory(readPromptHistory(sessionId), browsing ? historyIndexRef.current : -1, event.key === 'ArrowUp' ? 'up' : 'down');
+        if (step) {
+          event.preventDefault();
+          historyIndexRef.current = step.index;
+          historyRecalledRef.current = step.text;
+          setDraftText(step.text);
+          return;
+        }
       }
     }
 
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      handleComposerSubmit(event, userImages ? composerValue : event.currentTarget?.value ?? composerValue);
+      handleComposerSubmit(event, userImages ? composerValue : joinContext(contextChips, event.currentTarget?.value ?? draftText));
     }
   }
 
@@ -594,9 +639,9 @@ export function DesktopStatusBar({
       if (!canAddUserImages || !sameImageView(userImages)) return;
       const pasted = clipboardData.getData?.('text/plain');
       if (pasted && typeof pasted === 'string') {
-        const start = rawTextOffset(composerValue, event.currentTarget.selectionStart ?? composerValue.length);
-        const end = rawTextOffset(composerValue, event.currentTarget.selectionEnd ?? composerValue.length);
-        onComposerChange?.(composerValue.slice(0, start) + pasted + composerValue.slice(end));
+        const start = rawTextOffset(draftText, event.currentTarget.selectionStart ?? draftText.length);
+        const end = rawTextOffset(draftText, event.currentTarget.selectionEnd ?? draftText.length);
+        setDraftText(draftText.slice(0, start) + pasted + draftText.slice(end));
       }
       await addOwnedFiles(files, 'paste');
       return;
@@ -833,17 +878,18 @@ export function DesktopStatusBar({
           <button type="button" onClick={activeVoice[1].cancelRecording} aria-label="Cancel voice input">Cancel</button>
         </div>}
         {!userImages && isPastingImage && <p className="status-composer-upload-status" role="status">Uploading image…</p>}
+        <ContextChips chips={contextChips} unavailable={isContextUnavailable} onRemove={index => onComposerChange?.(removeContext(composerValue, index))} />
         {slashSuggestions.length > 0 && (
-          <div className="status-slash-menu" role="listbox" aria-label={activeMention != null ? 'File mentions' : 'Slash commands'}>
+          <div className="status-slash-menu" role="listbox" aria-label={activeMention != null ? (mentionThreads.length || mentionPullRequests.length ? 'Mentions' : 'File mentions') : 'Slash commands'}>
             {slashSuggestions.map((suggestion, index) => (
               <button
-                key={suggestion.cmd}
+                key={suggestion.key || suggestion.cmd}
                 type="button"
                 role="option"
                 aria-selected={index === selectedSlashIndex ? 'true' : 'false'}
                 className={`status-slash-option${index === selectedSlashIndex ? ' selected' : ''}`}
                 onClick={() => {
-                  onComposerChange?.(suggestion.insert ?? `${suggestion.cmd} `);
+                  onComposerChange?.(suggestion.insert ?? joinContext(contextChips, `${suggestion.cmd} `));
                   composerInputRef.current?.focus();
                 }}
               >
@@ -856,8 +902,8 @@ export function DesktopStatusBar({
         <textarea
           ref={composerInputRef}
           className="status-composer-input"
-          value={composerValue}
-          onChange={(event) => onComposerChange?.(event.target.value)}
+          value={draftText}
+          onChange={(event) => setDraftText(event.target.value)}
           onKeyDown={handleComposerKeyDown}
           onCompositionStart={() => { compositionRef.current = true; }}
           onCompositionEnd={() => { compositionRef.current = false; }}

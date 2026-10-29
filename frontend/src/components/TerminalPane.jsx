@@ -27,6 +27,7 @@ import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../ut
 import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
 import { isStructuredSessionId, getStructuredAgentLabel, getComposerPlaceholder } from '../utils/structuredSessions';
+import { buildMentionThreads } from './composer-context/mentionThreads';
 import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
 import { ProjectBadge } from './ProjectBadge';
 import { ThreadDetailsCard } from './ThreadDetailsCard';
@@ -204,6 +205,7 @@ export const TerminalPane = memo(function TerminalPane({
     () => sessions.filter((session) => !session.thread?.archived && !isCompanionSession(session)),
     [sessions]
   );
+  const mentionThreads = useMemo(() => buildMentionThreads(selectableSessions, pane.sessionId), [selectableSessions, pane.sessionId]);
   const currentSession = selectableSessions.find(s => s.id === pane.sessionId);
   const isV4Session = isStructuredSessionId(pane.sessionId) && currentSession?.runtime === 'v4';
   const isCodexSession = currentSession?.runtime === 'codex';
@@ -1306,6 +1308,7 @@ export const TerminalPane = memo(function TerminalPane({
                 attachmentsEnabled
                 skills={installedSkills}
                 mentionRoot={isStructuredSession ? sessionCwd : ''}
+                mentionThreads={isStructuredSession ? mentionThreads : undefined}
                 allowAnyFile={isStructuredSession && !isV4Session}
                 showImageButton
                 userImages={isV4Session ? userImages : undefined}

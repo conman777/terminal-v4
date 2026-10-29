@@ -520,12 +520,13 @@ describe('ThreadsSidebar', () => {
 
   it('discards stale content results when the search changes', async () => {
     let resolveOld;
+    apiFetch.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
     apiFetch.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
       .mockResolvedValueOnce({ ok: true, json: async () => [{ sessionId: 'new', title: 'New result', snippet: 'new text', workspacePath: '/repo' }] });
     render(<ThreadsSidebar {...buildProps()} />);
     const input = screen.getByRole('textbox', { name: 'Search threads' });
     fireEvent.change(input, { target: { value: 'old' } });
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
     fireEvent.change(input, { target: { value: 'new' } });
     expect(await screen.findByText('new text')).toBeInTheDocument();
     await act(async () => resolveOld({ ok: true, json: async () => [{ sessionId: 'old', title: 'Old result', snippet: 'old text' }] }));
@@ -598,10 +599,11 @@ describe('ThreadsSidebar', () => {
 
   it('clears content results and ignores an in-flight response', async () => {
     let resolveSearch;
+    apiFetch.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
     apiFetch.mockImplementationOnce(() => new Promise(resolve => { resolveSearch = resolve; }));
     render(<ThreadsSidebar {...buildProps()} />);
     fireEvent.change(screen.getByRole('textbox', { name: 'Search threads' }), { target: { value: 'compiler' } });
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     await act(async () => resolveSearch({ ok: true, json: async () => [{ sessionId: 'old', title: 'Old result', snippet: 'old text' }] }));
     expect(screen.queryByLabelText('Saved conversation results')).not.toBeInTheDocument();

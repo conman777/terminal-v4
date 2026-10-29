@@ -30,6 +30,7 @@ import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../ut
 import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
 import { isStructuredSessionId, getStructuredAgentLabel, getComposerPlaceholder } from '../utils/structuredSessions';
+import { buildMentionThreads } from './composer-context/mentionThreads';
 import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import './MobileUI.css';
@@ -126,6 +127,7 @@ export function MobileShell({
     () => showWorkspaceStart ? null : activeSessionId ? sessions.find((session) => session.id === activeSessionId) || null : sessions[0] || null,
     [activeSessionId, sessions, showWorkspaceStart]
   );
+  const mentionThreads = useMemo(() => buildMentionThreads(sessions, currentSession?.id), [sessions, currentSession?.id]);
   const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent] = useComposerFileAttachments(currentSession?.id);
   const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft(currentSession?.id);
   const isStructuredSession = isStructuredSessionId(currentSession?.id);
@@ -715,6 +717,7 @@ export function MobileShell({
                 attachmentsEnabled={isV4Session || (environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer'))}
                 skills={installedSkills}
                 mentionRoot={isStructuredSession ? sessionCwd : ''}
+                mentionThreads={isStructuredSession ? mentionThreads : undefined}
                 allowAnyFile={isStructuredSession && !isV4Session}
                 showImageButton
                 userImages={isV4Session ? userImages : undefined}

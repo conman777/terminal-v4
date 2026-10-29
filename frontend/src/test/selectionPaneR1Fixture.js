@@ -97,6 +97,7 @@ export function installSelectionPaneR1Fixture() {
     if (method === 'GET' && route === '/api/structured/owner-cleanup' && !url.search) return json({ error: 'Not found' }, 404);
     if (method === 'GET' && /^\/api\/structured\/sessions\/[^/]+\/input-capabilities$/.test(route) && !url.search) return json({ error: 'Not found' }, 404);
     if (method === 'GET' && route === '/api/structured/sessions' && url.search === '?view=inventory') return json(inventory);
+    if (method === 'GET' && route === '/api/thread-order' && !url.search) return json({ revision: 0, projects: {} });
     if (method === 'GET' && route === '/api/state') return json({ sessions: [], projectInfo: null });
     if (method === 'GET' && route === '/api/settings') return json(settings);
     if (method === 'PATCH' && route === '/api/settings') return json({});

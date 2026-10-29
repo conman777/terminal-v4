@@ -447,4 +447,47 @@ describe('ThreadsSessionItem actions and metadata', () => {
     rerender(<ThreadsSessionItem session={buildSession({updatedAt: 'invalid'})} />);
     expect(container.querySelector('time')).not.toBeInTheDocument();
   });
+
+  it('offers duration choices including a validated custom time and sends only seconds', async () => {
+    const user = userEvent.setup();
+    const onUpdateThreadMetadata = vi.fn().mockResolvedValue({});
+    const session = buildSession({ id: 'ss-work', threadLifecycle: { supported: true, snoozed: false, requiresAttention: false } });
+    render(<ThreadsSessionItem session={session} onSelect={vi.fn()} onUpdateThreadMetadata={onUpdateThreadMetadata} />);
+    const open = () => user.click(screen.getByRole('button', { name: 'Thread actions for Old title' }));
+    await open();
+    expect(screen.getAllByRole('menuitem').map(item => item.textContent).filter(label => label.startsWith('Snooze'))).toEqual([
+      'Snooze for one hour', 'Snooze for 4 hours', 'Snooze until tomorrow morning', 'Snooze for custom time…',
+    ]);
+    await user.click(screen.getByRole('menuitem', { name: 'Snooze for 4 hours' }));
+    await waitFor(() => expect(onUpdateThreadMetadata).toHaveBeenLastCalledWith('ss-work', { snoozeForSeconds: 14400 }));
+    await open();
+    await user.click(screen.getByRole('menuitem', { name: 'Snooze until tomorrow morning' }));
+    await waitFor(() => expect(onUpdateThreadMetadata).toHaveBeenCalledTimes(2));
+    const tomorrow = onUpdateThreadMetadata.mock.calls[1][1].snoozeForSeconds;
+    expect(tomorrow).toBeGreaterThan(3600 * 9 - 1);
+    expect(tomorrow).toBeLessThanOrEqual(3600 * 33);
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValueOnce('90m');
+    await open();
+    await user.click(screen.getByRole('menuitem', { name: 'Snooze for custom time…' }));
+    await waitFor(() => expect(onUpdateThreadMetadata).toHaveBeenLastCalledWith('ss-work', { snoozeForSeconds: 5400 }));
+    prompt.mockReturnValueOnce('99d');
+    await open();
+    await user.click(screen.getByRole('menuitem', { name: 'Snooze for custom time…' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('between 1 minute and 30 days');
+    expect(onUpdateThreadMetadata).toHaveBeenCalledTimes(3);
+  });
+
+  it('shows an honest disabled reason for sessions that can never be settled', async () => {
+    const user = userEvent.setup();
+    const native = buildSession({ id: 'ss-native', runtime: 'claude', threadLifecycle: { supported: true, settlementSupported: false, requiresAttention: false } });
+    const view = render(<ThreadsSessionItem session={native} onSelect={vi.fn()} onUpdateThreadMetadata={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Thread actions for Old title' }));
+    const item = screen.getByRole('menuitem', { name: 'Settling unavailable' });
+    expect(item).toBeDisabled();
+    expect(item).toHaveAttribute('title', expect.stringContaining('Claude and Codex'));
+    expect(screen.queryByRole('menuitem', { name: 'Settle thread' })).not.toBeInTheDocument();
+    view.rerender(<ThreadsSessionItem session={buildSession({ id: 'term-1' })} onSelect={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Thread actions for Old title' }));
+    expect(screen.getByRole('menuitem', { name: 'Settling unavailable' })).toHaveAttribute('title', expect.stringContaining('Terminal sessions'));
+  });
 });

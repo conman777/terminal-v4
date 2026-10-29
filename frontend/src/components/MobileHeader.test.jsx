@@ -425,7 +425,7 @@ describe('MobileHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     const overflow = screen.getByRole('group', { name: 'More actions' });
     expect(within(overflow).getAllByRole('button').map(button => button.textContent))
-      .toEqual(['New thread', 'Rename thread', 'Close thread', 'Show keyboard bar']);
+      .toEqual(['New thread', 'Rename thread', 'Settling unavailableTerminal sessions cannot be settled: Terminal V4 cannot verify their running processes.', 'Close thread', 'Show keyboard bar']);
     fireEvent.click(within(overflow).getByRole('button', { name: 'New thread' }));
     expect(props.onCreateSession).toHaveBeenCalledWith();
   });
@@ -737,5 +737,34 @@ describe('MobileHeader close recovery', () => {
     fireEvent.click(within(screen.getByRole('dialog', {name: 'Mobile menu'})).getByRole('button', {name: 'Browser', exact: true}));
     expect(props.onOpenWorkspaceBrowser).toHaveBeenCalledWith();
     expect(props.onCloseSession.mock.calls).toEqual([['session-1']]);
+  });
+
+  it('offers longer snooze choices and a custom time on mobile and keeps the chosen duration on retry', async () => {
+    const onUpdateThreadMetadata = vi.fn().mockRejectedValueOnce(new Error('Busy')).mockResolvedValue({});
+    const props = buildProps({ activeSessions: [{ id: 'ss-phone', title: 'Phone', threadLifecycle: { supported: true, snoozed: false, requiresAttention: false } }], activeSessionId: 'ss-phone', onUpdateThreadMetadata });
+    render(<MobileHeader {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze for 4 hours' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Busy');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry snooze change' }));
+    await waitFor(() => expect(onUpdateThreadMetadata.mock.calls).toEqual([['ss-phone', { snoozeForSeconds: 14400 }], ['ss-phone', { snoozeForSeconds: 14400 }]]));
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValueOnce('2d');
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze for custom time…' }));
+    await waitFor(() => expect(onUpdateThreadMetadata).toHaveBeenLastCalledWith('ss-phone', { snoozeForSeconds: 172800 }));
+    prompt.mockReturnValueOnce('0');
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Snooze for custom time…' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('between 1 minute and 30 days');
+    expect(onUpdateThreadMetadata).toHaveBeenCalledTimes(3);
+  });
+
+  it('shows the visible reason a native session cannot be settled', () => {
+    const props = buildProps({ activeSessions: [{ id: 'ss-native', title: 'Native', runtime: 'codex', threadLifecycle: { supported: true, settlementSupported: false, requiresAttention: false } }], activeSessionId: 'ss-native', onUpdateThreadMetadata: vi.fn() });
+    render(<MobileHeader {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    const item = screen.getByRole('button', { name: /Settling unavailable/ });
+    expect(item).toBeDisabled();
+    expect(item).toHaveTextContent('Claude and Codex sessions cannot be settled');
   });
 });
