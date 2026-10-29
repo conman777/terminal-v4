@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../utils/api';
 import { isStructuredSessionId } from '../utils/structuredSessions';
 import { getActiveEnvironment } from '../utils/remoteEnvironments';
+import { ConversationSharePanel } from './ConversationSharePanel';
 import './CollaborationPanel.css';
 async function request(path, options = {}) {
   const response = await apiFetch('/api/collaboration/invitations' + path, { ...options, home: true });
@@ -10,7 +11,7 @@ async function request(path, options = {}) {
   if (!response.ok) throw new Error(data.error || 'Invitation request failed');
   return data;
 }
-export function CollaborationPanel({ workspacePath, sessionId }) {
+export function CollaborationPanel({ workspacePath, sessionId, onInsertPrompt }) {
   const [items, setItems] = useState([]);
   const [role, setRole] = useState('observer');
   const [expiresInSeconds, setExpiry] = useState(3600);
@@ -33,20 +34,20 @@ export function CollaborationPanel({ workspacePath, sessionId }) {
   useEffect(() => {
     const controller = new AbortController();
     setItems([]); setLoaded(false); setLoading(false); setError('');
-    if (!remote) reload(controller.signal).catch(error => { if (!controller.signal.aborted) setError(error.message); });
+    if (!remote && !structured) reload(controller.signal).catch(error => { if (!controller.signal.aborted) setError(error.message); });
     return () => controller.abort();
-  }, [reload, remote]);
+  }, [reload, remote, structured]);
   useEffect(() => { setLink(''); }, [workspacePath, sessionId]);
+  if (structured) return <ConversationSharePanel sessionId={sessionId.replace(/^structured:/, '')} onInsertPrompt={onInsertPrompt} />;
   async function act(action) {
     setBusy(true); setError('');
     try { await action(); await reload(); } catch (error) { setError(error.message); } finally { setBusy(false); }
   }
   return <section className="collaboration-panel" aria-label="Workspace collaboration">
     <header><h3>Invite a collaborator</h3>
-    <p>Share only this existing terminal and its output. Controller access lets the guest type commands in this terminal.</p></header>
+    <p>Share only this existing terminal and its output. Controller access lets the guest type commands in this terminal. To share a conversation instead, select it: guests then get a read-only link.</p></header>
     {remote && <p role="status">Open Terminal v4 directly on the owning server to issue invitations.</p>}
     {!sessionId && <p>Select an existing terminal to share.</p>}
-    {structured && <p role="note">Sharing requires a PTY terminal. Select a terminal session to create an invitation.</p>}
     <form onSubmit={event => { event.preventDefault(); if (!canShare || busy || remote || !workspacePath) return; act(async () => {
       const issued = await request('', { method: 'POST', body: { workspacePath, sessionId, role, expiresInSeconds, maxUses } });
       setLink(window.location.origin + '/#invite=' + encodeURIComponent(issued.id) + '.' + encodeURIComponent(issued.secret));

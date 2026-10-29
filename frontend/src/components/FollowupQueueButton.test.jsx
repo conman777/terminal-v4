@@ -25,3 +25,16 @@ it('closes an open queue on account or environment scope changes', () => {
   act(() => setActiveEnvironment({ id: 'queue-synthetic-host', name: 'Fixture', baseUrl: 'https://queue.example.invalid' }));
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
+const waiting = { revision: 2, mode: 'running', holdReason: null, items: [], order: ['a', 'b'] };
+it('stays hidden for native sessions until the server queue is confirmed available', () => {
+  const { rerender } = render(<FollowupQueueButton sessionId="ss-native" required={false} queue={{ status: 'unknown' }} />);
+  expect(screen.queryByRole('button', { name: 'Open follow-up queue' })).not.toBeInTheDocument();
+  rerender(<FollowupQueueButton sessionId="ss-native" required={false} queue={{ status: 'unavailable', reason: 'none' }} />);
+  expect(screen.queryByRole('button', { name: 'Open follow-up queue' })).not.toBeInTheDocument();
+  rerender(<FollowupQueueButton sessionId="ss-native" required={false} queue={{ status: 'available', snapshot: waiting }} />);
+  expect(screen.getByRole('button', { name: 'Open follow-up queue' })).toHaveTextContent('Queue (2)');
+});
+it('always shows for V4 conversations even before the probe settles', () => {
+  render(<FollowupQueueButton sessionId="ss-v4" queue={{ status: 'unknown' }} />);
+  expect(screen.getByRole('button', { name: 'Open follow-up queue' })).toHaveTextContent(/^Queue$/);
+});

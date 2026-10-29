@@ -23,14 +23,16 @@ function QueueDialog({ sessionId, onClose }) {
   </div>, document.body);
 }
 
-export function FollowupQueueButton({ sessionId }) {
+export function FollowupQueueButton({ sessionId, queue = null, required = true }) {
   const [openSession, setOpenSession] = useState(null);
   const trigger = useRef(null);
   useEffect(() => { setOpenSession(null); }, [sessionId]);
   useEffect(() => subscribeEnvironment(() => setOpenSession(null)), []);
+  const waiting = queue?.snapshot ? queue.snapshot.order.length : 0;
   function close() { setOpenSession(null); trigger.current?.focus(); }
+  if (!required && queue?.status !== 'available') return null;
   return <>
-    <button type="button" className="workspace-tools-button" style={{ minHeight: 44 }} ref={trigger} aria-label="Open follow-up queue" disabled={!sessionId} onClick={() => setOpenSession(sessionId)}>Queue</button>
+    <button type="button" className="workspace-tools-button" style={{ minHeight: 44 }} ref={trigger} aria-label="Open follow-up queue" disabled={!sessionId} onClick={() => setOpenSession(sessionId)}>Queue{waiting > 0 ? ` (${waiting})` : ''}</button>
     {sessionId && openSession === sessionId && <QueueDialog key={sessionId} sessionId={sessionId} onClose={close} />}
   </>;
 }

@@ -1,0 +1,17 @@
+.terminal-pane-ui .thread-terminal-drawer { flex-grow: 0; flex-shrink: 0; }
+.thread-terminal-panes { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.thread-terminal-pane { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.thread-terminal-pane > :last-child { flex: 1; min-height: 0; }
+.thread-terminal-pane-header { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; padding: 0 4px 0 8px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font: 12px var(--font-ui); }
+.thread-terminal-pane-header span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-terminal-pane-header button { min-width: 32px; min-height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 12px var(--font-ui); cursor: pointer; }
+.thread-terminal-pane-header button:hover { color: var(--text-primary); background: var(--bg-surface); }
+.thread-terminal-pane-header button:focus-visible, .thread-terminal-confirm button:focus-visible, .thread-terminal-drawer-error button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+.thread-terminal-confirm { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-primary); font: 13px var(--font-ui); }
+.thread-terminal-confirm p { margin: 0; flex: 1 1 200px; }
+.thread-terminal-confirm button { min-height: 32px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); cursor: pointer; }
+@media (pointer: coarse) {
+  .thread-terminal-pane-header button { min-width: 44px; min-height: 44px; }
+  .thread-terminal-confirm button, .terminal-pane-ui .thread-terminal-drawer-error button { min-height: 44px; min-width: 44px; }
+}
+.thread-terminal-pane { position: relative; }

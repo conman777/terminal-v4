@@ -16,11 +16,12 @@ function creationErrorMessage(failure) {
 }
 
 // T3-style terminal drawer: hidden PTYs that belong to one conversation, opened in its folder.
-export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, enabled = true, sessions, createSession, updateThreadMetadata, restoreSession }) {
+export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, enabled = true, sessions, createSession, closeSession, updateThreadMetadata, restoreSession }) {
   const [created, setCreated] = useState([]);
   const [selected, setSelected] = useState(null);
   const [failures, setFailures] = useState([]);
   const [dismissedRecovery, setDismissedRecovery] = useState(null);
+  const [closeError, setCloseError] = useState('');
   const recordFailure = useCallback(next => setFailures(current => [...current.filter(item => !sameFailure(item, next)), next]), []);
   const clearFailure = useCallback(target => setFailures(current => current.filter(item => !sameFailure(item, target))), []);
   const attemptRef = useRef(new Map());
@@ -51,7 +52,8 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
     return [...listed].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || ''))).concat(extra);
   }, [authKey, created, sessions, signal, threadId]);
 
-  const create = useCallback(async () => {
+  const create = useCallback(async (options = {}) => {
+    const selectCreated = options?.select !== false;
     const freshOperation = freshOperationRef.current;
     freshOperationRef.current = false;
     if (!open || !active || !enabled || !threadId || !cwd || scopeBlocked) return null;
@@ -100,7 +102,7 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
       clearThreadTerminalRecovery(recoveryKey, attempt.raw);
       attempt.session = null;
       setCreated(current => [...current, { threadId, id: session.id, signal, authKey }]);
-      if (currentThread.current === threadId) setSelected(session.id);
+      if (selectCreated && currentThread.current === threadId) setSelected(session.id);
       return session.id;
     } catch (failure) {
       if (!signal.aborted && isAuthScopeCurrent(attempt.auth)) recordFailure({ ...failureScope, message: creationErrorMessage(failure) });
@@ -124,6 +126,21 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
     if (!linked) return;
     try { clearThreadTerminalRecovery(recoveryKey, recovery.raw); } catch { /* Another attempt changed the marker; leave it for review. */ }
   }, [cwd, recovery.raw, recoveryKey, sessions, signal, threadId]);
+
+  const closeTerminal = useCallback(async id => {
+    if (!closeSession || !terminals.some(item => item.id === id)) return false;
+    const last = terminals.length === 1;
+    const result = await closeSession(id);
+    if (result?.ok === false) {
+      setCloseError('This terminal could not be closed.');
+      return false;
+    }
+    setCloseError('');
+    if (last) attemptRef.current.delete(threadId);
+    setCreated(current => current.filter(item => item.id !== id));
+    setSelected(current => current === id ? null : current);
+    return true;
+  }, [closeSession, terminals, threadId]);
 
   const terminalId = terminals.some(item => item.id === selected) ? selected : terminals[0]?.id || null;
   // A shell that ended (for example when the server restarted) starts again in the same terminal, keeping its history.
@@ -200,6 +217,9 @@ export function useThreadDrawerTerminal({ threadId, cwd, open, active = true, en
     terminals: available ? terminals : [],
     select: setSelected,
     addTerminal: create,
+    closeTerminal,
+    closeError,
+    dismissCloseError: () => setCloseError(''),
     retry,
     canRetry: Boolean(available && (pendingRecovery ? !terminalId && canRecoverLink : applicableFailure)),
     error,

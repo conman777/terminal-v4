@@ -124,7 +124,7 @@ function WorkspaceToolsDialog({ workspacePath, currentSessionId, latestAssistant
             {id === 'tasks' && <WorkspaceTasksPanel workspacePath={workspacePath} currentSessionId={currentSessionId} latestAssistantText={latestAssistantText} onInsertPrompt={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
             {id === 'learning' && <WorkspaceProposalsPanel workspacePath={workspacePath} latestAssistantText={latestAssistantText} onRequestSuggestions={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
             {id === 'transfers' && <FileTransferPanel workspacePath={workspacePath} />}
-            {id === 'collaboration' && <CollaborationPanel workspacePath={workspacePath} sessionId={currentSessionId} />}
+            {id === 'collaboration' && <CollaborationPanel workspacePath={workspacePath} sessionId={currentSessionId} onInsertPrompt={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
             {id === 'replays' && <SessionReplayPanel workspacePath={workspacePath} sessionId={currentSessionId} />}
             {id === 'skills' && <WorkspaceSkillsPanel workspacePath={workspacePath} onInsertContext={onInsertPrompt ? prompt => navigate(onInsertPrompt, prompt) : undefined} />}
           </>}

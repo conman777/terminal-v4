@@ -1,0 +1,12 @@
+.pane-separator { position: relative; flex: 0 0 auto; background: var(--border-subtle); touch-action: none; }
+.pane-separator-vertical { width: 4px; cursor: col-resize; }
+.pane-separator-horizontal { height: 4px; cursor: row-resize; }
+.pane-separator::before { content: ""; position: absolute; inset: 0; }
+.pane-separator-vertical::before { left: -6px; right: -6px; }
+.pane-separator-horizontal::before { top: -6px; bottom: -6px; }
+.pane-separator:hover, .pane-separator:focus-visible { background: var(--accent-primary); }
+.pane-separator:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+@media (pointer: coarse) {
+  .pane-separator-vertical::before { left: -20px; right: -20px; }
+  .pane-separator-horizontal::before { top: -20px; bottom: -20px; }
+}

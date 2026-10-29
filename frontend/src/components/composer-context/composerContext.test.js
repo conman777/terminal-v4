@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MAX_CONTEXT_CHARS, addContext, buildTerminalContext, buildThreadContext, joinContext, redactSecrets, redactContextBlocks, splitContext,
+  MAX_CONTEXT_CHARS, addContext, buildPullRequestContext, buildTerminalContext, buildThreadContext, joinContext, redactSecrets, redactContextBlocks, splitContext,
 } from './composerContext';
 
 describe('redactSecrets', () => {
@@ -75,5 +75,15 @@ describe('redactContextBlocks', () => {
     const redacted = redactContextBlocks(value);
     expect(redacted).toContain('API_KEY=[redacted]');
     expect(redacted).toContain('password: mine');
+  });
+});
+
+describe('buildPullRequestContext', () => {
+  it('records the pull request link when it is a web address', () => {
+    expect(buildPullRequestContext({ id: '7', title: '#7 Fix', url: 'https://github.com/acme/app/pull/7' }))
+      .toEqual({ kind: 'pr', id: '7', label: '#7 Fix', body: 'Reference to a pull request "#7 Fix" (id 7). URL: https://github.com/acme/app/pull/7' });
+  });
+  it('drops a link that is not a web address', () => {
+    expect(buildPullRequestContext({ id: '7', title: 'Fix', url: 'javascript:alert(1)' }).body).toBe('Reference to a pull request "Fix" (id 7).');
   });
 });

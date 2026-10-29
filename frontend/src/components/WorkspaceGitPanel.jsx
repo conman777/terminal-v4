@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { apiFetch } from '../utils/api';
 import { DiffView } from './DiffView';
 import { prepareWorktreeCreation } from '../utils/worktreeCreationIntent';
+import { discardUnfinishedWorktree, fetchWorktreeProgress } from '../utils/worktreeProgress';
+import { WorktreeSetupCard } from './WorktreeSetupCard';
 import './WorkspaceGitPanel.css';
 
 async function request(url, options) {
@@ -33,6 +35,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   const [restore, setRestore] = useState(null);
   const [notice, setNotice] = useState('');
   const [worktreeAttempt, setWorktreeAttempt] = useState(false);
+  const [activeOperation, setActiveOperation] = useState(null);
   const mounted = useRef(false);
   const id = useId();
   const query = new URLSearchParams({ path: workspacePath, mode, base, ...(checkpointId ? { checkpointId } : {}) }).toString();
@@ -118,13 +121,17 @@ function GitWorkspace({ workspacePath, onStartTask }) {
       event.preventDefault(); mutate(async () => {
         const operation = prepareWorktreeCreation(workspacePath, 'git-panel');
         setWorktreeAttempt(true);
+        setActiveOperation(operation.operationId);
         let tree;
         try { tree = await request('/api/workspace/git/worktrees', { method: 'POST', signal: operation.signal, body: { path: workspacePath, name: name.trim(), baseRef: baseRef.trim(), operationId: operation.operationId } }); }
         catch (failure) {
           operation.assertCurrent();
           if (failure instanceof TypeError) throw new Error('Connection lost while creating the worktree. The request may have completed.');
+          const progress = await fetchWorktreeProgress(operation.operationId).catch(() => null);
+          if (progress?.cleaned === true) { try { operation.discard(); setWorktreeAttempt(false); } catch { /* reviewed on the next attempt */ } }
           throw failure;
         }
+        finally { if (mounted.current) setActiveOperation(null); }
         operation.assertCurrent();
         if (!tree?.path || tree.available === false || tree.creationStatus === 'unconfirmed') throw new Error('Could not confirm this worktree. Review the list before continuing.');
         if (!mounted.current) return;
@@ -137,9 +144,17 @@ function GitWorkspace({ workspacePath, onStartTask }) {
       <label htmlFor={id + '-base'}>Start from</label><input id={id + '-base'} value={baseRef} maxLength={200} disabled={busy} onChange={event => setBaseRef(event.target.value)} />
       <button disabled={busy || !workspacePath || !name.trim() || !baseRef.trim()}>Create isolated task</button>
     </form>
+    {activeOperation && <WorktreeSetupCard operationId={activeOperation} />}
     {!loading && !error && trees.length === 0 && <p>No isolated tasks yet.</p>}
     <ul className="workspace-git-list">{trees.map(tree => <li key={tree.id}><div><strong>{tree.name}</strong><small>{tree.branch}</small><small title={tree.path}>{tree.path}</small></div>
       {tree.creationStatus === 'unconfirmed' && <small>Creation unconfirmed · inspect the checkout before retrying</small>}
+      {tree.creationStatus === 'unconfirmed' && <button type="button" aria-label={'Remove unfinished ' + tree.name} disabled={busy} onClick={() => mutate(async () => {
+        const result = await discardUnfinishedWorktree(workspacePath, tree.id);
+        if (!result.discarded) throw new Error(result.error);
+        if (!mounted.current) return;
+        setNotice('Unfinished checkout removed.');
+        setRefresh(value => value + 1);
+      })}>Remove unfinished checkout</button>}
       {tree.archived && <small>Archived · checkout retained</small>}
       {!tree.archived && <button type="button" aria-label={'Start ' + tree.name} disabled={busy || !tree.available || !onStartTask} onClick={() => onStartTask?.(tree.path)}>{tree.available ? 'Start task' : 'Checkout unavailable'}</button>}
       <button type="button" aria-label={(tree.archived ? 'Reactivate ' : 'Archive ') + tree.name} disabled={busy || !tree.available} onClick={() => mutate(async () => {

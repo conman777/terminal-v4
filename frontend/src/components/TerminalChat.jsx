@@ -664,6 +664,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     return Boolean(term && typeof term.hasSelection === 'function' && term.hasSelection());
   }, []);
 
+  const selectionListenersRef = useRef(new Set());
+  const getTerminalSelectionText = useCallback(() => xtermRef.current?.getSelection?.() || '', []);
+  const clearTerminalSelection = useCallback(() => { xtermRef.current?.clearSelection?.(); }, []);
+  const subscribeTerminalSelection = useCallback((listener) => {
+    selectionListenersRef.current.add(listener);
+    return () => selectionListenersRef.current.delete(listener);
+  }, []);
+
   const copyTerminalSelection = useCallback(async () => {
     const term = xtermRef.current;
     const selection = term?.getSelection?.() || '';
@@ -1548,14 +1556,18 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     if (!onRegisterSelectionActions) return undefined;
 
     onRegisterSelectionActions({
+      sessionId,
       hasSelection: hasTerminalSelection,
-      copySelection: copyTerminalSelection
+      copySelection: copyTerminalSelection,
+      getSelectionText: getTerminalSelectionText,
+      clearSelection: clearTerminalSelection,
+      subscribe: subscribeTerminalSelection
     });
 
     return () => {
       onRegisterSelectionActions(null);
     };
-  }, [onRegisterSelectionActions, hasTerminalSelection, copyTerminalSelection]);
+  }, [onRegisterSelectionActions, sessionId, hasTerminalSelection, copyTerminalSelection, getTerminalSelectionText, clearTerminalSelection, subscribeTerminalSelection]);
 
   // Register focus terminal trigger for iOS keyboard activation
   useEffect(() => {
@@ -2233,6 +2245,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+    term.onSelectionChange?.(() => selectionListenersRef.current.forEach((listener) => listener()));
 
     const openWhenReady = () => {
       if (disposed || hasOpened) return;

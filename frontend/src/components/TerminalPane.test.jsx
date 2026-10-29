@@ -6,6 +6,7 @@ import { TerminalPane } from './TerminalPane';
 import { MobileShell } from './MobileShell';
 import { RawInputPending } from './RawInputPending';
 import { getSupervisedInputQueues } from '../utils/supervisedRawInputQueue';
+import { getNativeFollowupQueue } from '../utils/nativeFollowupQueue';
 
 const refreshSessionGitStats = vi.fn();
 const listSessionGitBranches = vi.fn();
@@ -37,11 +38,16 @@ let structuredRequiresCleanup = false;
 let lastStructuredOptions = null;
 let lastContextProps = null;
 let mockRawInputMode = 'legacy';
+const unavailableServerQueue = () => ({ status: 'unavailable', snapshot: null, reason: 'fixture', refresh: vi.fn() });
+let mockServerQueue = unavailableServerQueue();
+const enqueueServerFollowup = vi.fn();
 let structuredControlState = { sessionId: null, generation: 0, latestSeq: 0, events: [], truncated: false };
 const structuredInterrupt = vi.fn();
 let structuredIsInterrupting = false;
 let structuredControlError = '';
 
+vi.mock('../hooks/useServerFollowupQueue', () => ({ useServerFollowupQueue: () => mockServerQueue }));
+vi.mock('../utils/serverFollowupQueue', () => ({ enqueueServerFollowup: (...args) => enqueueServerFollowup(...args) }));
 vi.mock('../hooks/useSupervisedInputCapability', () => ({ useSupervisedInputCapability: () => mockRawInputMode }));
 
 vi.mock('../contexts/TerminalSessionContext', () => ({
@@ -244,6 +250,8 @@ describe('TerminalPane', () => {
     sendToSession.mockReset();
     sendRawToSession.mockReset();
     mockRawInputMode = 'legacy';
+    mockServerQueue = unavailableServerQueue();
+    enqueueServerFollowup.mockReset();
     updateThreadMetadata.mockReset();
     restoreSession.mockReset().mockResolvedValue({ restored: true });
     renameSession.mockReset().mockResolvedValue(undefined);
@@ -540,6 +548,62 @@ describe('TerminalPane', () => {
     await act(async () => { view.rerender(<TerminalPane {...props} fontSize={15} />); });
     await waitFor(() => expect(structuredSendMessage.mock.calls.map(call => call[0])).toEqual(['Also add tests']));
     expect([queued, screen.queryByRole('status', { name: 'Queued message' })]).toEqual([[0, true], null]);
+  });
+
+  it('sends a message sent mid-turn to the server queue when it exists, never the tab-only queue', async () => {
+    structuredIsStreaming = true;
+    mockServerQueue = { ...unavailableServerQueue(), status: 'available', snapshot: { revision: 1, mode: 'running', holdReason: null, items: [], order: [] } };
+    enqueueServerFollowup.mockResolvedValue({ mode: 'running', queueRevision: 2 });
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: 'ss-server-queue' }, sessions: [{ id: 'ss-server-queue', aiType: 'claude', title: 'Q', cwd: '/work' }] });
+    render(<TerminalPane {...props} />);
+    await act(async () => { await lastStatusBarProps.onComposerSubmit('Also add tests'); });
+    expect(enqueueServerFollowup).toHaveBeenCalledWith('ss-server-queue', 'Also add tests');
+    expect([structuredSendMessage.mock.calls.length, screen.queryByRole('status', { name: 'Queued message' })]).toEqual([0, null]);
+    expect(mockServerQueue.refresh).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Open follow-up queue' })).toBeInTheDocument();
+  });
+
+  it('keeps the draft and shows the failure when the server queue rejects a mid-turn message', async () => {
+    structuredIsStreaming = true;
+    mockServerQueue = { ...unavailableServerQueue(), status: 'available', snapshot: { revision: 1, mode: 'running', holdReason: null, items: [], order: [] } };
+    enqueueServerFollowup.mockRejectedValue(new Error('Queue changed on another device.'));
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: 'ss-server-queue-fail' }, sessions: [{ id: 'ss-server-queue-fail', aiType: 'claude', title: 'Q', cwd: '/work' }] });
+    render(<TerminalPane {...props} />);
+    fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep me' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Send composer' })); });
+    await waitFor(() => expect(lastConversationViewProps.conversationNotice).toBe('Queue changed on another device.'));
+    expect([screen.getByLabelText('Command composer').value, screen.queryByRole('status', { name: 'Queued message' })]).toEqual(['Keep me', null]);
+  });
+
+  it('does not send mid-turn text anywhere while the queue probe is still unknown', async () => {
+    structuredIsStreaming = true;
+    mockServerQueue = { ...unavailableServerQueue(), status: 'unknown' };
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: 'ss-queue-unknown' }, sessions: [{ id: 'ss-queue-unknown', aiType: 'claude', title: 'Q', cwd: '/work' }] });
+    render(<TerminalPane {...props} />);
+    await act(async () => { await lastStatusBarProps.onComposerSubmit('Wait for the probe'); });
+    expect([enqueueServerFollowup.mock.calls.length, structuredSendMessage.mock.calls.length, screen.queryByRole('status', { name: 'Queued message' })]).toEqual([0, 0, null]);
+    expect(lastConversationViewProps.conversationNotice).toMatch(/Checking the follow-up queue/);
+  });
+
+  it('labels the tab-local queue as tab-only and never replays it once the server queue exists', async () => {
+    structuredIsStreaming = false;
+    mockServerQueue = { ...unavailableServerQueue(), status: 'available', snapshot: { revision: 1, mode: 'running', holdReason: null, items: [], order: [] } };
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: 'ss-tab-only' }, sessions: [{ id: 'ss-tab-only', aiType: 'claude', title: 'Q', cwd: '/work' }] });
+    const store = getNativeFollowupQueue('ss-tab-only');
+    store.update(current => [...current, { id: 'local-1', text: 'Old tab copy', status: 'queued' }]);
+    render(<TerminalPane {...props} />);
+    expect(screen.getByRole('status', { name: 'Queued message' })).toHaveTextContent('Tab-only, not sent automatically');
+    expect(structuredSendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Remove queued copy' })).toBeInTheDocument();
+  });
+
+  it('labels a fallback tab-local queue as tab-only', async () => {
+    structuredIsStreaming = true;
+    const props = buildProps({ pane: { id: 'pane-1', sessionId: 'ss-fallback-label' }, sessions: [{ id: 'ss-fallback-label', aiType: 'claude', title: 'Q', cwd: '/work' }] });
+    render(<TerminalPane {...props} />);
+    await act(async () => { await lastStatusBarProps.onComposerSubmit('Fallback'); });
+    expect(screen.getByRole('status', { name: 'Queued message' })).toHaveTextContent('Tab-only queue');
+    expect(screen.queryByRole('button', { name: 'Open follow-up queue' })).not.toBeInTheDocument();
   });
 
   it('retains a queued message after the pane is unmounted and reopened', () => {

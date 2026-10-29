@@ -58,6 +58,20 @@ describe('WorkspaceGitPanel', () => {
     expect(screen.getByRole('button', { name: 'Archive Fix example' })).toBeDisabled();
   });
 
+  it('offers to remove an unfinished checkout and refreshes the list afterwards', async () => {
+    let discarded = false;
+    apiFetch.mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/git/worktrees/discard') { discarded = true; return reply({ discarded: true }); }
+      if (url.includes('/worktrees?')) return reply(discarded ? [] : [{ ...tree, available: false, creationStatus: 'unconfirmed' }]);
+      return reply(url.includes('/status') ? { branch: 'main', files: [] } : []);
+    });
+    render(<WorkspaceGitPanel workspacePath={path} onStartTask={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove unfinished Fix example' }));
+    expect(await screen.findByText('Unfinished checkout removed.')).toBeVisible();
+    expect(apiFetch).toHaveBeenCalledWith('/api/workspace/git/worktrees/discard', { method: 'POST', body: { path, worktreeId: 'tree' } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove unfinished Fix example' })).toBeNull());
+  });
+
   it('shows binary and truncation limitations', async () => {
     apiFetch.mockImplementation(async url=>url.includes('/worktrees')||url.includes('/checkpoints')?reply([]):url.includes('/diff')?reply({patch:'',binary:true,truncated:true}):reply({branch:'main',files:[{path:'binary.bin'}]}));
     render(<WorkspaceGitPanel workspacePath={path} />);fireEvent.click(await screen.findByRole('button',{name:/binary.bin/}));

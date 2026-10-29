@@ -7,6 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { LazyTerminalChat } from './LazyTerminalChat';
 import { LazyDesktopConversationView } from './LazyDesktopConversationView';
 import { FollowupQueueButton } from './FollowupQueueButton';
+import { enqueueServerFollowup } from '../utils/serverFollowupQueue';
+import { useServerFollowupQueue } from '../hooks/useServerFollowupQueue';
 import { ConversationContextButton } from './ConversationContextButton';
 import { DesktopStatusBar } from './DesktopStatusBar';
 import { MobileModelSettings } from './MobileModelSettings';
@@ -24,6 +26,7 @@ import { supervisedInputQueue } from '../utils/supervisedRawInputQueue';
 import { latestWorkspaceResponse } from '../utils/workspaceResponse';
 import { useUserImageComposer } from '../hooks/useUserImageComposer';
 import { useThreadDrawerTerminal } from '../hooks/useThreadDrawerTerminal';
+import { ThreadTerminalTabs } from './ThreadTerminalTabs';
 import { useInstalledSkills } from '../hooks/useInstalledSkills';
 import { PLAN_MARKER } from '../utils/planMode';
 import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
@@ -31,6 +34,12 @@ import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
 import { isStructuredSessionId, getStructuredAgentLabel, getComposerPlaceholder } from '../utils/structuredSessions';
 import { buildMentionThreads } from './composer-context/mentionThreads';
+import { useTerminalAddToChat } from './composer-context/TerminalAddToChat';
+import { resolveTerminalOwner } from './composer-context/addToChatState';
+import { useCurrentPullRequest } from '../hooks/useCurrentPullRequest';
+import { useLongPress } from '../hooks/useLongPress';
+import { ContextMenu } from './ContextMenu';
+import { resolveWorktreeOrigin } from '../utils/worktreeOrigin';
 import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import './MobileUI.css';
@@ -128,6 +137,7 @@ export function MobileShell({
     [activeSessionId, sessions, showWorkspaceStart]
   );
   const mentionThreads = useMemo(() => buildMentionThreads(sessions, currentSession?.id), [sessions, currentSession?.id]);
+  const worktreeOrigin = useMemo(() => resolveWorktreeOrigin(sessions, activeSessionId), [sessions, activeSessionId]);
   const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent] = useComposerFileAttachments(currentSession?.id);
   const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft(currentSession?.id);
   const isStructuredSession = isStructuredSessionId(currentSession?.id);
@@ -151,6 +161,7 @@ export function MobileShell({
   const isCodexSession = currentSession?.runtime === 'codex';
   const isManagedConversation = isV4Session || isCodexSession;
   const isClaudeChat = isStructuredSession && !isManagedConversation && currentSession?.aiType === 'claude';
+  const serverQueue = useServerFollowupQueue(isClaudeChat || isCodexSession ? currentSession?.id : null);
   const installedSkills = useInstalledSkills(isStructuredSession ? sessionCwd : '');
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   useEffect(() => { setPlanMode(false); }, [environment?.id]);
@@ -167,6 +178,20 @@ export function MobileShell({
     updateThreadMetadata,
     restoreSession,
   });
+  const mentionPullRequests = useCurrentPullRequest(sessionCwd, null, { enabled: isStructuredSession && visible });
+  const mainTerminalOwner = useMemo(() => resolveTerminalOwner({ terminalId: currentSession?.id, sessions: terminalSessions }), [currentSession?.id, terminalSessions]);
+  const mainAddToChat = useTerminalAddToChat({ terminalId: currentSession?.id, owner: mainTerminalOwner, label: 'Terminal' });
+  const drawerOwnerTitle = currentSession ? resolveTerminalOwner({ terminalId: currentSession.id, sessions: [currentSession] })?.title : null;
+  const drawerOwner = useMemo(() => (isStructuredSession && drawerOwnerTitle ? { threadId: currentSession.id, title: drawerOwnerTitle } : null), [currentSession?.id, drawerOwnerTitle, isStructuredSession]);
+  const drawerAddToChat = useTerminalAddToChat({ terminalId: threadTerminal.terminalId, owner: drawerOwner, label: 'Thread terminal' });
+  const [selectionMenu, setSelectionMenu] = useState(null);
+  const closeSelectionMenu = useCallback(() => setSelectionMenu(null), []);
+  const openSelectionMenu = useCallback((addToChat, coords) => {
+    if (addToChat.menuItems.length) setSelectionMenu({ x: coords?.x || 12, y: coords?.y || 12, items: addToChat.menuItems });
+  }, []);
+  const mainSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(mainAddToChat, coords), [mainAddToChat, openSelectionMenu]));
+  const drawerSelectionPress = useLongPress(useCallback(coords => openSelectionMenu(drawerAddToChat, coords), [drawerAddToChat, openSelectionMenu]));
+  useEffect(() => { setSelectionMenu(null); }, [currentSession?.id, threadTerminal.terminalId]);
   const agentExecutionAllowed = visible && environmentAllows(environment, 'agentExecute');
   const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const inferredAiType = currentSession ? (isManagedConversation ? inferSessionAiType(currentSession) : sessionAiTypes[currentSession.id] ?? inferSessionAiType(currentSession)) : null;
@@ -413,6 +438,21 @@ export function MobileShell({
     const request = {};
     composerRequestRef.current = request;
     setComposerSubmitting(true);
+    if ((isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length)) {
+      try {
+        const queued = await enqueueServerFollowup(currentSession.id, payload);
+        if (composerRequestRef.current !== request) return;
+        clearComposerDraft(submittedDraftRevision, trimmed);
+        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+        serverQueue.refresh();
+        setTransportNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
+      } catch (error) {
+        if (composerRequestRef.current === request) setTransportNotice(error.message || 'Could not queue this message. Your draft was kept.');
+      } finally {
+        if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
+      }
+      return;
+    }
     try {
       const result = isV4Session && userImages ? await sendImageDraft(payload)
         : isStructuredSession ? await structuredSendMessage(payload) : handleChatSend(payload);
@@ -432,7 +472,7 @@ export function MobileShell({
     } finally {
       if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
     }
-  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftRevision, clearComposerDraft, handleChatSend, isStructuredSession, isV4Session, isClaudeChat, isCodexSession, planMode, currentSession?.id, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
+  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftRevision, clearComposerDraft, handleChatSend, isStructuredSession, isV4Session, isClaudeChat, isCodexSession, planMode, currentSession?.id, serverQueue, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
 
   const conversationActionsAllowed = sessionInputAllowed && !structuredHistoryOnly && structuredConnectionState === 'online'
     && !structuredIsStreaming && !structuredIsSending && !structuredIsInterrupting && !structuredRequiresCleanup && !pendingApproval;
@@ -625,7 +665,7 @@ export function MobileShell({
                 className={`desktop-terminal-slot mobile-terminal-slot${isTerminalDockVisible ? ' is-open' : ' is-collapsed'}${useTerminalFirstLayout ? ' terminal-first' : ''}`}
                 aria-hidden={!isTerminalDockVisible ? 'true' : undefined}
               >
-                <div className="desktop-terminal-runtime-host" data-persistent-terminal="">
+                <div className="desktop-terminal-runtime-host" data-persistent-terminal="" {...mainSelectionPress}>
                   {shouldRenderTerminalRuntime ? (
                     <LazyTerminalChat
                       key={`${currentSession.id}-${refreshToken}`}
@@ -649,20 +689,17 @@ export function MobileShell({
                       onOutputChunk={handleOutputChunk}
                       onScreenSnapshot={handleScreenSnapshot}
                       onRegisterSendText={handleRegisterSendText}
+                      onRegisterSelectionActions={mainAddToChat.register}
                       onTurn={handleTurn}
                     />
                   ) : null}
                 </div>
               </div>
 
-              {isStructuredSession && threadTerminalOpen && <section className="mobile-thread-terminal" aria-label="Thread terminal">
-                {threadTerminal.terminals.length > 0 && <div className="mobile-thread-terminal-tabs" role="tablist" aria-label="Thread terminals">
-                  {threadTerminal.terminals.map((terminal, index) => <button key={terminal.id} type="button" role="tab"
-                    aria-selected={terminal.id === threadTerminal.terminalId} onClick={() => threadTerminal.select(terminal.id)}>
-                    {`Terminal ${index + 1}`}
-                  </button>)}
-                  <button type="button" aria-label="New terminal in this thread" disabled={!terminalInputAllowed} onClick={() => threadTerminal.addTerminal()}>+</button>
-                </div>}
+              {isStructuredSession && threadTerminalOpen && <section className="mobile-thread-terminal" aria-label="Thread terminal" {...drawerSelectionPress}>
+                {threadTerminal.terminals.length > 0 && <ThreadTerminalTabs className="mobile-thread-terminal-tabs" terminals={threadTerminal.terminals}
+                  selectedId={threadTerminal.terminalId} onSelect={threadTerminal.select} onAdd={() => threadTerminal.addTerminal()}
+                  disabled={!terminalInputAllowed} withPanels={false} />}
                 {threadTerminal.createError && <div className="mobile-thread-terminal-error"><p role="alert">{threadTerminal.createError}</p>
                   {threadTerminal.canRetryCreate && <button type="button" aria-label="Retry adding terminal" disabled={!terminalInputAllowed} onClick={() => threadTerminal.retryCreate()}>Retry</button>}
                   <button type="button" aria-label="Dismiss terminal error" onClick={() => threadTerminal.dismissCreateError()}>Dismiss</button>
@@ -687,6 +724,7 @@ export function MobileShell({
                         inputEnabled={terminalInputAllowed}
                         isPrimary={visible}
                         onRegisterFocusTerminal={onRegisterFocusTerminal}
+                        onRegisterSelectionActions={drawerAddToChat.register}
                       /> : <p role="status">Opening a terminal in this thread's folder…</p>}
               </section>}
 
@@ -718,6 +756,7 @@ export function MobileShell({
                 skills={installedSkills}
                 mentionRoot={isStructuredSession ? sessionCwd : ''}
                 mentionThreads={isStructuredSession ? mentionThreads : undefined}
+                mentionPullRequests={isStructuredSession ? mentionPullRequests : undefined}
                 allowAnyFile={isStructuredSession && !isV4Session}
                 showImageButton
                 userImages={isV4Session ? userImages : undefined}
@@ -747,7 +786,7 @@ export function MobileShell({
                 composerSecondaryAction={<>
                   {(isCodexSession || isClaudeChat) && sessionInputAllowed && <button type="button" className={`mobile-plan-toggle${planMode ? ' active' : ''}`} aria-label="Plan mode" aria-pressed={planMode}
                     disabled={modelChangeDisabled} onClick={() => setPlanMode(value => !value)}>Plan mode: {planMode ? 'On' : 'Off'}</button>}
-                  {isV4Session && <FollowupQueueButton sessionId={currentSession?.id} />}
+                  {(isV4Session || serverQueue.status === 'available') && <FollowupQueueButton sessionId={currentSession?.id} queue={serverQueue} />}
                   {isV4Session && <ConversationContextButton
                     sessionId={currentSession?.id} active={true}
                     controlState={structuredControlState}
@@ -766,6 +805,7 @@ export function MobileShell({
         ) : (
           <WorkspaceStartView
             onSelectHistorySession={onSelectHistorySession}
+            originThread={worktreeOrigin}
             currentPath={startWorkspacePath || projectInfo?.cwd || ''}
             projects={startProjects}
             recentFolders={recentFolders}
@@ -786,6 +826,8 @@ export function MobileShell({
           onHeightChange={onAccessoryHeightChange}
         />
       ) : null}
+
+      {selectionMenu && <ContextMenu x={selectionMenu.x} y={selectionMenu.y} items={selectionMenu.items} onClose={closeSelectionMenu} />}
 
       {transportNotice && transportNotice !== structuredActionError ? (
         <div className="mobile-shell-launch-notice" role="status" aria-live="polite">

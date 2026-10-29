@@ -64,6 +64,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
   const [onceAt, setOnceAt] = useState('');
   const [weekdays, setWeekdays] = useState([1, 2, 3, 4, 5]);
   const [enabled, setEnabled] = useState(false);
+  const [deliverTelegram, setDeliverTelegram] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -190,8 +191,10 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
               </fieldset>
             </>}
           <label className="workspace-schedule-checkbox"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />Enable this schedule</label>
+          <label className="workspace-schedule-checkbox"><input type="checkbox" checked={deliverTelegram} onChange={(event) => setDeliverTelegram(event.target.checked)} />Send each result to my paired Telegram chat</label>
           <button type="button" disabled={!canQueue || !scheduleName.trim() || (timing !== 'interval' && advancedTiming !== true) || (timing === 'calendar' && (!weekdays.length || !runTime || !validTimeZone(timeZone))) || (timing === 'once' && !validOnce)} onClick={() => mutate('/api/workspace/schedules', { method: 'POST', body: { ...input, name: scheduleName.trim(), enabled,
             intervalSeconds: timing === 'interval' ? Number(intervalSeconds) : 0,
+            ...(deliverTelegram ? { deliverTo: 'telegram' } : {}),
             ...(timing === 'calendar' ? { at: calendarTime(runTime, weekdays, timeZone) } : {}),
             ...(timing === 'once' ? { runOnceAt: onceTimestamp } : {}) } }, false, timing !== 'interval')}>Create schedule</button>
           <p>Enabled schedules run while the app server is running. Missed intervals are combined into one run.</p>
@@ -210,6 +213,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
             {task.outputTruncated && <small>Output reached the saved result limit.</small>}
             {(task.beforeCheckpointId || task.afterCheckpointId) && <small>Change checkpoints saved for review.</small>}
             {task.error && <p className="workspace-task-error">{task.error}</p>}
+            {task.deliveryStatus && <small className="workspace-task-delivery">{`Telegram delivery: ${task.deliveryStatus}${task.deliveryReason ? ` (${task.deliveryReason})` : ''}`}</small>}
             {task.events?.length > 0 && <details><summary>Task activity</summary><ul>{task.events.map((event, index) => <li key={index}>{event.message}</li>)}</ul></details>}
             <div className="workspace-task-actions">
               {!terminalStatuses.has(task.status) && <button type="button" disabled={pending || task.status === 'cancelling'} onClick={() => mutate('/api/workspace/tasks/' + task.id + '/cancel', { method: 'POST' })}>Cancel task</button>}
@@ -227,6 +231,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
             {schedule.nextRunAt && <small>Next run: {new Date(schedule.nextRunAt).toLocaleString()}</small>}
             {(() => { const last = describeLastRun(schedule, tasks); return <><small className="workspace-schedule-last">{last.text}</small>{last.error && <p className="workspace-task-error">Last error: {last.error}</p>}</>; })()}
             {schedule.missedRuns > 0 && <small className="workspace-schedule-missed">{`Missed ${schedule.missedRuns} scheduled ${schedule.missedRuns === 1 ? 'run' : 'runs'} while the app server was not running${schedule.lastMissedAt ? ` (latest ${new Date(schedule.lastMissedAt).toLocaleString()})` : ''}.`}</small>}
+            <label className="workspace-schedule-checkbox"><input type="checkbox" disabled={pending} checked={schedule.deliverTo === 'telegram'} aria-label={'Send ' + schedule.name + ' results to Telegram'} onChange={(event) => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { deliverTo: event.target.checked ? 'telegram' : null } })} />Send results to Telegram</label>
             <div className="workspace-task-actions">
               {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={(schedule.enabled ? 'Pause ' : 'Enable ') + schedule.name} onClick={() => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { enabled: !schedule.enabled } })}>{schedule.enabled ? 'Pause' : 'Enable'}</button>}
               {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={'Run ' + schedule.name + ' now'} onClick={() => mutate('/api/workspace/schedules/' + schedule.id + '/run', { method: 'POST' })}>Run now</button>}

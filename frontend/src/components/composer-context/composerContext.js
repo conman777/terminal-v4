@@ -42,11 +42,14 @@ export function buildTerminalContext({ text, label = 'Terminal output' }) {
   return { kind: 'terminal', label: `${cleanLabel(label, 'Terminal output')} · ${range}`, body, truncated: kept.length < total || body.length < kept.join('\n').length };
 }
 
-function buildReference(kind, noun, { id, title }) {
+const WEB_URL = /^https?:\/\/[^\s"<>]{1,300}$/;
+
+function buildReference(kind, noun, { id, title, url }) {
   const key = String(id ?? '');
   if (!SAFE_ID.test(key)) return null;
   const label = cleanLabel(title, key);
-  return { kind, id: key, label, body: `Reference to ${noun} "${label}" (id ${key}).` };
+  const link = typeof url === 'string' && WEB_URL.test(url) ? ` URL: ${url}` : '';
+  return { kind, id: key, label, body: `Reference to ${noun} "${label}" (id ${key}).${link}` };
 }
 
 export const buildThreadContext = thread => buildReference('thread', 'another thread of this user', thread);

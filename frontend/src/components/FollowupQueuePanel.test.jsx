@@ -409,3 +409,97 @@ describe('FollowupQueuePanel', () => {
     expect(posts[1][1].body).toEqual(original);
   });
 });
+
+describe('FollowupQueuePanel shared queue controls', () => {
+  const post = () => apiFetch.mock.calls.filter(([, options]) => options?.method === 'POST').map(([, options]) => options.body);
+  const hold = () => { let release; const wait = new Promise(done => { release = done; }); return { wait, release }; };
+
+  it('shows a Saving row immediately and rolls it back with the host error on a 409', async () => {
+    await setup(running); change('Queued message', 'optimistic task');
+    const pending = hold(); apiFetch.mockImplementationOnce(() => pending.wait);
+    queue();
+    const row = (await screen.findByText('optimistic task', { selector: 'p' })).closest('li');
+    expect(row).toHaveTextContent('Saving');
+    apiFetch.mockResolvedValueOnce(response(running));
+    await act(async () => pending.release(response({ error: 'Queue changed; reload before applying.' }, 409)));
+    await waitFor(() => expect(screen.queryByText('optimistic task', { selector: 'p' })).not.toBeInTheDocument());
+    expect(screen.getByRole('alert')).toHaveTextContent('Queue changed');
+    expect(screen.getByLabelText('Queued message')).toHaveValue('optimistic task');
+  });
+
+  it('keeps a confirmed row without a flash back to the old queue and drops the Saving label', async () => {
+    await setup(running); change('Queued message', 'confirmed task');
+    const added = { ...first, itemId: '00000000-0000-4000-8000-000000000012', inputRequestId: '00000000-0000-4000-8000-000000000022', text: 'confirmed task', revision: 3 };
+    const next = { ...running, revision: 3, items: [first, second, added], order: [A, B, added.itemId] };
+    apiFetch.mockImplementationOnce(async (_url, options) => response({ operationId: options.body.operationId, queueRevision: 3, itemId: options.body.operation.itemId, itemRevision: 3 }));
+    apiFetch.mockResolvedValueOnce(response(next));
+    queue();
+    await screen.findByText('confirmed task', { selector: 'p' });
+    await waitFor(() => expect(screen.getByText('confirmed task', { selector: 'p' }).closest('li')).not.toHaveTextContent('Saving'));
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+  });
+
+  it('hides a removed row while saving and restores it when the removal is rejected', async () => {
+    await setup(running);
+    const pending = hold(); apiFetch.mockImplementationOnce(() => pending.wait);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove message 1' }));
+    await waitFor(() => expect(screen.queryByText('first', { selector: 'p' })).not.toBeInTheDocument());
+    apiFetch.mockResolvedValueOnce(response(running));
+    await act(async () => pending.release(response({ error: 'Message changed' }, 409)));
+    expect(await screen.findByText('first', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('reorders with arrow keys on the drag handle', async () => {
+    await setup(running);
+    nextMutation({ ...running, revision: 3, order: [B, A] });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder message 1' }), { key: 'ArrowDown' });
+    await waitFor(() => expect(post().map(body => body.operation)).toEqual([{ kind: 'reorder', itemIds: [B, A] }]));
+  });
+
+  it('does not move the first message up or the last message down from the keyboard', async () => {
+    await setup(running);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder message 1' }), { key: 'ArrowUp' });
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder message 2' }), { key: 'ArrowDown' });
+    expect(post()).toEqual([]);
+  });
+
+  it('reorders by dragging a row onto another row', async () => {
+    await setup(running);
+    nextMutation({ ...running, revision: 3, order: [B, A] });
+    const rows = screen.getAllByRole('listitem');
+    fireEvent.dragStart(rows[0]); fireEvent.dragOver(rows[1]); fireEvent.drop(rows[1]);
+    await waitFor(() => expect(post().map(body => body.operation)).toEqual([{ kind: 'reorder', itemIds: [B, A] }]));
+  });
+
+  it('labels promote as running next and explains why send now is unavailable', async () => {
+    await setup(running);
+    expect(screen.getAllByRole('button', { name: /^Promote message/ })[0]).toHaveTextContent('Run next');
+    expect(screen.getByText(/Send now and steering are unavailable/i)).toBeInTheDocument();
+  });
+
+  it('shows an update made on another device and keeps stale polls from replacing newer state', async () => {
+    apiFetch.mockResolvedValueOnce(response(running));
+    render(<FollowupQueuePanel sessionId={SID} pollIntervalMs={500} />);
+    await screen.findByText('first', { selector: 'p' });
+    const added = { ...first, itemId: '00000000-0000-4000-8000-000000000012', inputRequestId: '00000000-0000-4000-8000-000000000022', text: 'from phone', revision: 3 };
+    apiFetch.mockResolvedValueOnce(response({ ...running, revision: 3, items: [first, second, added], order: [A, B, added.itemId] }));
+    expect(await screen.findByText('from phone', { selector: 'p' }, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText(/updated from another device/i)).toBeInTheDocument();
+    const calls = apiFetch.mock.calls.length;
+    apiFetch.mockResolvedValue(response({ ...running, revision: 2, items: [{ ...first, text: 'stale text' }, second], order: [A, B] }));
+    await waitFor(() => expect(apiFetch.mock.calls.length).toBeGreaterThan(calls), { timeout: 3000 });
+    expect(screen.queryByText('stale text', { selector: 'p' })).not.toBeInTheDocument();
+    expect(screen.getByText('from phone', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('warns when the message being edited changed on another device', async () => {
+    apiFetch.mockResolvedValueOnce(response(running));
+    render(<FollowupQueuePanel sessionId={SID} pollIntervalMs={500} />);
+    await screen.findByText('first', { selector: 'p' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit message 1' }));
+    change('Edit queued message', 'my edit');
+    apiFetch.mockResolvedValue(response({ ...running, revision: 3, items: [{ ...first, text: 'edited elsewhere', revision: 2 }, second] }));
+    expect(await screen.findByText(/changed on another device/i, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByLabelText('Edit queued message')).toHaveValue('my edit');
+  });
+});

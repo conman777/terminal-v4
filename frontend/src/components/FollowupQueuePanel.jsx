@@ -6,28 +6,11 @@ import { getActiveEnvironment, getEnvironmentSignal, getEnvironmentStorage, subs
 import { environmentAllows } from '../utils/runtimePermissions';
 import './FollowupQueuePanel.css';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const MAX_BYTES = 100_000;
+import { MAX_BYTES, UUID, applyOptimistic, integer, validateSnapshot } from '../utils/followupQueueSnapshot';
 const bytes = value => new TextEncoder().encode(value).length;
-const integer = value => Number.isSafeInteger(value) && value >= 0;
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const kinds = new Set(['enqueue', 'edit', 'remove', 'reorder', 'promote', 'pause', 'resume', 'wake']);
 const knownRejection = status => [400, 401, 403, 404, 409, 413, 422].includes(status);
-function validateSnapshot(value) {
-  if (!value || !integer(value.revision) || !['held', 'running'].includes(value.mode)
-    || (value.mode === 'held' ? !['new', 'restart', 'manual', 'dispatch_error'].includes(value.holdReason) : value.holdReason != null)
-    || !Array.isArray(value.items) || value.items.length > 128 || !Array.isArray(value.order)) throw new Error('The host returned an invalid queue. Reload before changing it.');
-  const ids = new Set(); const requests = new Set(); const pending = new Set();
-  for (const item of value.items) {
-    if (!item || !UUID.test(item.itemId) || ids.has(item.itemId) || !UUID.test(item.inputRequestId) || requests.has(item.inputRequestId)
-      || !integer(item.revision) || item.revision < 1 || item.revision > value.revision || typeof item.text !== 'string' || bytes(item.text) > MAX_BYTES
-      || !['pending', 'dispatching', 'accepted', 'removed'].includes(item.state)) throw new Error('The host returned an invalid queue. Reload before changing it.');
-    ids.add(item.itemId); requests.add(item.inputRequestId); if (item.state === 'pending') pending.add(item.itemId);
-  }
-  if (value.order.length !== pending.size || new Set(value.order).size !== value.order.length || value.order.some(id => !pending.has(id))) throw new Error('The host returned an invalid queue order.');
-  if (value.items.filter(item => item.state === 'dispatching').length > 1) throw new Error('The host returned an invalid queue reservation.');
-  return value;
-}
 function validReceipt(receipt, mutation) {
   return receipt && receipt.operationId === mutation.operationId && integer(receipt.queueRevision) && receipt.queueRevision > 0
     && (mutation.operation.itemId ? receipt.itemId === mutation.operation.itemId && integer(receipt.itemRevision) && receipt.itemRevision > 0 : receipt.itemId == null && receipt.itemRevision == null);
@@ -50,7 +33,7 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
   const prefix = useId(); const [scopeVersion, setScopeVersion] = useState(0);
   const [snapshot, setSnapshot] = useState(null); const [local, setLocal] = useState(null);
   const [loading, setLoading] = useState(true); const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(''); const [message, setMessage] = useState(''); const [corruptLocal, setCorruptLocal] = useState(false);
+  const [error, setError] = useState(''); const [remoteChange, setRemoteChange] = useState(false); const [dragId, setDragId] = useState(null); const [message, setMessage] = useState(''); const [corruptLocal, setCorruptLocal] = useState(false);
   const scope = useRef(null); const localRef = useRef(null); const snapshotRef = useRef(null); const action = useRef(null);
   const current = context => scope.current === context && !context.controller.signal.aborted && !context.environmentSignal.aborted;
   const endpoint = context => `/api/structured/sessions/${encodeURIComponent(context.sessionId)}/queue`;
@@ -75,14 +58,18 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
       saveLocal(context, next);
     }
   }
-  async function load(context, clearError = false) {
+  async function load(context, clearError = false, force = false) {
     if (!current(context)) return null;
     try {
       const response = await apiFetch(endpoint(context), { signal: signal(context) });
       const data = await response.json().catch(() => null);
       if (!response.ok) throw new Error(data?.error || `Could not load the queue (${response.status}).`);
       const next = validateSnapshot(data);
-      if (current(context)) { snapshotRef.current = next; setSnapshot(next); if (clearError) setError(''); }
+      if (!current(context)) return next;
+      const previous = snapshotRef.current;
+      if (!force && previous && next.revision < previous.revision) return previous;
+      if (previous && next.revision > previous.revision && !action.current && !localRef.current?.pending) setRemoteChange(true);
+      snapshotRef.current = next; setSnapshot(next); if (clearError) setError('');
       return next;
     } catch (failure) { if (current(context)) { setError(failure.message || 'Could not load the queue.'); if (!snapshotRef.current) setSnapshot(null); } return null; }
     finally { if (current(context)) setLoading(false); }
@@ -90,14 +77,16 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
   async function confirm(context, pending, receipt, recovered = false) {
     if (!current(context) || !validReceipt(receipt, pending.mutation)) throw new Error('The queue action receipt is invalid. Its result could not be confirmed.');
     if (localRef.current?.pending?.mutation.operationId !== pending.mutation.operationId) return;
+    setError('');
+    const fresh = await load(context, false, true);
+    if (!current(context)) return;
+    if (localRef.current?.pending?.mutation.operationId !== pending.mutation.operationId) return;
     const next = { ...localRef.current, pending: null };
     if (pending.mutation.operation.kind === 'enqueue' && next.draftText === pending.draftAtSubmit && next.draftRevision === pending.draftRevisionAtSubmit) { next.draftText = ''; next.draftRevision += 1; }
     if (pending.mutation.operation.kind === 'edit' && same(next.editor, pending.editorAtSubmit)) next.editor = null;
     if (recovered && pending.mutation.operation.kind !== 'pause') next.wakeRecovery = { operationId: pending.mutation.operationId };
     else if (!recovered && ['wake', 'resume'].includes(pending.mutation.operation.kind)) next.wakeRecovery = null;
-    setError(''); saveLocal(context, next);
-    const fresh = await load(context);
-    if (!current(context)) return;
+    setRemoteChange(false); saveLocal(context, next);
     if (recovered) setMessage(pending.mutation.operation.kind === 'pause' ? 'Queue action saved. Review the queue state.' : 'Queue action saved. Review its state and use Wake queue if it stays idle.');
     else if (pending.mutation.operation.kind === 'wake') {
       setMessage(fresh?.mode === 'held' ? 'Queue was held for review. Check the conversation before manually sending unsent work.'
@@ -165,7 +154,7 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
     const home = new URL(resolveHomeApiUrl('') || window.location.origin, window.location.origin).href.replace(/\/$/, '');
     const context = { sessionId, version: scopeVersion, home, storage: getEnvironmentStorage(), key: `followupQueuePanel:${encodeURIComponent(home)}:${sessionId}`, controller: new AbortController(), environmentSignal: getEnvironmentSignal() };
     scope.current = context; action.current = null; snapshotRef.current = null;
-    setSnapshot(null); setLoading(true); setBusy(false); setError(''); setMessage(''); setCorruptLocal(false);
+    setSnapshot(null); setLoading(true); setBusy(false); setError(''); setMessage(''); setCorruptLocal(false); setRemoteChange(false); setDragId(null);
     let restored = emptyLocal(home, sessionId);
     try { const raw = context.storage.getItem(context.key); if (raw) restored = validateLocal(JSON.parse(raw), home, sessionId); }
     catch (failure) { setCorruptLocal(true); setError(failure.message || 'Saved queue work could not be read.'); }
@@ -182,17 +171,33 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
   const host = visible ? snapshot : null; const draft = visible ? local : null;
   const allowed = environmentAllows(getActiveEnvironment(), 'agentExecute');
   const blocked = busy || Boolean(draft?.pending) || corruptLocal || !allowed;
-  const pendingItems = host ? host.order.map(id => host.items.find(item => item.itemId === id)) : [];
+  const overlay = host && draft?.pending ? applyOptimistic(host, draft.pending.mutation.operation) : null;
+  const shownItems = overlay ? overlay.items : host?.items || [];
+  const pendingItems = host ? (overlay ? overlay.order : host.order).map(id => shownItems.find(item => item.itemId === id)).filter(Boolean) : [];
+  const saving = overlay?.saving || new Set();
   const dispatching = host?.items.filter(item => item.state === 'dispatching') || [];
   const count = host?.items.filter(item => item.state === 'accepted').length || 0;
   const editing = draft?.editor;
+  const editedElsewhere = Boolean(editing && host && !draft.pending && (() => { const live = host.items.find(item => item.itemId === editing.itemId); return !live || live.state !== 'pending' || live.revision !== editing.revision; })());
   const move = (index, delta) => { const order = [...host.order]; [order[index], order[index + delta]] = [order[index + delta], order[index]]; mutate({ kind: 'reorder', itemIds: order }); };
+  const dropOn = index => {
+    const from = host.order.indexOf(dragId); setDragId(null);
+    if (blocked || from < 0 || from === index) return;
+    const order = [...host.order]; const [moved] = order.splice(from, 1); order.splice(index, 0, moved); mutate({ kind: 'reorder', itemIds: order });
+  };
+  const arrow = (event, index) => {
+    const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (!delta) return;
+    event.preventDefault();
+    if (!blocked && index + delta >= 0 && index + delta < pendingItems.length) move(index, delta);
+  };
   return <section className="followup-queue" aria-label="Follow-up queue">
     <header className="followup-queue-heading"><div><h3>Follow-up queue</h3><p>Messages wait for their next turn. Restarted queues need your permission to resume.</p></div>{onClose && <button type="button" className="btn-secondary" onClick={onClose}>Close queue</button>}</header>
     {visible && error && <p role="alert" className="followup-queue-error">{error}</p>}
     {visible && message && <p role="status">{message}</p>}
+    {visible && remoteChange && <p role="status">Updated from another device.</p>}
     {(!visible || loading) && <p role="status">Loading queue…</p>}
-    <div className="followup-queue-actions"><button type="button" className="btn-secondary" disabled={busy} onClick={() => void load(scope.current, true)}>Reload queue</button>
+    <div className="followup-queue-actions"><button type="button" className="btn-secondary" disabled={busy} onClick={() => void load(scope.current, true, true)}>Reload queue</button>
       {host && <button type="button" className="btn-secondary" disabled={blocked} onClick={() => mutate({ kind: host.mode === 'held' ? 'resume' : 'pause' })}>{host.mode === 'held' ? 'Resume queue' : 'Pause queue'}</button>}
       {host && (draft?.wakeRecovery || (host.mode === 'running' && host.order.length > 0)) && <button type="button" className="btn-secondary" disabled={blocked || host.mode !== 'running'} onClick={() => mutate({ kind: 'wake' })}>Wake queue</button>}
     </div>
@@ -207,13 +212,15 @@ export function FollowupQueuePanel({ sessionId, active = true, pollIntervalMs = 
         <button type="submit" className="btn-primary" disabled={blocked}>Queue message</button>
       </form>
       {editing && <form aria-label="Edit queue item" onSubmit={event => { event.preventDefault(); mutate({ kind: 'edit', itemId: editing.itemId, expectedItemRevision: editing.revision, text: editing.text }); }}>
-        <label htmlFor={`${prefix}-edit`}>Edit queued message</label><textarea id={`${prefix}-edit`} value={editing.text} maxLength={100_000} rows={3} onChange={event => updateLocal({ editor: { ...editing, text: event.target.value, localRevision: (editing.localRevision || 0) + 1 } })} />
+        {editedElsewhere && <p role="alert">This message changed on another device. Saving will be rejected; copy your edit, cancel, and reopen the message.</p>}<label htmlFor={`${prefix}-edit`}>Edit queued message</label><textarea id={`${prefix}-edit`} value={editing.text} maxLength={100_000} rows={3} onChange={event => updateLocal({ editor: { ...editing, text: event.target.value, localRevision: (editing.localRevision || 0) + 1 } })} />
         <div className="followup-queue-actions"><button type="submit" className="btn-primary" disabled={blocked}>Save queued edit</button><button type="button" className="btn-secondary" onClick={() => updateLocal({ editor: null })}>Cancel queued edit</button></div>
       </form>}
-      <ol className="followup-queue-items">{pendingItems.map((item, index) => <li key={item.itemId}>
-        <p className="followup-queue-text">{item.text}</p><div className="followup-queue-actions">
+      {pendingItems.length > 0 && <p className="followup-queue-note">Send now and steering are unavailable: this host runs queued messages one at a time after the current turn. Run next moves a message to the front of the queue.</p>}
+      <ol className="followup-queue-items">{pendingItems.map((item, index) => <li key={item.itemId} draggable={!blocked} onDragStart={() => setDragId(item.itemId)} onDragEnd={() => setDragId(null)} onDragOver={event => { if (dragId) event.preventDefault(); }} onDrop={event => { event.preventDefault(); dropOn(index); }}>
+        <p className="followup-queue-text">{item.text}</p>{saving.has(item.itemId) && <span className="followup-queue-saving">Saving…</span>}<div className="followup-queue-actions">
+          <button type="button" className="btn-secondary followup-queue-handle" aria-label={`Reorder message ${index + 1}`} title="Drag, or use the arrow keys, to reorder" disabled={blocked} onKeyDown={event => arrow(event, index)}>⠿</button>
           <button type="button" className="btn-secondary" aria-label={`Edit message ${index + 1}`} disabled={blocked} onClick={() => updateLocal({ editor: { itemId: item.itemId, revision: item.revision, text: item.text, localRevision: 0 } })}>Edit</button>
-          <button type="button" className="btn-secondary" aria-label={`Promote message ${index + 1}`} disabled={blocked} onClick={() => mutate({ kind: 'promote', itemId: item.itemId, expectedItemRevision: item.revision })}>Promote</button>
+          <button type="button" className="btn-secondary" aria-label={`Promote message ${index + 1}`} disabled={blocked} onClick={() => mutate({ kind: 'promote', itemId: item.itemId, expectedItemRevision: item.revision })}>Run next</button>
           <button type="button" className="btn-secondary" aria-label={`Move message ${index + 1} up`} disabled={blocked || index === 0} onClick={() => move(index, -1)}>Move up</button>
           <button type="button" className="btn-secondary" aria-label={`Move message ${index + 1} down`} disabled={blocked || index === pendingItems.length - 1} onClick={() => move(index, 1)}>Move down</button>
           <button type="button" className="btn-secondary" aria-label={`Remove message ${index + 1}`} disabled={blocked} onClick={() => mutate({ kind: 'remove', itemId: item.itemId, expectedItemRevision: item.revision })}>Remove</button>

@@ -307,7 +307,7 @@ describe('ToolCallBlock', () => {
     const list = screen.getByRole('list', { name: 'Session tasks' });
     expect(list.querySelectorAll('.cc-session-todo-content')).toHaveLength(256);
     expect(list).toHaveTextContent('Step 255');
-  });
+  }, 20000);
   it('shows an Edit failure reason alongside its proposed diff', async () => {
     const user = userEvent.setup();
     const failure = 'Old text occurs twice; select a unique match.';

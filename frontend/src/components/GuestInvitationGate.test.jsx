@@ -34,3 +34,11 @@ describe('GuestInvitationGate', () => {
     expect(screen.queryByText('Guest instance 1')).not.toBeInTheDocument();
   });
 });
+describe('GuestInvitationGate conversation shares', () => {
+  it('shows the read-only conversation viewer for a share fragment instead of the owner application', () => {
+    history.replaceState(null, '', '/#share=first.secret');
+    render(<GuestInvitationGate><div>Owner application</div></GuestInvitationGate>);
+    expect(screen.queryByText('Owner application')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open conversation' })).toBeInTheDocument();
+  });
+});

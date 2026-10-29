@@ -41,6 +41,30 @@ describe('WorkspaceTasksPanel', () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/schedule-one/run', { method: 'POST' }));
   });
 
+  it('creates a schedule that delivers to Telegram only when the box is ticked', async () => {
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Check build' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Review' } });
+    fireEvent.click(screen.getByLabelText('Send each result to my paired Telegram chat'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules', { method: 'POST', body: { workspacePath: path, provider: 'claude', prompt: 'Check build', model: null, parentSessionId: null, parentTaskId: null, name: 'Review', intervalSeconds: 3600, deliverTo: 'telegram', enabled: false } }));
+  });
+
+  it('toggles Telegram delivery on a schedule and shows each task\'s honest delivery status', async () => {
+    const delivered = { ...task, id: 'task-two', deliverTo: 'telegram', deliveryStatus: 'delivered' };
+    const skipped = { ...task, id: 'task-three', deliverTo: 'telegram', deliveryStatus: 'skipped', deliveryReason: 'No Telegram chat is paired' };
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ tasks: [delivered, skipped, task], schedules: [{ ...schedule, deliverTo: 'telegram' }] }) });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    expect(await screen.findByText('Telegram delivery: delivered')).toBeInTheDocument();
+    expect(screen.getByText('Telegram delivery: skipped (No Telegram chat is paired)')).toBeInTheDocument();
+    expect(screen.getAllByText(/Telegram delivery:/)).toHaveLength(2);
+    const toggle = screen.getByLabelText('Send Morning review results to Telegram');
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/schedule-one', { method: 'PATCH', body: { deliverTo: null } }));
+  });
+
   it('shows the stale one-shot enable error and retains the explicit Run now action', async () => {
     const message = 'This one-shot time has passed. Use Run now or create a new schedule for a future time.';
     apiFetch.mockImplementation(async (_url, options) => options?.method === 'PATCH'

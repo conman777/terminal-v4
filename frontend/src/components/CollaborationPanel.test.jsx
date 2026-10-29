@@ -30,10 +30,13 @@ describe('CollaborationPanel', () => {
  });
 });
 
-it.each(['ss-structured-fixture','structured:ss-legacy-fixture'])('explains why %s cannot be shared as a terminal',async sessionId=>{
- apiFetch.mockClear();
+it.each(['ss-structured-fixture','structured:ss-legacy-fixture'])('offers conversation sharing instead of a terminal invitation for %s',async sessionId=>{
+ apiFetch.mockReset();
+ apiFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ shares: [], audit: [] }) });
  render(<CollaborationPanel workspacePath="/project" sessionId={sessionId}/>);
- await screen.findByText(/Sharing requires a PTY terminal/);
- expect(screen.getByRole('button',{name:'Create invitation'})).toBeDisabled();
+ await screen.findByText(/No share links for this conversation/);
+ expect(screen.getByRole('button',{name:'Create read-only link'})).toBeEnabled();
+ expect(screen.queryByRole('button',{name:'Create invitation'})).not.toBeInTheDocument();
+ expect(apiFetch.mock.calls.map(([url])=>url)).toEqual([`/api/structured/sessions/${sessionId.replace(/^structured:/, '')}/shares`]);
  expect(apiFetch.mock.calls.some(([,options])=>options?.method==='POST')).toBe(false);
 });

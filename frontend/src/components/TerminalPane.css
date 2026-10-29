@@ -299,3 +299,4 @@
 .terminal-pane-ui .thread-terminal-tabs button[aria-selected="true"] { background: var(--bg-surface); color: var(--text-primary); }
 .terminal-pane-ui .thread-terminal-tabs button:hover { color: var(--text-primary); }
 .terminal-pane-ui .thread-terminal-tabs .thread-terminal-add { margin-left: 2px; font-size: 14px; }
+.terminal-pane-ui .thread-terminal-drawer { position: relative; }

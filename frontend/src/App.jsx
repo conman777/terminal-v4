@@ -10,6 +10,7 @@ import { captureAuthScope, isAuthScopeCurrent } from './utils/auth';
 import { shouldInitializeWorkspacePane } from './utils/paneSessionAssignments';
 import { resolveAgentSessionLaunch } from './utils/agentLauncher';
 import { recordThreadLineage } from './utils/threadLineageApi';
+import { resolveWorktreeOrigin } from './utils/worktreeOrigin';
 import { reopenWorkspaceSession } from './utils/workspaceNavigation';
 import { isStructuredSessionId } from './utils/structuredSessions';
 import { busyTransitions, notifyAgent } from './utils/agentNotifications';
@@ -1376,6 +1377,8 @@ function AppContent({ serverControl }) {
       rememberProject: (cwd, session) => persistSidebarProject(addSidebarProject, cwd, session), addSessionToDesktop, sendToSession });
   }, [addSessionToDesktop, addSidebarProject, createStructuredSession, customAiProviders, sendToSession]);
 
+  const worktreeOrigin = useMemo(() => resolveWorktreeOrigin(sessions, activeSessionId), [activeSessionId, sessions]);
+
   const handleOpenWorkspaceImageConversation = useCallback(async (prompt, options = {}) => {
     return openWorkspaceImageConversation(prompt, options, { customAiProviders, createStructuredSession,
       rememberProject: (cwd, session) => persistSidebarProject(addSidebarProject, cwd, session), addSessionToDesktop,
@@ -2011,6 +2014,7 @@ function AppContent({ serverControl }) {
                       recentFolders={recentFolders}
                       onSelectWorkspace={setWorkspaceDraftPath}
                       onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
+                      originThread={worktreeOrigin}
                       onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
                       onOpenImageConversation={handleOpenWorkspaceImageConversation}
                       onReviewImageConversation={handleSelectHistorySession}

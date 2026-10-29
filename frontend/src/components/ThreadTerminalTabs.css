@@ -1,0 +1,9 @@
+.thread-terminal-tabs { display: flex; flex: 0 0 auto; align-items: stretch; justify-content: space-between; gap: 4px; border-bottom: 1px solid var(--border-subtle); }
+.thread-terminal-tablist { display: flex; min-width: 0; overflow-x: auto; gap: 2px; }
+.thread-terminal-actions { display: flex; flex: 0 0 auto; gap: 2px; }
+.thread-terminal-tabs button { min-height: 32px; min-width: 32px; padding: 4px 10px; border: 0; border-radius: 6px 6px 0 0; background: transparent; color: var(--text-secondary); font: 12px var(--font-ui); cursor: pointer; white-space: nowrap; }
+.thread-terminal-tabs button[aria-selected="true"] { background: var(--bg-surface); color: var(--text-primary); }
+.thread-terminal-tabs button:hover:not(:disabled) { color: var(--text-primary); }
+.thread-terminal-tabs button:disabled { cursor: default; opacity: 0.5; }
+.thread-terminal-tabs button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+@media (pointer: coarse) { .thread-terminal-tabs button { min-height: 44px; min-width: 44px; font-size: 13px; } }

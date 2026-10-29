@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { apiGet, apiPost } from '../utils/api';
+import { getUser, subscribeAuth } from '../utils/auth';
+import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
 import './ThreadCardExtras.css';
 
 export const WATCH_INTERVAL_MS = 60000;
@@ -13,12 +15,21 @@ function describeChecks({ passed = 0, failed = 0, pending = 0 } = {}) {
   return parts.length ? parts.join(', ') : 'No checks';
 }
 
-export function confirmationFor(action, number, method) {
-  return action === 'merge' ? `merge #${number} (${method})` : `ready #${number}`;
+export function confirmationFor(action, number, method, headSha) {
+  return action === 'merge' ? `merge #${number} (${method}) @ ${headSha}` : `ready #${number} @ ${headSha}`;
 }
 
+const subscribeScope = listener => { const stops = [subscribeAuth(listener), subscribeEnvironment(listener)]; return () => stops.forEach(stop => stop()); };
+const scopeSnapshot = () => `${getUser()?.id || ''}\0${getActiveEnvironment()?.id || ''}`;
+
 export function PullRequestRow({ cwd, branch, refreshKey = 0 }) {
+  const identity = useSyncExternalStore(subscribeScope, scopeSnapshot);
+  return <PullRequestScope key={`${identity}\0${cwd || ''}\0${branch || ''}`} cwd={cwd} branch={branch} refreshKey={refreshKey} />;
+}
+
+function PullRequestScope({ cwd, branch, refreshKey }) {
   const [pullRequest, setPullRequest] = useState(null);
+  const [repository, setRepository] = useState('');
   const [problem, setProblem] = useState('');
   const [watching, setWatching] = useState(false);
   const [confirming, setConfirming] = useState(null);
@@ -33,24 +44,28 @@ export function PullRequestRow({ cwd, branch, refreshKey = 0 }) {
   useEffect(() => {
     if (!cwd || !branch) { setPullRequest(null); setProblem(''); return undefined; }
     let cancelled = false;
-    Promise.resolve().then(() => apiGet(`/api/workspace/git/pull-request?${new URLSearchParams({ path: cwd })}`))
+    const controller = new AbortController();
+    Promise.resolve().then(() => apiGet(`/api/workspace/git/pull-request?${new URLSearchParams({ path: cwd })}`, { signal: controller.signal }))
       .then(data => {
         if (cancelled) return;
         setPullRequest(data?.pullRequest || null);
+        setRepository(data?.repository || '');
         setProblem(data?.availability === 'error' ? data.reason || 'Pull request status could not be checked' : '');
       })
       .catch(() => { if (!cancelled) setProblem('Pull request status could not be loaded'); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [branch, cwd, refreshKey, reload]);
 
-  const open = pullRequest?.state === 'OPEN';
+  useEffect(() => () => { generation.current += 1; }, []);
+
+  const open = pullRequest?.state === 'OPEN' && !!pullRequest.headSha && !!repository;
   useEffect(() => {
     if (!watching || !open) return undefined;
     const timer = setInterval(() => { if (!document.hidden) refresh(); }, WATCH_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [watching, open, refresh]);
 
-  useEffect(() => { setConfirming(null); setError(''); }, [pullRequest?.number, branch, cwd]);
+  useEffect(() => { setConfirming(null); setError(''); }, [pullRequest?.number, pullRequest?.headSha, branch, cwd]);
 
   if (problem && !pullRequest) return <p role="status" className="thread-git-note">{problem}</p>;
   if (!pullRequest?.url) return null;
@@ -65,7 +80,7 @@ export function PullRequestRow({ cwd, branch, refreshKey = 0 }) {
     const token = ++generation.current;
     setPending(true);
     setError('');
-    const body = { path: cwd, action: confirming, number: pullRequest.number, confirm: confirmationFor(confirming, pullRequest.number, method) };
+    const body = { path: cwd, repository, action: confirming, number: pullRequest.number, headSha: pullRequest.headSha, url: pullRequest.url, confirm: confirmationFor(confirming, pullRequest.number, method, pullRequest.headSha) };
     if (confirming === 'merge') body.method = method;
     try {
       await apiPost('/api/workspace/git/pull-request/action', body);
@@ -93,7 +108,7 @@ export function PullRequestRow({ cwd, branch, refreshKey = 0 }) {
       {confirming && <div className="thread-pr-confirm" role="group" aria-label="Confirm pull request action">
         {confirming === 'merge' && <label>Merge method<select value={method} disabled={pending} onChange={event => setMethod(event.target.value)}>
           {METHODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-        <p className="thread-git-note">{confirming === 'merge' ? `This ${method}s pull request #${pullRequest.number} into its base branch on GitHub using your gh login.` : `This marks pull request #${pullRequest.number} ready for review on GitHub.`}</p>
+        <p className="thread-git-note">{confirming === 'merge' ? `This ${method}s pull request #${pullRequest.number} into its base branch on GitHub using your gh login.` : `This marks pull request #${pullRequest.number} ready for review on GitHub.`} Reviewed commit {String(pullRequest.headSha || '').slice(0, 7)}.</p>
         <div className="thread-git-buttons">
           <button type="button" className="thread-git-primary" disabled={pending} onClick={confirm}>{confirming === 'merge' ? `Confirm merge #${pullRequest.number}` : `Confirm ready #${pullRequest.number}`}</button>
           <button type="button" disabled={pending} onClick={() => { setConfirming(null); setError(''); }}>Cancel</button>

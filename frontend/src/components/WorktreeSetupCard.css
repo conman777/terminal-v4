@@ -1,0 +1,17 @@
+.worktree-setup-card { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-surface); color: var(--text-primary); font: 13px var(--font-ui); }
+.worktree-setup-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.worktree-setup-card h2 { margin: 0; font: 600 14px var(--font-ui); }
+.worktree-setup-elapsed { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.worktree-setup-stages { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.worktree-setup-stages li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; }
+.worktree-setup-stages li small { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; color: var(--text-secondary); }
+.worktree-setup-stage-status { color: var(--text-secondary); }
+.worktree-setup-stages li[data-status="running"] .worktree-setup-stage-status, .worktree-setup-stages li[data-status="done"] .worktree-setup-stage-status { color: var(--text-primary); }
+.worktree-setup-stages li[data-status="failed"] .worktree-setup-stage-status, .worktree-setup-stages li[data-status="warning"] .worktree-setup-stage-status { color: var(--error); }
+.worktree-setup-tail { margin: 0; max-height: 7.5em; overflow: auto; padding: 8px; border-radius: 6px; background: var(--terminal-bg); color: var(--text-primary); font: 12px/1.4 var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.worktree-setup-tail:focus-visible, .worktree-setup-cancel:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.worktree-setup-summary { margin: 0; overflow-wrap: anywhere; color: var(--text-secondary); }
+.worktree-setup-error { margin: 0; color: var(--error); }
+.worktree-setup-cancel { align-self: flex-start; min-height: 36px; padding: 0 12px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-surface); color: var(--text-primary); font: 13px var(--font-ui); cursor: pointer; }
+.worktree-setup-cancel:disabled { cursor: default; opacity: 0.7; }
+@media (pointer: coarse), (max-width: 640px) { .worktree-setup-cancel { min-height: 44px; min-width: 44px; font-size: 14px; } }

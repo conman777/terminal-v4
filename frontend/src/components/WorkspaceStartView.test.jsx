@@ -255,6 +255,55 @@ describe('WorkspaceStartView', () => {
     ]);
   });
 
+  describe('worktree lineage', () => {
+    beforeEach(() => apiFetchMock.mockClear());
+    const startWorktree = async (props, receipt = { accepted: true, sessionId: 'ss-child' }) => {
+      const base = apiFetchMock.getMockImplementation();
+      apiFetchMock.mockImplementation(async (url, options) => String(url) === '/api/workspace/git/worktrees'
+        ? { ok: true, json: async () => ({ path: '/worktrees/task' }) } : base(url, options));
+      const submit = vi.fn().mockResolvedValue(receipt);
+      render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={submit} {...props} /></AutocorrectProvider>);
+      fireEvent.click(screen.getByRole('button', { name: 'Where' }));
+      fireEvent.click(screen.getByRole('menuitemradio', { name: /New worktree/ }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), { target: { value: 'Do the task' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+      await waitFor(() => expect(submit).toHaveBeenCalled());
+      await act(async () => { await Promise.resolve(); });
+    };
+    const lineageCalls = () => apiFetchMock.mock.calls.filter(([url]) => url === '/api/thread-lineage');
+
+    it('records a worktree link from the thread the task was started from', async () => {
+      await startWorktree({ originThread: { id: 'ss-parent', paths: ['/project'] } });
+      await waitFor(() => expect(lineageCalls()).toHaveLength(1));
+      expect(lineageCalls()[0][1]).toMatchObject({ method: 'PUT', body: { childId: 'ss-child', parentId: 'ss-parent', kind: 'worktree' } });
+    });
+
+    it.each([
+      ['there is no parent thread', {}],
+      ['the parent belongs to another project', { originThread: { id: 'ss-parent', paths: ['/elsewhere'] } }],
+    ])('records nothing when %s', async (_name, props) => {
+      await startWorktree(props);
+      expect(lineageCalls()).toEqual([]);
+    });
+
+    it('records nothing for a task started in place', async () => {
+      const submit = vi.fn().mockResolvedValue({ accepted: true, sessionId: 'ss-child' });
+      render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={submit} originThread={{ id: 'ss-parent', paths: ['/project'] }} /></AutocorrectProvider>);
+      fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), { target: { value: 'Do the task' } });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+      await waitFor(() => expect(submit).toHaveBeenCalled());
+      await act(async () => { await Promise.resolve(); });
+      expect(lineageCalls()).toEqual([]);
+    });
+
+    it('records nothing when the agent did not accept the task', async () => {
+      await startWorktree({ originThread: { id: 'ss-parent', paths: ['/project'] } }, { accepted: false, sessionId: 'ss-child' });
+      expect(lineageCalls()).toEqual([]);
+    });
+  });
+
   it('uses the selected base ref for a new worktree and resets it when the project changes', async () => {
     const base = apiFetchMock.getMockImplementation();
     apiFetchMock.mockImplementation(async (url, options) => String(url) === '/api/workspace/git/worktrees'
@@ -401,6 +450,68 @@ describe('WorkspaceStartView', () => {
     await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests[1].operationId).not.toBe(requests[0].operationId);
     expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Keep my task');
+  });
+
+  it('shows setup progress, cancels for real, and does not call a cleaned cancel an ambiguous request', async () => {
+    const base = apiFetchMock.getMockImplementation();
+    const requests = [];
+    let resolveCreate;
+    let cancelled = false;
+    apiFetchMock.mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/git/worktrees') {
+        requests.push(options.body);
+        if (requests.length > 1) return { ok: true, json: async () => ({ path: '/worktrees/task' }) };
+        return new Promise(resolve => { resolveCreate = resolve; });
+      }
+      if (String(url).startsWith('/api/workspace/git/worktrees/progress')) return { ok: true, json: async () => ({ status: cancelled ? 'cancelled' : 'running', cancelling: false, elapsedMs: 1000, cleaned: cancelled ? true : null, cleanup: cancelled ? 'The partial checkout and its branch were removed.' : null, tail: ['npm install'],
+        stages: [{ id: 'base', label: 'Checking base', status: 'done' }, { id: 'checkout', label: 'Creating worktree', status: 'done' }, { id: 'setup', label: 'Setup script', status: cancelled ? 'cancelled' : 'running' }] }) };
+      if (url === '/api/workspace/git/worktrees/cancel') { cancelled = true; resolveCreate({ ok: false, json: async () => ({ error: 'Worktree creation was cancelled and the partial checkout was removed.' }) }); return { ok: true, json: async () => ({ status: 'running', cancelling: true, stages: [] }) }; }
+      return base(url, options);
+    });
+    render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={vi.fn().mockResolvedValue({ accepted: true })} /></AutocorrectProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Where' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /New worktree/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), { target: { value: 'Slow setup task' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    expect(await screen.findByLabelText('Worktree setup progress')).toBeVisible();
+    expect(await screen.findByLabelText('Latest setup output')).toHaveTextContent('npm install');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel worktree setup' }));
+    expect(await screen.findByText('Worktree creation was cancelled and the partial checkout was removed.')).toBeVisible();
+    expect(screen.queryByText(/previous request may have created a checkout/i)).toBeNull();
+    expect(screen.queryByLabelText('Worktree setup progress')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Slow setup task');
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/workspace/git/worktrees/cancel', { method: 'POST', body: { operationId: requests[0].operationId } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].operationId).not.toBe(requests[0].operationId);
+  });
+
+  it('offers to remove an unfinished checkout after an ambiguous failure and then starts with a new request', async () => {
+    const base = apiFetchMock.getMockImplementation();
+    const requests = [];
+    apiFetchMock.mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/git/worktrees') {
+        requests.push(options.body);
+        if (requests.length === 1) return { ok: false, json: async () => ({ error: 'Worktree creation is unconfirmed.' }) };
+        return { ok: true, json: async () => ({ path: '/worktrees/task' }) };
+      }
+      if (url === '/api/workspace/git/worktrees/discard') return { ok: true, json: async () => ({ discarded: true }) };
+      return base(url, options);
+    });
+    render(<AutocorrectProvider><WorkspaceStartView currentPath="/project" onSubmitPrompt={vi.fn().mockResolvedValue({ accepted: true })} /></AutocorrectProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Where' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /New worktree/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), { target: { value: 'Half done' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove the unfinished checkout' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove the unfinished checkout' })).toBeNull());
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/workspace/git/worktrees/discard', { method: 'POST', body: { path: '/project', worktreeId: requests[0].operationId } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }));
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests[1].operationId).not.toBe(requests[0].operationId);
   });
 
   it('keeps the prompt when a worktree base is empty', async () => {

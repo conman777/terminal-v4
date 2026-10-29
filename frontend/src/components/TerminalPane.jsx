@@ -28,6 +28,9 @@ import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
 import { isStructuredSessionId, getStructuredAgentLabel, getComposerPlaceholder } from '../utils/structuredSessions';
 import { buildMentionThreads } from './composer-context/mentionThreads';
+import { TerminalAddToChat, useTerminalAddToChat } from './composer-context/TerminalAddToChat';
+import { resolveTerminalOwner } from './composer-context/addToChatState';
+import { useCurrentPullRequest } from '../hooks/useCurrentPullRequest';
 import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
 import { ProjectBadge } from './ProjectBadge';
 import { ThreadDetailsCard } from './ThreadDetailsCard';
@@ -36,6 +39,8 @@ import { PLAN_MARKER } from '../utils/planMode';
 import { notifyAgent } from '../utils/agentNotifications';
 import { loadStash, stashDraft, takeStashed } from '../utils/draftStash';
 import { getNativeFollowupQueue, newNativeFollowup } from '../utils/nativeFollowupQueue';
+import { enqueueServerFollowup } from '../utils/serverFollowupQueue';
+import { useServerFollowupQueue } from '../hooks/useServerFollowupQueue';
 import { dismissLearningNudge, shouldNudgeLearning } from '../utils/learningNudge';
 import { contextMeter } from '../utils/contextUsage';
 import { OpenInEditorRow, PullRequestStatus, ThreadGitActions } from './ThreadCardActions';
@@ -45,6 +50,7 @@ import { useWorkspaceGitStatus } from '../hooks/useWorkspaceGitStatus';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useInstalledSkills } from '../hooks/useInstalledSkills';
 import { useThreadDrawerTerminal } from '../hooks/useThreadDrawerTerminal';
+import { ThreadTerminalDrawer } from './ThreadTerminalDrawer';
 import { isCompanionSession } from '../utils/sidebarSessionScope';
 import { projectNameFromPath } from '../utils/projectBadge';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
@@ -199,7 +205,7 @@ export const TerminalPane = memo(function TerminalPane({
     });
   }, []);
 
-  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession, sendRawToSession, renameSession, updateThreadMetadata, updateStructuredSessionSelection, updateStructuredSessionAccess, createSession, restoreSession } = useTerminalSession();
+  const { activeSessionId, listSessionGitBranches, checkoutSessionGitBranch, sendToSession, sendRawToSession, renameSession, updateThreadMetadata, updateStructuredSessionSelection, updateStructuredSessionAccess, createSession, closeSession, restoreSession } = useTerminalSession();
 
   const selectableSessions = useMemo(
     () => sessions.filter((session) => !session.thread?.archived && !isCompanionSession(session)),
@@ -244,6 +250,7 @@ export const TerminalPane = memo(function TerminalPane({
   const [planMode, setPlanMode] = useState(false);
   const nativeQueue = useMemo(() => getNativeFollowupQueue(pane.sessionId), [pane.sessionId, composerStore]);
   const { items: queuedMessages, error: queueError } = useSyncExternalStore(nativeQueue.subscribe, nativeQueue.getSnapshot);
+  const serverQueue = useServerFollowupQueue(isClaudeChat || isCodexSession ? pane.sessionId : null);
   const [stashed, setStashed] = useState(loadStash);
   useEffect(() => { setPlanMode(false); }, [pane.sessionId]);
   const detailsDocked = useMediaQuery('(min-width: 1280px)');
@@ -256,8 +263,13 @@ export const TerminalPane = memo(function TerminalPane({
   const threadGit = useWorkspaceGitStatus(sessionCwd, { enabled: detailsVisible });
   const drawerTerminal = useThreadDrawerTerminal({
     threadId: isStructuredSession ? pane.sessionId : null, cwd: sessionCwd, open: drawerOpen && terminalInputAllowed, enabled: terminalInputAllowed,
-    sessions, createSession, updateThreadMetadata, restoreSession,
+    sessions, createSession, closeSession, updateThreadMetadata, restoreSession,
   });
+  const mentionPullRequests = useCurrentPullRequest(sessionCwd, threadGit.branch, { enabled: isStructuredSession && isActive });
+  const mainTerminalOwner = useMemo(() => resolveTerminalOwner({ terminalId: pane.sessionId, sessions, activeThreadId: activeSessionId }), [activeSessionId, pane.sessionId, sessions]);
+  const mainAddToChat = useTerminalAddToChat({ terminalId: pane.sessionId, owner: mainTerminalOwner, label: 'Terminal' });
+  const drawerOwnerTitle = currentSession ? resolveTerminalOwner({ terminalId: pane.sessionId, sessions: [currentSession] })?.title : null;
+  const drawerOwner = useMemo(() => (isStructuredSession && drawerOwnerTitle ? { threadId: pane.sessionId, title: drawerOwnerTitle } : null), [drawerOwnerTitle, isStructuredSession, pane.sessionId]);
   const sessionGitBranchInfo = gitBranchInfo?.sessionId === pane.sessionId ? gitBranchInfo : null;
 
   const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
@@ -686,6 +698,29 @@ export const TerminalPane = memo(function TerminalPane({
       : isStructuredSession ? `${planMode && (isClaudeChat || isCodexSession) ? PLAN_MARKER : ''}${withAttachedFiles(trimmed, attachmentPaths)}`
         : [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
     if (!payload.trim() && !(isV4Session && userImages?.items.length)) return;
+    if ((isClaudeChat || isCodexSession) && serverQueue.status === 'unknown' && structuredIsStreaming) {
+      setIsNoticePersistent(true); setViewModeNotice('Checking the follow-up queue. Your draft was kept; try again in a moment.');
+      return;
+    }
+    if ((isClaudeChat || isCodexSession) && serverQueue.status === 'available' && (structuredIsStreaming || serverQueue.snapshot?.order.length)) {
+      const request = {};
+      composerRequestRef.current = request;
+      setComposerSubmitting(true);
+      try {
+        const queued = await enqueueServerFollowup(pane.sessionId, payload);
+        if (composerRequestRef.current !== request) return;
+        clearComposerDraft(submittedDraftRevision, trimmed);
+        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+        serverQueue.refresh();
+        setIsNoticePersistent(false);
+        setViewModeNotice(queued.mode === 'held' ? 'Queued on the server. The queue is paused: open Queue to resume it.' : 'Queued on the server.');
+      } catch (error) {
+        if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice(error.message || 'Could not queue this message. Your draft was kept.'); }
+      } finally {
+        if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
+      }
+      return;
+    }
     if ((isClaudeChat || isCodexSession) && (structuredIsStreaming || queuedMessages.length)) {
       if (composerDraftError && queuedMessages.some(item => item.text === payload)) return;
       const item = newNativeFollowup(payload);
@@ -716,7 +751,7 @@ export const TerminalPane = memo(function TerminalPane({
     } finally {
       if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
     }
-  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftError, composerDraftRevision, clearComposerDraft, handleChatSend, isClaudeChat, isCodexSession, isStructuredSession, isV4Session, nativeQueue, pane.sessionId, planMode, queueError, queuedMessages, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
+  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftError, composerDraftRevision, clearComposerDraft, handleChatSend, isClaudeChat, isCodexSession, isStructuredSession, isV4Session, nativeQueue, pane.sessionId, planMode, queueError, queuedMessages, serverQueue, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
 
   const modelUpdatePending = modelUpdate?.sessionId === pane.sessionId && modelUpdate.pending;
   const modelUpdateError = modelUpdate?.sessionId === pane.sessionId ? modelUpdate.error : '';
@@ -791,7 +826,7 @@ export const TerminalPane = memo(function TerminalPane({
 
   useEffect(() => {
     const head = queuedMessages[0];
-    if (!head) return;
+    if (!head || serverQueue.status === 'available') return;
     if (structuredIsStreaming && head.status === 'waiting') {
       nativeQueue.update(current => current.map(item => item.id === head.id ? { ...item, status: 'queued' } : item));
       return;
@@ -815,7 +850,7 @@ export const TerminalPane = memo(function TerminalPane({
       });
       if (!saved) nativeQueue.holdLocal(head.id);
     })();
-  }, [isClaudeChat, isCodexSession, nativeQueue, queuedMessages, sessionInputAllowed, structuredConnectionState, structuredHistoryOnly, structuredIsStreaming, structuredRequiresCleanup, structuredSendMessage]);
+  }, [isClaudeChat, isCodexSession, nativeQueue, queuedMessages, serverQueue.status, sessionInputAllowed, structuredConnectionState, structuredHistoryOnly, structuredIsStreaming, structuredRequiresCleanup, structuredSendMessage]);
   const stashCurrentDraft = useCallback(() => {
     if (!composerValue.trim()) return;
     setStashed(stashDraft(composerValue));
@@ -1243,10 +1278,12 @@ export const TerminalPane = memo(function TerminalPane({
                       onCliEvent={handleCliEvent}
                       onRegisterFocusTerminal={handleRegisterFocusTerminal}
                       onRegisterSendText={handleRegisterSendText}
+                      onRegisterSelectionActions={mainAddToChat.register}
                       onTurn={handleTurn}
                     />
                   ) : null}
                 </div>
+                {isTerminalDockVisible && <TerminalAddToChat state={mainAddToChat} />}
               </div>
               {useTerminalFirstLayout && viewModeNotice && <div role="alert" className="terminal-input-error">{viewModeNotice}</div>}
               {showLearningNudge && <div className="session-queued-message session-learning-nudge" role="status" aria-label="Save what was learned">
@@ -1257,20 +1294,20 @@ export const TerminalPane = memo(function TerminalPane({
               </div>}
               {queueError && <div role="alert" className="terminal-input-error">{queueError}</div>}
               {queuedMessages.map(item => <div key={item.id} className="session-queued-message" role="status" aria-label="Queued message">
-                <span className="session-queued-label">{item.status === 'held' ? 'Send unconfirmed' : item.status === 'sending' ? 'Sending' : item.status === 'editing' ? 'Original retained' : item.status === 'recovered' ? 'Restored for review' : item.status === 'waiting' ? 'Waiting for previous response' : 'Queued'}</span>
+                <span className="session-queued-label">{serverQueue.status === 'available' ? 'Tab-only, not sent automatically · ' : 'Tab-only queue · '}{item.status === 'held' ? 'Send unconfirmed' : item.status === 'sending' ? 'Sending' : item.status === 'editing' ? 'Original retained' : item.status === 'recovered' ? 'Restored for review' : item.status === 'waiting' ? 'Waiting for previous response' : 'Queued'}</span>
                 <span className="session-queued-text">{item.text}</span>
                 {item.status === 'held' && <span>Check the conversation before removing this message; it may have been sent.</span>}
                 {item.status === 'recovered' && <span>Check the conversation before resuming; another tab may have sent this message.</span>}
                 {item.status === 'editing' && <span>Remove this copy before sending your edited draft.</span>}
-                {(item.status === 'recovered' || item.status === 'waiting' && !structuredIsStreaming) && <button type="button" onClick={() => {
+                {serverQueue.status !== 'available' && (item.status === 'recovered' || item.status === 'waiting' && !structuredIsStreaming) && <button type="button" onClick={() => {
                   nativeQueue.update(current => current.map(queued => queued.id === item.id ? { ...queued, status: 'queued' } : queued));
                 }}>Resume queue</button>}
-                {item.status === 'queued' && <button type="button" onClick={() => structuredInterrupt?.()} disabled={structuredIsInterrupting || !structuredIsStreaming}>Send now</button>}
+                {serverQueue.status !== 'available' && item.status === 'queued' && <button type="button" onClick={() => structuredInterrupt?.()} disabled={structuredIsInterrupting || !structuredIsStreaming}>Send now</button>}
                 {(item.status === 'queued' || item.status === 'recovered') && <button type="button" onClick={() => {
                   if (nativeQueue.update(current => current.map(queued => queued.id === item.id ? { ...queued, status: 'editing' } : queued)))
                     setComposerValue(current => current ? `${current}\n\n${item.text}` : item.text);
                 }}>Edit</button>}
-                {(item.status === 'editing' || item.status === 'held') && <button type="button" onClick={() => {
+                {(item.status === 'editing' || item.status === 'held' || serverQueue.status === 'available') && <button type="button" onClick={() => {
                   nativeQueue.update(current => current.filter(queued => queued.id !== item.id));
                 }}>Remove queued copy</button>}
               </div>)}
@@ -1309,6 +1346,7 @@ export const TerminalPane = memo(function TerminalPane({
                 skills={installedSkills}
                 mentionRoot={isStructuredSession ? sessionCwd : ''}
                 mentionThreads={isStructuredSession ? mentionThreads : undefined}
+                mentionPullRequests={isStructuredSession ? mentionPullRequests : undefined}
                 allowAnyFile={isStructuredSession && !isV4Session}
                 showImageButton
                 userImages={isV4Session ? userImages : undefined}
@@ -1347,7 +1385,7 @@ export const TerminalPane = memo(function TerminalPane({
                           onChange={handleSelectModel} />
                       </div> : isStructuredSession && <span className="session-composer-context">{getStructuredAgentLabel(currentSession)}{currentSession?.model ? ` · ${currentSession.model}` : ''}</span>}
                     <div className="session-composer-actions">
-                    {isV4Session && <FollowupQueueButton sessionId={pane.sessionId} />}
+                    {(isV4Session || serverQueue.status === 'available') && <FollowupQueueButton sessionId={pane.sessionId} queue={serverQueue} />}
                     {isV4Session && <ConversationContextButton
                       sessionId={pane.sessionId} active={true}
                       controlState={structuredControlState}
@@ -1380,36 +1418,9 @@ export const TerminalPane = memo(function TerminalPane({
                   </div>
                 )}
               />
-              {isStructuredSession && drawerOpen && <section className="thread-terminal-drawer" aria-label="Thread terminal">
-                {drawerTerminal.terminals.length > 0 && <div className="thread-terminal-tabs" role="tablist" aria-label="Thread terminals">
-                  {drawerTerminal.terminals.map((terminal, index) => <button key={terminal.id} type="button" role="tab"
-                    aria-selected={terminal.id === drawerTerminal.terminalId} onClick={() => drawerTerminal.select(terminal.id)}>
-                    {`Terminal ${index + 1}`}
-                  </button>)}
-                  <button type="button" className="thread-terminal-add" aria-label="New terminal in this thread" onClick={() => drawerTerminal.addTerminal()}>+</button>
-                </div>}
-                {drawerTerminal.createError && <div className="thread-terminal-drawer-error"><p role="alert">{drawerTerminal.createError}</p>
-                  {drawerTerminal.canRetryCreate && <button type="button" aria-label="Retry adding terminal" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.retryCreate()}>Retry</button>}
-                  <button type="button" aria-label="Dismiss terminal error" onClick={() => drawerTerminal.dismissCreateError()}>Dismiss</button>
-                  {drawerTerminal.canStartAgainAfterReview && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.startAgainAfterReview()}>I checked the list; start another</button>}
-                </div>}
-                {!terminalInputAllowed ? <p role="status" className="thread-terminal-drawer-status">Terminal access is unavailable for this environment.</p>
-                  : !sessionCwd ? <p role="status" className="thread-terminal-drawer-status">This conversation has no workspace folder for a terminal.</p>
-                  : drawerTerminal.error ? <div className="thread-terminal-drawer-error"><p role="alert">{drawerTerminal.error}</p>
-                  {drawerTerminal.canRetry && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.retry()}>Retry opening terminal</button>}
-                  {!drawerTerminal.terminalId && drawerTerminal.canStartAgainAfterReview && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.startAgainAfterReview()}>I checked the list; start another</button>}</div>
-                  : drawerTerminal.terminalId ? <LazyTerminalChat
-                    key={drawerTerminal.terminalId}
-                    surface="desktop"
-                    sessionId={drawerTerminal.terminalId}
-                    fontSize={fontSize}
-                    webglEnabled={webglEnabled}
-                    viewMode="terminal"
-                    inputEnabled={terminalInputAllowed}
-                    isPrimary={isActive}
-                    fitSignal={fitSignal}
-                  /> : <p role="status" className="thread-terminal-drawer-status">Opening a terminal in this thread's folder…</p>}
-              </section>}
+              {isStructuredSession && drawerOpen && <ThreadTerminalDrawer threadId={pane.sessionId} drawer={drawerTerminal} terminalInputAllowed={terminalInputAllowed}
+                sessionCwd={sessionCwd} fontSize={fontSize} webglEnabled={webglEnabled} isActive={isActive} fitSignal={fitSignal} owner={drawerOwner}
+                onRequestClose={() => setDrawerOpen(false)} onRequestReopen={() => setDrawerOpen(true)} />}
             </div>
           </div>
         ) : (

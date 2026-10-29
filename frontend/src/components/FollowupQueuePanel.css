@@ -20,3 +20,8 @@
   .followup-queue textarea { font-size: 16px; }
   .followup-queue-items { padding-left: 18px; }
 }
+
+.followup-queue-saving { font-size: 0.8125rem; color: var(--text-secondary, inherit); opacity: 0.8; }
+.followup-queue-handle { cursor: grab; min-width: 44px; min-height: 44px; }
+.followup-queue-items li[draggable="true"] { cursor: default; }
+.followup-queue-note { font-size: 0.8125rem; opacity: 0.8; }

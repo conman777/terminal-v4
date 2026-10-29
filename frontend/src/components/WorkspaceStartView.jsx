@@ -13,9 +13,13 @@ import { DesktopStatusBar } from './DesktopStatusBar';
 import { useComposerDraft } from '../hooks/useComposerDraft';
 import { useStartImageDraft } from '../hooks/useStartImageDraft';
 import { prepareWorktreeCreation } from '../utils/worktreeCreationIntent';
+import { worktreeParentFor } from '../utils/worktreeOrigin';
+import { recordThreadLineage } from '../utils/threadLineageApi';
 import { withAttachedFiles } from '../utils/attachedFiles';
 import { createWorkspaceStartAttachments } from '../utils/workspaceStartAttachments';
 import { startImageRequestId } from '../utils/startImageTransfer';
+import { discardUnfinishedWorktree, fetchWorktreeProgress } from '../utils/worktreeProgress';
+import { WorktreeSetupCard } from './WorktreeSetupCard';
 
 function availabilityReason(value) {
   return [value?.reason, value?.unavailableReason].find(reason => typeof reason === 'string' && reason.trim())?.trim();
@@ -43,6 +47,13 @@ async function createTaskWorktree(path, prompt, baseRef, operation) {
   }
   operation.assertCurrent();
   const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    const progress = await fetchWorktreeProgress(operation.operationId).catch(() => null);
+    if (progress?.cleaned === true) {
+      try { operation.discard(); } catch { /* the saved request is reviewed on the next attempt */ }
+      throw Object.assign(new Error(result?.error || 'Worktree setup did not finish. Nothing was left behind.'), { worktreeCleaned: true });
+    }
+  }
   if (!response.ok || !result?.path || result.available === false || result.creationStatus === 'unconfirmed') throw new Error(result?.error || 'Could not confirm this worktree. Review Git & worktrees before continuing.');
   return result.path;
 }
@@ -52,6 +63,7 @@ export function WorkspaceStartView({
   projects = [],
   recentFolders = [],
   onSelectWorkspace,
+  originThread = null,
   onSubmitPrompt,
   onOpenImageConversation,
   onReviewImageConversation,
@@ -76,6 +88,7 @@ export function WorkspaceStartView({
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [worktreeAttempt, setWorktreeAttempt] = useState(false);
+  const [activeWorktreeOp, setActiveWorktreeOp] = useState(null);
   const [catalogError, setCatalogError] = useState('');
   const [catalogAttempt, setCatalogAttempt] = useState(0);
   const sending = useRef(false);
@@ -170,6 +183,11 @@ export function WorkspaceStartView({
     else if (!startImages.hasImages) startHint = 'Project selected. Describe your task above, then send to start.';
   }
 
+  function recordWorktreeLineage(childId) {
+    const parentId = worktreeParentFor(originThread, selectedPath, childId);
+    if (parentId) void recordThreadLineage(childId, parentId, 'worktree');
+  }
+
   async function handleSubmit(value) {
     const trimmed = typeof value === 'string' ? value.trim() : composerValue.trim();
     const attachments = attachmentDraft.attachments;
@@ -181,7 +199,7 @@ export function WorkspaceStartView({
     const submitScope = captureAuthScope();
     try {
       const operation = placement === 'worktree' ? prepareWorktreeCreation(selectedPath, 'start') : null;
-      if (operation) setWorktreeAttempt(true);
+      if (operation) { setWorktreeAttempt(true); setActiveWorktreeOp(operation.operationId); }
       const path = operation ? await createTaskWorktree(selectedPath, trimmed, baseRef.trim(), operation) : selectedPath;
       operation?.assertCurrent();
       let receipt;
@@ -204,10 +222,29 @@ export function WorkspaceStartView({
       if (!startImages.hasImages && (receipt === false || receipt?.accepted === false)) throw new Error('The agent did not accept this task. Your prompt is saved here.');
       if (!startImages.hasImages && receipt?.accepted !== true) throw new Error('Task delivery could not be confirmed. Your draft is saved here.');
       operation?.complete();
+      if (operation) recordWorktreeLineage(receipt?.sessionId);
       setWorktreeAttempt(false);
       if (!startImages.hasImages) clearComposerDraft(composerDraftRevision, trimmed);
       attachmentStore.complete(attachments);
-    } catch (failure) { if (!environmentSignal.aborted && isAuthScopeCurrent(submitScope)) setError(failure.message || 'Unable to start this task. Your prompt is saved here.'); }
+    } catch (failure) {
+      if (failure.worktreeCleaned) setWorktreeAttempt(false);
+      if (!environmentSignal.aborted && isAuthScopeCurrent(submitScope)) setError(failure.message || 'Unable to start this task. Your prompt is saved here.');
+    }
+    finally { sending.current = false; setStarting(false); setActiveWorktreeOp(null); }
+  }
+
+  async function handleDiscardUnfinishedWorktree() {
+    if (sending.current) return;
+    sending.current = true;
+    setStarting(true);
+    try {
+      const operation = prepareWorktreeCreation(selectedPath, 'start');
+      const result = await discardUnfinishedWorktree(selectedPath, operation.operationId);
+      if (!result.discarded && !/No unfinished worktree request/.test(result.error)) { setError(result.error); return; }
+      operation.discard();
+      setWorktreeAttempt(false);
+      setError('');
+    } catch (failure) { setError(failure.message); }
     finally { sending.current = false; setStarting(false); }
   }
 
@@ -220,7 +257,7 @@ export function WorkspaceStartView({
     const text = composerValue;
     try {
       const operation = placement === 'worktree' ? prepareWorktreeCreation(selectedPath, 'start') : null;
-      if (operation) setWorktreeAttempt(true);
+      if (operation) { setWorktreeAttempt(true); setActiveWorktreeOp(operation.operationId); }
       const path = operation ? await createTaskWorktree(selectedPath, text, baseRef.trim(), operation) : selectedPath;
       operation?.assertCurrent();
       if (!attachmentStore.begin('conversation')) throw new Error('Could not save the conversation request. Your draft was kept.');
@@ -229,11 +266,15 @@ export function WorkspaceStartView({
       if (environmentSignal.aborted || !isAuthScopeCurrent(submitScope)) return;
       if (receipt?.opened !== true || !receipt.sessionId) throw new Error('Conversation creation could not be confirmed. Your draft is saved here.');
       operation?.complete();
+      if (operation) recordWorktreeLineage(receipt?.sessionId);
       setWorktreeAttempt(false);
       clearComposerDraft(composerDraftRevision, text);
       attachmentStore.complete([]);
-    } catch (failure) { if (!environmentSignal.aborted && isAuthScopeCurrent(submitScope)) setError(failure.message || 'Unable to open the conversation. Your draft is saved here.'); }
-    finally { sending.current = false; setStarting(false); }
+    } catch (failure) {
+      if (failure.worktreeCleaned) setWorktreeAttempt(false);
+      if (!environmentSignal.aborted && isAuthScopeCurrent(submitScope)) setError(failure.message || 'Unable to open the conversation. Your draft is saved here.');
+    }
+    finally { sending.current = false; setStarting(false); setActiveWorktreeOp(null); }
   }
 
   async function handleResumeImageConversation() {
@@ -339,6 +380,7 @@ export function WorkspaceStartView({
             {branchState?.unavailable && <small>Branch list unavailable. Enter a branch or commit above.</small>}
             {branchState?.truncated && <small>Showing the first 200 branches. Enter another branch above.</small>}
           </div>}
+          {starting && activeWorktreeOp && <WorktreeSetupCard operationId={activeWorktreeOp} />}
           {(error || catalogError || composerDraftError) && <p className="workspace-start-error" role="alert">{error || catalogError || composerDraftError}</p>}
           {attachmentDraft.error && <div className="workspace-start-recovery" role="alert">{attachmentDraft.error} <button type="button" onClick={attachmentStore.retrySave}>{attachmentDraft.attachments.length ? 'Retry saving attachments' : 'Retry saving request'}</button></div>}
           {attachmentDraft.attachments.length > 0 && !nativeAttachments && <p className="workspace-start-hint" role="status">Choose Codex or Claude to send the attached files, or remove them before starting this task.</p>}
@@ -356,6 +398,7 @@ export function WorkspaceStartView({
               try { prepareWorktreeCreation(selectedPath, 'start').discard(); setWorktreeAttempt(false); setError(''); }
               catch (failure) { setError(failure.message); }
             }}>Use a new worktree request</button>
+            <button type="button" disabled={starting} onClick={handleDiscardUnfinishedWorktree}>Remove the unfinished checkout</button>
           </div>}
 
           {catalogError && <button type="button" className="workspace-start-retry" onClick={() => setCatalogAttempt(attempt => attempt + 1)}>Retry loading agents</button>}

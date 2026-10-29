@@ -26,6 +26,10 @@ const mockUpdateThreadMetadata = vi.fn(echoThreadPatch);
 const mockRestoreSession = vi.fn(() => Promise.resolve());
 const mockUpdateStructuredSessionSelection = vi.fn(() => Promise.resolve());
 const mockSendRawToSession = vi.fn();
+let mockServerQueue = { status: 'unavailable', snapshot: null, reason: 'fixture', refresh: () => {} };
+const enqueueServerFollowup = vi.fn();
+vi.mock('../hooks/useServerFollowupQueue', () => ({ useServerFollowupQueue: () => mockServerQueue }));
+vi.mock('../utils/serverFollowupQueue', () => ({ enqueueServerFollowup: (...args) => enqueueServerFollowup(...args) }));
 vi.mock('../hooks/useSupervisedInputCapability', () => ({ useSupervisedInputCapability: () => mockRawInputMode }));
 
 vi.mock('../hooks/useInstalledSkills', () => ({ useInstalledSkills: () => [{ name: 'project-review', description: 'Review this project' }] }));
@@ -697,6 +701,28 @@ describe('MobileShell', () => {
     expect(state.sendMessage.mock.calls[0][0]).toContain('/work/project/saved.txt');
     expect(state.sendMessage.mock.calls[0][0]).not.toContain('/work/project/mine.txt');
     act(() => clearTokens(true));
+  });
+
+  it('queues a mid-turn phone message on the server queue and keeps the draft when that fails', async () => {
+    const session = { id: 'ss-phone-server-queue', runtime: 'codex', cwd: '/work/project' };
+    const refresh = vi.fn();
+    mockServerQueue = { status: 'available', snapshot: { revision: 1, mode: 'running', holdReason: null, items: [], order: [] }, reason: '', refresh };
+    const state = { ...createStructuredSessionState(), isStreaming: true, sendMessage: vi.fn().mockResolvedValue({ accepted: true }) };
+    mockUseStructuredSession.mockReturnValue(state);
+    try {
+      renderMobileShell({ sessions: [session], activeSessionId: session.id });
+      expect(screen.getByRole('button', { name: 'Open follow-up queue' })).toBeInTheDocument();
+      enqueueServerFollowup.mockResolvedValueOnce({ mode: 'running', queueRevision: 2 });
+      await act(async () => { await lastStatusBarProps.onComposerSubmit('Then run the tests'); });
+      expect([enqueueServerFollowup.mock.calls[0], state.sendMessage.mock.calls.length, refresh.mock.calls.length]).toEqual([['ss-phone-server-queue', 'Then run the tests'], 0, 1]);
+      fireEvent.change(screen.getByLabelText('Command composer'), { target: { value: 'Keep me' } });
+      enqueueServerFollowup.mockRejectedValueOnce(new Error('Queue changed on another device.'));
+      await act(async () => { await lastStatusBarProps.onComposerSubmit('Keep me'); });
+      expect(screen.getByLabelText('Command composer')).toHaveValue('Keep me');
+      expect(screen.getByText('Queue changed on another device.')).toBeInTheDocument();
+    } finally {
+      mockServerQueue = { status: 'unavailable', snapshot: null, reason: 'fixture', refresh: () => {} };
+    }
   });
 
   it('checks saved files before mobile send even if the cross-tab event is delayed', async () => {
