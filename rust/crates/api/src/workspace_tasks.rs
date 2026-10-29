@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path as FsPath, PathBuf};
 use uuid::Uuid;
 
+#[path = "workspace_tasks/cron.rs"]
+mod cron;
 #[path = "workspace_tasks/schedule_change.rs"]
 mod schedule_change;
 #[cfg(test)]
@@ -110,17 +112,57 @@ pub struct ScheduleInput {
     pub run_once_at: Option<u64>,
 }
 
-/// A time of day on chosen weekdays (0 = Sunday), in the user's time zone offset from UTC.
+/// A time of day on chosen weekdays (0 = Sunday), or a 5-field cron expression,
+/// in a named time zone or a fixed offset from UTC.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", try_from = "RawCalendarTime")]
 pub struct CalendarTime {
     pub hour: u8,
     pub minute: u8,
     pub weekdays: Vec<u8>,
-    #[serde(default)]
     pub utc_offset_minutes: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub time_zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawCalendarTime {
+    hour: Option<u8>,
+    minute: Option<u8>,
+    weekdays: Option<Vec<u8>>,
+    #[serde(default)]
+    utc_offset_minutes: i32,
+    #[serde(default)]
+    time_zone: Option<String>,
+    #[serde(default)]
+    cron: Option<String>,
+}
+
+impl TryFrom<RawCalendarTime> for CalendarTime {
+    type Error = String;
+    fn try_from(raw: RawCalendarTime) -> Result<Self, String> {
+        if raw.cron.is_some() {
+            if raw.hour.unwrap_or(0) != 0
+                || raw.minute.unwrap_or(0) != 0
+                || raw.weekdays.as_ref().is_some_and(|days| !days.is_empty())
+            {
+                return Err("A cron schedule cannot also set hour, minute or weekdays".into());
+            }
+        } else if raw.hour.is_none() || raw.minute.is_none() || raw.weekdays.is_none() {
+            return Err("hour, minute and weekdays are required".into());
+        }
+        Ok(Self {
+            hour: raw.hour.unwrap_or(0),
+            minute: raw.minute.unwrap_or(0),
+            weekdays: raw.weekdays.unwrap_or_default(),
+            utc_offset_minutes: raw.utc_offset_minutes,
+            time_zone: raw.time_zone,
+            cron: raw.cron,
+        })
+    }
 }
 
 fn validate_calendar(at: &CalendarTime) -> Result<(), ApiError> {
@@ -130,6 +172,17 @@ fn validate_calendar(at: &CalendarTime) -> Result<(), ApiError> {
         .is_some_and(|zone| zone.parse::<chrono_tz::Tz>().is_err())
     {
         return Err(ApiError::bad_request("Choose a valid IANA time zone"));
+    }
+    if let Some(expression) = &at.cron {
+        if cron::CronExpr::parse(expression).is_none()
+            || !(-840..=840).contains(&at.utc_offset_minutes)
+            || next_calendar_run(now_ms(), at) == u64::MAX
+        {
+            return Err(ApiError::bad_request(
+                "Use a valid 5-field cron expression with a reachable date",
+            ));
+        }
+        return Ok(());
     }
     let mut days = at.weekdays.clone();
     days.sort_unstable();
@@ -148,9 +201,27 @@ fn validate_calendar(at: &CalendarTime) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn next_cron_run(now: u64, at: &CalendarTime, expression: &str) -> u64 {
+    let (Some(expr), Ok(now)) = (cron::CronExpr::parse(expression), i64::try_from(now)) else {
+        return u64::MAX;
+    };
+    let found = match at.time_zone.as_deref().map(str::parse::<chrono_tz::Tz>) {
+        Some(Ok(zone)) => expr.next_after(&zone, now),
+        Some(Err(_)) => None,
+        None => chrono::FixedOffset::east_opt(at.utc_offset_minutes.saturating_mul(60))
+            .and_then(|zone| expr.next_after(&zone, now)),
+    };
+    found
+        .and_then(|millis| u64::try_from(millis).ok())
+        .unwrap_or(u64::MAX)
+}
+
 /// The next moment after `now` (milliseconds since the epoch) matching the calendar time.
 pub(crate) fn next_calendar_run(now: u64, at: &CalendarTime) -> u64 {
     const DAY: i64 = 86_400_000;
+    if let Some(expression) = &at.cron {
+        return next_cron_run(now, at, expression);
+    }
     if let Some(zone) = &at.time_zone {
         let Some(instant) = i64::try_from(now)
             .ok()
@@ -279,6 +350,54 @@ pub struct ScheduleRecord {
     pub missed_runs: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_missed_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<ScheduleSkill>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_status: Option<TaskStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ScheduleSkill {
+    pub skill_ref: String,
+    pub name: String,
+    pub revision: String,
+}
+
+const LAST_ERROR_LIMIT: usize = 500;
+
+fn with_last_outcomes(
+    mut schedules: Vec<ScheduleRecord>,
+    tasks: &[TaskRecord],
+) -> Vec<ScheduleRecord> {
+    for schedule in &mut schedules {
+        schedule.last_status = None;
+        schedule.last_error = None;
+        let Some(task) = schedule
+            .last_task_id
+            .and_then(|id| tasks.iter().find(|task| task.id == id))
+        else {
+            continue;
+        };
+        schedule.last_status = Some(task.status.clone());
+        let failure = matches!(task.status, TaskStatus::Failed | TaskStatus::Interrupted);
+        schedule.last_error = task
+            .error
+            .clone()
+            .or_else(|| {
+                (failure && task.exit_code.is_some_and(|code| code != 0))
+                    .then(|| format!("Exited with code {}", task.exit_code.unwrap_or_default()))
+            })
+            .map(|error| {
+                crate::session_search::safe_history_text(&error)
+                    .chars()
+                    .take(LAST_ERROR_LIMIT)
+                    .collect()
+            });
+    }
+    schedules
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -806,7 +925,7 @@ fn read_owner_schedules_sync(
         return Err(unavailable());
     }
     let (store, _) = decode_store(&bytes, owner).map_err(|_| unavailable())?;
-    Ok(store.schedules)
+    Ok(with_last_outcomes(store.schedules, &store.tasks))
 }
 
 #[cfg(not(unix))]
@@ -862,6 +981,9 @@ mod read_only_schedule_tests {
                 created_at: 1,
                 missed_runs: 0,
                 last_missed_at: None,
+                skill: None,
+                last_status: None,
+                last_error: None,
             }],
         }
     }
@@ -1282,6 +1404,7 @@ mod reviewed_schedule_change_tests {
                 weekdays: vec![1],
                 utc_offset_minutes: 0,
                 time_zone: Some("Invalid/Zone".into()),
+                cron: None,
             });
             Ok(())
         })
@@ -1802,6 +1925,9 @@ mod unit_tests {
             created_at: 0,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         })
         .unwrap();
         value["runOnceAt"] = 1.into();
@@ -1869,6 +1995,7 @@ mod unit_tests {
             weekdays: vec![1, 2, 3, 4, 5],
             utc_offset_minutes: 0,
             time_zone: None,
+            cron: None,
         };
         let sunday_only = CalendarTime {
             hour: 9,
@@ -1876,6 +2003,7 @@ mod unit_tests {
             weekdays: vec![0],
             utc_offset_minutes: 0,
             time_zone: None,
+            cron: None,
         };
         let tokyo_9am = CalendarTime {
             hour: 9,
@@ -1883,6 +2011,7 @@ mod unit_tests {
             weekdays: vec![2],
             utc_offset_minutes: 540,
             time_zone: None,
+            cron: None,
         };
         let hour = 3_600_000u64;
         let day = 24 * hour;
@@ -1929,6 +2058,9 @@ mod unit_tests {
             created_at: 1,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         });
         queue_due_schedules(&mut store, now, |_| true);
         queue_due_schedules(&mut store, now + 60_000, |_| true);
@@ -2317,6 +2449,9 @@ mod persisted_io_tests {
             created_at: 0,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         };
         for schedule in [
             base.clone(),
@@ -2328,6 +2463,7 @@ mod persisted_io_tests {
                     weekdays: vec![1],
                     utc_offset_minutes: 0,
                     time_zone: Some("America/New_York".into()),
+                    cron: None,
                 }),
                 interval_seconds: 60,
                 ..base.clone()
@@ -4079,6 +4215,7 @@ async fn list(
     let path = query
         .path
         .map(|value| crate::session_search::workspace_filter_key(&value));
+    let schedules_with_outcomes = with_last_outcomes(store.schedules, &store.tasks);
     let mut tasks: Vec<_> = store
         .tasks
         .into_iter()
@@ -4089,8 +4226,7 @@ async fn list(
         })
         .collect();
     tasks.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    let schedules = store
-        .schedules
+    let schedules = schedules_with_outcomes
         .into_iter()
         .filter(|schedule| {
             path.as_ref().is_none_or(|path| {
@@ -4275,6 +4411,9 @@ pub(crate) async fn create_owner_schedule(
             created_at: now,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         };
         let mut schedule = schedule;
         schedule.next_run_at = schedule.enabled.then(|| {
@@ -4306,6 +4445,7 @@ pub(crate) async fn prepare_reviewed_schedule(
     session_id: String,
     turn_id: String,
     input: ScheduleInput,
+    skill: Option<ScheduleSkill>,
 ) -> Result<ReviewedSchedule, ApiError> {
     if owner.is_empty()
         || session_id.is_empty()
@@ -4326,6 +4466,14 @@ pub(crate) async fn prepare_reviewed_schedule(
     }
     if let Some(at) = &input.at {
         validate_calendar(at)?;
+    }
+    if skill.as_ref().is_some_and(|skill| {
+        [&skill.skill_ref, &skill.name].iter().any(|text| {
+            text.is_empty() || text.chars().count() > 200 || text.chars().any(char::is_control)
+        }) || skill.revision.len() != 64
+            || !skill.revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(ApiError::bad_request("Invalid skill reference"));
     }
     if input.name.trim().is_empty()
         || input.name.chars().count() > 80
@@ -4351,6 +4499,9 @@ pub(crate) async fn prepare_reviewed_schedule(
         created_at: now,
         missed_runs: 0,
         last_missed_at: None,
+        skill,
+        last_status: None,
+        last_error: None,
     };
     schedule.next_run_at = schedule.enabled.then(|| {
         schedule
@@ -4919,6 +5070,9 @@ mod worker_durability_tests {
             created_at: 1,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         }
     }
 
@@ -5014,6 +5168,7 @@ mod worker_durability_tests {
             weekdays: vec![0, 1, 2, 3, 4, 5, 6],
             utc_offset_minutes: 0,
             time_zone: None,
+            cron: None,
         });
         store_with_schedule(dir.path(), workspace.path(), schedule);
         let before = now_ms();
@@ -7366,6 +7521,7 @@ mod reviewed_schedule_tests {
                 at: None,
                 run_once_at: None,
             },
+            None,
         )
         .await
         .unwrap()
@@ -7404,6 +7560,7 @@ mod reviewed_schedule_tests {
                 "session".into(),
                 "turn".into(),
                 input,
+                None,
             )
             .await;
             assert_eq!(result.is_ok(), accepted, "input: {value}");
@@ -7485,3 +7642,11 @@ mod reviewed_schedule_tests {
         assert_eq!(std::fs::read_to_string(invalid_root).unwrap(), "fixture");
     }
 }
+
+#[cfg(test)]
+#[path = "workspace_tasks/schedule_cron_tests.rs"]
+mod schedule_cron_tests;
+
+#[cfg(all(test, unix))]
+#[path = "workspace_tasks/worker_process_tests.rs"]
+mod worker_process_tests;

@@ -381,7 +381,93 @@ async fn runtime_reopens_existing_background_manager_and_deletion_reaps_owned_pr
         "owned background process survived deletion"
     );
     assert!(background.ensure_session_open(&action.scope).await.is_err());
+    assert!(
+        session_fence::is_retired(&data.canonicalize().unwrap(), "owner", &session.id).unwrap()
+    );
+    let stale = request(root.path(), "owner", &session.id, "after-delete");
+    assert!(background.start(stale.clone(), Some(&stale)).await.is_err());
     manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_startup_recovers_a_group_left_by_a_crashed_host_and_leaves_mismatches_unknown() {
+    use std::os::unix::process::CommandExt;
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let config = AppConfig {
+        data_dir: data.clone(),
+        ..Default::default()
+    };
+    let setup = crate::state::AppState::new(config.clone()).unwrap();
+    let cleanup = setup.provision_owner_cleanup().unwrap();
+    let background = {
+        let mut db = setup.lock_db().unwrap();
+        bootstrap::open_or_provision(&data, &mut db).unwrap()
+    };
+    let spawn = || {
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "exec /bin/sleep 300"])
+            .process_group(0)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let scope = BackgroundScope {
+        owner: "owner".into(),
+        session: "session".into(),
+        workspace: root.path().canonicalize().unwrap(),
+        incarnation: None,
+    };
+    let matching = spawn();
+    let mismatched = spawn();
+    let matching_pid = matching.id() as i32;
+    let mismatched_pid = mismatched.id() as i32;
+    for (action, child, skew) in [("matching", &matching, 0), ("mismatched", &mismatched, 1)] {
+        let key = background.ledger.claim(&scope, action).unwrap();
+        let identity = recovery::capture(child.id()).unwrap();
+        background
+            .ledger
+            .record_launch(
+                &key,
+                &scope,
+                action,
+                identity.pid,
+                identity.pgid,
+                Some((identity.started.0 + skew, identity.started.1)),
+            )
+            .unwrap();
+    }
+    drop(background);
+    drop(cleanup);
+    drop(setup);
+    let reapers = [matching, mismatched].map(|mut child| std::thread::spawn(move || child.wait()));
+
+    let state = crate::state::AppState::new_runtime(config).unwrap();
+    let manager = state.structured_session_manager();
+    let background = manager.background_processes_for_test().unwrap();
+    assert!(
+        exited(matching_pid).await,
+        "matching group survived startup"
+    );
+    assert!(unsafe { libc::kill(mismatched_pid, 0) } == 0);
+    assert_eq!(
+        background.ledger.read(&scope, "matching").unwrap(),
+        BackgroundState::Cancelled
+    );
+    assert_eq!(
+        background.ledger.read(&scope, "mismatched").unwrap(),
+        BackgroundState::Unknown
+    );
+    assert!(background
+        .session_has_outstanding("owner", "session")
+        .unwrap());
+    unsafe { libc::kill(-mismatched_pid, libc::SIGKILL) };
+    for reaper in reapers {
+        let _ = reaper.join();
+    }
+    let _ = manager.shutdown().await;
 }
 
 #[tokio::test]

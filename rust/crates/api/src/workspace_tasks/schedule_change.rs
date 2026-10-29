@@ -61,6 +61,7 @@ fn proposed_edit(
     let mut proposed = schedule.clone();
     if let Some(prompt) = changes.prompt {
         proposed.input.prompt = prompt;
+        proposed.skill = None;
         validate_task(&proposed.input).map_err(|error| error.message)?;
     }
     if let Some(timing) = changes.timing {
@@ -211,7 +212,7 @@ async fn prepare(
         return Err("Workspace changed; review the schedule again".into());
     }
     let schedules = read_owner_schedules(data_dir.clone(), owner.clone()).await?;
-    let schedule = schedules
+    let mut schedule = schedules
         .into_iter()
         .find(|schedule| {
             schedule.id == id
@@ -219,6 +220,8 @@ async fn prepare(
                 && schedule.input.workspace_path == workspace
         })
         .ok_or("Schedule is unavailable in this conversation")?;
+    schedule.last_status = None;
+    schedule.last_error = None;
     check_action(&schedule, action, now_ms())?;
     let timing_edited = changes
         .as_ref()
@@ -816,6 +819,9 @@ mod edit_tests {
             created_at: now,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         };
         let at = CalendarTime {
             hour: 2,
@@ -823,6 +829,7 @@ mod edit_tests {
             weekdays: vec![0, 1, 2, 3, 4, 5, 6],
             utc_offset_minutes: 0,
             time_zone: Some("America/New_York".into()),
+            cron: None,
         };
         let candidate = proposed_edit(
             &schedule,

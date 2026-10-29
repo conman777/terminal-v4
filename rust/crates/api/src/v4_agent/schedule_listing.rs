@@ -66,8 +66,13 @@ where
                 || record.input.model.as_ref().is_some_and(|model| {
                     model.chars().count() > 200 || model.chars().any(char::is_control)
                 })
+                || record.last_error.as_ref().is_some_and(|error| error.chars().count() > 500)
+                || record.skill.as_ref().is_some_and(|skill| {
+                    skill.name.chars().count() > 200 || skill.skill_ref.chars().count() > 200
+                })
                 || record.at.as_ref().is_some_and(|at| {
-                    at.weekdays.len() > 7
+                    at.cron.as_ref().is_some_and(|cron| cron.chars().count() > 256 || cron.chars().any(char::is_control))
+                        || at.weekdays.len() > 7
                         || at.time_zone.as_ref().is_some_and(|zone| {
                             zone.chars().count() > 200 || zone.chars().any(char::is_control)
                         })
@@ -98,6 +103,9 @@ where
                 "lastRunAt": record.last_run_at,
                 "missedRuns": record.missed_runs,
                 "lastMissedAt": record.last_missed_at,
+                "lastStatus": record.last_status,
+                "lastError": record.last_error.map(|error| safe_history_text(&error)),
+                "skill": record.skill.map(|skill| json!({"skillRef": skill.skill_ref, "name": safe_history_text(&skill.name), "revision": skill.revision})),
                 "lastTaskId": record.last_task_id,
                 "createdAt": record.created_at,
             }))
@@ -134,6 +142,9 @@ mod tests {
             created_at: 1,
             missed_runs: 0,
             last_missed_at: None,
+            skill: None,
+            last_status: None,
+            last_error: None,
         }
     }
 
@@ -162,6 +173,7 @@ mod tests {
             weekdays: vec![1],
             utc_offset_minutes: 0,
             time_zone: Some("UTC".into()),
+            cron: None,
         });
         let mut no_parent = record(&scope.session_id, &session.workspace, "No parent");
         no_parent.input.parent_session_id = None;
@@ -565,5 +577,62 @@ mod tests {
         assert!(!output.contains("Other schedule"));
         assert_eq!(std::fs::read(bytes_before.0).unwrap(), bytes_before.1);
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn reports_last_outcome_cron_and_skill_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (session, scope) = fixture(dir.path());
+        let mut failed = record(&scope.session_id, &session.workspace, "Failed");
+        failed.last_status = Some(crate::workspace_tasks::TaskStatus::Failed);
+        failed.last_error = Some("agent exited".into());
+        failed.skill = Some(crate::workspace_tasks::ScheduleSkill {
+            skill_ref: "workspace:id".into(),
+            name: "Triage".into(),
+            revision: "a".repeat(64),
+        });
+        failed.at = Some(serde_json::from_value(json!({"cron":"*/5 * * * *"})).unwrap());
+        failed.missed_runs = 2;
+        failed.last_missed_at = Some(9);
+        let fresh = record(&scope.session_id, &session.workspace, "Fresh");
+        let records = vec![failed, fresh];
+        let listed: Value = serde_json::from_str(
+            &execute(
+                "owner",
+                &session,
+                &scope,
+                &json!({}),
+                &Cancellation::default(),
+                |_, _| async { Ok(records) },
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        let rows = listed["schedules"].as_array().unwrap();
+        assert_eq!(
+            (
+                rows[0]["lastStatus"].clone(),
+                rows[0]["lastError"].clone(),
+                rows[0]["missedRuns"].clone(),
+                rows[0]["lastMissedAt"].clone(),
+                rows[0]["at"]["cron"].clone(),
+                rows[0]["skill"]["name"].clone(),
+                rows[1]["lastStatus"].clone(),
+                rows[1]["lastError"].clone(),
+                rows[1]["skill"].clone(),
+            ),
+            (
+                json!("failed"),
+                json!("agent exited"),
+                json!(2),
+                json!(9),
+                json!("*/5 * * * *"),
+                json!("Triage"),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            )
+        );
     }
 }

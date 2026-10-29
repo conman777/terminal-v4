@@ -285,7 +285,9 @@ impl AppState {
                         background,
                     ),
                 ) => {
-                    manager.bind_background_processes(Arc::new(background))?;
+                    let background = Arc::new(background);
+                    Self::recover_background_at_startup(&background);
+                    manager.bind_background_processes(background)?;
                 }
                 Ok(
                     crate::v4_agent::background_process::bootstrap::ExistingInstallation::Absent,
@@ -296,7 +298,9 @@ impl AppState {
                         match state.open_existing_background() {
                             Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Absent) => {}
                             Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Available(background)) => {
-                                manager.bind_background_processes(Arc::new(background))?
+                                let background = Arc::new(background);
+                                Self::recover_background_at_startup(&background);
+                                manager.bind_background_processes(background)?
                             }
                             _ => manager.mark_background_unavailable(),
                         }
@@ -446,6 +450,38 @@ impl AppState {
         )?;
         fence.validate(&db)?;
         Ok(result)
+    }
+
+    #[cfg(unix)]
+    fn recover_background_at_startup(
+        background: &Arc<crate::v4_agent::background_process::BackgroundProcesses>,
+    ) {
+        let background = background.clone();
+        let outcome = std::thread::Builder::new()
+            .name("background-recovery".into())
+            .spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| error.to_string())?
+                    .block_on(background.recover_unconfirmed())
+            })
+            .map_err(|error| error.to_string())
+            .and_then(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| "Background recovery stopped unexpectedly".to_string())
+            })
+            .and_then(|result| result);
+        match outcome {
+            Ok(report) => tracing::info!(
+                killed = report.killed,
+                already_stopped = report.already_stopped,
+                unresolved = report.unresolved,
+                "Background process recovery finished"
+            ),
+            Err(error) => tracing::warn!(%error, "Background process recovery failed"),
+        }
     }
 
     #[cfg(unix)]

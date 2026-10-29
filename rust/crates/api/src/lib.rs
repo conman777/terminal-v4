@@ -51,6 +51,8 @@ mod structured;
 mod system_rebuild;
 pub mod system_stats;
 mod terminal;
+mod thread_lineage;
+mod thread_order;
 pub mod tmux;
 pub mod transcribe;
 pub mod turn_detector;
@@ -69,6 +71,7 @@ mod workspace_activity;
 mod workspace_browser;
 mod workspace_git;
 mod workspace_proposals;
+mod workspace_pull_request;
 mod workspace_rewind;
 mod workspace_skills;
 pub mod workspace_tasks;
@@ -253,6 +256,8 @@ pub fn app(state: AppState) -> Router {
         .merge(agent_catalog::routes())
         .merge(provider_connections::routes())
         .merge(agent_mcp::routes())
+        .merge(thread_lineage::routes())
+        .merge(thread_order::routes())
         .merge(agent_mcp_apps::routes())
         .merge(agent_browser::routes())
         .merge(native_history::routes())
@@ -260,6 +265,7 @@ pub fn app(state: AppState) -> Router {
         .merge(workspace_proposals::routes())
         .merge(workspace_skills::routes())
         .merge(workspace_git::routes())
+        .merge(workspace_pull_request::routes())
         .merge(open_in_editor::routes())
         .merge(system_doctor::routes())
         .merge(workspace_files::routes())

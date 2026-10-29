@@ -20,6 +20,9 @@ pub(crate) mod delegation_outbox;
 #[cfg(any(test, unix))]
 #[allow(dead_code)]
 mod delegation_review;
+#[cfg(unix)]
+mod execute_code;
+mod execution_backend;
 mod integrations;
 pub(crate) mod interaction;
 mod knowledge;
@@ -200,6 +203,8 @@ fn tool_definitions_for_read(
     definitions.push(scheduling::definition());
     definitions.push(question::definition());
     definitions.push(todo::definition());
+    #[cfg(unix)]
+    definitions.push(execute_code::definition());
     #[cfg(unix)]
     definitions.push(delegation_inline::definition());
     #[cfg(unix)]
@@ -1311,8 +1316,40 @@ async fn turn_with_interaction(
                         .await
                         .map(integrations::Output::text);
                     }
+                    #[cfg(unix)]
+                    if name == execute_code::NAME {
+                        return execute_code::execute(
+                            &workspace,
+                            &call["input"],
+                            context.tool_policy,
+                            &context.scope,
+                            &call_id,
+                            context.interaction,
+                            &context.cancellation,
+                        )
+                        .await
+                        .map(integrations::Output::text);
+                    }
                     if name == "run_command" {
-                        let approved=context.cancellation.run(context.interaction.approve(ApprovalRequest {id:uuid::Uuid::new_v4().to_string(),scope:context.scope.clone(),tool_call_id:call_id.clone(),tool_name:name.into(),tool_input:call["input"].clone(),description:format!("Command (runs on this host)\nWorkspace: {}\nExact arguments: {}",workspace.display(),serde_json::to_string_pretty(&call["input"]).map_err(|_|"Cannot encode command")?),expires_at:interaction::now_ms()+300_000})).await?;
+                        let host = execution_backend::from_environment()?.host_description();
+                        let input_text = serde_json::to_string_pretty(&call["input"])
+                            .map_err(|_| "Cannot encode command")?;
+                        let description = format!(
+                            "Command ({host})\nWorkspace: {}\nExact arguments: {input_text}",
+                            workspace.display()
+                        );
+                        let approved = context
+                            .cancellation
+                            .run(context.interaction.approve(ApprovalRequest {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                scope: context.scope.clone(),
+                                tool_call_id: call_id.clone(),
+                                tool_name: name.into(),
+                                tool_input: call["input"].clone(),
+                                description,
+                                expires_at: interaction::now_ms() + 300_000,
+                            }))
+                            .await?;
                         context.cancellation.check()?;
                         return tools::run_command_cancellable(
                             &workspace,
@@ -1408,6 +1445,7 @@ async fn turn_with_interaction(
                         .map(integrations::Output::text)
                 };
                 if name == "run_command"
+                    || name == "execute_code"
                     || name == "create_schedule"
                     || name == "manage_schedule"
                     || name == "browser_press"

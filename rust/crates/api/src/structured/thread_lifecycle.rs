@@ -12,6 +12,8 @@ pub(super) struct ThreadLifecycle {
     pub(super) can_settle: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     snoozed_until_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settlement_unavailable_reason: Option<&'static str>,
 }
 
 pub(super) fn project(
@@ -38,6 +40,7 @@ pub(super) fn project(
         settled: false,
         can_settle: false,
         snoozed_until_ms: active.map(|snooze| snooze.until_ms),
+        settlement_unavailable_reason: None,
     }
 }
 
@@ -53,6 +56,9 @@ impl ThreadLifecycle {
     ) -> Self {
         self.settlement_supported = queue.is_some();
         let Some((fingerprint, pending)) = queue else {
+            self.settlement_unavailable_reason = Some(
+                "Queued work, background commands or delegated work cannot be verified for this session right now.",
+            );
             return self;
         };
         let quiet = !process_active
@@ -158,6 +164,103 @@ pub(super) fn woke_after(events: &[StructuredSessionEvent], after_seq: i64) -> b
             ),
             _ => false,
         })
+}
+
+const AUTO_SETTLE_ENV: &str = "TERMINAL_AUTO_SETTLE_IDLE_SECONDS";
+const AUTO_SETTLE_MIN_SECONDS: i64 = 300;
+const AUTO_SETTLE_MAX_SECONDS: i64 = 2_592_000;
+#[cfg(unix)]
+const AUTO_SETTLE_SWEEP_INTERVAL_MS: i64 = 30_000;
+
+pub(super) fn parse_auto_settle_idle_ms(value: Option<&str>) -> Option<i64> {
+    let seconds: i64 = value?.trim().parse().ok()?;
+    (AUTO_SETTLE_MIN_SECONDS..=AUTO_SETTLE_MAX_SECONDS)
+        .contains(&seconds)
+        .then_some(seconds * 1000)
+}
+
+pub(super) fn auto_settle_due(last_activity_at: &str, now_ms: i64, idle_ms: i64) -> bool {
+    time::OffsetDateTime::parse(
+        last_activity_at,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map(|at| {
+        let last_ms = (at.unix_timestamp_nanos() / 1_000_000) as i64;
+        now_ms.saturating_sub(last_ms) >= idle_ms
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(unix)]
+static LAST_AUTO_SETTLE_SWEEP_MS: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+
+#[cfg(unix)]
+impl super::StructuredSessionManager {
+    pub(super) async fn auto_settle_idle_at(
+        &self,
+        owner: &str,
+        idle_ms: i64,
+        now_ms: i64,
+    ) -> Result<Vec<String>, String> {
+        let mut settled = Vec::new();
+        for item in self.list_inventory(owner).await? {
+            let Some(thread) = item.thread.as_ref() else {
+                continue;
+            };
+            if !item.thread_lifecycle.can_settle
+                || thread.pinned
+                || !auto_settle_due(&thread.last_activity_at, now_ms, idle_ms)
+            {
+                continue;
+            }
+            let update = super::StructuredThreadUpdate {
+                settled: Some(true),
+                pinned: Some(false),
+                ..Default::default()
+            };
+            if matches!(
+                self.update_thread(owner, &item.id, update).await,
+                Ok(Some(_))
+            ) {
+                settled.push(item.id);
+            }
+        }
+        Ok(settled)
+    }
+
+    pub(super) fn schedule_auto_settle(&self, owner: &str) {
+        use std::sync::atomic::Ordering;
+        let Some(idle_ms) =
+            parse_auto_settle_idle_ms(std::env::var(AUTO_SETTLE_ENV).ok().as_deref())
+        else {
+            return;
+        };
+        let now_ms = super::now_ts();
+        let last = LAST_AUTO_SETTLE_SWEEP_MS.load(Ordering::SeqCst);
+        if now_ms.saturating_sub(last) < AUTO_SETTLE_SWEEP_INTERVAL_MS
+            || LAST_AUTO_SETTLE_SWEEP_MS
+                .compare_exchange(last, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+        {
+            return;
+        }
+        let Ok(permit) = self.external_admission() else {
+            return;
+        };
+        let manager = self.clone();
+        let owner = owner.to_owned();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if manager
+                .auto_settle_idle_at(&owner, idle_ms, super::now_ts())
+                .await
+                .is_err()
+            {
+                tracing::warn!("Automatic thread settlement was skipped; state was unavailable");
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -656,5 +759,250 @@ mod tests {
             .snooze
             .is_none());
         second_manager.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn auto_settle_idle_period_is_off_unless_configured_within_bounds() {
+        assert_eq!(parse_auto_settle_idle_ms(None), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some("")), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some("soon")), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some("0")), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some("299")), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some("2592001")), None);
+        assert_eq!(parse_auto_settle_idle_ms(Some(" 3600 ")), Some(3_600_000));
+    }
+
+    #[test]
+    fn auto_settle_is_due_only_after_a_parseable_idle_period() {
+        let at = "2026-01-01T00:00:00Z";
+        let at_ms = 1_767_225_600_000;
+        assert!(!auto_settle_due(at, at_ms + 999, 1000));
+        assert!(auto_settle_due(at, at_ms + 1000, 1000));
+        assert!(!auto_settle_due("not a time", i64::MAX, 1000));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn snooze_choices_use_server_clock_enforce_bounds_and_survive_restart() {
+        use super::super::StructuredThreadUpdate;
+        let data = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new_runtime(config.clone()).unwrap();
+        let manager = state.structured_session_manager();
+        let session = manager
+            .create_session(
+                "owner",
+                data.path().to_str().unwrap(),
+                Some("deepseek"),
+                Some("deepseek-chat"),
+                None,
+            )
+            .await
+            .unwrap();
+        for seconds in [0, 59, 2_592_001] {
+            assert!(manager
+                .update_thread(
+                    "owner",
+                    &session.id,
+                    StructuredThreadUpdate {
+                        snooze_for_seconds: Some(seconds),
+                        ..Default::default()
+                    }
+                )
+                .await
+                .is_err());
+        }
+        let before = super::super::now_ts();
+        let thread = manager
+            .update_thread(
+                "owner",
+                &session.id,
+                StructuredThreadUpdate {
+                    snooze_for_seconds: Some(4 * 3600),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let after = super::super::now_ts();
+        let until = thread.snooze.unwrap().until_ms;
+        assert!(until >= before + 4 * 3600 * 1000 && until <= after + 4 * 3600 * 1000);
+        manager.shutdown().await.unwrap();
+        drop(manager);
+        drop(state);
+        let state = crate::state::AppState::new_runtime(config).unwrap();
+        let reopened = state.structured_session_manager();
+        let lifecycle = &reopened.list_inventory("owner").await.unwrap()[0].thread_lifecycle;
+        assert_eq!(lifecycle.snoozed_until_ms, Some(until));
+        assert!(lifecycle.snoozed);
+        reopened.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn automatic_settlement_skips_pinned_pending_native_and_delegated_threads() {
+        use super::super::StructuredThreadUpdate;
+        let data = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new_runtime(config).unwrap();
+        let manager = state.structured_session_manager();
+        let cwd = data.path().to_str().unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            ids.push(
+                manager
+                    .create_session("owner", cwd, Some("deepseek"), Some("deepseek-chat"), None)
+                    .await
+                    .unwrap()
+                    .id,
+            );
+        }
+        let (idle, pinned, pending, delegated, snoozed) =
+            (&ids[0], &ids[1], &ids[2], &ids[3], &ids[4]);
+        let native = manager
+            .create_session("owner", cwd, Some("claude"), None, None)
+            .await
+            .unwrap()
+            .id;
+        manager
+            .update_thread(
+                "owner",
+                pinned,
+                StructuredThreadUpdate {
+                    pinned: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .update_thread(
+                "owner",
+                snoozed,
+                StructuredThreadUpdate {
+                    snooze_for_seconds: Some(3600),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        manager
+            .record_event("owner", pending, approval(1, "a"))
+            .await
+            .unwrap();
+        let incarnation = {
+            let session = manager
+                .owned_session("owner", delegated)
+                .await
+                .unwrap()
+                .unwrap();
+            let inner = session.state.lock().await;
+            inner.session_incarnation.unwrap().0
+        };
+        manager
+            .inner
+            .delegation_supervisor
+            .get()
+            .unwrap()
+            .seed_test_outstanding_parent(
+                "owner",
+                delegated,
+                incarnation,
+                &data.path().canonicalize().unwrap(),
+            )
+            .unwrap();
+
+        let far_future = super::super::now_ts() + 10_000_000;
+        assert!(manager
+            .auto_settle_idle_at("owner", 1000, 0)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            manager
+                .auto_settle_idle_at("owner", 1000, far_future)
+                .await
+                .unwrap(),
+            vec![idle.clone()]
+        );
+        let inventory = manager.list_inventory("owner").await.unwrap();
+        let settled: Vec<_> = inventory
+            .iter()
+            .filter(|item| item.thread_lifecycle.settled)
+            .map(|item| item.id.clone())
+            .collect();
+        assert_eq!(settled, vec![idle.clone()]);
+        assert!(inventory
+            .iter()
+            .find(|item| item.id == native)
+            .is_some_and(|item| !item.thread_lifecycle.settlement_supported
+                && !item.thread_lifecycle.can_settle));
+        assert!(manager
+            .auto_settle_idle_at("owner", 1000, far_future)
+            .await
+            .unwrap()
+            .is_empty());
+        manager.shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn settle_with_explicit_unpinned_assertion_rejects_a_pinned_thread() {
+        use super::super::StructuredThreadUpdate;
+        let data = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        };
+        let state = crate::state::AppState::new_runtime(config).unwrap();
+        let manager = state.structured_session_manager();
+        let session = manager
+            .create_session(
+                "owner",
+                data.path().to_str().unwrap(),
+                Some("deepseek"),
+                Some("deepseek-chat"),
+                None,
+            )
+            .await
+            .unwrap();
+        manager
+            .update_thread(
+                "owner",
+                &session.id,
+                StructuredThreadUpdate {
+                    pinned: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(manager
+            .update_thread(
+                "owner",
+                &session.id,
+                StructuredThreadUpdate {
+                    settled: Some(true),
+                    pinned: Some(false),
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_err());
+        assert!(
+            manager.list_inventory("owner").await.unwrap()[0]
+                .thread
+                .as_ref()
+                .unwrap()
+                .pinned
+        );
+        manager.shutdown().await.unwrap();
     }
 }

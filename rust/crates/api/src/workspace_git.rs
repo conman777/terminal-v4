@@ -291,7 +291,7 @@ async fn git_text(repo: &Path, args: &[&str], index: Option<&Path>) -> Result<St
     }
     Ok(String::from_utf8_lossy(&output.bytes).trim().to_string())
 }
-async fn repository(path: &str) -> Result<PathBuf, ApiError> {
+pub(crate) async fn repository(path: &str) -> Result<PathBuf, ApiError> {
     if path.is_empty() || path.len() > 4096 || !Path::new(path).is_absolute() {
         return Err(ApiError::bad_request(
             "An absolute workspace directory is required",
@@ -649,7 +649,7 @@ async fn git_user(repo: &Path, args: &[&str]) -> Result<String, ApiError> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
-async fn current_branch(repo: &Path) -> Result<String, ApiError> {
+pub(crate) async fn current_branch(repo: &Path) -> Result<String, ApiError> {
     let branch = git_user(repo, &["branch", "--show-current"]).await?;
     if branch.is_empty() {
         return Err(ApiError::bad_request(
@@ -754,65 +754,6 @@ async fn create_pull_request_with(
         .unwrap_or("")
         .to_string())
 }
-/// Summarises `gh pr view --json` output: state, review decision and how the checks went.
-pub(crate) fn summarize_pull_request(view: &Value) -> Value {
-    let mut passed = 0;
-    let mut failed = 0;
-    let mut pending = 0;
-    for check in view["statusCheckRollup"].as_array().into_iter().flatten() {
-        let outcome = check["conclusion"]
-            .as_str()
-            .filter(|value| !value.is_empty())
-            .or_else(|| check["state"].as_str())
-            .unwrap_or("")
-            .to_ascii_uppercase();
-        match outcome.as_str() {
-            "SUCCESS" | "NEUTRAL" | "SKIPPED" => passed += 1,
-            "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED"
-            | "STARTUP_FAILURE" => failed += 1,
-            _ => pending += 1,
-        }
-    }
-    json!({
-        "number": view["number"], "url": view["url"], "title": view["title"], "state": view["state"],
-        "review": view["reviewDecision"].as_str().filter(|value| !value.is_empty()),
-        "checks": { "passed": passed, "failed": failed, "pending": pending },
-    })
-}
-
-async fn pull_request_status(path: &str) -> Result<Value, ApiError> {
-    let repo = repository(path).await?;
-    let branch = current_branch(&repo).await?;
-    let output = tokio::time::timeout(
-        Duration::from_secs(20),
-        tokio::process::Command::new("gh")
-            .current_dir(&repo)
-            .args([
-                "pr",
-                "view",
-                &branch,
-                "--json",
-                "number,url,title,state,reviewDecision,statusCheckRollup",
-            ])
-            .env("GH_PROMPT_DISABLED", "1")
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| ApiError::bad_request("GitHub CLI timed out"))?;
-    let Ok(output) = output else {
-        return Ok(
-            json!({ "pullRequest": null, "reason": "Install the GitHub CLI (gh) to see pull request checks" }),
-        );
-    };
-    if !output.status.success() {
-        return Ok(json!({ "pullRequest": null, "reason": "No pull request for this branch yet" }));
-    }
-    let view: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|_| ApiError::internal("GitHub CLI returned unexpected output"))?;
-    Ok(json!({ "pullRequest": summarize_pull_request(&view) }))
-}
-
 #[derive(Deserialize)]
 struct PullRequestQuery {
     path: String,
@@ -822,7 +763,9 @@ async fn pull_request_status_route(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<PullRequestQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(pull_request_status(&query.path).await?))
+    Ok(Json(
+        crate::workspace_pull_request::status(&query.path).await?,
+    ))
 }
 
 #[derive(Deserialize)]
@@ -871,6 +814,7 @@ async fn pull_request_route(
 ) -> Result<Json<Value>, ApiError> {
     push_branch(&input.path).await?;
     let url = create_pull_request_with("gh", &input.path, &input.title, &input.body).await?;
+    crate::workspace_pull_request::invalidate_cache();
     Ok(Json(json!({ "url": url })))
 }
 async fn file_patch(
@@ -1926,17 +1870,6 @@ mod integration_tests {
                 .count(),
             2,
             "the user's index is untouched"
-        );
-    }
-
-    #[test]
-    fn pull_request_summary_counts_checks_and_review() {
-        let view = json!({"number": 7, "url": "https://github.com/acme/app/pull/7", "title": "Fix", "state": "OPEN", "reviewDecision": "APPROVED",
-            "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}, {"conclusion": "", "state": "PENDING"}, {"state": "SUCCESS"}]});
-        assert_eq!(
-            summarize_pull_request(&view),
-            json!({"number": 7, "url": "https://github.com/acme/app/pull/7", "title": "Fix", "state": "OPEN", "review": "APPROVED",
-                "checks": {"passed": 2, "failed": 1, "pending": 1}})
         );
     }
 

@@ -3,8 +3,8 @@
 //! The in-process permit is deliberately absent after restart: a stored reservation
 //! must be reconciled, not retried automatically by a new process.
 use super::{
-    normalize_structured_input_message, receipt_from_events, StructuredControlError,
-    StructuredSessionManager, StructuredSessionState,
+    normalize_structured_input_message, StructuredControlError, StructuredSessionManager,
+    StructuredSessionState,
 };
 use crate::followup_queue::{
     AcceptedReceipt, DispatchOutcome, HoldReason, IdleBoundary, ItemState, Mutation,
@@ -142,7 +142,7 @@ fn current_permit(key: &Key) -> Result<Option<Permit>, StructuredControlError> {
         .get(key)
         .copied())
 }
-fn store(manager: &StructuredSessionManager) -> QueueStore {
+pub(super) fn store(manager: &StructuredSessionManager) -> QueueStore {
     QueueStore::new(&manager.inner.config.data_dir, manager_boot_id(manager))
 }
 pub(crate) fn manager_boot_id(manager: &StructuredSessionManager) -> Uuid {
@@ -155,7 +155,7 @@ pub(crate) fn manager_boot_id(manager: &StructuredSessionManager) -> Uuid {
 fn queue_supported(state: &StructuredSessionState) -> bool {
     crate::v4_agent::supports(&state.provider) || super::native_queue::enabled_for(state)
 }
-fn scope(state: &StructuredSessionState) -> Result<QueueScope, StructuredControlError> {
+pub(super) fn scope(state: &StructuredSessionState) -> Result<QueueScope, StructuredControlError> {
     if crate::v4_agent::supports(&state.provider) {
         return QueueScope::new(&state.user_id, FsPath::new(&state.cwd), &state.id)
             .map_err(control_error);
@@ -290,7 +290,11 @@ fn reconcile_with_store_checked(
     else {
         return Ok(snapshot);
     };
-    let canonical = receipt_from_events(&state.events, &item.input_request_id.to_string());
+    let canonical = super::native_queue::canonical_receipt(
+        store.data_dir(),
+        state,
+        &item.input_request_id.to_string(),
+    )?;
     let outcome = if let Some((receipt, text)) = canonical {
         if text != normalize_structured_input_message(&item.text) {
             store
@@ -353,9 +357,9 @@ fn native_admission(
     request_id: &str,
     text: &str,
 ) -> Result<(), StructuredControlError> {
-    if state.provider != "codex" {
+    if !matches!(state.provider.as_str(), "codex" | "claude") {
         return Err(StructuredControlError::invalid(
-            "Expected a Codex conversation",
+            "Expected a native Codex or Claude conversation",
         ));
     }
     if state.retiring || state.deleting {
@@ -503,7 +507,15 @@ fn drain_at_revision(
         if super::native_queue::enabled_for(&state) {
             match super::native_queue::drain_gate(&state) {
                 super::native_queue::DrainGate::Proceed => {}
-                super::native_queue::DrainGate::Skip => return Ok(()),
+                super::native_queue::DrainGate::Skip(_) => {
+                    super::native_queue::schedule_retry(
+                        &manager,
+                        &owner,
+                        &session_id,
+                        expected_generation,
+                    );
+                    return Ok(());
+                }
                 super::native_queue::DrainGate::Hold => {
                     return store(&manager)
                         .hold(&scope, HoldReason::Manual)

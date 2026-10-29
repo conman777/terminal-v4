@@ -306,6 +306,9 @@ impl QueueStore {
         }
     }
 
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.data
+    }
     pub(crate) fn fail_fast(mut self) -> Self {
         self.fail_fast = true;
         self

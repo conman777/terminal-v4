@@ -148,6 +148,216 @@ async fn stalled_launch_does_not_delay_stop_or_unrelated_authorization_and_is_re
     manager.shutdown().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stalled_launch_does_not_block_status_cancel_or_session_checks_and_cleanup_waits_for_it() {
+    let root = tempfile::tempdir().unwrap();
+    let (manager, _) = provisioned(root.path());
+    let manager = Arc::new(manager);
+    let incarnation = Some(uuid::Uuid::new_v4());
+    let mut live = pid_file_request(root.path(), "owner", "session", "live", Some(0));
+    live.scope.incarnation = incarnation;
+    manager.start(live.clone(), Some(&live)).await.unwrap();
+    let mut slow = pid_file_request(root.path(), "owner", "session", "slow", Some(0));
+    slow.scope.incarnation = incarnation;
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let launch = tokio::spawn({
+        let manager = manager.clone();
+        let slow = slow.clone();
+        async move {
+            manager
+                .start_for_actor(
+                    slow.clone(),
+                    &slow,
+                    &Cancellation::default(),
+                    i64::MAX,
+                    move |command| {
+                        entered_tx.send(()).unwrap();
+                        release_rx
+                            .recv_timeout(Duration::from_secs(20))
+                            .map_err(|_| "test launch was never released".to_string())?;
+                        command
+                            .spawn()
+                            .map_err(|_| "Cannot start background process".to_string())
+                    },
+                )
+                .await
+        }
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+
+    let within = Duration::from_secs(2);
+    let status = tokio::time::timeout(within, manager.snapshot(&live.scope, "live"))
+        .await
+        .expect("status waited for the stalled launch")
+        .unwrap();
+    assert_eq!(status.state, BackgroundState::Running);
+    tokio::time::timeout(within, manager.ensure_session_open(&live.scope))
+        .await
+        .expect("session check waited for the stalled launch")
+        .unwrap();
+    let access = manager
+        .access_for_actor(
+            &live.scope,
+            "live",
+            0,
+            i64::MAX,
+            &Cancellation::default(),
+            false,
+        )
+        .unwrap();
+    assert_eq!(access.state, BackgroundState::Running);
+    tokio::time::timeout(within, manager.cancel(&live.scope, "live"))
+        .await
+        .expect("cancel waited for the stalled launch")
+        .unwrap();
+    let cancelled = manager
+        .wait(
+            &live.scope,
+            "live",
+            Duration::from_secs(5),
+            &Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cancelled.state, BackgroundState::Cancelled);
+
+    let cleanup = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.cleanup_session("owner", "session").await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !cleanup.is_finished(),
+        "cleanup ignored an in-flight launch"
+    );
+    let late = pid_file_request(root.path(), "owner", "session", "late", Some(0));
+    assert!(manager
+        .start(late.clone(), Some(&late))
+        .await
+        .unwrap_err()
+        .contains("closed"));
+
+    release_tx.send(()).unwrap();
+    let outcome = launch.await.unwrap();
+    assert!(outcome.unwrap_err().contains("changed during launch"));
+    tokio::time::timeout(Duration::from_secs(10), cleanup)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let slow_state = manager
+        .wait(
+            &slow.scope,
+            "slow",
+            Duration::from_secs(5),
+            &Cancellation::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(slow_state.state, BackgroundState::Cancelled);
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn launching_commands_count_against_running_limits() {
+    let root = tempfile::tempdir().unwrap();
+    let (manager, _) = provisioned(root.path());
+    let manager = Arc::new(manager);
+    manager.set_running_limits_for_test(1, 8);
+    let slow = pid_file_request(root.path(), "owner", "session", "slow", Some(0));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let launch = tokio::spawn({
+        let manager = manager.clone();
+        let slow = slow.clone();
+        async move {
+            manager
+                .start_for_actor(
+                    slow.clone(),
+                    &slow,
+                    &Cancellation::default(),
+                    i64::MAX,
+                    move |command| {
+                        entered_tx.send(()).unwrap();
+                        release_rx
+                            .recv_timeout(Duration::from_secs(20))
+                            .map_err(|_| "test launch was never released".to_string())?;
+                        command
+                            .spawn()
+                            .map_err(|_| "Cannot start background process".to_string())
+                    },
+                )
+                .await
+        }
+    });
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let second = pid_file_request(root.path(), "owner", "session", "second", Some(0));
+    let refused = manager.start(second.clone(), Some(&second)).await;
+    assert!(refused.unwrap_err().contains("Too many"));
+    release_tx.send(()).unwrap();
+    launch.await.unwrap().unwrap();
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn finished_entries_and_workers_are_bounded_per_session_and_fall_back_to_the_ledger() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = plain(root.path());
+    let launches = MAX_RETAINED_FINISHED + 4;
+    for index in 0..launches {
+        let mut request =
+            pid_file_request(root.path(), "owner", "session", &format!("a{index}"), None);
+        request.command = format!("printf out{index}; exit {}", index % 5);
+        manager
+            .start(request.clone(), Some(&request))
+            .await
+            .unwrap();
+        manager
+            .wait(
+                &request.scope,
+                &request.action_id,
+                Duration::from_secs(10),
+                &Cancellation::default(),
+            )
+            .await
+            .unwrap();
+    }
+    let other = pid_file_request(root.path(), "owner", "other-session", "kept", None);
+    manager.start(other.clone(), Some(&other)).await.unwrap();
+    {
+        let registry = manager.registry.lock().await;
+        let retained = registry
+            .entries
+            .values()
+            .filter(|entry| entry.scope.session == "session")
+            .count();
+        assert_eq!(retained, MAX_RETAINED_FINISHED + 1);
+        assert!(registry.workers.len() <= MAX_RETAINED_FINISHED + 2);
+        assert!(registry
+            .entries
+            .values()
+            .any(|entry| entry.scope.session == "other-session"));
+    }
+    let scope = scope(root.path(), "owner", "session");
+    let evicted = manager.snapshot(&scope, "a0").await.unwrap();
+    assert_eq!(evicted.state, BackgroundState::Exited { code: Some(0) });
+    assert_eq!(evicted.stdout, "");
+    assert!(evicted.output_withheld);
+    let newest = manager
+        .snapshot(&scope, &format!("a{}", launches - 1))
+        .await
+        .unwrap();
+    assert_eq!(
+        newest.state,
+        BackgroundState::Exited {
+            code: Some(((launches - 1) % 5) as i32)
+        }
+    );
+    manager.cancel(&other.scope, "kept").await.unwrap();
+    manager.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn launch_exceeding_its_budget_is_stopped_instead_of_confirmed() {
     let root = tempfile::tempdir().unwrap();

@@ -2,24 +2,71 @@ use super::{
     interaction::{ActionScope, ApprovalRequest, Cancellation, Interaction},
     Session,
 };
-use crate::workspace_tasks::{self, CalendarTime, ScheduleInput, TaskInput};
+use crate::workspace_tasks::{self, CalendarTime, ScheduleInput, ScheduleSkill, TaskInput};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::Digest;
 use std::path::Path;
 
 pub(super) fn definition() -> Value {
-    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"required":["hour","minute","weekdays"],"additionalProperties":false},"runOnceAt":{"type":"integer"}},"required":["name","prompt","enabled"],"additionalProperties":false}})
+    json!({"name":"create_schedule","description":"Create an app-owned scheduled unattended task after explicit review. Supply intervalSeconds, at, or runOnceAt; calendar schedules may also include intervalSeconds. Times are Unix milliseconds. In at, give hour, minute and weekdays, or a 5-field cron expression (minute hour day-of-month month day-of-week) in cron; timeZone is an IANA name. Provide a prompt, or skillRef (workspace:<id> or account:<id> from discover_skills) to run a saved skill's current instructions as the task prompt; skillInput adds input after them. The task cannot run commands. The workspace, owner, provider, model and parent session come from this conversation.","parameters":{"type":"object","properties":{"name":{"type":"string"},"prompt":{"type":"string"},"skillRef":{"type":"string"},"skillInput":{"type":"string"},"enabled":{"type":"boolean"},"intervalSeconds":{"type":"integer"},"at":{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"weekdays":{"type":"array","items":{"type":"integer"}},"cron":{"type":"string"},"utcOffsetMinutes":{"type":"integer"},"timeZone":{"type":"string"}},"additionalProperties":false},"runOnceAt":{"type":"integer"}},"required":["name","enabled"],"additionalProperties":false}})
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Arguments {
     name: String,
-    prompt: String,
+    prompt: Option<String>,
+    skill_ref: Option<String>,
+    skill_input: Option<String>,
     enabled: bool,
     interval_seconds: Option<u64>,
     at: Option<CalendarTime>,
     run_once_at: Option<u64>,
+}
+
+fn skill_prompt(
+    data: &Path,
+    owner: &str,
+    workspace: &str,
+    reference: &str,
+    input: Option<&str>,
+) -> Result<(ScheduleSkill, String), String> {
+    let invalid = || "Choose a saved skill as workspace:<id> or account:<id>".to_string();
+    let (scope, id) = reference.split_once(':').ok_or_else(invalid)?;
+    let id = uuid::Uuid::parse_str(id).map_err(|_| invalid())?;
+    let path = match scope {
+        "workspace" => {
+            crate::workspace::profile_path(data, owner, workspace).map_err(|e| e.message)?
+        }
+        "account" => crate::workspace::account_profile_path(data, owner),
+        _ => return Err(invalid()),
+    };
+    let skill = crate::workspace::read_profile(&path)
+        .map_err(|e| e.message)?
+        .skills
+        .into_iter()
+        .find(|skill| skill.id == id)
+        .ok_or("That saved skill was not found")?;
+    let revision = hex::encode(sha2::Sha256::digest(skill.instructions.as_bytes()));
+    let mut prompt = format!(
+        "Run the saved skill \"{}\" (revision {}).\n\n{}",
+        skill.name,
+        &revision[..12],
+        skill.instructions
+    );
+    if let Some(input) = input.filter(|input| !input.trim().is_empty()) {
+        prompt.push_str("\n\nInput for this run:\n");
+        prompt.push_str(input);
+    }
+    Ok((
+        ScheduleSkill {
+            skill_ref: reference.into(),
+            name: skill.name.chars().take(200).collect(),
+            revision,
+        },
+        prompt,
+    ))
 }
 
 pub(super) async fn execute(
@@ -49,11 +96,25 @@ pub(super) async fn execute(
     {
         return Err("Choose an interval or one-shot time, not both".into());
     }
+    let (skill, prompt) = match (&args.skill_ref, args.prompt) {
+        (Some(reference), None) => {
+            let (skill, prompt) = skill_prompt(
+                data,
+                owner,
+                &session.workspace,
+                reference,
+                args.skill_input.as_deref(),
+            )?;
+            (Some(skill), prompt)
+        }
+        (None, Some(prompt)) if args.skill_input.is_none() => (None, prompt),
+        _ => return Err("Provide either a prompt or a saved skill with optional input".into()),
+    };
     let schedule = ScheduleInput {
         task: TaskInput {
             workspace_path: session.workspace.clone(),
             provider: session.provider.clone(),
-            prompt: args.prompt,
+            prompt,
             model: Some(session.model.clone()),
             parent_session_id: Some(scope.session_id.clone()),
             parent_task_id: None,
@@ -72,6 +133,7 @@ pub(super) async fn execute(
         scope.session_id.clone(),
         scope.turn_id.clone(),
         schedule,
+        skill,
     )
     .await
     .map_err(|e| e.message)?;
@@ -419,5 +481,128 @@ mod tests {
         let store: Value = serde_json::from_slice(&std::fs::read(saved).unwrap()).unwrap();
         assert_eq!(store["schedules"], json!([tool_result]));
         server.abort();
+    }
+
+    fn save_skill(
+        data: &std::path::Path,
+        owner: &str,
+        workspace: &std::path::Path,
+        account: bool,
+    ) -> uuid::Uuid {
+        let id = uuid::Uuid::new_v4();
+        let path = if account {
+            crate::workspace::account_profile_path(data, owner)
+        } else {
+            crate::workspace::profile_path(data, owner, &workspace.to_string_lossy()).unwrap()
+        };
+        let profile = crate::workspace::WorkspaceProfile {
+            memory: String::new(),
+            skills: vec![crate::workspace::WorkspaceSkill {
+                id,
+                name: "Nightly triage".into(),
+                instructions: "List open issues and summarise them.".into(),
+                activation: None,
+                support_files: Default::default(),
+            }],
+            default_agent: String::new(),
+            selection: None,
+        };
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        crate::workspace::write_profile(&path, &profile).unwrap();
+        id
+    }
+
+    #[tokio::test]
+    async fn saved_skill_schedule_snapshots_the_reviewed_instructions_as_the_task_prompt() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace = workspace.path().canonicalize().unwrap();
+        let session = super::super::new_session("openai-api", "gpt-4.1", &workspace);
+        for account in [false, true] {
+            let id = save_skill(data.path(), "owner", &workspace, account);
+            let reference = format!("{}:{id}", if account { "account" } else { "workspace" });
+            let gate = Gate {
+                approved: true,
+                requests: Mutex::new(vec![]),
+            };
+            let input = json!({"name":"Triage","skillRef":reference,"skillInput":"Only P1","enabled":true,"at":{"cron":"0 6 * * 1-5","timeZone":"Europe/Berlin"}});
+            let saved: Value = serde_json::from_str(
+                &execute(
+                    data.path(),
+                    "owner",
+                    &session,
+                    &scope(&session),
+                    "call",
+                    &input,
+                    &gate,
+                    &Cancellation::default(),
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            let prompt = saved["prompt"].as_str().unwrap();
+            assert!(prompt.contains("List open issues and summarise them."));
+            assert!(prompt.ends_with("Input for this run:\nOnly P1"));
+            assert_eq!(saved["skill"]["skillRef"], reference);
+            assert_eq!(saved["skill"]["name"], "Nightly triage");
+            assert_eq!(saved["skill"]["revision"].as_str().unwrap().len(), 64);
+            assert_eq!(saved["at"]["cron"], "0 6 * * 1-5");
+            assert_eq!(
+                gate.requests.lock().unwrap()[0].tool_input["schedule"],
+                saved
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_schedule_rejects_unknown_foreign_malformed_and_ambiguous_requests() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace = workspace.path().canonicalize().unwrap();
+        let session = super::super::new_session("openai-api", "gpt-4.1", &workspace);
+        let id = save_skill(data.path(), "someone-else", &workspace, false);
+        let gate = Gate {
+            approved: true,
+            requests: Mutex::new(vec![]),
+        };
+        let timing = json!({"intervalSeconds":60});
+        for extra in [
+            json!({"skillRef":format!("workspace:{id}")}),
+            json!({"skillRef":format!("workspace:{}", uuid::Uuid::new_v4())}),
+            json!({"skillRef":format!("account:{id}")}),
+            json!({"skillRef":"workspace:not-a-uuid"}),
+            json!({"skillRef":"project:abc"}),
+            json!({"skillRef":format!("workspace:{id}"),"prompt":"Both"}),
+            json!({"skillInput":"orphan input","prompt":"Plain"}),
+            json!({}),
+        ] {
+            let mut input = json!({"name":"Triage","enabled":true});
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            input
+                .as_object_mut()
+                .unwrap()
+                .extend(timing.as_object().unwrap().clone());
+            assert!(
+                execute(
+                    data.path(),
+                    "owner",
+                    &session,
+                    &scope(&session),
+                    "call",
+                    &input,
+                    &gate,
+                    &Cancellation::default(),
+                )
+                .await
+                .is_err(),
+                "{input}"
+            );
+        }
+        assert!(gate.requests.lock().unwrap().is_empty());
+        assert!(!data.path().join("workspace-tasks").exists());
     }
 }

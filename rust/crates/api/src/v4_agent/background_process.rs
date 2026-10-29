@@ -42,6 +42,9 @@ use tokio::{
 
 pub(super) const OUTPUT_LIMIT: usize = 64 * 1024;
 const MAX_ACTIONS: usize = 128;
+/// Finished commands whose bounded output stays in memory, per session; older
+/// ones are evicted and answer status from the durable ledger only.
+pub(super) const MAX_RETAINED_FINISHED: usize = 16;
 /// Durable receipts are retained for replay protection until their session is
 /// deleted, so each owner and session is capped to stop one from consuming
 /// the global receipt budget.
@@ -140,10 +143,64 @@ struct Entry {
     done: watch::Sender<bool>,
 }
 #[derive(Default)]
+struct Launches {
+    active: Arc<Mutex<HashMap<u64, (String, String)>>>,
+    next: std::sync::atomic::AtomicU64,
+    idle: Arc<tokio::sync::Notify>,
+}
+struct LaunchSlot {
+    id: u64,
+    active: Arc<Mutex<HashMap<u64, (String, String)>>>,
+    idle: Arc<tokio::sync::Notify>,
+}
+impl Drop for LaunchSlot {
+    fn drop(&mut self) {
+        if let Ok(mut active) = self.active.lock() {
+            active.remove(&self.id);
+        }
+        self.idle.notify_waiters();
+    }
+}
+impl Launches {
+    fn reserve(&self, owner: &str, session: &str) -> Result<LaunchSlot, String> {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.active
+            .lock()
+            .map_err(|_| "Background launch state is unavailable")?
+            .insert(id, (owner.to_owned(), session.to_owned()));
+        Ok(LaunchSlot {
+            id,
+            active: self.active.clone(),
+            idle: self.idle.clone(),
+        })
+    }
+    fn counts(&self, owner: &str) -> Result<(usize, usize), String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "Background launch state is unavailable")?;
+        Ok((
+            active.len(),
+            active.values().filter(|(o, _)| o == owner).count(),
+        ))
+    }
+    fn busy(&self, scope: Option<(&str, &str)>) -> Result<bool, String> {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| "Background launch state is unavailable")?;
+        Ok(match scope {
+            Some((owner, session)) => active.values().any(|(o, s)| o == owner && s == session),
+            None => !active.is_empty(),
+        })
+    }
+}
+#[derive(Default)]
 struct Registry {
     closed: bool,
     entries: HashMap<Vec<u8>, Arc<Entry>>,
     closed_sessions: HashSet<(String, String)>,
+    order: std::collections::VecDeque<Vec<u8>>,
     shutdown_failed: bool,
     workers: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -153,6 +210,9 @@ pub(crate) struct BackgroundProcesses {
     #[cfg(all(test, unix))]
     coordinator_lifecycle: std::sync::RwLock<bool>,
     registry: AsyncMutex<Registry>,
+    launches: Launches,
+    commands_enabled: std::sync::atomic::AtomicBool,
+    completion_worker: std::sync::atomic::AtomicBool,
     #[cfg(all(test, unix))]
     claim_pause: Mutex<
         Option<(
@@ -440,6 +500,46 @@ impl BackgroundProcesses {
         self.ledger.pending_completions(COMPLETION_PAGE)
     }
 
+    pub(crate) fn enable_commands(&self) {
+        self.commands_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub(crate) fn commands_enabled(&self) -> bool {
+        self.commands_enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn claim_completion_worker(&self) -> bool {
+        !self
+            .completion_worker
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    pub(crate) async fn is_closed(&self) -> bool {
+        self.registry.lock().await.closed
+    }
+
+    /// Whether a metadata-only notice may still be delivered for this scope.
+    /// Unlike `ensure_session_open` it does not depend on unrelated unknown
+    /// claims, because a notice reveals no process output.
+    pub(crate) async fn delivery_open(&self, scope: &BackgroundScope) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(gate) = &self.owner_gate {
+            gate.ensure_open(&scope.owner)?;
+        }
+        let registry = self.registry.lock().await;
+        if registry.closed
+            || registry
+                .closed_sessions
+                .contains(&(scope.owner.clone(), scope.session.clone()))
+            || self.ledger.is_retired(&scope.owner, &scope.session)?
+        {
+            return Err("Background session is closed".into());
+        }
+        Ok(())
+    }
+
     /// True for exactly one caller per marker.
     pub(crate) fn acknowledge_completion(&self, seq: i64) -> Result<bool, String> {
         self.ledger.acknowledge_completion(seq)
@@ -457,6 +557,11 @@ impl BackgroundProcesses {
     #[cfg(unix)]
     pub(crate) async fn recover_unconfirmed(&self) -> Result<RecoveryReport, String> {
         let registry = self.registry.lock().await;
+        if self.launches.busy(None)? {
+            return Err(
+                "Background launches are in flight; recovery must run before launching".into(),
+            );
+        }
         let mut report = RecoveryReport::default();
         for (key, identity) in self.ledger.recovery_candidates()? {
             if registry.entries.contains_key(&key) {
@@ -750,6 +855,9 @@ impl BackgroundProcesses {
             #[cfg(all(test, unix))]
             coordinator_lifecycle: std::sync::RwLock::new(true),
             registry: AsyncMutex::new(Registry::default()),
+            launches: Launches::default(),
+            commands_enabled: std::sync::atomic::AtomicBool::new(false),
+            completion_worker: std::sync::atomic::AtomicBool::new(false),
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
             ledger: Arc::new(Ledger::create(path)?),
@@ -789,6 +897,9 @@ impl BackgroundProcesses {
             #[cfg(all(test, unix))]
             coordinator_lifecycle: std::sync::RwLock::new(true),
             registry: AsyncMutex::new(Registry::default()),
+            launches: Launches::default(),
+            commands_enabled: std::sync::atomic::AtomicBool::new(false),
+            completion_worker: std::sync::atomic::AtomicBool::new(false),
             #[cfg(all(test, unix))]
             claim_pause: Mutex::new(None),
             ledger,
@@ -803,7 +914,7 @@ impl BackgroundProcesses {
     }
     fn check_running_slots(&self, registry: &Registry, owner: &str) -> Result<(), String> {
         use std::sync::atomic::Ordering::SeqCst;
-        let (mut owner_running, mut total_running) = (0, 0);
+        let (mut total_running, mut owner_running) = self.launches.counts(owner)?;
         for entry in registry.entries.values().filter(|e| !*e.done.borrow()) {
             total_running += 1;
             owner_running += usize::from(entry.scope.owner == owner);
@@ -976,23 +1087,27 @@ impl BackgroundProcesses {
         {
             return Err("Invalid background action".into());
         }
-        let mut registry = if fail_fast {
-            self.registry
-                .try_lock()
-                .map_err(|_| "Background admission is busy; retry")?
-        } else {
-            self.registry.lock().await
+        let slot = {
+            let registry = if fail_fast {
+                self.registry
+                    .try_lock()
+                    .map_err(|_| "Background admission is busy; retry")?
+            } else {
+                self.registry.lock().await
+            };
+            if registry.closed {
+                return Err("Background process manager is shut down".into());
+            }
+            if registry
+                .closed_sessions
+                .contains(&(request.scope.owner.clone(), request.scope.session.clone()))
+            {
+                return Err("Background session is closed".into());
+            }
+            self.check_running_slots(&registry, &request.scope.owner)?;
+            self.launches
+                .reserve(&request.scope.owner, &request.scope.session)?
         };
-        if registry.closed {
-            return Err("Background process manager is shut down".into());
-        }
-        if registry
-            .closed_sessions
-            .contains(&(request.scope.owner.clone(), request.scope.session.clone()))
-        {
-            return Err("Background session is closed".into());
-        }
-        self.check_running_slots(&registry, &request.scope.owner)?;
         // Revalidate after waiting for admission; the workspace may have changed.
         if std::fs::canonicalize(&request.scope.workspace)
             .ok()
@@ -1135,7 +1250,7 @@ impl BackgroundProcesses {
                 None => Err("Background process identity is unavailable".into()),
             };
             if recorded.is_err() {
-                registry.shutdown_failed = true;
+                self.registry.lock().await.shutdown_failed = true;
                 if let Ok(mut unconfirmed) = self.unconfirmed.lock() {
                     *unconfirmed = true;
                 }
@@ -1151,7 +1266,7 @@ impl BackgroundProcesses {
         let tree = match tree {
             Ok(tree) => tree,
             Err(_) => {
-                registry.shutdown_failed = true;
+                self.registry.lock().await.shutdown_failed = true;
                 if let Ok(mut unconfirmed) = self.unconfirmed.lock() {
                     *unconfirmed = true;
                 }
@@ -1162,9 +1277,22 @@ impl BackgroundProcesses {
         };
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
+        let mut registry = self.registry.lock().await;
+        if admission == LaunchAdmission::Confirmed
+            && (registry.closed
+                || registry
+                    .closed_sessions
+                    .contains(&(request.scope.owner.clone(), request.scope.session.clone())))
+        {
+            admission = LaunchAdmission::Revoked;
+        }
         let (cancel, cancel_rx) = watch::channel(false);
         let (done, _) = watch::channel(false);
         let completion_scope = request.scope.clone();
+        let (trim_owner, trim_session) = (
+            completion_scope.owner.clone(),
+            completion_scope.session.clone(),
+        );
         let entry = Arc::new(Entry {
             scope: request.scope,
             state: Mutex::new(BackgroundState::Running),
@@ -1233,8 +1361,11 @@ impl BackgroundProcesses {
                 state,
             });
         });
+        registry.order.push_back(key.clone());
         registry.entries.insert(key, entry);
         registry.workers.push(worker);
+        Self::trim_finished(&mut registry, &trim_owner, &trim_session).await;
+        drop(slot);
         match admission {
             LaunchAdmission::Confirmed => {}
             LaunchAdmission::Revoked => {
@@ -1256,6 +1387,40 @@ impl BackgroundProcesses {
             stderr_truncated: false,
             output_withheld: false,
         })
+    }
+    async fn trim_finished(registry: &mut Registry, owner: &str, session: &str) {
+        registry
+            .order
+            .retain(|key| registry.entries.contains_key(key));
+        let finished: Vec<Vec<u8>> = registry
+            .order
+            .iter()
+            .filter(|key| {
+                registry.entries.get(*key).is_some_and(|entry| {
+                    entry.scope.owner == owner
+                        && entry.scope.session == session
+                        && *entry.done.borrow()
+                        && !matches!(
+                            *entry.state.lock().unwrap(),
+                            BackgroundState::CleanupUnconfirmed | BackgroundState::Unknown
+                        )
+                })
+            })
+            .cloned()
+            .collect();
+        for key in &finished[..finished.len().saturating_sub(MAX_RETAINED_FINISHED)] {
+            registry.entries.remove(key);
+        }
+        registry
+            .order
+            .retain(|key| registry.entries.contains_key(key));
+        for worker in std::mem::take(&mut registry.workers) {
+            if worker.is_finished() {
+                registry.shutdown_failed |= worker.await.is_err();
+            } else {
+                registry.workers.push(worker);
+            }
+        }
     }
     async fn entry(&self, scope: &BackgroundScope, action_id: &str) -> Result<Arc<Entry>, String> {
         self.registry
@@ -1533,11 +1698,18 @@ impl BackgroundProcesses {
     // Closes admission for this owner/session and waits for every live process.
     // Durable receipts are retained for deduplication, including after deletion.
     pub(crate) async fn cleanup_session(&self, owner: &str, session: &str) -> Result<(), String> {
-        let entries: Vec<_> = {
+        let entries: Vec<_> = loop {
+            let idle = self.launches.idle.clone();
+            let notified = idle.notified();
             let mut registry = self.registry.lock().await;
             registry
                 .closed_sessions
                 .insert((owner.to_owned(), session.to_owned()));
+            if self.launches.busy(Some((owner, session)))? {
+                drop(registry);
+                notified.await;
+                continue;
+            }
             let entries = registry
                 .entries
                 .values()
@@ -1547,7 +1719,7 @@ impl BackgroundProcesses {
             for entry in &entries {
                 let _ = entry.cancel.send(true);
             }
-            entries
+            break entries;
         };
         let mut unconfirmed = false;
         for entry in entries {
@@ -1579,6 +1751,7 @@ impl BackgroundProcesses {
     ) -> Result<(), String> {
         let mut registry = self.registry.lock().await;
         if registry.closed
+            || self.launches.busy(Some((owner, session)))?
             || self.ledger.is_retired(owner, session)?
             || self.ledger.has_unknown(Some((owner, session)))?
         {
@@ -1649,8 +1822,18 @@ impl BackgroundProcesses {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *lifecycle = false;
         }
-        let mut registry = self.registry.lock().await;
-        registry.closed = true;
+        let mut registry = loop {
+            let idle = self.launches.idle.clone();
+            let notified = idle.notified();
+            let mut registry = self.registry.lock().await;
+            registry.closed = true;
+            if self.launches.busy(None)? {
+                drop(registry);
+                notified.await;
+                continue;
+            }
+            break registry;
+        };
         for entry in registry.entries.values() {
             let _ = entry.cancel.send(true);
         }

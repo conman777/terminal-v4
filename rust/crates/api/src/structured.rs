@@ -4,6 +4,9 @@ mod actor_admission;
 mod auth_integration_tests;
 #[cfg(all(test, unix))]
 mod background_actor;
+#[cfg(unix)]
+#[cfg_attr(not(test), allow(dead_code))]
+mod background_completion;
 #[cfg(test)]
 mod claude_regressions;
 mod codex;
@@ -1702,6 +1705,8 @@ impl StructuredSessionManager {
         if admission.is_none() {
             self.schedule_delegation_recovery(user_id);
         }
+        #[cfg(unix)]
+        self.schedule_auto_settle(user_id);
         let sessions: Vec<_> = self
             .inner
             .sessions
@@ -2449,6 +2454,9 @@ impl StructuredSessionManager {
         {
             return Err("Settle this thread without another lifecycle change".into());
         }
+        if updates.settled == Some(true) && updates.pinned == Some(false) && thread.pinned {
+            return Err("Pinned threads are not settled automatically".into());
+        }
         #[cfg(unix)]
         if let Some(settled) = updates.settled {
             if !crate::v4_agent::supports(&state.provider) {
@@ -3121,6 +3129,8 @@ impl StructuredSessionManager {
         if events_on_disk.is_some() {
             return Err("Session changed in another manager; reload and try again".into());
         }
+        queue::check_native_admission(self, &state, request_id.as_deref().unwrap_or(""), text)
+            .map_err(|error| error.message)?;
         if state.deleting || state.retiring || state.process.is_some() {
             return Err(
                 "Session is busy; interrupt the current turn before sending another message".into(),
@@ -3299,7 +3309,13 @@ impl StructuredSessionManager {
                     break;
                 }
             }
-            let _ = manager.clear_generation(&user_id, &id, generation).await;
+            if manager
+                .clear_generation(&user_id, &id, generation)
+                .await
+                .is_ok()
+            {
+                let _ = native_queue::turn_finished(manager, user_id, id, generation).await;
+            }
         });
         pending_start.commit();
         Ok(receipt)
@@ -4594,6 +4610,14 @@ impl StructuredSessionManager {
                     "User images require an owned V4 conversation",
                 ));
             }
+            #[cfg(unix)]
+            let queued_authority = if queued && native_queue::enabled_for(&state) {
+                native_queue::dispatch_authority(self, &state, request_id, text)?
+            } else {
+                None
+            };
+            #[cfg(unix)]
+            let authority = queued_authority.as_ref().or(authority);
             drop(state);
             let receipt = self
                 .send_native_message(
@@ -6769,6 +6793,7 @@ impl StructuredSessionManager {
         state.events.push(event.clone());
         state.updated_at = metadata.updated_at;
         state.thread = metadata.thread;
+        native_queue::event_may_clear_fence(event);
         Ok(())
     }
 

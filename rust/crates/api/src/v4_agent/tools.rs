@@ -490,6 +490,7 @@ pub(super) async fn run_command_cancellable(
     turn_id: &str,
     tool_call_id: &str,
 ) -> Result<String, String> {
+    let backend = super::execution_backend::from_environment()?;
     run_command_inner(
         root,
         input,
@@ -502,6 +503,7 @@ pub(super) async fn run_command_cancellable(
             turn_id,
             tool_call_id,
         }),
+        backend.as_ref(),
     )
     .await
 }
@@ -611,6 +613,27 @@ async fn run_command_with_timeout(
         &super::interaction::Cancellation::default(),
         &resources,
         None,
+        &super::execution_backend::LocalBackend,
+    )
+    .await
+}
+
+#[cfg(all(test, unix))]
+pub(super) async fn run_command_with_backend(
+    root: &Path,
+    input: &Value,
+    backend: &dyn super::execution_backend::ExecutionBackend,
+) -> Result<String, String> {
+    let resources = CommandResources::default();
+    run_command_inner(
+        root,
+        input,
+        true,
+        std::time::Duration::from_secs(10),
+        &super::interaction::Cancellation::default(),
+        &resources,
+        None,
+        backend,
     )
     .await
 }
@@ -623,6 +646,7 @@ async fn run_command_inner(
     cancel: &super::interaction::Cancellation,
     resources: &CommandResources,
     progress: Option<CommandProgress<'_>>,
+    backend: &dyn super::execution_backend::ExecutionBackend,
 ) -> Result<String, String> {
     cancel.check()?;
     if !approved {
@@ -649,36 +673,12 @@ async fn run_command_inner(
             "Previous command cleanup must be confirmed before another command can run".into(),
         );
     }
-    let mut process = if cfg!(windows) {
-        let mut p = tokio::process::Command::new("cmd.exe");
-        p.args(["/d", "/s", "/c", command]);
-        p
-    } else {
-        let mut p = tokio::process::Command::new("/bin/sh");
-        p.args(["-c", command]);
-        p
-    };
+    let mut process = backend.command(root, command)?;
     process
-        .current_dir(root)
-        .env_clear()
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    for name in [
-        "PATH",
-        "SystemRoot",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "LANG",
-        "TERM",
-    ] {
-        if let Some(value) = std::env::var_os(name) {
-            process.env(name, value);
-        }
-    }
     #[cfg(unix)]
     process.process_group(0);
     let mut child = process.spawn().map_err(|_| "Cannot start command")?;
