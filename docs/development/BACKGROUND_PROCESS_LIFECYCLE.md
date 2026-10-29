@@ -39,8 +39,9 @@ cleanup. On Unix, the original ledger owner explicitly releases its locks on
 drop so a forked child cannot accidentally retain them; a child cannot release
 the parent's locks. This is not confirmation that a child process has stopped.
 
-Before enabling the tools, finish fresh-install provisioning without recreating
-lost state, complete a durable cross-process session actor fence,
+Before enabling the tools, call `bootstrap::open_or_provision` at trusted
+startup (it exists, is tested for restart, crash-in-the-middle and lost-state
+refusal, and is simply not wired in yet), complete a durable cross-process session actor fence,
 define scoped completion and output handling, and provide a recovery policy that
 accounts for escaped or otherwise unconfirmed processes. Validate
 platform-specific behavior; the lifeline is implemented only on Unix, and the
@@ -82,20 +83,38 @@ session ID, so a recreated session with the same ID is held rather than reopened
 Capacity is refused before approval or any durable claim. Live processes are
 capped at 8 per owner and 32 in total, counted from tracked entries that have not
 finished, so a slot returns as soon as a worker commits a terminal outcome.
-Durable receipts, kept for replay protection until the session is deleted, are
-capped at 32 per session, 64 per owner and 128 in total so one session or owner
-cannot exhaust the shared budget. A refused start asks for no approval and claims
-no receipt. Failed-to-start, denied-after-claim and cancelled-before-launch claims
-still consume a receipt until their session is deleted.
+Durable receipts are capped at 32 per session, 64 per owner and 128 in total so
+one session or owner cannot exhaust the shared budget. When a claim would exceed
+a cap, the ledger first prunes the oldest finished receipts (exited, cancelled,
+timed out, failed to start) in the affected scope, in one transaction with the
+claim. It never prunes a running or unknown claim, a reviewed-unknown claim, or
+any of a session's newest 8 receipts. A scope full of unfinished claims is still
+refused. Pruning gives up replay protection only for old finished actions of a
+still-open session: replaying one needs the same incarnation-scoped action key,
+which exists only inside a completed turn's actor and still needs a fresh
+approval. Retired sessions keep full replay protection. A refused start asks for
+no approval and claims no receipt.
 
 After a restart the actor reads durable outcomes (exited, cancelled, timed out,
 failed to start) from the ledger. A claim a crash left unfinished is reported as
 unknown, cannot be cancelled, blocks all new background starts until an
 authorized review attests it, and keeps shutdown reporting unconfirmed cleanup.
-Completion is observed by polling status or wait; the terminal outcome is
-committed once and later cancel, wait or status calls cannot change it. There is
-no push delivery to the agent or the thread's settlement state when a command
-finishes.
+The terminal outcome is committed once and later cancel, wait or status calls
+cannot change it. After the ledger commit, the manager publishes a
+metadata-only completion hint (scope, action ID, outcome; never the command or
+output) on a bounded broadcast channel (`subscribe_completions`). A subscriber
+may lag and miss hints, and none exists across a restart, so the ledger via
+status or wait stays authoritative; a consumer must reconcile before relying on
+delivery. Nothing in the agent loop or queue subscribes yet: a future delivery
+step must check owner, session incarnation and checkpoint before injecting a
+completion notice, and must never inject output without the reviewed-output
+action. `session_has_outstanding(owner, session)` is a read-only ledger query,
+true while any command in the session is running or has an unreviewed outcome
+(including after a crash) or the manager has unconfirmed cleanup. It is not yet
+called by thread settlement: structured.rs must consult it next to
+`parent_has_outstanding` in the settle branch of the thread update
+(refusing settlement on true or on error) and in the inventory lifecycle
+projection where `delegation_quiet` is computed.
 
 The current owner gate holds an SQLite write transaction while invoking the
 spawn callback. Local Stop and unrelated authorization operations also need a
@@ -171,3 +190,19 @@ All cooperating processes must honor the same durable hold. These identity
 checks assume intact, private, stable local storage and do not protect against
 database rollback or a hostile same-user swap and restoration during SQLite
 open. Old binaries do not honor the hold protocol.
+
+A crash-unknown claim can now be attested without a logout cleanup request.
+`review_unknown_owner_standalone` runs inside the same owner-review
+transaction as the cleanup flow (live direct credential, auth-generation and
+admission checks, tracked processes terminal, ledger identity unchanged) and
+persists the same audit row. It requires that the owner has no background or
+structured cleanup hold; a held owner must use the cleanup review. Because the
+control-database write transaction is held, launch admission cannot interleave.
+The request identifier is `standalone-<operation>`, and a retry of the same
+operation is idempotent. The review never replays the action or proves that a
+process stopped; it only lets new starts proceed. No HTTP route or UI calls it
+yet. A route would mirror `review_background` in structured/ownership_recovery.rs
+(direct `LocalAuthority`, explicit acknowledgment, operation ID) and call the
+function on a blocking worker through the structured manager's bound background
+manager, and the owner-cleanup recovery panel would need a standalone entry
+point showing the owner's unknown count (`owner_cleanup_unconfirmed`).

@@ -9,20 +9,25 @@ native agents, and explicitly configured MCP servers may offer related features.
 Reference: [Hermes v0.22.5 release, commit `bf0203a794a`](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5),
 and its pinned [built-in tool reference](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a/website/docs/reference/tools-reference.md).
 That reference makes availability conditional on platform, toolsets, credentials,
-and configuration. V4's inspected worktree is based on commit
-`a71bf926573917f42872810201771870c991e22c` but contains extensive uncommitted and
-untracked changes, so its status cannot be reproduced from that commit alone.
+and configuration. V4 source was re-verified on branch `fix/macos-app-verification`
+at HEAD `61f1e21`; the shared worktree may contain uncommitted changes made
+concurrently, so status cannot be reproduced from that commit alone.
 
-Status meanings:
+Status meanings (exactly one per row):
 
-- **Partial**: related functionality exists in inspected source; differences or
-  missing verification prevent a parity claim.
-- **Conditional**: a related tool is registered only with the stated V4 setup;
-  matching semantics and full coverage still require testing.
-- **Not exposed**: no equivalent model-callable built-in was found in the
-  inspected V4 registry; this is not a claim about arbitrary MCP servers or all
-  native providers.
-- **Uninspected**: source evidence is not sufficient to assess equivalence.
+- **Implemented**: a model-callable or user-visible V4 feature for this
+  capability exists in current source and is available without extra account
+  setup beyond the platform noted. It does **not** assert Hermes semantic parity;
+  listed differences still apply, and nothing here was run against a real provider.
+- **Conditional**: implemented, but registered or usable only under the stated
+  condition (setting, credential, platform, provider support).
+- **Missing**: no equivalent was found in the current V4 agent registry or UI.
+  This is not a claim about arbitrary MCP servers or external providers.
+- **Not yet assessed**: evidence is insufficient; no parity claim is made.
+
+Core capabilities (file, command, memory, session, schedule, delegation) are
+listed separately from optional, provider-, platform- and credential-dependent
+ones; Hermes catalogue breadth (messaging, plugins, backends) is not core.
 
 V4 registry evidence: [`tool_definitions`](../../rust/crates/api/src/v4_agent/mod.rs),
 [`file and command tools`](../../rust/crates/api/src/v4_agent/tools.rs),
@@ -32,71 +37,99 @@ V4 registry evidence: [`tool_definitions`](../../rust/crates/api/src/v4_agent/mo
 [`browser tools`](../../rust/crates/api/src/v4_agent/browser.rs). The registry
 filters out integrations and writes for the internal read-only child policy.
 
-## Tool-by-tool mapping
+## Core tool mapping
 
-| Hermes capability | V4 source status | Evidence and difference to resolve |
+| Hermes capability | V4 status | Evidence and difference to resolve |
 | --- | --- | --- |
-| `read_file` | Partial | Workspace-only UTF-8 reads support bounded line pages and byte pages for larger files. Hermes documents additional document formats and different reading behavior. |
-| `write_file` | Partial | V4 writes within the workspace, with bounded atomic replacement. Compare Hermes's whole-file read baseline and syntax checks. |
-| `patch` | Partial | `replace_text` replaces one literal match by default, or an explicitly expected number of matches; Hermes describes more flexible patch matching and syntax checks. |
-| `search_files` | Partial | On Unix, bounded `search_text` supports literal and regex content searches and workspace-relative filename searches; `list_files` lists one directory. Regex syntax and case folding, scan limits, non-Unix behavior and Hermes output modes differ; see the [runtime guide](../features/V4_RUNTIME.md). |
-| `terminal` foreground | Partial | `run_command` starts in the workspace, requires exact-action approval and is limited to 60 seconds; unattended tasks deny commands. Approved commands have normal host access, not an OS sandbox. |
-| `terminal` background and `process_manage` | Not exposed | The background manager, ledger and tool wrappers are test-only; they are not registered in the production V4 turn. Inspect, cancel, output, completion and recovery remain unintegrated. |
-| `browser_navigate`, `browser_back`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll` | Conditional | V4 advertises corresponding operations when its agent browser is enabled. Exact-action approvals, target restrictions and snapshot semantics differ. |
-| `browser_vision` | Conditional | `browser_screenshot` returns a reviewed PNG. Hermes also describes a fallback vision route; V4 tool-image and provider support must be checked separately. |
-| `browser_press` | Not exposed | The experimental implementation is not in the agent registry. An isolated Chromium test shows that a focus handler can redirect a key to an element other than the reviewed ref. Settings changes must also be serialized with the admitted action through confirmed release, including modal interruption. Both boundaries need resolution before exposure; approved script evaluation does not establish equivalent native key behavior. |
-| `browser_console` | Not exposed | Browser/preview UI features do not establish an agent-callable equivalent in the inspected registry. |
-| `browser_get_images` | Conditional | When the V4 browser is enabled, an approved action lists bounded image URLs and alt text from the reviewed document and open shadow roots. Both browser paths bind the action to the reviewed tab and document; standalone reads also coordinate with settings writes by current-version processes. It does not fetch images or include inline data, closed shadow roots, or iframe contents; URL queries may be sensitive. |
-| `browser_cdp`, `browser_dialog` | Not exposed | Hermes conditionally registers these for CDP. V4 has approved browser actions and UI dialog handling, but the inspected agent registry has no corresponding raw-CDP or dialog-decision tool. |
-| `browser_exec` | Not exposed | The [pinned implementation](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a/tools/browser_use_cli.py) provides this for the Browser Use backend instead of the default browser tools. V4's approved page evaluation is not an equivalent host-side Python browser driver. |
-| `browser_vault` | Not exposed | The [pinned implementation](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a/tools/browser_vault_tool.py) registers one model-facing tool with list, fill, save-login, one-time-code and unlock actions. No equivalent appears in V4's agent registry. The upstream reference's summary counts five vault tools, so verify release-specific registration rather than assuming that count. |
-| `clarify` | Partial | V4's `ask_user` supports one to four structured questions with choices or free text, bound to the active turn. CLI and unattended runs cannot answer; compare Hermes batching and presentation. |
-| `manage_connections` | Partial | V4 can configure and explicitly probe MCP servers in its UI and exposes approved MCP wrappers. A Hermes managed-connector flow and agent-callable management are not established. |
-| `execute_code` | Not exposed | An approved shell command can run code, but there is no inspected Hermes-style programmatic tool-orchestration executor. |
-| `cronjob_manage` create | Partial | `create_schedule` accepts reviewed interval, one-shot and calendar jobs. Workspace/owner/provider/model are derived from the active session. |
-| `cronjob_manage` list, update, pause, resume, run, remove | Partial | On Unix, `list_schedules` and reviewed `manage_schedule` operate on schedules linked to the current owner, conversation and workspace. Management supports prompt or timing edits, pause, resume, run now and removal after explicit approval, with stale or unavailable storage rejected. Editing timing retains the reviewed first run and leaves existing tasks unchanged. Compare cron forms, skill/script jobs and delivery semantics. |
-| `delegate_task` | Partial | On Unix, an approved read-only child runs in a separate context while the parent waits. `delegate_tasks` can run two to four such investigations concurrently. Where a supported provider and the background supervisor are available, `delegate_task_background` can deliver a result through the parent queue. See the [runtime guide](../features/V4_RUNTIME.md) for its recovery and approval limits; integrated real-provider behavior remains to be verified. |
-| `memory` | Partial | V4 can inspect knowledge and propose reviewed memory/skill changes. Compare mutation rules, prompt snapshots and long-term learning without bypassing review. |
-| `session_search` | Partial | `recall_sessions` and `read_session` support scoped, redacted search and anchored reads. Optional last-update time filters and ranked-window pagination narrow and compare matches across one bounded scan window with a revision check. This is not Hermes session-start filtering, global ranking or FTS5 parity. |
-| `skills_list`, `skill_view` | Partial | `discover_skills`, `list_skill_files` and `read_skill_file` provide scoped discovery and bounded reads. Compare installed roots, metadata and continuation semantics. |
-| `skill_manage` | Partial | `propose_knowledge` stages package changes for review; it does not apply them directly. External project skill packages are read-only in this flow. |
-| `todo_list` | Partial | V4 has an owner/workspace/session-scoped revisioned list with nested items, replace/merge/read and active-task compaction preservation. It rejects invalid or cyclic updates and has stricter bounds than Hermes; it clears the list in rewind forks because earlier snapshots are unavailable. |
-| `vision_analyze` | Partial | V4 handles bounded image inputs and browser screenshots; an agent-callable image analyzer with an auxiliary-model fallback is not established. |
-| `image_generate` | Not exposed | No native generation/edit tool appears in the V4 agent registry. An external MCP server may independently provide one. |
-| `video_analyze` | Not exposed | No native agent-callable video analysis tool appears in the inspected registry. |
-| `video_generate`, `xai_video_edit`, `xai_video_extend` | Not exposed | No native agent-callable generation or editing counterparts appear in the inspected registry. Hermes describes these as opt-in and backend dependent. |
-| `web_search` | Partial | Unix V4 sessions can use opt-in, exactly approved Tavily search through an account Vault entry. The fixed-host client pins public IPv4 addresses, disables proxies and redirects, and bounds responses. It supports one provider rather than Hermes's provider selection. Local mock tests do not establish real-provider availability. See the [runtime guide](../features/V4_RUNTIME.md) for host scope and data-directory race limits. |
-| `web_extract` | Partial | An exactly approved unauthenticated GET extracts bounded UTF-8 HTML or plain text from an origin explicitly allowed in the agent browser settings. Public IPv4 addresses are pinned; redirects, proxies, browser credentials and nonstandard ports are unavailable. This is not a browser rendering or Hermes provider parity. See the [runtime guide](../features/V4_RUNTIME.md). |
-| `x_search` | Not exposed | No dedicated public-X search tool appears in the inspected registry; upstream requires opt-in and xAI credentials. |
-| `text_to_speech` | Partial | V4's conversation UI uses browser speech synthesis for read-aloud. It is not an agent-callable generated audio artifact or messaging voice delivery. |
-| `computer_use` | Not exposed | V4 agent browser controls web pages; the inspected registry does not provide Hermes's OS-wide desktop control. |
-| `mcp__<server>__*` | Conditional | V4 provides local server listing plus approved tool/resource/prompt discovery and invocation wrappers when a server is enabled. Compare registration, auth, live tool refresh and MCP host capabilities. |
-| `feishu_doc_read`; `feishu_drive_add_comment`, `feishu_drive_list_comments`, `feishu_drive_list_comment_replies`, `feishu_drive_reply_comment` | Not exposed | Hermes scopes these to its Feishu document-comment handler and credentials; no direct built-ins appear in the inspected V4 registry. |
-| `discord`, `discord_admin` | Not exposed | Hermes scopes these to its Discord gateway and token; no direct built-ins appear in the inspected V4 registry. |
-| `yb_query_group_info`, `yb_query_group_members`, `yb_send_dm`, `yb_search_sticker`, `yb_send_sticker` | Not exposed | Hermes scopes these to its Yuanbao gateway and credentials; no direct built-ins appear in the inspected V4 registry. |
-| `kanban_show`, `kanban_list`, `kanban_complete`, `kanban_block` | Not exposed | V4 workspace tasks have their own task lifecycle; the inspected agent registry has no Hermes kanban dispatcher contract. |
-| `kanban_request_review`, `kanban_request_changes`, `kanban_heartbeat`, `kanban_comment` | Not exposed | No equivalent model-callable board-review/heartbeat/comment contract was found in the inspected registry. |
-| `kanban_create`, `kanban_link`, `kanban_unblock` | Not exposed | No model-callable dependency-graph operation was found in the inspected registry; the synchronous read-only delegation tool is not linked to a board. |
-| `kanban_attach`, `kanban_attach_url`, `kanban_attachments` | Not exposed | V4 image and file handling does not establish task-board attachment parity. |
-| `desktop_project` | Partial | V4 UI supports workspace/project selection. An agent-callable project create/list/switch tool was not found in the inspected registry. |
-| `manage_catalog` | Not exposed | No Hermes-style agent-callable plugin/skill catalog installation flow was found in the inspected registry. |
-| `read_terminal`, `close_terminal` | Partial | V4 has UI terminals and terminal history; model-callable desktop-terminal reading or view-only closing was not established. |
-| `desktop_preview`, `drive_preview`, `annotate_preview` | Partial | V4 has an in-app browser/preview and conditional approved browser actions. Inspect whether those operations target the same human-visible pane and match the requested lifecycle and annotations. |
-| `read_window_below`, `focus_pane` | Not exposed | No matching model-callable OS-window metadata or application-pane focus tool appears in the inspected registry. |
-| `react_to_message`, `gui_tour`, `show_tip`, `set_theme` | Not exposed | UI controls and user preferences are not evidence of Hermes-style model-callable actions. Hermes limits these tools to desktop sessions. |
+| `read_file` | Implemented | `read_file` reads workspace UTF-8 files with bounded line pages and byte pages (up to 512 KB per read); symlinks and credential paths are refused. Hermes documents additional document formats. |
+| `write_file` | Implemented | `write_file` writes within the workspace with bounded atomic replacement. Hermes's whole-file read baseline and syntax checks were not compared. |
+| `patch` | Implemented | `replace_text` replaces one literal match, or an explicit `expected_count`. `apply_patch` applies 1 to 50 hunks atomically (all-or-nothing, one atomic write), with per-hunk `expected_count`, a whitespace-tolerant line match used only when unambiguous, an optional content-hash `expected_revision` rechecked just before writing, and `dry_run`; it is filtered out for read-only children. It takes structured hunks only (no unified-diff format) and has no syntax check. |
+| `search_files` | Implemented | `search_text` (content or filename mode; literal and, on Unix, regex) and `list_files` (one directory). Regex case folding is ASCII-only, long lines may be skipped, scan limits apply, and non-Unix search is unavailable. See the [runtime guide](../features/V4_RUNTIME.md). |
+| `terminal` foreground | Implemented | `run_command` needs exact-action approval, runs in the workspace, 60 s limit; unattended tasks deny it. Approved commands have normal host access, not an OS sandbox. |
+| `terminal` background/notification modes and `process_manage` (list, poll, read logs, wait, kill, write) | Missing | `background_start`/`status`/`wait`/`cancel`/`read_output` are defined, but `mod.rs` registers them only under `#[cfg(test)]`; no production turn offers them. See [BACKGROUND_PROCESS_LIFECYCLE.md](BACKGROUND_PROCESS_LIFECYCLE.md). |
+| `execute_code` (programmatic tool orchestration) | Missing | Hermes (`code_execution` toolset) runs a Python script that calls Hermes tools programmatically. An approved shell command can run code, but V4 has no executor that lets a script call V4 tools. |
+| `delegate_task` | Implemented (Unix) | Approved read-only child in a separate context while the parent waits; `delegate_tasks` runs two to four concurrently. Children get only read/search/recall/skill-read tools. Not available on non-Unix. |
+| `delegate_task` background | Conditional | `delegate_task_background` is registered only on Unix, for the Standard tool policy, when the delegation supervisor is present and the provider supports durable tasks. Integrated real-provider behavior is unverified. |
+| `clarify` | Implemented | Hermes asks 1-5 questions (single-select, multi-select or open-ended); V4 `ask_user` takes one to four structured questions (choices or free text) bound to the active turn, and multi-select was not confirmed. CLI and unattended runs cannot answer. |
+| `todo_list` | Implemented | Owner/workspace/session-scoped revisioned list with nesting, replace/merge/read and compaction preservation; stricter bounds than Hermes; cleared in rewind forks. |
+| `mcp__<server>__*` | Conditional | `mcp_list_servers` is always registered; `mcp_list_tools`, `mcp_call_tool`, resource and prompt wrappers are registered only when at least one MCP server is enabled, and every call needs approval (unattended calls are disabled). |
+| `manage_connections` | Missing | Hermes displays, checks, connects, reconnects and renames managed connectors or local MCP servers (needs the Nous Portal to enable connectors; it cannot disconnect or revoke). MCP servers are configured in the UI (`McpSettingsPanel`); no agent-callable management or Hermes managed-connector flow. |
+| `manage_catalog` | Missing | Hermes (desktop app sessions only; not in `all`) searches and, with approval, installs catalog plugins and hub skills into the profile. V4 has no agent-callable plugin/skill catalog installation. |
 
-## Core runtime and integration behavior
+## Browser tools and action safety
 
-| Capability | Status and evidence | Work to establish parity |
+All V4 browser and `web_extract` tools are **Conditional** on the account's agent browser setting being enabled (`browser::load_config(...).enabled`); each action needs exact-action approval, is limited to configured origins, and is bound to the reviewed tab and document. V4's own browser is a disposable Chromium profile; when the shared in-app browser is available, `browser_open`, `browser_tabs` and `browser_close` act on the human-visible browser instead.
+
+| Hermes capability | V4 status | Evidence and difference to resolve |
 | --- | --- | --- |
-| Provider protocols and models | Partial: V4 documents Anthropic Messages, OpenAI Responses and compatible Chat Completions; other named transports are explicitly unavailable. | Inventory the exact Hermes v0.22.5 provider routes, auth flows, local models and execution backends; test configured providers separately from mocks. |
-| Streaming, tool-loop limits and cancellation | Partial: V4 streams supported provider formats, bounds requests and uses scoped interaction/cancellation. | Compare retries, incomplete turns, interruption and reconnect behavior for each provider. |
-| Context and compaction | Partial: V4 has model-generated compaction, recoverable source archives and request budgets. | Compare token accounting, auxiliary-model selection, compaction timing and recovery; do not treat compaction as missing. |
-| Memory and skill timing | Partial: account/workspace memory and always-on saved skills are injected; opt-in on-demand skills are discoverable. | Compare session-pinned memory, background learning and progressive loading; preserve reviewed writes. |
-| Scheduling recovery | Partial: V4 has owner-scoped schedules, worker leases and interruption receipts. | Close known storage-failure and mixed-version-worker gaps; compare missed runs, delivery and schedule management. |
-| Messaging gateways | Partial/uninspected: local V4 source contains a Telegram gateway, but it was not run or fully audited here. | Inventory each Hermes channel's inbound/outbound, approvals, attachments and recovery against the relevant V4 integration. Do not access any private account without the user's explicit consent. |
-| Plugin ecosystem | Uninspected: Hermes v0.22.5 includes core and catalog plugins; V4 has MCP configuration and installed skill support. | Inventory plugin lifecycle, security review, configuration and credential handling individually; no plugin count is a parity score. |
-| User interfaces and native integrations | Uninspected for complete parity: V4 desktop/mobile browser UI and optional native shell differ from Hermes desktop and messaging surfaces. | Compare supported workflows by platform, including platform-gated tools and accessibility. The separate T3 UI reference is not Hermes UI evidence. |
+| `browser_navigate`, `browser_back`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_scroll` | Conditional | Registered with the agent browser. Refs come from the latest snapshot; stale refs are rejected; password values are redacted. Snapshot semantics differ from Hermes. V4 additionally registers `browser_open`, `browser_forward`, `browser_select`, `browser_wait`, `browser_tabs`, `browser_close`. |
+| `browser_vision` | Conditional | Hermes screenshots the page and falls back to an auxiliary vision model on text-only models. `browser_screenshot` returns the active tab viewport as a PNG. Hermes also describes a fallback vision route; whether the selected V4 model accepts tool images must be checked per model. |
+| `browser_get_images` | Conditional | Registered with the agent browser. Lists bounded image URLs and alt text from the reviewed document and open shadow roots; does not fetch images, read closed shadow roots or iframes. URLs may be sensitive. |
+| `browser_press` | Missing | Implemented only under `#[cfg(test)]` (`browser.rs`) and not registered. An isolated Chromium test shows a focus handler can redirect a key to an element other than the reviewed ref, and settings changes must be serialized through confirmed release including modal interruption. `browser_evaluate` (approved script) does not establish native key behavior. |
+| `browser_console` | Conditional | Requires the agent browser enabled and an exactly approved action; isolated V4 browser only. Returns buffered console messages and uncaught exceptions (200 per tab, 500 characters each) from the reviewed document's main world, with heuristic secret redaction. Iframe and worker messages are not included. Not given to read-only children. |
+| `browser_cdp` | Missing | Hermes gates it on a CDP endpoint (raw DevTools command). V4 has no raw-CDP tool. |
+| `browser_dialog` | Conditional | Same conditions as `browser_console`. It cannot act on a dialog that is already open (that blocks the browser's input); instead it arms a one-time accept or dismiss for the next dialog on the reviewed origin, expiring after 60 seconds, and unarmed dialogs are auto-dismissed. Matched by origin, not frame. |
+| `browser_exec` | Missing | The tools reference names it (with five vault tools) only in its intro count and lists no description. Hermes's Browser Use backend tool ([pinned implementation](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a/tools/browser_use_cli.py)); V4's `browser_evaluate` is page-side JS, not an equivalent host driver. |
+| `browser_vault` | Missing | [Pinned implementation](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a/tools/browser_vault_tool.py) provides list/fill/save-login/one-time-code/unlock; no equivalent. Verify release-specific registration rather than assuming the upstream summary's count. |
+| `web_extract` | Conditional | Hermes (`web` toolset) extracts clean content from up to 5 URLs including PDFs and needs one of EXA, PARALLEL, FIRECRAWL, TAVILY, PERPLEXITY or KEENABLE API keys. V4 registers it only with the agent browser enabled (no provider key, no PDFs, one URL not established). Exactly approved unauthenticated GET of an allowlisted origin; bounded UTF-8 HTML/plain text; public IPv4 pinned; no redirects, proxies, credentials or nonstandard ports. Not a rendering or provider extractor. |
+| `web_search` | Conditional | Hermes needs one of EXA_API_KEY, PARALLEL_API_KEY, FIRECRAWL_API_KEY, TAVILY_API_KEY, PERPLEXITY_API_KEY or KEENABLE_API_KEY and returns 5 results by default. V4 registers it only when the account has a configured Tavily key in the Vault (Unix). Fixed-host client with pinned public IPv4, no proxy/redirects, bounded responses. One provider versus Hermes's provider selection. |
+| `desktop_preview`, `drive_preview`, `annotate_preview` | Conditional | Hermes limits these to desktop app sessions (open/close/read the preview pane; interact with the in-app page; persistent element outlines). Shared-browser variants of `browser_open`/`browser_tabs`/`browser_close` exist when `workspace_browser::shared_available`; no annotation tool. Lifecycle equivalence with Hermes unverified. |
+| `computer_use` | Missing | Hermes needs `cua-driver` on `$PATH` and controls the desktop in the background without taking the cursor. V4 has web-page control only; no OS-wide desktop control. |
+
+## Memory, skills, recall and compaction
+
+| Hermes capability | V4 status | Evidence and difference to resolve |
+| --- | --- | --- |
+| `memory` | Implemented (review-gated) | `inspect_knowledge` reads account/workspace memory and proposals; `propose_knowledge` stages changes for human review and never self-applies. Hermes can write memory directly; V4 intentionally differs. External memory providers (Hermes `plugins/memory`: byterover, retaindb) are Missing. |
+| `session_search` | Implemented | Hermes searches or reads past sessions in its local database with FTS5 and no LLM calls. V4: `recall_sessions` and `read_session` give scoped, redacted search with anchored reads, `read_context_archive` reads compaction archives. Bounded scan with revision check; not FTS5 or global ranking. See the prerequisites for an index below. |
+| `skills_list`, `skill_view` | Implemented | `discover_skills`, `list_skill_files`, `read_skill_file`; project `.v4/skills`, `.agents/skills`, `.claude/skills` packages are read-only. Scripts are never executed. |
+| `skill_manage` | Implemented (review-gated) | Via `propose_knowledge`; external project packages stay read-only. |
+| Context compaction | Implemented | Model-generated compaction with recoverable archives and request-byte budgets (`compaction.rs`). Token accounting and auxiliary-model selection not compared with Hermes (including the `context_engine` plugin). |
+| Always-on and on-demand skills in prompt | Implemented | Account/workspace memory and always-on skills are injected; opt-in skills are listed by reference. Background learning and session-pinned memory: Missing. |
+
+## Scheduling and task management
+
+| Hermes capability | V4 status | Evidence and difference to resolve |
+| --- | --- | --- |
+| `cronjob_manage` create | Implemented | `create_schedule` accepts reviewed interval, one-shot and calendar jobs; workspace/owner/provider/model derive from the session. Unattended tasks cannot run commands or MCP calls. |
+| `cronjob_manage` list/update/pause/resume/run/remove | Implemented (Unix) | `list_schedules` and reviewed `manage_schedule` for schedules linked to the current owner, conversation and workspace. Skill/script jobs, delivery to messaging platforms and Hermes `cron_providers` were not found. |
+| Scheduling recovery | Implemented, with known gaps | Owner-scoped schedules, worker leases and interruption receipts; storage-failure and mixed-version-worker gaps remain. UI: `WorkspaceTasksPanel`. |
+| `kanban_*` (show, list, complete, block, create, link, unblock, comment, heartbeat, request_review, request_changes, attach, attach_url, attachments) | Missing | Hermes registers these only for dispatcher-spawned workers (`HERMES_KANBAN_TASK`) or with the `kanban` toolset; `kanban_list` and `kanban_unblock` are orchestrator-only; attachments cap at 25 MB. V4 has no model-callable board; V4 workspace tasks and `todo_list` are separate. |
+| `desktop_project` (Projects: named multi-folder workspaces), `read_terminal`, `close_terminal`, `read_window_below`, `focus_pane`, `react_to_message`, `gui_tour`, `show_tip`, `set_theme` | Missing | UI controls exist for projects, terminals and theme but no model-callable equivalents. Hermes limits these to desktop app sessions; `react_to_message` is also opt-in via `display.message_reactions`. |
+
+## Image, audio and video
+
+| Hermes capability | V4 status | Evidence and difference to resolve |
+| --- | --- | --- |
+| `vision_analyze` / image input | Conditional | Hermes returns pixels to vision-capable models or an auxiliary-model description otherwise. V4: Bounded image attachments (`user_images.rs`) and browser screenshots reach the model only when the selected model's catalog confirms image input. No standalone analyzer tool or auxiliary-model fallback. |
+| `image_generate` | Missing | Hermes generates or edits via a configured backend (FAL_KEY, OPENAI_API_KEY, Codex OAuth, xAI OAuth or KREA_API_KEY). V4 has no native tool; an MCP server may add one. |
+| `video_analyze`, `video_generate`, `xai_video_edit`, `xai_video_extend` | Missing | No native tools; Hermes makes `video_analyze` (`--toolsets video`) and generation (`--toolsets video_gen`; XAI, FAL, OPENROUTER or DEEPINFRA credentials; edit/extend need xAI credentials and a public HTTPS MP4 URL) opt-in and backend-dependent (`plugins/video_gen`). |
+| `text_to_speech` | Missing | Hermes converts text to audio delivered as a voice message or attachment. Not a V4 agent tool. The UI has browser speech-synthesis read-aloud (`frontend/src/utils/readAloud.js`), which is not generated audio or messaging voice. |
+| Speech-to-text (voice input) | Conditional | `transcribe.rs` uses a local Whisper server if available, else Groq `whisper-large-v3` with a key; the composer records and transcribes. Real device/provider behavior unverified. |
+| `x_search` | Missing | Upstream is read-only search of public X posts, profiles and threads; it requires opt-in via `hermes tools` and `XAI_API_KEY` or xAI Grok OAuth. |
+
+## Providers and execution environments
+
+| Capability | V4 status | Evidence and work to establish parity |
+| --- | --- | --- |
+| Provider routes | Conditional | The agent loop (`supports`) runs a catalogued provider only if auth is `api-key` and transport is `openai-chat`, `openai-responses` or `anthropic-messages`: 34 of 40 entries in [`agent_provider_definitions.json`](../../rust/crates/api/src/agent_provider_definitions.json) (including OpenRouter, xAI, DeepSeek, Nous, LM Studio, Fireworks and Ollama Cloud). Each needs its own credential or local server. Not in the agent loop: `copilot`, `moa`, `copilot-acp`, `bedrock`, `vertex`, `azure-foundry`. Hermes keeps its providers under `plugins/model-providers/` (per-provider enumeration **not yet assessed**); do not claim parity from the count. |
+| Streaming, tool-loop limits, cancellation | Implemented | Streams supported formats, bounds requests, scoped interaction/cancellation. Retry, incomplete-turn and reconnect behavior per provider not compared. |
+| Execution environments | Local host only (Implemented); all others Missing | V4 runs commands on the V4 host. Hermes `tools/environments` includes `local`, `docker`, `ssh`, `modal`, `managed_modal`, `daytona` and `vercel_sandbox` (listing may be incomplete). No Docker, SSH, serverless or remote-sandbox backend in V4's agent. Paired-environment remoting (`RemoteEnvironmentsPanel`) targets other V4 hosts, not these backends. |
+
+## Tools moved out of the Hermes built-in set
+
+| Hermes capability | V4 status | Evidence and difference to resolve |
+| --- | --- | --- |
+| Honcho memory, Home Assistant and Spotify tools | Missing | The pinned reference says these are installed as plugins (`hermes plugins install honcho|homeassistant|spotify`; Spotify also needs `hermes spotify login`). V4 has no plugin loader; an explicitly configured MCP server could provide similar tools. |
+
+## Messaging and optional integrations
+
+| Capability | V4 status | Evidence and work to establish parity |
+| --- | --- | --- |
+| Telegram gateway | Conditional | [`telegram_gateway.rs`](../../rust/crates/api/src/telegram_gateway.rs) with a Settings UI (`TelegramSetting.jsx`) needs the user's own bot token and a pairing code. Per-user polling worker with `/pair`, `/threads`, `/use N` and plain messages relayed to a chosen structured thread; replies are the final assistant text, chunked, with a 30-minute wait. Pairing codes expire after 10 minutes, are single-use, are burned after 5 wrong guesses and work only from private chats; the update offset is persisted so a restart does not replay old messages (at-most-once delivery); failed polls back off and Telegram's `retry_after` is honoured. A turn blocked on an approval or question sends a notice (tool name only) to approve in the app; approvals cannot be answered from Telegram. Attachments from the paired chat get a reply that they are not forwarded. No voice, streaming or outbound attachments. Verified only against a local mock for the rate-limit retry and unit tests; the worker loop has not run against a real bot. |
+| Other Hermes messaging channels | Missing | Pinned `plugins/platforms` lists a2a, bluebubbles, buzz, dingtalk, discord, email, feishu, google_chat, irc, line, matrix, mattermost, ntfy, photon, qqbot, raft, signal, simplex, slack, sms, teams, telegram, wecom, weixin, whatsapp, whatsapp_cloud, yuanbao; `gateway/platforms` adds api_server and webhook ingress (listings may be incomplete). V4 has none of these except Telegram. Includes the platform-bound tools: `discord` (read/participate; needs `DISCORD_BOT_TOKEN`, gateway only), `discord_admin` (channels, roles, timeouts, kicks, bans; token plus bot permissions), `feishu_doc_read`, `feishu_drive_add_comment`/`list_comments`/`list_comment_replies`/`reply_comment` (document-comment handler only, Feishu credentials) and `yb_query_group_info`, `yb_query_group_members`, `yb_send_dm`, `yb_search_sticker`, `yb_send_sticker` (`hermes-yuanbao` platform, Yuanbao credentials). All Missing. |
+| Plugin ecosystem | Missing / not yet assessed | Hermes `plugins/` has 18 directories (browser, computer_use, context_engine, cron_providers, dashboard_auth, delegation, disk-cleanup, google_meet, hermes-achievements, image_gen, kanban, memory, model-providers, platforms, security-guidance, teams_pipeline, video_gen, web) plus `plugin-catalog` and `optional-mcps`. V4 has MCP configuration and skill packages but no plugin loader; each plugin needs separate inventory. |
+| User interfaces and native integrations | Not yet assessed | V4 browser UI and optional native shell versus Hermes desktop/TUI/web surfaces; the T3 matrix is not Hermes UI evidence. |
 
 ## Verification and next steps
 
@@ -111,8 +144,21 @@ filters out integrations and writes for the internal read-only child policy.
    A mock or isolated fixture is evidence for that scenario only, not proof of
    real-provider or deployment behavior.
 
+Last re-verified against V4 source at `61f1e21` and the public Hermes GitHub tree at `bf0203a794a` (directory listings were truncated by the viewer and may be incomplete).
 This review inspected the published reference and selected local source only.
 It did not run tests, services, integrations, or access private accounts.
+
+## Remaining gaps (prioritized)
+
+1. Integrate or consciously drop production background commands (`background_*` tools are test-only) and `process_manage` equivalents.
+2. Decide on `browser_press`: resolve the focus-redirect and settings-serialization boundaries, then register it. (`browser_console` and an arm-ahead `browser_dialog` now exist; a decision on an already-open dialog is not possible with the current protocol.)
+3. Verify provider and delegation paths against real accounts (mocks are the only evidence); add Bedrock, Vertex, Azure and Copilot to the agent loop or document them as unsupported.
+4. Add an image-generation path (native tool or documented MCP route) and an agent-callable image analyzer/fallback.
+5. Telegram: attachments, voice, approval/question handling, streaming, then a real-bot test; then decide whether any other channel (Slack, Discord, email, webhook) is in scope.
+6. Add an execution-backend abstraction (Docker/SSH at minimum) or state local-only as a product decision.
+7. Programmatic tool orchestration (`execute_code`) and syntax checks for patching (multi-hunk `apply_patch` exists).
+8. Agent-callable project, terminal-read and connection management tools; background learning and external memory providers.
+9. Inventory Hermes plugins and model-provider plugins individually before any parity claim; build an indexed recall (see prerequisites below).
 
 ## Prerequisites for an indexed recall implementation
 

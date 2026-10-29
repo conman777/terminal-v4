@@ -237,3 +237,82 @@ checks. Tests: `structured::session_read_auth_tests`.
 ## Verification gates before exposure
 
 Use actual separate processes, not just manager instances. Cover same request and conflicting payload races, same owner/session exclusion, independent owners/sessions, alias paths, historical ID spellings, absent and unsafe roots, lock replacement and restart. Exercise recovery racing an active turn; delete versus submit, callback, queue admission and child delivery; stop and graceful shutdown; process exit with surviving children; failure before/after durable acceptance and queue reconciliation; retained manual/restart holds; stale cached manager; malformed, foreign, or deleted identities. Confirm no duplicate provider start and preservation of the exact durable receipt across restart. Keep native queue endpoints disabled until these integration checks pass. Validate Unix and Windows semantics separately and report unsupported configurations.
+
+## Native Claude/Codex server-owned queue: blockers (no implementation enabled)
+
+No native queue dispatch is implemented or enabled. Wiring one now would create
+a queue that cannot prove acceptance versus absence after a crash, or be held
+by Stop, logout, delete and settlement. Verified in source:
+
+1. No receipt identity for Claude. The native send path in `structured.rs`
+   returns `StructuredReceipt::legacy()` with no request ID, so a crash between
+   provider hand-off and durable record cannot be reconciled as accepted or
+   absent. Codex records `UserMessageAccepted` in its journal, so a Codex-first
+   design could reconcile by request ID, but only after the ownership boundary
+   below exists.
+2. Queue adapter is V4-only. `structured/queue.rs::scope` rejects every
+   provider for which `v4_agent::supports` is false. `hold_session`,
+   `hold_generation`, `check_admission` and settlement queue checks therefore
+   skip native sessions, so Stop, logout, delete and settle would not hold a
+   native queue. Only the test-only `check_native_admission_prototype` exists.
+3. No idle boundary. Native turns emit no turn-complete signal that safely
+   triggers a drain; the queue needs one that is also fenced against duplicate
+   starts.
+4. Separate authority path. Native sends use `with_native_authority` behind the
+   `supervised-input-preview` feature, and the native session incarnation is
+   optional (legacy checkpoints have none). Queue items would need the same
+   signed-authority binding V4 uses, and a missing incarnation must stay held,
+   never be recreated.
+5. Ownership. Per-session actor state is still unfenced across managers (see
+   "Reproduced defect": the ignored `two_managers_do_not_accept_the_same_codex_request_twice`
+   test). A native drain would inherit the double-start risk until the owner
+   and session lease covers `send_input`, callbacks and drain.
+6. Codex approvals and workspace-activity fences must be consulted before each
+   drain; the drain must not auto-answer or bypass a pending approval.
+
+Preconditions to start work: close item 5 (lease on all mutating paths), give
+Claude a durable request ID with a persisted acceptance record, extend `scope`
+and the hold paths to native providers, then implement Codex first behind an
+off-by-default feature with on-disk queue state and crash/restart tests.
+
+## Groundwork status: session lease and native request ledger
+
+Implemented (no queue endpoint enabled):
+
+- Per-session advisory lease (`structured/request_ledger.rs`,
+  `structured-session-leases/<owner-hash>/<session>.lock`, non-blocking
+  `try_lock`). `submit_codex` and `send_native_message` take it after the
+  in-memory state lock, so two managers (including in one process) cannot both
+  run the check, persist and provider-start section. A contended lease returns a
+  retryable conflict; nothing waits on it. Under the lease the on-disk history is
+  re-read; if it is ahead of the manager's memory the request is answered from
+  disk when its ID is already accepted, otherwise rejected as "changed in another
+  manager". This makes the formerly ignored
+  `two_managers_do_not_accept_the_same_codex_request_twice` pass.
+- Native Claude sends with a valid UUID `requestId` write a durable intent
+  (`structured-native-requests/<owner-hash>/<session>.jsonl`: requestId,
+  messageId, text SHA-256, fsynced before the user message is journaled) and
+  return a real receipt (`requestId`, `messageId`, `acceptedSeq`) instead of
+  `StructuredReceipt::legacy()`. Reconciliation after a crash: intent plus a
+  journaled user message with that `messageId` means accepted (retry returns the
+  same receipt, no second start); intent without it means absent (a retry gets a
+  new message ID and a newer intent). Same ID with different text is rejected.
+  A missing or non-UUID `requestId` keeps the legacy receipt and writes nothing.
+  The ledger is capped (compacts 4096 to 2048 records, 2 MiB), ignores a torn
+  final line and trims it before the next append.
+
+Remaining limits:
+
+- The lease only covers `submit_codex` and `send_native_message`; `send_input`,
+  provider callbacks, approvals and delete are not yet inside it, and the lease
+  and ledger files are not removed on session delete (owned by
+  `thread_lifecycle.rs`).
+- Every manager load still rewrites the checkpoint (new inode), so a second
+  manager loading a session makes the first manager's journal appends fail
+  closed ("Structured history file identity changed"). That is safe but means
+  concurrent managers on one data dir are unsupported; the owner live lease
+  remains the real boundary.
+- A native start that fails after acceptance reports an error once, but a retry
+  with the same request ID returns the accepted receipt without restarting.
+- Blockers 2, 3, 4 and 6 above (scope for native providers, idle boundary,
+  signed-authority binding of queue items, approval fences) are untouched.
