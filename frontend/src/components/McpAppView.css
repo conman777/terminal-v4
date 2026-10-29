@@ -1,0 +1,18 @@
+.mcp-app-panel { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--accent-primary); border-radius: 12px; padding: 14px; background: var(--bg-base); min-width: 0; }
+.mcp-app-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.mcp-app-header > div { min-width: 0; }
+.mcp-app-header h4 { font-size: 14px; margin: 0 0 6px; overflow-wrap: anywhere; }
+.mcp-app-header p, .mcp-app-policy { font-size: 12px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.mcp-app-policy summary { cursor: pointer; }
+.mcp-app-policy pre, .mcp-app-request pre { margin: 10px 0; max-height: 220px; overflow: auto; padding: 10px; font-size: 12px; background: var(--bg-elevated, var(--bg-base)); white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--border-subtle); border-radius: 6px; }
+.mcp-app-frame { width: 100%; max-height: 720px; min-height: 160px; border: 1px solid var(--border-subtle); border-radius: 8px; box-sizing: border-box; background: white; }
+.mcp-app-requests { display: flex; flex-direction: column; gap: 12px; }
+.mcp-app-requests h5 { font-size: 13px; margin: 0; }
+.mcp-app-request { padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.mcp-app-request strong, .mcp-app-request p { font-size: 12px; overflow-wrap: anywhere; }
+.mcp-app-request a { display: inline-flex; align-items: center; text-decoration: none; }
+@media(max-width: 560px) { .mcp-app-panel { padding: 10px; } .mcp-app-header { flex-wrap: wrap; } .mcp-app-request a { min-height: 44px; } }
+
+.mcp-app-source { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mcp-app-source label { font-size: 12px; color: var(--text-secondary); }
+.mcp-app-source textarea { box-sizing: border-box; width: 100%; min-width: 0; max-height: 260px; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 10px; font: 12px ui-monospace, monospace; color: var(--text-primary); background: var(--bg-base); resize: vertical; }

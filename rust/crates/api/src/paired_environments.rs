@@ -235,6 +235,81 @@ pub(crate) fn capabilities_for_token(state: &AppState, token: &str) -> Option<Ca
         .ok()?;
     serde_json::from_str(&encoded?).ok()
 }
+#[cfg(all(test, unix))]
+pub(crate) fn synthetic_input_grant(state: &AppState, owner: &str) -> (String, String) {
+    let token = format!("tv4pair.{}", random_secret());
+    let id = uuid::Uuid::new_v4().to_string();
+    let db = storage(state).unwrap();
+    db.execute("INSERT INTO paired_grants (id,hash,owner,username,label,created,expires,profile,capabilities) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![id, fingerprint(&token), owner, "fixture", "synthetic", now(), now() + 3600, "operator", serde_json::to_string(&Capabilities::operator()).unwrap()]).unwrap();
+    (id, token)
+}
+
+pub(crate) fn validate_input_authority(
+    state: &AppState,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<i64, String> {
+    let db = storage(state).map_err(|_| "Paired grant storage unavailable")?;
+    let record: Option<(String, String, i64)> = db
+        .query_row(
+            "SELECT owner,capabilities,expires FROM paired_grants WHERE hash=?1 AND expires>?2",
+            params![fingerprint(&authority.token), now()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|_| "Paired grant storage unavailable")?;
+    let (grant_owner, encoded, expires) = record.ok_or("Paired grant expired or revoked")?;
+    let capabilities: Capabilities =
+        serde_json::from_str(&encoded).map_err(|_| "Paired grant is invalid")?;
+    if grant_owner != owner || !capabilities.allows_http(&authority.method, &authority.path) {
+        return Err("Paired grant does not authorize this input".into());
+    }
+    Ok(expires.saturating_mul(1000))
+}
+
+pub(crate) fn validate_message_authority(
+    state: &AppState,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<i64, String> {
+    let expires = validate_input_authority(state, authority, owner)?;
+    if authority.method == "GET"
+        && !crate::auth::runtime_message_allowed(state, &authority.token, true, "message")
+    {
+        return Err("Paired grant does not authorize messages".into());
+    }
+    Ok(expires)
+}
+
+pub(crate) fn validate_decision_authority(
+    state: &AppState,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<i64, String> {
+    let expires = validate_input_authority(state, authority, owner)?;
+    if authority.method == "GET"
+        && !crate::auth::runtime_message_allowed(state, &authority.token, true, "approve")
+    {
+        return Err("Paired grant does not authorize approvals".into());
+    }
+    Ok(expires)
+}
+
+#[cfg(unix)]
+pub(crate) fn validate_stop_authority(
+    state: &AppState,
+    authority: &crate::auth::PairedInputAuthority,
+    owner: &str,
+) -> Result<i64, String> {
+    let expires = validate_input_authority(state, authority, owner)?;
+    if authority.method == "GET"
+        && !crate::auth::runtime_message_allowed(state, &authority.token, true, "interrupt")
+    {
+        return Err("Paired grant does not authorize Stop".into());
+    }
+    Ok(expires)
+}
+
 pub(crate) fn authorize_request(
     state: &AppState,
     token: &str,
@@ -272,6 +347,7 @@ pub(crate) fn authenticate_token(
     path: &str,
 ) -> Option<AuthenticatedUser> {
     authorize_request(state, token, "GET", path)
+        .and_then(|user| crate::auth::runtime_identity(state, user).ok())
 }
 fn device_info(db: &rusqlite::Connection) -> Result<(String, String, String), ApiError> {
     let id = db
@@ -294,12 +370,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Bearer ")
 }
 fn local_user(state: &AppState, token: &str) -> Result<AuthenticatedUser, ApiError> {
-    crate::auth::authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        token,
-    )
-    .map_err(|_| unauthorized())
+    crate::auth::authenticate_local_token(&state, token).map_err(|_| unauthorized())
 }
 fn client() -> Result<reqwest::Client, ApiError> {
     reqwest::Client::builder()
@@ -602,7 +673,7 @@ async fn connect(
         _ => {
             return Err(ApiError::bad_request(
                 "Provide a server URL or a relay URL and device ID",
-            ))
+            ));
         }
     };
     let label = label(&input.label)?;
@@ -774,15 +845,27 @@ async fn revoke(
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let db = storage(&state)?;
-    if db
-        .execute(
+    let changed = tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _guard = {
+            let guard = state
+                .acquire_input_guard(&user.user_id)
+                .map_err(ApiError::internal)?;
+            state
+                .verify_owner_input_guard(&guard)
+                .map_err(ApiError::internal)?;
+            guard
+        };
+        let db = storage(&state)?;
+        db.execute(
             "DELETE FROM paired_grants WHERE id=?1 AND owner=?2",
             params![id, user.user_id],
         )
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        == 0
-    {
+        .map_err(|error| ApiError::internal(error.to_string()))
+    })
+    .await
+    .map_err(|_| ApiError::internal("Grant revocation unavailable"))??;
+    if changed == 0 {
         return Err(ApiError::not_found("Grant not found"));
     }
     Ok(StatusCode::NO_CONTENT)
@@ -847,6 +930,36 @@ async fn status(
     ))
 }
 
+pub(crate) fn authorize_resource_target(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    id: &str,
+    path: &str,
+) -> Result<(), ApiError> {
+    let environment = load_environment(state, user, id)?;
+    if environment.capabilities.allows_http("GET", path) {
+        Ok(())
+    } else {
+        Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "This permission profile does not allow that preview target".into(),
+        })
+    }
+}
+
+pub(crate) fn resource_controller_allowed(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    id: &str,
+    port: u16,
+) -> bool {
+    load_environment(state, user, id).is_ok_and(|environment| {
+        environment
+            .capabilities
+            .allows_http("POST", &format!("/api/preview/{port}/client-operation"))
+    })
+}
+
 async fn proxy(
     State(state): State<AppState>,
     Path((id, rest)): Path<(String, String)>,
@@ -866,7 +979,31 @@ async fn proxy(
     let token = bearer(request.headers())
         .map(str::to_string)
         .or(query_token);
-    let preview = path.starts_with("/preview/");
+    let resource_query = url::form_urlencoded::parse(query.as_bytes())
+        .find(|(name, _)| name == "previewToken")
+        .map(|(_, value)| value.into_owned());
+    let full_path = format!("/api/environments/{id}/proxy{path}");
+    let resource_user = resource_query.as_deref().and_then(|token| {
+        crate::preview::auth_urls::authenticate_resource_token(
+            &state,
+            token,
+            request.method().as_str(),
+            &full_path,
+        )
+        .ok()
+    });
+    let resource_prefix = if path == "/api/preview" {
+        Some(full_path.clone())
+    } else {
+        crate::preview::extract_port_from_path(&path)
+            .map(|(port, _)| format!("/api/environments/{id}/proxy/preview/{port}"))
+    };
+    let document_url = format!(
+        "{}{}",
+        crate::request_origin(request.headers()).unwrap_or_else(|| "http://localhost:3020".into()),
+        full_path
+    );
+    let preview = path.starts_with("/preview/") || path == "/api/preview";
     let preview_cookie_route = preview || path.starts_with("/api/preview/");
     let preview_cookie = if preview_cookie_route {
         request
@@ -874,28 +1011,28 @@ async fn proxy(
             .get("cookie")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| {
-                value
-                    .split(';')
-                    .find_map(|pair| pair.trim().strip_prefix("tv4_remote_preview="))
+                value.split(';').find_map(|pair| {
+                    let pair = pair.trim();
+                    pair.strip_prefix("tv4_remote_preview=")
+                        .or_else(|| pair.strip_prefix("terminal_preview_token="))
+                })
             })
             .map(str::to_string)
     } else {
         None
     };
     let preview_user = preview_cookie.as_deref().and_then(|credential| {
-        crate::auth::authenticate_preview_token(
-            &state.config().jwt_secret,
-            state.config().allowed_username.as_deref(),
-            credential,
-            "/preview/",
-        )
-        .ok()
+        crate::auth::authenticate_runtime_preview_token(&state, credential, "/preview/").ok()
     });
     let websocket = request
         .headers()
         .get("upgrade")
         .is_some_and(|value| value.as_bytes().eq_ignore_ascii_case(b"websocket"));
     if websocket {
+        if resource_query.is_some() {
+            return Err(unauthorized());
+        }
+
         let (mut parts, _) = request.into_parts();
         let ws = WebSocketUpgrade::from_request_parts(&mut parts, &state)
             .await
@@ -908,6 +1045,7 @@ async fn proxy(
     }
     let user = match token.as_deref() {
         Some(token) => local_user(&state, token)?,
+        None if resource_query.is_some() => resource_user.ok_or_else(unauthorized)?,
         None if preview_cookie_route
             && ([axum::http::Method::GET, axum::http::Method::HEAD].contains(request.method())
                 || (request.method() == axum::http::Method::POST
@@ -919,14 +1057,53 @@ async fn proxy(
         None => return Err(unauthorized()),
     };
     let preview_ticket = if preview && token.is_some() {
-        Some(crate::auth::issue_preview_token(
-            &state.config().jwt_secret,
-            &user.user_id,
-            &user.username,
-        ))
+        Some(
+            crate::auth::preview_token_for_access(
+                &state,
+                token.as_deref().ok_or_else(unauthorized)?,
+            )
+            .map_err(|_| unauthorized())?,
+        )
     } else {
         None
     };
+    let resource_root = (path == "/api/preview")
+        .then(|| {
+            url::form_urlencoded::parse(query.as_bytes())
+                .find(|(name, _)| name == "path")
+                .map(|(_, value)| value.into_owned())
+        })
+        .flatten();
+    if let (Some(token), Some(root)) = (resource_query.as_deref(), resource_root.as_deref()) {
+        if !crate::preview::auth_urls::resource_root_allowed(&state, token, root) {
+            return Err(unauthorized());
+        }
+    }
+    let resource_ticket = resource_prefix.as_deref().and_then(|prefix| {
+        resource_query
+            .as_deref()
+            .and_then(|token| {
+                crate::preview::auth_urls::resource_token_for_root(
+                    &state,
+                    token,
+                    prefix,
+                    resource_root.as_deref(),
+                )
+            })
+            .or_else(|| {
+                preview_ticket
+                    .as_deref()
+                    .or(preview_cookie.as_deref())
+                    .and_then(|parent| {
+                        crate::preview::auth_urls::resource_token_for_root(
+                            &state,
+                            parent,
+                            prefix,
+                            resource_root.as_deref(),
+                        )
+                    })
+            })
+    });
     let environment = load_environment(&state, &user, &id)?;
     let method = request.method().clone();
     if !environment.capabilities.allows_http(method.as_str(), &path) {
@@ -960,13 +1137,16 @@ async fn proxy(
     let mut response = Response::builder()
         .status(remote.status())
         .header("cache-control", "private, no-store");
+    if preview {
+        response = response.header("content-security-policy", crate::preview::DOCUMENT_SANDBOX);
+    }
     if let Some(value) = remote.headers().get("content-type") {
         response = response.header("content-type", value);
     }
     if let Some(value) = remote.headers().get("content-disposition") {
         response = response.header("content-disposition", value);
     }
-    if let Some(ticket) = preview_ticket {
+    if let Some(ticket) = &preview_ticket {
         response=response.header("set-cookie",format!("tv4_remote_preview={ticket}; HttpOnly; SameSite=Strict; Max-Age=900; Path=/api/environments/{id}/proxy/"));
     }
     let text_asset = preview
@@ -985,6 +1165,35 @@ async fn proxy(
             .map_err(|_| ApiError::bad_request("Remote preview text is not UTF-8"))?;
         let prefix = format!("/api/environments/{id}/proxy");
         let content = rewrite_preview(&content, &prefix);
+        let controller = crate::preview::extract_port_from_path(&path)
+            .filter(|(port, _)| resource_controller_allowed(&state, &user, &id, *port))
+            .and_then(|_| {
+                crate::preview::auth_urls::resource_controller(
+                    &state,
+                    resource_ticket.as_deref()?,
+                    resource_prefix.as_deref()?,
+                )
+            });
+        let content = crate::preview::script_inject::bind_controller(&content, controller.as_ref());
+        let content = if let (Some(ticket), Some(resource_prefix)) =
+            (resource_ticket.as_deref(), resource_prefix.as_deref())
+        {
+            let content_type = response
+                .headers_ref()
+                .and_then(|headers| headers.get("content-type"))
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("text/html");
+            crate::preview::auth_urls::authorize_resources(
+                &content,
+                content_type,
+                &document_url,
+                resource_prefix,
+                ticket,
+            )
+        } else {
+            content
+        };
+
         return response
             .body(Body::from(content))
             .map_err(|_| ApiError::internal("Unable to forward remote preview"));
@@ -1041,13 +1250,7 @@ async fn proxy_socket(
     preview_cookie: Option<String>,
 ) {
     let cookie_user = preview_cookie.as_deref().and_then(|credential| {
-        crate::auth::authenticate_preview_token(
-            &state.config().jwt_secret,
-            state.config().allowed_username.as_deref(),
-            credential,
-            "/preview/",
-        )
-        .ok()
+        crate::auth::authenticate_runtime_preview_token(&state, credential, "/preview/").ok()
     });
     let token = match token {
         Some(token) => token,
@@ -1134,6 +1337,7 @@ async fn proxy_socket(
     {
         return;
     }
+    let mut forwarded_close = false;
     let mut interval = tokio::time::interval(Duration::from_secs(2));
     interval.tick().await;
     loop {
@@ -1156,29 +1360,58 @@ async fn proxy_socket(
                 Some(Ok(tungstenite::Message::Text(text)))=>{if socket.send(Message::Text(text.to_string().into())).await.is_err(){break;}},
                 Some(Ok(tungstenite::Message::Binary(bytes)))=>{if socket.send(Message::Binary(bytes)).await.is_err(){break;}},
                 Some(Ok(tungstenite::Message::Ping(bytes)))=>{let _=remote.send(tungstenite::Message::Pong(bytes)).await;},
-                Some(Ok(tungstenite::Message::Pong(_)))=>{}, _=>break,
+                Some(Ok(tungstenite::Message::Pong(_)))=>{},
+                Some(Ok(tungstenite::Message::Close(frame)))=>{
+                    forwarded_close = true;
+                    let frame = frame.map(|frame| axum::extract::ws::CloseFrame {
+                        code: frame.code.into(), reason: frame.reason.to_string().into(),
+                    });
+                    let _ = tokio::time::timeout(Duration::from_secs(3),socket.send(Message::Close(frame))).await;
+                    break;
+                },
+                _=>break,
             },
             _=interval.tick()=>{
-                if (!token.is_empty() && local_user(&state,&token).is_err()) || (token.is_empty() && preview_cookie.as_deref().is_none_or(|credential|crate::auth::authenticate_preview_token(&state.config().jwt_secret,state.config().allowed_username.as_deref(),credential,"/preview/").is_err())) || load_environment(&state,&user,&id).is_err() || !remote_available(&environment).await{let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4401,reason:"Remote authorization expired or revoked".into()}))).await;break;}
+                if (!token.is_empty() && local_user(&state,&token).is_err()) || (token.is_empty() && preview_cookie.as_deref().is_none_or(|credential|crate::auth::authenticate_runtime_preview_token(&state,credential,"/preview/").is_err())) || load_environment(&state,&user,&id).is_err() || !remote_available(&environment).await{let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4401,reason:"Remote authorization expired or revoked".into()}))).await;break;}
             }
         }
     }
     let _ = remote.close(None).await;
-    let _ = socket.send(Message::Close(None)).await;
+    if !forwarded_close {
+        let _ = socket.send(Message::Close(None)).await;
+    }
 }
 
 async fn release(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let token = bearer(&headers).ok_or_else(unauthorized)?;
-    authenticate_token(&state, token, "/api/state").ok_or_else(unauthorized)?;
-    let db = storage(&state)?;
-    db.execute(
-        "DELETE FROM paired_grants WHERE hash=?1",
-        [fingerprint(token)],
-    )
-    .map_err(|error| ApiError::internal(error.to_string()))?;
+    let token = bearer(&headers).ok_or_else(unauthorized)?.to_owned();
+    let user = authenticate_token(&state, &token, "/api/state").ok_or_else(unauthorized)?;
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        let _guard = {
+            let guard = state
+                .acquire_input_guard(&user.user_id)
+                .map_err(ApiError::internal)?;
+            state
+                .verify_owner_input_guard(&guard)
+                .map_err(ApiError::internal)?;
+            guard
+        };
+        authenticate_token(&state, &token, "/api/state")
+            .filter(|current| current.user_id == user.user_id)
+            .ok_or_else(unauthorized)?;
+        let db = storage(&state)?;
+        db.execute(
+            "DELETE FROM paired_grants WHERE hash=?1",
+            [fingerprint(&token)],
+        )
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+        Ok::<_, ApiError>(())
+    })
+    .await
+    .map_err(|_| ApiError::internal("Grant release unavailable"))??;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1696,6 +1929,125 @@ mod transport_tests {
     }
 
     #[tokio::test]
+    async fn static_query_preview_uses_scoped_remote_cookie_without_credentials_in_assets() {
+        let home = server().await;
+        let target = server().await;
+        let client = client().unwrap();
+        let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap()
+            .to_path_buf();
+        let fixture = tempfile::Builder::new()
+            .prefix("remote-static-preview-")
+            .tempdir_in(project_root)
+            .unwrap();
+        std::fs::write(fixture.path().join("index.html"), "<link href='style.css'>").unwrap();
+        std::fs::write(fixture.path().join("style.css"), "body { color: red }").unwrap();
+        let pairing_code = code(&client, &target, "remote-owner").await;
+        let environment = json_response(
+            client
+                .post(format!("{}/api/environments/connect", home.url))
+                .bearer_auth(token(&home, "local-owner"))
+                .json(&json!({"url":target.url,"code":pairing_code,"label":"Static preview host"}))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        let id = environment["id"].as_str().unwrap();
+        let prefix = format!("/api/environments/{id}/proxy");
+        let home_token = token(&home, "local-owner");
+        let response = client
+            .get(format!("{}{prefix}/api/preview", home.url))
+            .query(&[
+                ("path", fixture.path().to_str().unwrap()),
+                ("token", home_token.as_str()),
+            ])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response
+            .headers()
+            .get("set-cookie")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string();
+        let html = response.text().await.unwrap();
+        assert!(!html.contains(&home_token));
+        assert!(!html.contains("tv4pair."));
+        let asset = html
+            .split("href='")
+            .nth(1)
+            .unwrap()
+            .split('\'')
+            .next()
+            .unwrap()
+            .replace("&amp;", "&");
+        assert!(
+            asset.starts_with(&format!("{prefix}/api/preview?")),
+            "{html}"
+        );
+        assert_eq!(
+            client
+                .get(format!("{}{}", home.url, asset))
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "body { color: red }"
+        );
+        assert_eq!(
+            client
+                .get(format!("{}{}", home.url, asset))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        let stripped = crate::preview::auth_urls::strip_preview_token(&asset);
+        assert_eq!(
+            client
+                .get(format!("{}{}", home.url, stripped))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(format!("{}{prefix}/api/terminal", home.url))
+                .header("cookie", &cookie)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            client
+                .get(format!("{}{prefix}/api/preview", home.url))
+                .bearer_auth(token(&home, "other-local-owner"))
+                .query(&[("path", fixture.path().to_str().unwrap())])
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[tokio::test]
     async fn revocation_closes_an_existing_remote_event_stream() {
         let home = server().await;
         let target = server().await;
@@ -1849,8 +2201,8 @@ async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<V
 }
 
 fn rewrite_preview(content: &str, prefix: &str) -> String {
-    let pattern =
-        regex_lite::Regex::new(r"/(?:api/)?preview/").expect("static preview path expression");
+    let pattern = regex_lite::Regex::new(r"/(?:api/)?preview(?:/|\?)")
+        .expect("static preview path expression");
     let origin = regex_lite::Regex::new(r#"var apiOrigin = "[^"]*";"#)
         .expect("static preview origin expression");
     let content = origin.replace_all(content, "var apiOrigin = window.location.origin;");
@@ -1905,7 +2257,7 @@ fn event_stream_body(
                     _=interval.tick()=>{
                         let valid=match token.as_deref(){
                             Some(token)=>local_user(&state,token).is_ok(),
-                            None=>cookie.as_deref().is_some_and(|credential|crate::auth::authenticate_preview_token(&state.config().jwt_secret,state.config().allowed_username.as_deref(),credential,"/preview/").is_ok()),
+                            None=>cookie.as_deref().is_some_and(|credential|crate::auth::authenticate_runtime_preview_token(&state,credential,"/preview/").is_ok()),
                         };
                         if !valid || load_environment(&state,&user,&id).is_err() || !remote_available(&environment).await{return None;}
                     }

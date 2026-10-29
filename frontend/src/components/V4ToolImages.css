@@ -1,0 +1,4 @@
+.v4-tool-images { display: grid; gap: 10px; margin: 10px 0; min-width: 0; }
+.v4-tool-image { margin: 0; min-width: 0; }
+.v4-tool-image img { display: block; width: auto; max-width: 100%; max-height: 480px; object-fit: contain; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-base); }
+.v4-tool-image-state { margin: 0; color: var(--text-muted); font-size: 13px; }

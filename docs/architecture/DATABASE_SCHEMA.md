@@ -71,6 +71,27 @@ These are JSON files stored under `backend/data/users/<userId>/`:
 - `bookmarks.json` (command bookmarks)
 - `notes.json` (notes)
 
+## Structured conversation storage
+
+The active Rust structured-session store is separate from these legacy paths:
+`AppConfig.data_dir/structured-sessions/<sha256-owner>/<session-id>.json`.
+Version 1 contains an owner envelope and complete snapshot. Version 2 is JSONL:
+the first line is `{version:2, ownerId, snapshot}`, followed by
+`{updatedAt, status, event}` records with consecutive event sequences. Records
+end in a newline and are synced before acknowledgement. Only an unterminated
+final record can be ignored during recovery; malformed committed records fail
+closed. Restart checkpoints remove an incomplete tail before further writes.
+
+Atomic checkpoints preserve metadata edits and compact after at most 2,048 tail
+records or about 1 MiB of tail data. Canonical history retains its 16 MiB /
+32,768-event limits and terminal-event reserve; the physical journal has a bounded
+17 MiB allowance. This does not truncate older events. Direct context and knowledge
+reads reconstruct the same canonical history. Knowledge-only v1 recall retains
+its previous bounded support for sparse legacy event envelopes.
+
+Older binaries that support only version 1 cannot read version 2 files; use the
+updated binary with migrated data. Legacy input is accepted automatically.
+
 ## Preview Cookie Store
 
 - File: `backend/data/preview-cookies.json`
@@ -99,4 +120,4 @@ The active Rust runtime uses AppConfig.data_dir/terminal.db (TERMINAL_DATA_DIR o
 
 Feature initialization applies additive idempotent schema changes. Existing paired records receive operator permissions without newly introduced desktop/tunnel authority. Preserve the signing secret and SQLite data when moving a host so encrypted credentials and device identities remain usable. Raw pairing codes/invitation secrets are returned at creation and are not retained as plaintext database credentials.
 
-Transfers store owner-hashed JSON records and staging bytes in the application data tree; completed uploads publish into the requested workspace. Recordings store owner-hashed bounded JSON tapes and status receipts. Rewind uses owner/workspace journal records with file fingerprints, provider branches and recovery checkpoint IDs. TCP listeners, desktop viewing sessions and relay stream registries are process-local and expire/stop rather than being silently recreated after restart. Browser device selection and download chunk caches are additionally partitioned by home identity/environment.
+Transfers store owner-hashed JSON records and staging bytes in the application data tree; completed uploads publish into the requested workspace. Recordings store owner-hashed bounded JSON tapes and status receipts. Rewind uses owner/workspace journal records with file fingerprints, provider branches and recovery checkpoint IDs. TCP listeners, desktop viewing sessions and relay stream registries are process-local and expire/stop rather than being silently recreated after restart. Browser device selection and download chunk caches are additionally partitioned by home identity/environment. IndexedDB transfer cache version 2 retires old unscoped chunks and keys chunks by API home, user, auth session, environment identity, host, transfer and offset. Auth-session retirement removes stale bytes; captured cleanup keys cannot target a later view/account. Completed download snapshots remain in the owner-hashed server store until explicit record removal and count with pending data toward the 512 MiB quota. Browser history recovery after a relay size-limit close is transient and does not create another persisted history store.

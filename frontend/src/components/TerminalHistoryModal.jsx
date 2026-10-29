@@ -1,3 +1,4 @@
+import './UtilityDialogs.css';
 import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '../utils/api';
 import { useMobileDetect } from '../hooks/useMobileDetect';
@@ -59,16 +60,16 @@ export function TerminalHistoryModal({ isOpen, sessionId, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content terminal-history-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content terminal-history-modal ui-utility-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-history-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Terminal History</h2>
+          <h2 id="terminal-history-title">Terminal History</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
         <div className="modal-body terminal-history-body">
-          {isLoading && <div className="terminal-history-loading">Loading history...</div>}
-          {error && <div className="terminal-history-error">{error}</div>}
+          {isLoading && <div role="status" className="terminal-history-loading">Loading history...</div>}
+          {error && <div role="alert" className="terminal-history-error">{error}</div>}
           {!isLoading && !error && (
             <textarea
               ref={textAreaRef}

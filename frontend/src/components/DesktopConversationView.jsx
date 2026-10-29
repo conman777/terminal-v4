@@ -1,8 +1,75 @@
-import { useEffect } from 'react';
-import ToolCallBlock from './ToolCallBlock';
+import { StructuredActivityGroup, StructuredPlan, StructuredReasoning, StructuredToolResult, StructuredWorkGroup, StructuredWorking } from './StructuredActivityGroup';
+import { attachTurnChanges, groupTurnWork } from '../utils/conversationWork';
+import { TurnChangesCard } from './TurnChangesCard';
+import { PlanActions } from './PlanActions';
+import { attachPlanActions, isPlanMessage, stripPlanMarker } from '../utils/planMode';
+import { forkPrompt } from '../utils/conversationFork';
+import { canReadAloud, readAloud } from '../utils/readAloud';
+import { useTurnChanges } from '../hooks/useTurnChanges';
+import './DesktopConversationView.css';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import ToolCallBlock, { getToolDisplayInfo, sessionTodoResult } from './ToolCallBlock';
+import { getBrowserToolDisplayInfo } from '../utils/browserToolPresentation';
+import { V4UserImages } from './V4UserImages';
+import { AgentQuestionCard } from './AgentQuestionCard';
 import { COMMON_LAUNCH_PREFIXES, getAiDisplayLabel, normalizeAiType } from '../utils/aiProviders';
 import { useConversationScroll } from '../hooks/useConversationScroll';
 import { parseInteractivePromptSnapshot, parseInteractivePromptEvent } from '../utils/interactivePrompt';
+import { workspaceKeyboardBlocked } from '../utils/workspaceKeyboardScope';
+import { foldedMessageKey, registerFoldedSearchGroup } from '../utils/foldedConversationSearch';
+
+function UncertainApprovalReview({ approval, onReview, disabled, isStreaming }) {
+  const [checked, setChecked] = useState(false);
+  return <div className="cc-message cc-assistant"><div className="cc-assistant-bubble">
+    <div className="structured-approval-prompt" role="group" aria-label="Uncertain approval decision">
+      <div className="structured-approval-title" role="status">Approval decision needs review</div>
+      <p>The decision may have been delivered. Stop the session and inspect the action and its results before continuing.</p>
+      <p>{approval.description || approval.prompt || `Action: ${approval.toolName}`}</p>
+      {approval.toolInput && <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(approval.toolInput, null, 2)}</pre>}
+      {approval.reviewUnavailable ? <p>This server cannot safely acknowledge the decision. Stop the session, inspect the terminal, and use a new conversation if further work is needed.</p> : <p>Acknowledging records your review; it does not resend or reverse the decision. Start a new request if further work is needed.</p>}
+      {isStreaming && <p>Stop the session before acknowledging this review.</p>}
+      {!approval.reviewUnavailable && <><label><input type="checkbox" checked={checked} onChange={event => setChecked(event.target.checked)} /> I inspected the action and understand the decision may have been delivered.</label>
+        <div className="desktop-interactive-prompt-actions"><button type="button" className="desktop-interactive-action secondary" disabled={!checked || disabled || isStreaming || !onReview} onClick={() => onReview?.(approval)}>Acknowledge review</button></div></>}
+    </div>
+  </div></div>;
+}
+
+function SearchableWorkGroup({ items, durationMs, renderItem }) {
+  const group = useRef(null);
+  const searchable = items.flatMap(item => {
+    if (['user', 'assistant', 'reasoning', 'plan'].includes(item.role)) return [item];
+    if (item.role !== 'activity') return [];
+    return item.messages.flatMap(message => {
+      const content = Array.isArray(message.content) ? message.content : [];
+      const output = message.result || content.filter(block => block?.type === 'text').map(block => block.text).join('\n');
+      const info = getToolDisplayInfo({ tool: message.toolName, toolInput: message.toolInput });
+      const edit = ['edit', 'replace_text'].includes(message.toolName?.toLowerCase());
+      const diff = edit && typeof info.oldString === 'string' && typeof info.newString === 'string';
+      const tasks = message.toolName?.toLowerCase() === 'todo_list' && !message.isError && typeof output === 'string' ? sessionTodoResult(output) : null;
+      const diffText = diff ? (info.oldString === info.newString ? ['No changes'] : [
+        ...(info.oldString ? info.oldString.split('\n').map(line => `-${line}`) : []),
+        ...(info.newString ? info.newString.split('\n').map(line => `+${line}`) : []),
+      ]) : [];
+      const visibleOutput = typeof output === 'string' && (!diff || message.isError) ? output : '';
+      return visibleOutput || diffText.length ? [{ role: 'tool', toolCallId: message.toolCallId, content: visibleOutput, searchText: [...diffText, ...(tasks?.map(task => task.content) || [])], original: message }] : [];
+    });
+  });
+  useLayoutEffect(() => registerFoldedSearchGroup(group.current, searchable), [items]);
+  return <div ref={group}>
+    {searchable.map((item, index) => <span key={foldedMessageKey(item)} hidden
+      data-folded-search-index={index} data-folded-message-id={(item.role === 'user' || item.role === 'assistant') ? item.messageId || undefined : undefined}
+      data-folded-message-role={item.messageId && (item.role === 'user' || item.role === 'assistant') ? item.role : undefined} />)}
+    <StructuredWorkGroup durationMs={durationMs}>{items.map((item, index) => {
+      const searchIndex = searchable.indexOf(item);
+      if (item.role === 'activity') {
+        const indexes = item.messages.map(message => searchable.findIndex(entry => entry.original === message));
+        const valid = indexes.filter(value => value >= 0);
+        return <div key={`activity-${index}`} data-folded-activity-start={valid[0]} data-folded-activity-end={valid.at(-1)}>{renderItem(item, index, indexes)}</div>;
+      }
+      return searchIndex < 0 ? renderItem(item, index) : <div key={foldedMessageKey(item)} data-folded-render-index={searchIndex}>{renderItem(item, index)}</div>;
+    })}</StructuredWorkGroup>
+  </div>;
+}
 
 const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;
 const CODEX_MODEL_SQUASHED_RE = /gpt-5(?:\.\d+)?/i;
@@ -767,6 +834,9 @@ function normalizeInteractivePromptText(prompt) {
 
 function getStatusTone(statusLabel) {
   switch (statusLabel) {
+    case 'Waiting for approval':
+    case 'Waiting for your answer':
+    case 'Cleanup required':
     case 'input':
       return 'input-required';
     case 'running':
@@ -787,12 +857,17 @@ function getStatusTone(statusLabel) {
 
 function getStatusLabel({
   interactivePrompt,
+  pendingApproval,
+  requiresCleanup,
   isStreaming,
   isOffline,
   connectionState,
   isSendReady,
   showTerminalMirror,
 }) {
+  if (requiresCleanup) return 'Cleanup required';
+  if (pendingApproval?.toolName === 'ask_user') return 'Waiting for your answer';
+  if (pendingApproval) return 'Waiting for approval';
   if (interactivePrompt) return 'input';
   if (isOffline) return 'offline';
   if (connectionState === 'connecting') return 'connecting';
@@ -808,8 +883,45 @@ function TypingIndicator() {
   );
 }
 
+const STRUCTURED_MESSAGE_OUTCOMES = {
+  streaming: 'Partial response',
+  cancelled: 'Stopped — partial response',
+  interrupted: 'Stopped — partial response',
+  failed: 'Failed — partial response',
+  unconfirmed: 'Completion not confirmed — partial response',
+};
+
+function sameToolArguments(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameToolArguments(left[key], right[key]));
+}
+
+function findApprovalToolIndex(approval, tools) {
+  if (!approval) return -1;
+  const approvalInfo = getToolDisplayInfo({ tool: approval.toolName, toolInput: approval.toolInput });
+  const exactMatches = [];
+  const fallbackMatches = [];
+  tools.forEach((tool, index) => {
+    const identities = ['approvalId', 'toolCallId', 'requestId', 'turnId'];
+    const shared = identities.filter(key => approval[key] != null && tool[key] != null);
+    if (shared.some(key => approval[key] !== tool[key])) return;
+    if (shared.includes('toolCallId') || shared.includes('approvalId')) {
+      exactMatches.push(index);
+      return;
+    }
+    const info = getToolDisplayInfo({ tool: tool.toolName, toolInput: tool.toolInput });
+    const sameTool = (info.browserTool || tool.toolName) === (approvalInfo.browserTool || approval.toolName);
+    if (sameTool && tool.toolName && sameToolArguments(tool.toolInput || {}, approval.toolInput || {})) fallbackMatches.push(index);
+  });
+  const matches = exactMatches.length ? exactMatches : fallbackMatches;
+  return matches.length === 1 ? matches[0] : -1;
+}
+
 export function DesktopConversationView({
   turns,
+  showHeader = true,
   isStreaming = false,
   onSend,
   onSendRaw,
@@ -834,11 +946,46 @@ export function DesktopConversationView({
   structuredMessages = [],
   structuredToolCalls = [],
   pendingApproval = null,
+  browserApprovals = [],
+  onBrowserApprove,
+  isBrowserApproving = false,
+  browserApprovalError = '',
   onApprove = null,
+  onReviewApproval = null,
+  isApproving = false,
+  isInterrupting = false,
+  requiresCleanup = false,
+  actionError = '',
   allowPromptKeyboardCapture = false,
+  workspacePath = '',
+  allowApprovalForSession = false,
+  onImplementPlan,
+  onImplementPlanInNewThread,
+  onEditMessage,
+  onForkFromMessage,
+  onDiffComment,
 }) {
+  const timeline = [];
+  for (const message of structuredMessages) {
+    const previous = timeline[timeline.length - 1];
+    if (message.role === 'tool' && previous?.role === 'activity') previous.messages.push(message);
+    else if (message.role === 'tool') timeline.push({ role: 'activity', messages: [message] });
+    else timeline.push(message);
+  }
   const assistantLabel = getAiDisplayLabel(aiType) || 'Assistant';
   const isStructured = mode === 'structured';
+  const turnChanges = useTurnChanges(isStructured ? sessionId : null, isStreaming);
+  const approvalInfo = pendingApproval ? getToolDisplayInfo({ tool: pendingApproval.toolName, toolInput: pendingApproval.toolInput }) : null;
+  const scheduleReview = ['create_schedule', 'manage_schedule'].includes(pendingApproval?.toolName)
+    && pendingApproval?.toolInput?.schedule && typeof pendingApproval.toolInput.schedule === 'object';
+  const delegationReview = pendingApproval?.toolName === 'delegate_task_background'
+    && pendingApproval.toolInput?.permission === 'read_only_child'
+    && ['prompt', 'workspace', 'provider', 'model'].every(key => typeof pendingApproval.toolInput[key] === 'string');
+  const scheduleReviewText = pendingApproval?.toolName === 'create_schedule'
+    ? 'Create this unattended schedule?'
+    : [['pause', 'Pause this schedule?'], ['resume', 'Resume this schedule?'], ['run', 'Run this schedule now? An unattended task will start.'], ['remove', 'Remove this schedule? Existing tasks will continue.']].find(([action]) => action === pendingApproval?.toolInput?.action)?.[1] || 'Review this schedule action.';
+  const approvalToolIndex = isStructured ? findApprovalToolIndex(pendingApproval, structuredToolCalls) : -1;
+  const browserApprovalToolIndices = new Set(isStructured ? browserApprovals.map(row => findApprovalToolIndex({ ...row, toolName: row.name, toolInput: row.arguments }, structuredToolCalls)) : []);
   const visibleTurns = isStructured ? [] : buildVisibleTurns(turns, aiType);
   const hasBackgroundOutput = typeof terminalPreview === 'string' && terminalPreview.trim().length > 0;
   const hasLiveScreenSnapshot = typeof terminalScreenSnapshot === 'string' && terminalScreenSnapshot.trim().length > 0;
@@ -858,6 +1005,8 @@ export function DesktopConversationView({
   const isOffline = connectionState === 'offline';
   const statusLabel = getStatusLabel({
     interactivePrompt,
+    pendingApproval: isStructured ? pendingApproval || browserApprovals.length > 0 : null,
+    requiresCleanup,
     isStreaming,
     isOffline,
     connectionState,
@@ -886,6 +1035,7 @@ export function DesktopConversationView({
     structuredMessages.length > 0
     || structuredToolCalls.length > 0
     || Boolean(pendingApproval)
+    || browserApprovals.length > 0
   );
   const hasVisibleConversationTurns = conversationTurns.length > 0;
   const hasVisibleTurns = displayTurns.length > 0 || hasStructuredActivity;
@@ -895,7 +1045,7 @@ export function DesktopConversationView({
     ? extractLatestAssistantReplyFromRawTranscript(terminalPreview)
     : '';
   const showInlineInteractivePrompt = showInteractivePromptBlock && !showTerminalStartupCard;
-  const shouldRenderHeader = !showTerminalStartupCard;
+  const shouldRenderHeader = showHeader && !showTerminalStartupCard;
   const showPromptCopyInStartupPanel = !(showTerminalStartupCard && isTerminalDockVisible);
   const showTerminalPreviewInStartupCard = Boolean(terminalPreview)
     && !(showTerminalStartupCard && isTerminalDockVisible)
@@ -955,7 +1105,7 @@ export function DesktopConversationView({
     jumpToBottom,
     markShouldStickToBottom,
   } = useConversationScroll({
-    deps: [turns, structuredMessages, structuredToolCalls, pendingApproval, isStreaming],
+    deps: [turns, structuredMessages, structuredToolCalls, pendingApproval, browserApprovals, isStreaming],
     followBehavior: 'auto',
   });
 
@@ -964,9 +1114,12 @@ export function DesktopConversationView({
 
     const handleGlobalKeyDown = (event) => {
       const target = event.target;
+      if (workspaceKeyboardBlocked(target)) return;
       const isInput = target instanceof HTMLInputElement;
       const isTextarea = target instanceof HTMLTextAreaElement;
       const isEditable = isInput || isTextarea || Boolean(target?.isContentEditable);
+      if (target?.closest?.('button, a[href], summary, select, [role="button"], [role="menuitem"], [role="tab"]')) return;
+      if (target?.closest?.('[data-conversation-scroll-region]')) return;
       if (isEditable) return;
 
       const payload = mapKeyboardEventToTerminalInput(event);
@@ -984,7 +1137,7 @@ export function DesktopConversationView({
   }, [onSendRaw, shouldCaptureRawKeyboard]);
 
   return (
-    <div className="desktop-conversation-view mode-conversation">
+    <div className="desktop-conversation-view mode-conversation" data-conversation-session-id={sessionId}>
       {shouldRenderHeader && (
         <div className="desktop-conversation-header">
           <div className="desktop-conversation-header-main">
@@ -1007,6 +1160,10 @@ export function DesktopConversationView({
               <span className={`desktop-conversation-chip status-${statusTone}`}>
                 {statusLabel}
               </span>
+              {isStructured && (isStreaming || requiresCleanup) && <>
+                <button type="button" className="desktop-agent-action" aria-label={requiresCleanup ? "Retry cancellation" : "Stop response"} onClick={() => onInterrupt?.()} disabled={!onInterrupt || isInterrupting}>{requiresCleanup ? "Retry cancellation" : "Stop response"}</button>
+                {isInterrupting && <span role="status">Stopping response…</span>}
+              </>}
               {liveRuntimeLabel && (
                 <span className="desktop-conversation-chip">{liveRuntimeLabel}</span>
               )}
@@ -1026,7 +1183,9 @@ export function DesktopConversationView({
       <div className={`desktop-conversation-body${activityTurns.length > 0 ? ' has-activity-window' : ''}`}>
         <div ref={containerRef} className="desktop-thread" onScroll={handleScroll}>
           <div className={`desktop-thread-inner${showTerminalStartupCard ? ' live-session-layout' : ''}`}>
-          {conversationNotice && (
+          {actionError && !(isStructured && (pendingApproval || browserApprovals.length > 0)) && <div className="desktop-agent-inline-notice" role="alert">{actionError}</div>}
+          {isStructured && !pendingApproval && browserApprovals.length === 0 && browserApprovalError && browserApprovalError !== actionError && <div className="desktop-agent-inline-notice" role="alert">{browserApprovalError}</div>}
+          {conversationNotice && conversationNotice !== actionError && (
             <div className="desktop-agent-inline-notice" role="status" aria-live="polite">
               {conversationNotice}
             </div>
@@ -1062,7 +1221,7 @@ export function DesktopConversationView({
           )}
 
           {!hasVisibleTurns && isLoadingHistory && (
-            <div className="desktop-conversation-empty">Loading conversation history...</div>
+            <div className="desktop-conversation-empty" role="status">Loading conversation history...</div>
           )}
 
           {showStartupCard && (
@@ -1145,10 +1304,9 @@ export function DesktopConversationView({
               )}
 
               {!showTerminalStartupCard && (
-                <pre className="dcv-startup-text">
-                <span className="dcv-startup-msg">{startupMessage}</span>
-                <span className="dcv-cursor-blink">▍</span>
-                </pre>
+                <p className="dcv-startup-text">
+                  <span className="dcv-startup-msg">{startupMessage}</span>
+                </p>
               )}
 
               {showLaunchButton && (
@@ -1195,47 +1353,61 @@ export function DesktopConversationView({
           {conversationTurns.map((turn, index) => (
             <ToolCallBlock
               key={`${turn.ts ?? index}-${turn.role}-${index}`}
-              item={{ type: turn.role, content: turn.content }}
+              item={{ type: turn.role, content: turn.content, roleLabel: assistantLabel }}
             />
           ))}
 
-          {isStructured && structuredMessages.map((msg, index) => {
+          {isStructured && attachTurnChanges(attachPlanActions(groupTurnWork(timeline, { inProgress: isStreaming }), { inProgress: isStreaming }), turnChanges).map(function renderTimelineItem(msg, index, searchIndexes) {
+            if (!searchIndexes?.every(value => typeof value === 'number')) searchIndexes = undefined;
+            if (msg.role === 'plan-actions') return <PlanActions key={`s-plan-${msg.key}`} plan={msg.plan} disabled={isStreaming}
+              onImplement={onImplementPlan} onImplementInNewThread={onImplementPlanInNewThread} />;
+            if (msg.role === 'turn-changes') return <TurnChangesCard key={`s-changes-${msg.turnId}`} changes={msg.changes} workspacePath={workspacePath} onComment={onDiffComment} />;
+            if (msg.role === 'work') {
+              const first = msg.items[0];
+              return <SearchableWorkGroup key={`s-work-${first?.messageId || first?.messages?.[0]?.toolCallId || index}`}
+                items={msg.items} durationMs={msg.durationMs} renderItem={renderTimelineItem} />;
+            }
             if (msg.role === 'user') {
               return (
+                <div key={`s-user-${msg.messageId || msg.requestId || `${msg.ts ?? index}-${index}`}`} data-message-id={msg.messageId} data-message-role="user" tabIndex={-1} onFocus={event => { if (event.target === event.currentTarget) autoScrollRef.current = false; }}>
                 <ToolCallBlock
-                  key={`s-${msg.ts ?? index}-user-${index}`}
-                  item={{ type: 'user', content: msg.content }}
+                  item={{ type: 'user', copyText: stripPlanMarker(msg.content),
+                    actions: onEditMessage && typeof msg.content === 'string' ? [{ label: 'Edit as new message', onClick: () => onEditMessage(stripPlanMarker(msg.content)) }] : [],
+                    content: <>{isPlanMessage(msg.content) && <span className="cc-plan-chip">Plan</span>}{stripPlanMarker(msg.content)}{Array.isArray(msg.attachments) && msg.attachments.length > 0
+                    && <V4UserImages sessionId={sessionId} attachments={msg.attachments} />}</> }}
                 />
+                </div>
               );
             }
             if (msg.role === 'assistant') {
+              const outcome = STRUCTURED_MESSAGE_OUTCOMES[msg.completionStatus];
               return (
-                <ToolCallBlock
-                  key={`s-${msg.ts ?? index}-assistant-${index}`}
-                  item={{ type: 'assistant', content: msg.content }}
-                />
+                <div key={`s-assistant-${msg.messageId || `${msg.ts ?? index}-${index}`}`} data-message-id={msg.messageId} data-message-role="assistant" tabIndex={-1} onFocus={event => { if (event.target === event.currentTarget) autoScrollRef.current = false; }}>
+                  <ToolCallBlock item={{ type: 'assistant', content: msg.content, roleLabel: assistantLabel,
+                    actions: [
+                      ...(canReadAloud() && typeof msg.content === 'string' && msg.content ? [{ label: 'Read aloud', onClick: () => readAloud(msg.content) }] : []),
+                      ...(onForkFromMessage && msg.messageId && !isStreaming ? [{ label: 'Fork from here', onClick: () => onForkFromMessage(forkPrompt(structuredMessages, msg.messageId)) }] : []),
+                    ] }} />
+                  {outcome && <p className="structured-message-outcome" role="status">{outcome}</p>}
+                </div>
               );
             }
-            if (msg.role === 'tool') {
-              return (
-                <ToolCallBlock
-                  key={`s-${msg.ts ?? index}-tool-${index}`}
-                  item={{
-                    type: 'tool_use',
-                    tool: msg.toolName,
-                    toolInput: msg.toolInput,
-                    result: {
-                      toolResult: msg.result || '',
-                      isError: Boolean(msg.isError)
-                    }
-                  }}
-                />
-              );
+            if (msg.role === 'reasoning') return <StructuredReasoning key={`s-reasoning-${msg.messageId || index}`} content={msg.content} />;
+            if (msg.role === 'plan') return <StructuredPlan key={`s-plan-${msg.messageId || index}`} content={msg.content} />;
+            if (msg.role === 'activity') {
+              const first = msg.messages[0];
+              const key = `s-tool-${first.turnId || ''}-${first.toolCallId || index}`;
+              const renderToolResult = (message, toolIndex) => <div key={message.toolCallId || message.messageId || toolIndex} data-folded-render-index={searchIndexes?.[toolIndex] >= 0 ? searchIndexes[toolIndex] : undefined}>
+                <StructuredToolResult message={message} sessionId={sessionId} />
+              </div>;
+              return msg.messages.length > 1
+                ? <StructuredActivityGroup key={key} messages={msg.messages} sessionId={sessionId} renderToolResult={searchIndexes ? renderToolResult : undefined} />
+                : searchIndexes ? renderToolResult(first, 0) : <StructuredToolResult key={key} message={first} sessionId={sessionId} />;
             }
             if (msg.role === 'error') {
               return (
                 <div key={`s-${msg.ts ?? index}-error-${index}`} className="cc-message cc-error">
-                  <div className="cc-error-bubble">{msg.content}</div>
+                  <div className="cc-error-bubble" role="alert">{msg.content}</div>
                 </div>
               );
             }
@@ -1245,43 +1417,32 @@ export function DesktopConversationView({
           {isStructured && structuredToolCalls.length > 0 && (
             <div className="cc-message cc-assistant">
               <div className="cc-assistant-bubble">
-                {structuredToolCalls.map((tc, i) => (
-                  <div key={`tc-${i}`} className="structured-tool-running">
-                    Running <strong>{tc.toolName}</strong>...
-                    {tc.result && <pre className="structured-tool-partial">{tc.result}</pre>}
-                  </div>
-                ))}
+                {structuredToolCalls.map((tc, i) => {
+                  const toolInfo = getToolDisplayInfo({ tool: tc.toolName, toolInput: tc.toolInput });
+                  const awaitingApproval = i === approvalToolIndex || browserApprovalToolIndices.has(i);
+                  if (awaitingApproval && !tc.result) return null;
+                  return (
+                    <div key={`tc-${tc.turnId || ''}-${tc.toolCallId || i}`} className="structured-tool-running">
+                      {!awaitingApproval && <span className="structured-tool-running-line" role="status">
+                        {requiresCleanup || !isStreaming ? 'Awaiting confirmation for' : 'Running'} <strong>{toolInfo.title}</strong>
+                        {toolInfo.detail && <> <code className="structured-tool-running-detail" title={toolInfo.input || undefined}>{toolInfo.detail}</code></>}…
+                      </span>}
+                      {!awaitingApproval && toolInfo.browserTool && <details className="structured-tool-details">
+                        <summary>Details</summary>
+                        <code>{toolInfo.rawTool}</code>
+                        {toolInfo.server && <p>Server: <code>{toolInfo.server}</code></p>}
+                        <pre tabIndex={0} aria-label="Tool arguments" data-conversation-scroll-region>{toolInfo.input || '{}'}</pre>
+                      </details>}
+                      {tc.result && <pre className="structured-tool-partial" tabIndex={0} aria-label="Partial tool output" data-conversation-scroll-region>{tc.result}</pre>}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {isStructured && pendingApproval && (
-            <div className="cc-message cc-assistant">
-              <div className="cc-assistant-bubble">
-                <div className="structured-approval-prompt">
-                  <p>{pendingApproval.description || pendingApproval.prompt || `Approve ${pendingApproval.toolName}?`}</p>
-                  {pendingApproval.toolInput && (
-                    <pre className="structured-approval-input">{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
-                  )}
-                  <div className="desktop-interactive-prompt-actions">
-                    <button
-                      type="button"
-                      className="desktop-interactive-action primary"
-                      onClick={() => onApprove?.(true)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="desktop-interactive-action secondary"
-                      onClick={() => onApprove?.(false)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
+          {isStructured && isStreaming && !pendingApproval && browserApprovals.length === 0 && !requiresCleanup && !isInterrupting && (
+            <StructuredWorking since={structuredMessages.findLast(message => message.role === 'user')?.ts} />
           )}
 
           {isStreaming && !isStructured && (
@@ -1301,13 +1462,139 @@ export function DesktopConversationView({
               {activityTurns.map((turn, index) => (
                 <ToolCallBlock
                   key={`activity-${turn.ts ?? index}-${index}`}
-                  item={{ type: turn.role, content: turn.content }}
+                  item={{ type: turn.role, content: turn.content, roleLabel: assistantLabel }}
                 />
               ))}
             </div>
           </aside>
         )}
       </div>
+
+      {isStructured && (pendingApproval || browserApprovals.length > 0) && (
+        <section className={`desktop-pending-requests${delegationReview ? ' has-delegation-review' : ''}`} aria-label="Pending requests">
+          {actionError && <div className="desktop-agent-inline-notice" role="alert">{actionError}</div>}
+          {browserApprovalError && browserApprovalError !== actionError && <div className="desktop-agent-inline-notice" role="alert">{browserApprovalError}</div>}
+          {isStructured && browserApprovals.map(row => {
+            const input = row.arguments || {};
+            const info = getBrowserToolDisplayInfo(row.name, input);
+            const detail = info?.detail || (Object.keys(input).length ? JSON.stringify(input, null, 2) : '');
+            const disabled = !onBrowserApprove || isBrowserApproving || isApproving || isInterrupting || requiresCleanup;
+            return <div key={`browser-approval-${row.id}`} className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <div className="structured-approval-prompt structured-browser-approval" role="group" aria-label="Browser approval required">
+                  <div className="structured-approval-title" role="status">Waiting for approval</div>
+                  <p className="structured-approval-question">{info ? `${info.title}?` : `Approve ${row.name}?`}</p>
+                  {row.target?.url && <p className="structured-browser-approval-page">Page: {row.target.url}</p>}
+                  {detail && <pre className="structured-approval-arguments" tabIndex={0} aria-label="Action arguments" data-conversation-scroll-region>{detail}</pre>}
+                  <details className="structured-tool-details">
+                    <summary>Details</summary>
+                    <p>Tool: <code>{row.name}</code></p>
+                    <p>Requested by: <code>{row.label}</code></p>
+                    <p>Request: <code>{row.id}</code></p>
+                    <pre className="structured-approval-input" tabIndex={0} aria-label="Browser approval details" data-conversation-scroll-region>{JSON.stringify(input, null, 2)}</pre>
+                    {row.target && <pre className="structured-approval-input" tabIndex={0} aria-label="Browser approval target" data-conversation-scroll-region>{JSON.stringify(row.target, null, 2)}</pre>}
+                  </details>
+                  {!onBrowserApprove && <p className="structured-approval-help">Approval actions are unavailable in this view.</p>}
+                  {requiresCleanup && <p className="structured-approval-help">Complete cancellation before responding to this approval.</p>}
+                  {isBrowserApproving && <p role="status">Submitting browser approval decision…</p>}
+                  <div className="desktop-interactive-prompt-actions">
+                    <button type="button" className="desktop-interactive-action primary" onClick={() => onBrowserApprove?.(row.id, true)} disabled={disabled}>Approve</button>
+                    <button type="button" className="desktop-interactive-action secondary" onClick={() => onBrowserApprove?.(row.id, false)} disabled={disabled}>Reject</button>
+                  </div>
+                </div>
+              </div>
+            </div>;
+          })}
+
+          {isStructured && (pendingApproval?.decisionUncertain || pendingApproval?.decisionUnconfirmed) && <UncertainApprovalReview key={pendingApproval.approvalId} approval={pendingApproval} onReview={onReviewApproval} isStreaming={isStreaming} disabled={isApproving || isBrowserApproving || isInterrupting || requiresCleanup} />}
+
+          {isStructured && !pendingApproval?.decisionUncertain && !pendingApproval?.decisionUnconfirmed && pendingApproval?.toolName === 'ask_user' && Array.isArray(pendingApproval.toolInput?.questions) && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <div className="structured-approval-prompt" role="group" aria-label="Question from the agent">
+                  <div className="structured-approval-title" role="status">{pendingApproval.description || 'The agent has a question for you.'}</div>
+                  <AgentQuestionCard key={pendingApproval.approvalId || pendingApproval.seq} questions={pendingApproval.toolInput.questions}
+                    disabled={!onApprove || isApproving || isBrowserApproving || isInterrupting || requiresCleanup}
+                    onAnswer={answers => onApprove?.(true, pendingApproval, answers)}
+                    onDismiss={() => onApprove?.(false, pendingApproval)} />
+                  {isApproving && <p role="status">Sending your answer…</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isStructured && pendingApproval && !pendingApproval.decisionUncertain && !pendingApproval.decisionUnconfirmed && pendingApproval.toolName !== 'ask_user' && (
+            <div className="cc-message cc-assistant">
+              <div className="cc-assistant-bubble">
+                <div className={`structured-approval-prompt${approvalInfo.browserTool ? ' structured-browser-approval' : ''}`} role="group" aria-label="Approval required">
+                  <div className="structured-approval-title" role="status">Waiting for approval</div>
+                  {delegationReview ? <>
+                    <p className="structured-approval-question">Run a read-only background investigation?</p>
+                    <dl className="structured-delegation-fields">
+                      <div><dt>Task</dt><dd><pre tabIndex={0} data-conversation-scroll-region>{pendingApproval.toolInput.prompt}</pre></dd></div>
+                      <div><dt>Project</dt><dd><pre className="structured-delegation-project" tabIndex={0} data-conversation-scroll-region>{pendingApproval.toolInput.workspace}</pre></dd></div>
+                      <div><dt>Model</dt><dd>{pendingApproval.toolInput.provider} · {pendingApproval.toolInput.model}</dd></div>
+                    </dl>
+                    <p className="structured-approval-help">No shell, writes or external tools. New empty queues run automatically; other held queues need resume.</p>
+                    <details className="structured-tool-details">
+                      <summary>More details</summary>
+                      <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
+                    </details>
+                  </> : approvalInfo.browserTool ? <>
+                    <p className="structured-approval-question">{approvalInfo.title}?</p>
+                    {approvalInfo.detail && <pre className="structured-approval-arguments" tabIndex={0} aria-label="Action arguments" data-conversation-scroll-region>{approvalInfo.detail}</pre>}
+                    <details className="structured-tool-details" key={`${pendingApproval.turnId || ''}:${pendingApproval.approvalId || pendingApproval.toolCallId || pendingApproval.seq || pendingApproval.toolName}`}>
+                      <summary>Details</summary>
+                      <p>Tool: <code>{pendingApproval.toolName}</code></p>
+                      {(pendingApproval.server || pendingApproval.serverName || approvalInfo.server) && <p>Server: <code>{pendingApproval.server || pendingApproval.serverName || approvalInfo.server}</code></p>}
+                      {(pendingApproval.description || pendingApproval.prompt) && <p>{pendingApproval.description || pendingApproval.prompt}</p>}
+                      {pendingApproval.toolInput != null && <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>}
+                    </details>
+                  </> : <>
+                    <p>{scheduleReview ? scheduleReviewText : pendingApproval.description || pendingApproval.prompt || `Approve ${pendingApproval.toolName}?`}</p>
+                    {pendingApproval.toolInput && (
+                      <pre className="structured-approval-input" tabIndex={0} aria-label="Approval details" data-conversation-scroll-region>{JSON.stringify(pendingApproval.toolInput, null, 2)}</pre>
+                    )}
+                    {scheduleReview && pendingApproval.description && <details className="structured-tool-details"><summary>Full approval description</summary><pre tabIndex={0} data-conversation-scroll-region>{pendingApproval.description}</pre></details>}
+                  </>}
+                  {!onApprove && <p className="structured-approval-help">Approval actions are unavailable in this view.</p>}
+                  {requiresCleanup && <p className="structured-approval-help">Complete cancellation before responding to this approval.</p>}
+                  {isApproving && <p role="status">Submitting approval decision…</p>}
+                  <div className="desktop-interactive-prompt-actions">
+                    <button
+                      type="button"
+                      className="desktop-interactive-action primary"
+
+                      onClick={() => onApprove?.(true, pendingApproval)}
+                      disabled={!onApprove || isApproving || isBrowserApproving || isInterrupting || requiresCleanup}
+                    >
+                      Approve
+                    </button>
+                    {allowApprovalForSession && !approvalInfo.browserTool && <button
+                      type="button"
+                      className="desktop-interactive-action secondary"
+                      onClick={() => onApprove?.(true, pendingApproval, undefined, { forSession: true })}
+                      disabled={!onApprove || isApproving || isBrowserApproving || isInterrupting || requiresCleanup}
+                    >
+                      Allow for this session
+                    </button>}
+                    <button
+                      type="button"
+                      className="desktop-interactive-action secondary"
+
+                      onClick={() => onApprove?.(false, pendingApproval)}
+                      disabled={!onApprove || isApproving || isBrowserApproving || isInterrupting || requiresCleanup}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </section>
+      )}
 
       {showScrollBtn && (
         <button

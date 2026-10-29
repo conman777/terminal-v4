@@ -1,4 +1,5 @@
 import { environmentAllows } from '../utils/runtimePermissions';
+import './TerminalPane.css';
 import { useEffect, useRef, useCallback, useState, useMemo, useSyncExternalStore } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -9,6 +10,7 @@ import '@xterm/xterm/css/xterm.css';
 import { observeActiveTerminalResize } from '../utils/observeActiveTerminalResize';
 import { extractPreviewUrl, isServerReady } from '../utils/urlDetector';
 import { apiFetch, uploadScreenshot } from '../utils/api';
+import { prepareTerminalInput } from '../utils/terminalCommandDelivery';
 import {
   getImageFileFromClipboardItems,
   getImageFileFromDataTransfer,
@@ -133,6 +135,7 @@ function extractCompletedLinesFromTerminalInputChunk(chunk, state) {
 }
 
 export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetected, fontSize, webglEnabled, onScrollDirection, onViewportStateChange, onRegisterImageUpload, onRegisterHistoryPanel, onRegisterSelectionActions, onRegisterFocusTerminal, onRegisterSendText, onRegisterScrollToBottom, onActivityChange, onConnectionChange, onCwdChange, onSendMessage, onOutputChunk, onScreenSnapshot, onTurn, onCliEvent, usesTmux, fitSignal, viewMode = 'terminal', isPrimary = false, skipHistory = false, syncPtySize: requestedSyncPtySize = true, surface, inputEnabled: requestedInputEnabled = true }) {
+  const [inputDeliveryError, setInputDeliveryError] = useState('');
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   const inputEnabled = requestedInputEnabled !== false && environmentAllows(environment, 'terminalInput');
   const syncPtySize = requestedSyncPtySize !== false && environmentAllows(environment, 'terminalInput');
@@ -143,7 +146,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const socketRef = useRef(null);
   const sendSocketInputRef = useRef(null);
   const socketReadyForInputRef = useRef(false);
-  const preAuthSocketInputRef = useRef('');
+  const preAuthSocketInputRef = useRef([]);
   const detectedUrlsRef = useRef(new Set());
   const suppressPasteEventRef = useRef(false);
   const touchScrollAccRef = useRef(0);
@@ -195,7 +198,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   });
   const [showCopiedBanner, setShowCopiedBanner] = useState(false);
   const [windowActive, setWindowActive] = useState(() => isWindowActive());
-  // Bumped after xterm.open so the active-resize observer can attach to a live host.
+  // Bumped after xterm.open so the resize observer can attach to a live host.
   const [hostReadyVersion, setHostReadyVersion] = useState(0);
   const copiedBannerTimerRef = useRef(null);
   const { buffer: readerBuffer, append: appendToReader, clear: clearReader, replace: replaceReaderBuffer } = useTerminalBuffer();
@@ -204,7 +207,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   const readerLineHeightRef = useRef(null);
   const [readerScrollToken, setReaderScrollToken] = useState(0);
   const sendTerminalInputRef = useRef(null);
-  const pendingExternalInputRef = useRef([]);
   const enqueueExternalInputRef = useRef(null);
   const externalInputFramesRef = useRef([]);
   const externalInputTimerRef = useRef(null);
@@ -307,7 +309,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     pageChars: platformConfig.history.pageChars,
     maxEvents: platformConfig.history.maxEvents,
     maxChars: platformConfig.history.maxChars
-  }), [platformConfig]);
+  }), [platformConfig.history.pageEvents, platformConfig.history.pageChars, platformConfig.history.maxEvents, platformConfig.history.maxChars]);
 
   const applyHistoryConfig = useCallback(() => {
     const config = getHistoryConfig();
@@ -442,9 +444,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   }, []);
 
   // Send data to terminal via WebSocket
-  const sendToTerminal = useCallback((data) => {
+  const sendToTerminal = useCallback((data, delivery) => {
     if (!data) return;
-    sendSocketInputRef.current?.(data);
+    return sendSocketInputRef.current?.(data, delivery);
   }, []);
 
   // Favicon flashing
@@ -601,7 +603,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
   // Handler for reader view keyboard input
   const handleReaderInput = useCallback((data) => {
-    if (!data) return;
+    if (!data || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return;
     if (sendTerminalInputRef.current) {
       sendTerminalInputRef.current(data);
     } else {
@@ -611,8 +613,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
         body: { command: data }
+      }).then(response => {
+        if (!response.ok) throw new Error(`Terminal input was not accepted (${response.status}).`);
       }).catch((error) => {
-        console.error('Failed to send terminal input:', error);
+        setInputDeliveryError(error.message || 'Terminal input failed.');
       });
     }
   }, [sessionId]);
@@ -1371,31 +1375,30 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
   }, []);
 
+  const canRenderTerminal = useCallback(() => {
+    const container = terminalRef.current;
+    if (!container?.isConnected || container.closest('[inert], [aria-hidden="true"]')) return false;
+    if (container.getClientRects().length === 0) return false;
+    const { width, height } = container.getBoundingClientRect();
+    if (width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT) return false;
+    if (typeof window !== 'undefined' && window.getComputedStyle) {
+      const computed = window.getComputedStyle(container);
+      if (computed.display === 'none' || computed.visibility === 'hidden') return false;
+    }
+    return true;
+  }, [MIN_FIT_CONTAINER_HEIGHT, MIN_FIT_CONTAINER_WIDTH]);
+
   const refreshTerminalViewport = useCallback(({ fit = false, preserveBottom = false, clearAtlas = false } = {}) => {
     const term = xtermRef.current;
     if (!term) return;
-
-    const container = terminalRef.current;
-    const canRender = (() => {
-      if (!container) return false;
-      if (container.getClientRects().length === 0) return false;
-      const { width, height } = container.getBoundingClientRect();
-      if (width < MIN_FIT_CONTAINER_WIDTH || height < MIN_FIT_CONTAINER_HEIGHT) return false;
-      if (typeof window !== 'undefined' && window.getComputedStyle) {
-        const computed = window.getComputedStyle(container);
-        if (computed.display === 'none' || computed.visibility === 'hidden') return false;
-      }
-      return true;
-    })();
+    const canRender = canRenderTerminal();
 
     // Block fit() while history is being loaded: the stored ANSI sequences were
     // recorded at the PTY's original width. Resizing xterm mid-playback misaligns
     // cursor positions and causes severe content garbling. fit() will be triggered
     // explicitly once loadInitialHistory() completes.
-    // stable terminal: inactive split panes keep last geometry — skip fit churn.
-    const allowFit = fit && (isPrimaryRef.current || isMobile);
     let handledByAuthoritativeResize = false;
-    if (allowFit && canRender && !historyReloadingRef.current && requestAuthoritativeResizeRef.current) {
+    if (fit && canRender && !historyReloadingRef.current && requestAuthoritativeResizeRef.current) {
       try {
         handledByAuthoritativeResize = requestAuthoritativeResizeRef.current() === true;
       } catch {
@@ -1403,7 +1406,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     }
 
-    if (allowFit && fitAddonRef.current && canRender && !historyReloadingRef.current && !handledByAuthoritativeResize) {
+    if (fit && fitAddonRef.current && canRender && !historyReloadingRef.current && !handledByAuthoritativeResize) {
       let wasAtBottom = true;
       if (preserveBottom) {
         const buffer = term.buffer?.active;
@@ -1433,7 +1436,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         // Ignore transient refresh failures during rapid mount/unmount.
       }
     }
-  }, [MIN_FIT_CONTAINER_HEIGHT, MIN_FIT_CONTAINER_WIDTH, isMobile]);
+  }, [canRenderTerminal]);
 
   const scheduleViewportRefresh = useCallback(({
     delay,
@@ -1566,15 +1569,14 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Register send-text function for external callers (e.g. chat input bar)
   useEffect(() => {
     if (!onRegisterSendText) return undefined;
-    onRegisterSendText((text) => {
+    onRegisterSendText((text, delivery) => {
       if (!text) return false;
       requestTerminalTextInputFocus();
       const enqueueExternalInput = enqueueExternalInputRef.current;
       if (!enqueueExternalInput) {
-        pendingExternalInputRef.current.push(text);
         return false;
       }
-      return enqueueExternalInput(text);
+      return enqueueExternalInput(text, delivery);
     });
     return () => {
       onRegisterSendText(null);
@@ -1772,7 +1774,8 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const postTrackedResize = ({ cols, rows, clientId, priority = false }) => {
-      if (!syncPtySizeRef.current || disposed) return;
+      if (!syncPtySizeRef.current || disposed || environmentSignal.aborted) return;
+      if (!isMobile && !canRenderTerminal()) return;
       const nextCols = Number.isFinite(cols) ? Math.max(20, Math.min(500, Math.round(cols))) : 0;
       const nextRows = Number.isFinite(rows) ? Math.max(3, Math.min(500, Math.round(rows))) : 0;
       if (!nextCols || !nextRows) return;
@@ -1793,14 +1796,17 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       apiFetch(`/api/terminal/${sessionId}/resize`, {
         method: 'POST',
-        body
+        body,
+        signal: environmentSignal
       })
         .then(async (response) => {
           if (!response?.ok) return;
           const payload = await response.json().catch(() => null);
+          if (disposed || environmentSignal.aborted || lastResizeRequestKey !== requestKey) return;
           updatePtyOwnerFromResizeAck(payload);
         })
         .catch((error) => {
+          if (disposed || environmentSignal.aborted) return;
           if (lastResizeRequestKey === requestKey) {
             lastResizeRequestKey = '';
           }
@@ -1914,9 +1920,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const discardUnsentInput = () => {
-      preAuthSocketInputRef.current = '';
+      const pending = preAuthSocketInputRef.current;
+      preAuthSocketInputRef.current = [];
+      for (const entry of pending) entry.reject(Object.assign(new Error('Terminal input was cancelled before authentication completed. Your draft was kept.'), { definitelyRejected: true }));
       inputBufferRef.current = '';
-      pendingExternalInputRef.current = [];
+      for (const frame of externalInputFramesRef.current) frame.reject?.(new Error('Terminal input was cancelled. Your draft was kept.'));
       externalInputFramesRef.current = [];
       if (inputFlushRef.current) clearTimeout(inputFlushRef.current);
       inputFlushRef.current = null;
@@ -1924,49 +1932,68 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       externalInputTimerRef.current = null;
     };
 
-    const sendTerminalInput = (text) => {
-      if (!text || disposed || !environmentAllows(getActiveEnvironment(), 'terminalInput') || environmentSignal.aborted || reconnectController.isStopped()) return;
-      const resolvedText = rewriteTerminalAgentInput(text);
-      capturePreviewFromInput(resolvedText);
-      if (sendSocketInputRef.current?.(resolvedText)) {
-        onSendMessageRef.current?.(resolvedText);
-        return;
+    const sendTerminalInput = (text, terminalDelivery) => {
+      if (!text || disposed || !environmentAllows(getActiveEnvironment(), 'terminalInput') || environmentSignal.aborted || reconnectController.isStopped()) return false;
+      let resolvedText;
+      try { resolvedText = rewriteTerminalAgentInput(text); }
+      catch (error) {
+        setInputDeliveryError(error.message || 'Terminal input failed. Your draft was kept.');
+        const rejected = Promise.reject(error);
+        rejected.catch(() => {});
+        return rejected;
       }
-      onSendMessageRef.current?.(resolvedText);
-      apiFetch(`/api/terminal/${sessionId}/input`, {
+      capturePreviewFromInput(resolvedText);
+      let receipt = sendSocketInputRef.current?.(resolvedText, terminalDelivery);
+      if (!receipt) receipt = apiFetch(`/api/terminal/${sessionId}/input`, {
         method: 'POST',
-        body: { command: resolvedText }
-      }).catch((error) => {
-        console.error('Failed to send terminal input:', error);
+        body: { command: resolvedText }, signal: environmentSignal, terminalDelivery,
+      }).then(response => {
+        if (!response.ok) throw Object.assign(new Error(`Terminal input was not accepted (${response.status}). Your draft was kept.`), {
+          // This route also uses 404 for PTY write errors, which may follow partial delivery.
+          definitelyRejected: [400, 401, 403, 413].includes(response.status),
+        });
+        return true;
       });
+      const delivery = Promise.resolve(receipt).then(accepted => {
+        if (accepted === false || disposed || environmentSignal.aborted) throw new Error('The terminal session changed. Your draft was kept.');
+        onSendMessageRef.current?.(resolvedText);
+        setInputDeliveryError('');
+        return true;
+      });
+      delivery.catch(error => { if (!disposed && !environmentSignal.aborted) setInputDeliveryError(error.message || 'Terminal input failed. Your draft was kept.'); });
+      return delivery;
     };
 
     const flushQueuedSocketInput = () => {
-      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) { preAuthSocketInputRef.current = ''; return false; }
+      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) { discardUnsentInput(); return false; }
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN || !socketReadyForInputRef.current) {
         return false;
       }
 
-      const payload = preAuthSocketInputRef.current;
-      if (!payload) {
-        return true;
+      const pending = preAuthSocketInputRef.current;
+      preAuthSocketInputRef.current = [];
+      for (const entry of pending) {
+        try {
+          prepareTerminalInput(sessionId, entry.delivery);
+          socket.send(entry.payload);
+          entry.resolve(true);
+        } catch (error) { entry.reject(error); }
       }
-
-      preAuthSocketInputRef.current = '';
-      socket.send(payload);
       return true;
     };
 
-    const sendSocketInput = (payload) => {
-      if (!environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
+    const sendSocketInput = (payload, delivery) => {
+      if (disposed || environmentSignal.aborted || reconnectController.isStopped() || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
       const socket = socketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) {
         return false;
       }
+      prepareTerminalInput(sessionId, delivery);
       if (!socketReadyForInputRef.current) {
-        preAuthSocketInputRef.current += payload;
-        return true;
+        const receipt = new Promise((resolve, reject) => preAuthSocketInputRef.current.push({ payload, delivery, resolve, reject }));
+        receipt.catch(() => {});
+        return receipt;
       }
       socket.send(payload);
       return true;
@@ -1998,7 +2025,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     const queueTerminalInput = (data) => {
-      if (!data || disposed) return;
+      if (!data || disposed || environmentSignal.aborted) return;
+      try { prepareTerminalInput(sessionId); }
+      catch (error) { setInputDeliveryError(error.message); return; }
       inputBufferRef.current += data;
       if (!inputFlushRef.current) {
         inputFlushRef.current = setTimeout(flushInputBuffer, 0);
@@ -2008,15 +2037,24 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
     };
 
-    const sendUserInput = (text) => {
+    const sendUserInput = (text, delivery) => {
       if (!text || disposed) return;
-      exitCopyModeIfActive();
+      const copyModeExit = exitCopyModeIfActive(delivery);
       markUserInput();
       resetIdleTimer(false);
       if (inputBufferRef.current) {
         flushInputBuffer();
       }
-      sendTerminalInput(text);
+      const sendAfterCopyModeExit = (accepted) => {
+        if (accepted === false) throw Object.assign(new Error('Terminal could not leave history mode. Your draft was kept.'), { definitelyRejected: true });
+        return sendTerminalInput(text, delivery);
+      };
+      if (copyModeExit?.then) {
+        const receipt = copyModeExit.then(sendAfterCopyModeExit);
+        receipt.catch(error => { if (!disposed && !environmentSignal.aborted) setInputDeliveryError(error.message || 'Terminal input failed. Your draft was kept.'); });
+        return receipt;
+      }
+      return sendAfterCopyModeExit(copyModeExit);
     };
     const clearExternalInputTimer = () => {
       if (externalInputTimerRef.current) {
@@ -2034,27 +2072,47 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         drainExternalInput();
       }, delay);
     };
-    const drainExternalInput = () => {
-      if (disposed || externalInputFramesRef.current.length === 0) return;
+    let drainingExternalInput = false;
+    const drainExternalInput = async () => {
+      if (disposed || drainingExternalInput || externalInputFramesRef.current.length === 0) return;
       if (Date.now() < nextExternalInputAtRef.current) {
         scheduleExternalInputDrain();
         return;
       }
       const nextFrame = externalInputFramesRef.current.shift();
       if (!nextFrame?.data) return;
-      sendUserInput(nextFrame.data);
-      nextExternalInputAtRef.current = Date.now() + (Number.isFinite(nextFrame.delayAfterMs) ? nextFrame.delayAfterMs : 0);
-      if (externalInputFramesRef.current.length > 0) {
-        scheduleExternalInputDrain();
+      drainingExternalInput = true;
+      try {
+        const accepted = await sendUserInput(nextFrame.data, nextFrame.commandLease);
+        if (accepted === false) throw new Error('Terminal input was not accepted. Your draft was kept.');
+        nextFrame.delivery.accepted = true;
+        nextFrame.resolve?.({ accepted: true });
+        nextExternalInputAtRef.current = Date.now() + (Number.isFinite(nextFrame.delayAfterMs) ? nextFrame.delayAfterMs : 0);
+      } catch (error) {
+        const failure = nextFrame.delivery.accepted
+          ? Object.assign(new Error(error.message), { definitelyRejected: false }) : error;
+        nextFrame.reject?.(failure);
+        for (const frame of externalInputFramesRef.current) frame.reject?.(failure);
+        externalInputFramesRef.current = [];
+      } finally {
+        drainingExternalInput = false;
+        if (externalInputFramesRef.current.length > 0) scheduleExternalInputDrain();
       }
     };
-    const enqueueExternalInput = (text) => {
-      const frames = createExternalInputFrames(text);
+    const enqueueExternalInput = (text, commandLease) => {
+      const socket = socketRef.current;
+      const socketReady = socket?.readyState === WebSocket.OPEN && socketReadyForInputRef.current;
+      const frames = socketReady ? createExternalInputFrames(text)
+        : typeof text === 'string' && text ? [{ data: text, delayAfterMs: 120 }] : [];
       if (disposed || frames.length === 0 || !environmentAllows(getActiveEnvironment(), 'terminalInput')) return false;
+      const delivery = { accepted: false };
+      for (const frame of frames) { frame.delivery = delivery; frame.commandLease = commandLease; }
+      const completion = new Promise((resolve, reject) => Object.assign(frames[frames.length - 1], { resolve, reject }));
+      completion.catch(() => {});
       externalInputFramesRef.current.push(...frames);
       scheduleExternalInputDrain();
       drainExternalInput();
-      return true;
+      return completion;
     };
     const confirmLargePaste = (text) => {
       if (!text) return false;
@@ -2073,12 +2131,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     sendSocketInputRef.current = sendSocketInput;
     sendTerminalInputRef.current = sendUserInput;
     enqueueExternalInputRef.current = enqueueExternalInput;
-    if (pendingExternalInputRef.current.length > 0) {
-      const queuedInputs = pendingExternalInputRef.current.splice(0, pendingExternalInputRef.current.length);
-      for (const queuedText of queuedInputs) {
-        enqueueExternalInput(queuedText);
-      }
-    }
     if (registerTerminalSender) {
       registerTerminalSender(sessionId, sendUserInput);
     }
@@ -2128,6 +2180,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     };
 
     term.attachCustomKeyEventHandler((event) => {
+      if (event.defaultPrevented) return false;
       const normalizedKey = typeof event.key === 'string' ? event.key.toLowerCase() : '';
 
       // Copy terminal selection instead of sending SIGINT when text is selected.
@@ -2209,6 +2262,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       }
       term.open(container);
       setHostReadyVersion((version) => version + 1);
+      // A newly opened primary terminal takes the keyboard unless the user is already typing elsewhere.
+      if (isPrimaryRef.current && !isMobile && inputEnabled !== false && term.textarea
+        && (!document.activeElement || document.activeElement === document.body)) {
+        focusElementWithoutScroll(term.textarea);
+      }
 
       // Pre-block fit() until loadInitialHistory() finishes.
       // xterm is initialised at cols=250 so that ANSI cursor-positioning sequences
@@ -2412,7 +2470,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           params.set('afterTs', String(afterTs));
         }
         const response = await apiFetch(`/api/terminal/${sessionId}/history?${params.toString()}`);
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error(`Terminal history was not available (${response.status}).`);
         const snapshot = await response.json();
         return {
           history: Array.isArray(snapshot?.history) ? snapshot.history : [],
@@ -2627,7 +2685,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       const loadIncrementalHistory = async () => {
         if (disposed) return;
         const state = historyStateRef.current;
-        if (state.loading || (!state.newestTs && !state.newestSeq)) return;
+        if (state.loading) return;
         state.loading = true;
         state.lastLoadAt = Date.now();
         historyReloadingRef.current = true;
@@ -2637,7 +2695,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           const historyPage = await fetchHistoryPage(
             state.newestSeq !== null && state.newestSeq !== undefined
               ? { afterSeq: state.newestSeq }
-              : { afterTs: state.newestTs }
+              : state.newestTs ? { afterTs: state.newestTs } : { afterSeq: 0 }
           );
           if (disposed || environmentSignal.aborted) return;
           const history = unseenTerminalEvents(historyPage?.history || [], state.newestSeq || 0);
@@ -2762,14 +2820,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
       const debouncedFit = (delay = 120) => {
         if (disposed) return;
-        // stable terminal: only the active surface drives fit/PTY size. Inactive split
-        // panes stay mounted with their last geometry.
-        if (!isPrimaryRef.current && !isMobile) return;
         scheduleViewportRefresh({ delay, fit: true, preserveBottom: true });
       };
 
-      // ResizeObserver is owned by the isPrimary effect (observeActiveTerminalResize)
-      // so inactive tabs don't thrash FitAddon / WebGL.
+      // Each retained host observes its geometry; the fit boundary rejects hidden panes.
 
       const handleFocus = () => debouncedFit();
       const STALE_SOCKET_THRESHOLD = 25000;
@@ -3649,9 +3703,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       container.addEventListener('contextmenu', handleContextMenu);
 
       const handlePasteEvent = async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
         if (suppressPasteEventRef.current) {
-          e.preventDefault();
-          e.stopPropagation();
           return;
         }
         const clipboardData = e.clipboardData;
@@ -3669,6 +3723,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         } catch (error) {
           console.error('Failed to inspect clipboard image data:', error);
         }
+        if (disposed || environmentSignal.aborted) return;
         if (imageFile && !shouldSendText) {
           e.preventDefault();
           e.stopPropagation();
@@ -3762,10 +3817,11 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
 
     return () => {
       disposed = true;
+      discardUnsentInput();
       detectedUrlsRef.current.clear();
       sendSocketInputRef.current = null;
       socketReadyForInputRef.current = false;
-      preAuthSocketInputRef.current = '';
+      preAuthSocketInputRef.current = [];
       clientIdRef.current = null;
       ptyOwnerStateRef.current = {
         isOwner: null,
@@ -3835,7 +3891,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       reconnectSocketRef.current = null;
       sendTerminalInputRef.current = null;
       enqueueExternalInputRef.current = null;
-      pendingExternalInputRef.current = [];
       externalInputFramesRef.current = [];
       nextExternalInputAtRef.current = 0;
       if (externalInputTimerRef.current) {
@@ -3901,11 +3956,9 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
     }
   }, [platformConfig.fontSize, scheduleViewportRefresh]);
 
-  // Terminal v4 stable: only the active surface observes resize / fits. Inactive split
-  // panes keep their xterm+socket mounted without FitAddon thrash or WebGL atlas
-  // churn. Re-activation fits once and clears the texture atlas.
+  // Visible inactive panes also need fitting when fullscreen restores their split geometry.
+  // Primary ownership still controls PTY priority; hidden hosts cannot fit or publish sizes.
   useEffect(() => {
-    if (!isPrimary && !isMobile) return undefined;
     const host = terminalRef.current;
     if (!host || !xtermRef.current?.element) return undefined;
 
@@ -3916,7 +3969,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
           immediate: true,
           fit: false,
           preserveBottom: true,
-          clearAtlas: true,
+          clearAtlas: isPrimary || isMobile,
         });
       },
       onFit: () => {
@@ -3933,7 +3986,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   // Use shorter debounce on mobile for faster keyboard response
   useEffect(() => {
     if (!fitAddonRef.current || !xtermRef.current) return;
-    if (!isPrimary && !isMobile) return;
     const debounceTime = 100;
     scheduleViewportRefresh({ delay: debounceTime, fit: true, preserveBottom: true });
     // Second fit after any CSS transitions settle (300ms max transition + buffer)
@@ -3947,7 +3999,6 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
   useEffect(() => {
     if (fitSignal === undefined || fitSignal === null) return;
     if (!fitAddonRef.current || !xtermRef.current) return;
-    if (!isPrimary && !isMobile) return;
     scheduleViewportRefresh({ immediate: true, fit: true, preserveBottom: true });
   }, [fitSignal, isPrimary, isMobile, scheduleViewportRefresh]);
 
@@ -4065,6 +4116,7 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
       onTouchEndCapture={handleTouchEndCapture}
       onTouchCancelCapture={handleTouchCancelCapture}
     >
+      {inputDeliveryError && <div role="alert" className="terminal-input-error">{inputDeliveryError}</div>}
       <div
         ref={terminalRef}
         className="xterm-container xterm-container-terminal-v4"
@@ -4110,35 +4162,51 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         />
       )}
 
-      {!isMobile && isScrollMode && (
-        <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>
-      )}
-      {viewMode === 'terminal' && isCopyMode && (
-        <div className="terminal-copy-mode-banner">
-          <button
-            type="button"
-            className="terminal-copy-mode-exit"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
-            onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
-          >
-            Return to live
-          </button>
-        </div>
-      )}
-      {showCopiedBanner && (
-        <div className="terminal-copy-feedback-banner" role="status" aria-live="polite">
-          Copied
-        </div>
-      )}
+      <div className="terminal-frame-status">
+        {isLoadingHistory && (
+          <div className="terminal-loading-indicator" role="status">
+            <span className="terminal-loading-spinner" aria-hidden="true"></span>
+            <span>Loading history...</span>
+          </div>
+        )}
+        {isLoadingMoreHistory && !isLoadingHistory && (
+          <div className="terminal-loading-indicator" role="status">
+            <span className="terminal-loading-spinner" aria-hidden="true"></span>
+            <span>Loading more history...</span>
+          </div>
+        )}
+        {!isMobile && isScrollMode && (
+          <div className="terminal-scroll-mode-hint">Scroll mode — tap to type</div>
+        )}
+        {viewMode === 'terminal' && isCopyMode && (
+          <div className="terminal-copy-mode-banner">
+            <button
+              type="button"
+              className="terminal-copy-mode-exit"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
+              onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
+            >
+              Return to live
+            </button>
+          </div>
+        )}
+        {showCopiedBanner && (
+          <div className="terminal-copy-feedback-banner" role="status" aria-live="polite">
+            Copied
+          </div>
+        )}
+
+      </div>
 
       <button
+        type="button"
         className="terminal-image-btn"
         onClick={triggerFileInput}
         title="Upload image"
         aria-label="Upload image"
         disabled={!inputEnabled || !environmentAllows(environment, 'fileWrite') || !environmentAllows(environment, 'transfer')}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
           <circle cx="8.5" cy="8.5" r="1.5" />
           <polyline points="21 15 16 10 5 21" />
@@ -4158,21 +4226,10 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
         </div>
       )}
 
-      {isLoadingHistory && (
-        <div className="terminal-loading-indicator">
-          <span className="terminal-loading-spinner"></span>
-          <span>Loading history...</span>
-        </div>
-      )}
-      {isLoadingMoreHistory && !isLoadingHistory && (
-        <div className="terminal-loading-indicator">
-          <span className="terminal-loading-spinner"></span>
-          <span>Loading more history...</span>
-        </div>
-      )}
       {!isMobile && (isScrollMode || isCopyMode) && (
         <div className={`terminal-scroll-buttons ${isMobile ? 'mobile' : 'desktop'}`}>
           <button
+            type="button"
             className="scroll-btn scroll-up"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); scrollUp(); triggerLoadMoreIfAtTop(); }}
             onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); startScrolling('up'); triggerLoadMoreIfAtTop(); }}
@@ -4182,11 +4239,12 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onMouseLeave={stopScrolling}
             aria-label="Scroll up"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="18 15 12 9 6 15" />
             </svg>
           </button>
           <button
+            type="button"
             className="scroll-btn scroll-down"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); scrollDown(); }}
             onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); startScrolling('down'); }}
@@ -4196,18 +4254,19 @@ export function TerminalChat({ sessionId, keybarOpen, viewportHeight, onUrlDetec
             onMouseLeave={stopScrolling}
             aria-label="Scroll down"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="6 9 12 15 18 9" />
             </svg>
           </button>
           <button
+            type="button"
             className="scroll-btn scroll-live"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
             onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); jumpToLatestOutput(); }}
             aria-label="Jump to live output"
             title="Jump to live output"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="7 13 12 18 17 13" />
               <polyline points="7 6 12 11 17 6" />
             </svg>

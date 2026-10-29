@@ -85,13 +85,17 @@ fn directory(data: &FsPath, owner: &str) -> PathBuf {
 fn record_path(data: &FsPath, owner: &str, id: Uuid) -> PathBuf {
     directory(data, owner).join(format!("{id}.json"))
 }
-fn load(data: &FsPath, owner: &str, id: Uuid) -> Result<Record, ApiError> {
+fn load_record(data: &FsPath, owner: &str, id: Uuid) -> Result<Record, ApiError> {
     let bytes = fs::read(record_path(data, owner, id))
         .map_err(|_| ApiError::not_found("Transfer not found"))?;
-    let mut record: Record = serde_json::from_slice(&bytes).map_err(io)?;
+    let record: Record = serde_json::from_slice(&bytes).map_err(io)?;
     if record.owner != owner || record.transfer.id != id {
         return Err(ApiError::not_found("Transfer not found"));
     }
+    Ok(record)
+}
+fn load(data: &FsPath, owner: &str, id: Uuid) -> Result<Record, ApiError> {
+    let mut record = load_record(data, owner, id)?;
     if record.transfer.direction == Direction::Upload && record.transfer.status == "publishing" {
         let (_, target) = resolve(
             &record.transfer.workspace_path,
@@ -177,12 +181,14 @@ fn resolve(workspace: &str, relative: &str) -> Result<(PathBuf, PathBuf), ApiErr
     Ok((root, canonical_parent.join(target.file_name().unwrap())))
 }
 fn validate_stage(record: &Record) -> Result<(), ApiError> {
-    let (_, target) = resolve(
-        &record.transfer.workspace_path,
-        &record.transfer.relative_path,
-    )?;
-    if target != record.target {
-        return Err(conflict("Destination moved during transfer"));
+    if record.transfer.direction == Direction::Upload {
+        let (_, target) = resolve(
+            &record.transfer.workspace_path,
+            &record.transfer.relative_path,
+        )?;
+        if target != record.target {
+            return Err(conflict("Destination moved during transfer"));
+        }
     }
     let meta = fs::symlink_metadata(&record.stage).map_err(io)?;
     if !meta.is_file() || meta.file_type().is_symlink() {
@@ -258,7 +264,11 @@ fn create(data: &FsPath, owner: &str, input: Create) -> Result<Transfer, ApiErro
     if existing.len() >= 100
         || existing
             .iter()
-            .filter(|r| r.transfer.status == "pending")
+            .filter(|r| {
+                r.transfer.status == "pending"
+                    || (r.transfer.direction == Direction::Download
+                        && r.transfer.status == "completed")
+            })
             .map(|r| r.transfer.size)
             .sum::<u64>()
             + size
@@ -407,14 +417,22 @@ fn finish(data: &FsPath, owner: &str, id: Uuid) -> Result<Transfer, ApiError> {
     Ok(record.transfer)
 }
 fn cancel(data: &FsPath, owner: &str, id: Uuid) -> Result<Transfer, ApiError> {
-    let mut record = load(data, owner, id)?;
+    let mut record = load_record(data, owner, id)?;
+    // Cleanup owns only the stored staging file; publication prerequisites may be gone.
+    if record.stage.parent() != Some(directory(data, owner).as_path()) {
+        return Err(conflict("Transfer staging path changed"));
+    }
+    match fs::remove_file(&record.stage) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io(error)),
+    }
     if record.transfer.status == "completed" || record.transfer.status == "cancelled" {
         fs::remove_file(record_path(data, owner, id)).map_err(io)?;
-        return Ok(record.transfer);
+    } else {
+        record.transfer.status = "cancelled".into();
+        save(data, &record)?;
     }
-    record.transfer.status = "cancelled".into();
-    save(data, &record)?;
-    let _ = fs::remove_file(record.stage);
     Ok(record.transfer)
 }
 fn read_chunk(
@@ -424,7 +442,9 @@ fn read_chunk(
     query: ChunkQuery,
 ) -> Result<serde_json::Value, ApiError> {
     let mut record = load(data, owner, id)?;
-    if record.transfer.direction != Direction::Download || record.transfer.status != "pending" {
+    if record.transfer.direction != Direction::Download
+        || !matches!(record.transfer.status.as_str(), "pending" | "completed")
+    {
         return Err(conflict("Download is not pending"));
     }
     let length = query.length.unwrap_or(CHUNK);
@@ -454,7 +474,9 @@ fn finish_download(
     input: DownloadComplete,
 ) -> Result<Transfer, ApiError> {
     let mut record = load(data, owner, id)?;
-    if record.transfer.direction != Direction::Download || record.transfer.status != "pending" {
+    if record.transfer.direction != Direction::Download
+        || !matches!(record.transfer.status.as_str(), "pending" | "completed")
+    {
         return Err(conflict("Download is not pending"));
     }
     if record.transfer.offset != record.transfer.size
@@ -464,7 +486,7 @@ fn finish_download(
     }
     record.transfer.status = "completed".into();
     save(data, &record)?;
-    let _ = fs::remove_file(record.stage);
+    // Keep the snapshot for delivery retries until explicit record removal.
     Ok(record.transfer)
 }
 
@@ -767,6 +789,147 @@ mod tests {
             .0,
             StatusCode::OK
         );
+        assert_eq!(
+            request(
+                router.clone(),
+                Some(&owner),
+                "POST",
+                &format!("/api/transfers/{id}/download-complete"),
+                serde_json::json!({"sha256":digest(b"hi")})
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            request(
+                router.clone(),
+                Some(&owner),
+                "POST",
+                &format!("/api/transfers/{id}/download-complete"),
+                serde_json::json!({"sha256":digest(b"wrong")})
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            request(
+                router.clone(),
+                Some(&other),
+                "GET",
+                &format!("/api/transfers/{id}/chunk?offset=0"),
+                serde_json::Value::Null
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            request(
+                router.clone(),
+                Some(&owner),
+                "GET",
+                &format!("/api/transfers/{id}/chunk?offset=0"),
+                serde_json::Value::Null
+            )
+            .await
+            .1["data"],
+            "6869"
+        );
+    }
+    #[test]
+    fn cancellation_survives_missing_destination_workspace_and_stage() {
+        for missing in ["destination", "workspace", "stage"] {
+            let data = tempfile::tempdir().unwrap();
+            let work = tempfile::tempdir().unwrap();
+            fs::create_dir(work.path().join("nested")).unwrap();
+            let file = create(
+                data.path(),
+                "alice",
+                input(work.path(), "nested/new.txt", 2),
+            )
+            .unwrap();
+            let record = load(data.path(), "alice", file.id).unwrap();
+            match missing {
+                "destination" => fs::remove_dir(work.path().join("nested")).unwrap(),
+                "workspace" => fs::remove_dir_all(work.path()).unwrap(),
+                _ => fs::remove_file(&record.stage).unwrap(),
+            }
+            assert!(cancel(data.path(), "bob", file.id).is_err());
+            assert_eq!(
+                cancel(data.path(), "alice", file.id).unwrap().status,
+                "cancelled"
+            );
+            assert!(!record.stage.exists());
+            cancel(data.path(), "alice", file.id).unwrap();
+            assert!(records(data.path(), "alice").unwrap().is_empty());
+        }
+    }
+    #[test]
+    fn download_receipt_retries_and_completed_bytes_remain_deliverable() {
+        let data = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        fs::write(work.path().join("download.txt"), b"hello").unwrap();
+        let mut intent = input(work.path(), "download.txt", 5);
+        intent.direction = Direction::Download;
+        let file = create(data.path(), "alice", intent).unwrap();
+        read_chunk(
+            data.path(),
+            "alice",
+            file.id,
+            ChunkQuery {
+                offset: 0,
+                length: None,
+            },
+        )
+        .unwrap();
+        let receipt = || DownloadComplete {
+            sha256: digest(b"hello"),
+        };
+        finish_download(data.path(), "alice", file.id, receipt()).unwrap();
+        fs::remove_file(work.path().join("download.txt")).unwrap();
+        assert_eq!(
+            finish_download(data.path(), "alice", file.id, receipt())
+                .unwrap()
+                .status,
+            "completed"
+        );
+        assert!(finish_download(
+            data.path(),
+            "alice",
+            file.id,
+            DownloadComplete {
+                sha256: digest(b"wrong")
+            }
+        )
+        .is_err());
+        assert!(read_chunk(
+            data.path(),
+            "bob",
+            file.id,
+            ChunkQuery {
+                offset: 0,
+                length: None
+            }
+        )
+        .is_err());
+        assert_eq!(
+            read_chunk(
+                data.path(),
+                "alice",
+                file.id,
+                ChunkQuery {
+                    offset: 0,
+                    length: None
+                }
+            )
+            .unwrap()["data"],
+            "68656c6c6f"
+        );
+        let stage = load(data.path(), "alice", file.id).unwrap().stage;
+        cancel(data.path(), "alice", file.id).unwrap();
+        assert!(!stage.exists());
     }
     #[test]
     fn rewind_prevents_publish_and_staging_stays_outside_the_workspace() {

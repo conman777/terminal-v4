@@ -1,3 +1,5 @@
+import './MobileUI.css';
+
 export function MobileViewTabs({ mobileView, onViewChange, previewUrl }) {
   // Only show view tabs when there's a preview URL
   if (!previewUrl) {
@@ -5,10 +7,11 @@ export function MobileViewTabs({ mobileView, onViewChange, previewUrl }) {
   }
 
   return (
-    <div className="mobile-view-tabs">
+    <div className="mobile-view-tabs mobile-ui" role="group" aria-label="Mobile view">
       <button
         type="button"
         className={`mobile-view-tab${mobileView === 'terminal' ? ' active' : ''}`}
+        aria-pressed={mobileView === 'terminal'}
         onClick={() => onViewChange?.('terminal')}
       >
         Terminal
@@ -16,6 +19,7 @@ export function MobileViewTabs({ mobileView, onViewChange, previewUrl }) {
       <button
         type="button"
         className={`mobile-view-tab${mobileView === 'preview' ? ' active' : ''}`}
+        aria-pressed={mobileView === 'preview'}
         onClick={() => onViewChange?.('preview')}
       >
         Preview

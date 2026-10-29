@@ -1,11 +1,11 @@
 # Terminal v4 - Feature Catalog
 
-This document provides a comprehensive overview of all features in Terminal v4.
+This catalog describes the active Rust API and web workspace. Provider-backed tools require a configured runtime, and remote operations require the corresponding device permission. Availability in a menu does not establish that an external provider or device is connected.
 
 ## Core Terminal Features
 
 ### Terminal Emulation
-- **Full PTY Support**: True pseudo-terminal with node-pty for interactive programs (vim, Python REPL, etc.)
+- **Full PTY Support**: Rust-managed pseudo-terminals for interactive programs (vim, Python REPL, etc.)
 - **xterm.js Rendering**: Professional terminal UI with ANSI color support
 - **WebGL Acceleration**: Optional WebGL renderer for improved performance
 - **Tmux Integration**: Optional tmux support for session persistence across server restarts
@@ -14,7 +14,7 @@ This document provides a comprehensive overview of all features in Terminal v4.
 - **Configurable Working Directory**: Set default cwd for new terminal sessions
 
 ### Terminal UI
-- **Split Pane Layouts**: Multi-pane terminal view with draggable dividers
+- **Split Pane Layouts**: Up to eight panes with pointer and keyboard resizing; saved child proportions survive reopening and viewport changes
 - **Fullscreen Mode**: Focus on a single terminal pane
 - **Reader View**: Accessible terminal output reading with pagination
 - **Tab Bar**: Visual tabs with drag-to-reorder support
@@ -31,6 +31,24 @@ This document provides a comprehensive overview of all features in Terminal v4.
 - **Model Selection**: Switch between Claude models (Sonnet, Opus, Haiku)
 - **Working Directory Control**: Set cwd for each Claude session
 - **Tool Visibility**: View tool calls and responses in structured format
+- **Access modes**: Per-thread Supervised (approve each action, with "Allow for this session"), Auto-edit (default) or Full access, for Claude Code and Codex
+- **Plan mode**: Read-only planning turns with "Implement plan" or "Implement in a new thread"
+- **Questions**: Codex questions appear as answerable cards in the conversation
+- **Per-turn changes**: Files each turn changed, with diffs (stacked or side by side) and line comments that go into your next message
+- **Thread details**: Branch, uncommitted changes, Commit/push/PR, pull request checks and review, Open in editor, project scripts, terminal drawer with several terminals
+- **Composer**: Slash commands and installed skills by name, `@` file mentions, any-file attachments, queued messages while a reply runs, stashed drafts, context-window meter
+- **Usage**: Settings → Usage totals tokens and cost (where reported) per thread
+- **Messaging**: Settings → Messaging connects a Telegram bot to talk to a thread from one paired chat
+
+## Shared Browser
+
+- **App-owned Chromium**: The server runs the bundled browser; the web interface displays its frames and forwards human input. Websites run on the server, including when viewing Terminal v4 through Tailscale.
+- **Tabs and navigation**: Address/search input, Back/Forward based on actual tab history, reload, tab switching, and retained tabs when the pane is hidden.
+- **Shared human/agent context**: Coding agents use the same pages through account- and session-scoped capabilities. Human takeover pauses agent control.
+- **Explicit browser review**: Exact browser actions require a broker decision; the injected Codex transport does not add a second duplicate prompt. Other native permissions remain separate.
+- **Scope**: Profiles are disposable. Browser file pickers, downloads, and durable website profiles are not exposed by the workspace browser. File management is available in Files.
+
+See [Agent browser](features/V4_AGENT_BROWSER.md) for runtime packaging, approvals, origin restrictions, and cleanup behavior.
 
 ## Preview & Development
 
@@ -49,14 +67,14 @@ This document provides a comprehensive overview of all features in Terminal v4.
 - **Network Tab**: Monitor HTTP requests with timing, status, and headers
 - **Storage Tab**: Inspect localStorage, sessionStorage, and cookies
 - **WebSocket Tab**: Monitor WebSocket connections and messages
-- **Performance Tab**: Display web vitals (FCP, LCP, CLS, FID, TTFB)
+- **Performance Tab**: Optional inspector enabled by `VITE_ENABLE_PERFORMANCE_TAB=true`; displays the metrics supplied by the selected preview
 - **Log Filtering**: Search and filter logs by type, level, or content
 - **JSON Viewer**: Pretty-print JSON responses and payloads
 
 ### Screenshots & Recording
 - **Full Page Screenshots**: Capture entire preview page
 - **Element Screenshots**: Screenshot specific elements by CSS selector
-- **Video Recording**: Record preview session as MP4 video
+- **Video Recording API**: Browser capture produces WebM; the current web toolbar does not expose preview recording start/stop. Session replay is a separate feature.
 - **Screenshot Gallery**: Browse, view, and delete saved screenshots
 - **Configurable Dimensions**: Set custom viewport width/height
 
@@ -83,7 +101,7 @@ This document provides a comprehensive overview of all features in Terminal v4.
 - **File Browser**: Navigate filesystem with folder tree
 - **File Upload**: Drag-drop or select files to upload
 - **File Download**: Download individual files or zip directories
-- **Rename/Move**: Rename or move files and folders
+- **Rename**: Rename files and folders within the current folder from the Files action menu. Moving to another path is available through the Files API or terminal; the Files UI exposes rename only.
 - **Delete**: Delete files and directories
 - **Unzip**: Extract zip files in place
 - **Folder Navigation**: Breadcrumb navigation
@@ -107,18 +125,17 @@ This document provides a comprehensive overview of all features in Terminal v4.
 ## System Monitoring
 
 ### Real-Time Stats
-- **CPU Usage**: Current CPU utilization percentage
-- **Memory Usage**: RAM usage with total/used/free breakdown
-- **Disk I/O**: Real-time read/write MB/s for all block devices
-- **Event Loop Delay**: Node.js event loop monitoring (mean and max)
-- **Top Processes**: List of processes by CPU/memory with port info
+- **CPU Usage**: Current CPU utilization percentage and core count
+- **Memory Usage**: RAM usage with used/total breakdown
+- **Disk Usage**: Used/total space across disks
+- **Top Processes**: The busiest processes by CPU, then memory
 
 ### Historical Statistics
 - **Stats History**: 5-minute interval tracking for 30 days
 - **Time Range Queries**: View stats for 1h, 6h, 24h, 7d, or 30d
 - **CPU History**: Historical CPU usage trends
 - **Memory History**: Historical RAM usage trends
-- **Disk I/O History**: Historical disk read/write rates
+- **Disk History**: Historical disk usage percentage
 
 ## Voice & Audio
 
@@ -132,7 +149,6 @@ This document provides a comprehensive overview of all features in Terminal v4.
 
 ### Bookmarks
 - **Command Bookmarks**: Save frequently-used commands
-- **Working Directory**: Associate commands with specific directories
 - **Execute Bookmarks**: Run saved commands directly in terminal
 - **Bookmark Management**: Create, update, delete bookmarks
 
@@ -157,35 +173,35 @@ This document provides a comprehensive overview of all features in Terminal v4.
 - **Sidebar State**: Remember sidebar collapsed/expanded
 - **Preview URL**: Remember last preview URL
 - **Groq API Key**: Store transcription API key
-- **Theme Customization**: Custom color themes (via StyleEditor)
+- **Appearance**: Light/dark theme, accent colour presets and conversation width (Settings → Interface)
 
-### Browser Automation Settings
-- **Idle Timeout**: Auto-close idle browser sessions
-- **Max Lifetime**: Maximum browser session duration
-- **Cleanup Interval**: Frequency of cleanup checks
+### Agent Browser Settings
+- Enable browser tools, configure allowed origins, and set the action timeout on Home.
+- Advanced executable and headless options apply to standalone V4 runs. The shared workspace browser uses the bundled engine and frame transport.
+- The Browser settings shortcut opens this supported configuration. The retired `/api/settings/browser` lifecycle form is not an active API.
 
 ## Developer Tools
 
 ### System Management
-- **System Rebuild**: Remotely trigger rebuild.sh script
-- **Build Output**: View rebuild logs and status
-- **Server Restart**: Restart backend server
+- **System Rebuild**: `POST /api/system/rebuild` runs `rebuild.sh` and returns its output. It is off unless the server starts with `TERMINAL_V4_ALLOW_REBUILD=1`; there is no UI for it, and restarting stays manual
+- **Setup check**: Settings → Setup check (`GET /api/system/doctor`) confirms Git, Claude Code, Codex, the GitHub CLI and the data folder
 
 ### Keyboard Shortcuts
-- **Global Shortcuts**: System-wide keyboard shortcuts
-- **Context-Aware**: Different shortcuts per UI context
-- **Configurable**: Customizable shortcut bindings
+- **Command palette**: ⌘K / Ctrl+K runs any workspace command or jumps to a thread
+- **Find in thread**: ⌘F / Ctrl+F highlights and steps through matching messages
+- **Configurable**: Settings → Keyboard shortcuts rebinds palette, find, sidebar, preview, full screen, new and close terminal
 
 ### Advanced Features
 - **WebSocket Latency Testing**: Measure round-trip time
 - **Health Check Endpoint**: Monitor server health
 - **Idle Detection**: Detect user inactivity
 - **Favicon Notifications**: Flash favicon for alerts
+- **Agent Notifications**: Optional system notifications when a thread finishes or needs approval while you are in another window
 - **Session Activity Tracking**: Track last activity per session
 
 ## Persistence & Data Storage
 
-### SQLite Database
+### SQLite Database (`terminal.db` in the data directory)
 - User accounts
 - Refresh tokens
 - User settings

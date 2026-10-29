@@ -39,6 +39,8 @@ function toTimestamp(value) {
 export function useSessionActivity() {
   const [activity, setActivity] = useState({});
   const focusedSessionRef = useRef(null);
+  const persistentBusyRef = useRef(new Set());
+  const lifecycleRef = useRef(new Map());
   const hasBusySessions = Object.values(activity).some((state) => state?.isBusy);
 
   // Auto-clear stale busy sessions only while something is actually busy.
@@ -52,7 +54,7 @@ export function useSessionActivity() {
         let changed = false;
         const next = {};
         for (const [id, state] of Object.entries(prev)) {
-          if (state.isBusy && state.lastActivity > 0 && now - state.lastActivity > BUSY_STALE_MS) {
+          if (state.isBusy && !persistentBusyRef.current.has(id) && state.lastActivity > 0 && now - state.lastActivity > BUSY_STALE_MS) {
             next[id] = normalizeActivityState({ ...state, isBusy: false });
             changed = true;
           } else {
@@ -65,6 +67,14 @@ export function useSessionActivity() {
     return () => clearInterval(interval);
   }, [hasBusySessions]);
 
+  const markUnread = useCallback((sessionId) => {
+    if (!sessionId) return;
+    setActivity(prev => ({
+      ...prev,
+      [sessionId]: normalizeActivityState({ ...normalizeActivityState(prev[sessionId]), hasUnread: true, needsAttention: true }),
+    }));
+  }, []);
+
   const markActivity = useCallback((sessionId) => {
     if (!sessionId) return;
     setActivity(prev => {
@@ -75,6 +85,7 @@ export function useSessionActivity() {
         [sessionId]: normalizeActivityState({
           ...current,
           hasUnread: !isFocused,
+          needsAttention: !isFocused,
           lastActivity: Date.now()
         })
       };
@@ -87,12 +98,13 @@ export function useSessionActivity() {
     setActivity(prev => {
       const current = prev[sessionId] ? normalizeActivityState(prev[sessionId]) : null;
       if (!current) return prev;
-      if (!current.hasUnread && !current.isBusy) return prev;
+      if (!current.hasUnread && !current.needsAttention) return prev;
       return {
         ...prev,
         [sessionId]: normalizeActivityState({
           ...current,
-          hasUnread: false
+          hasUnread: false,
+          needsAttention: false
         })
       };
     });
@@ -103,12 +115,13 @@ export function useSessionActivity() {
     if (!sessionId) return;
     setActivity(prev => {
       const current = normalizeActivityState(prev[sessionId]);
-      if (!current.hasUnread) return prev;
+      if (!current.hasUnread && !current.needsAttention) return prev;
       return {
         ...prev,
         [sessionId]: normalizeActivityState({
           ...current,
           hasUnread: false,
+          needsAttention: false,
           lastActivity: Date.now()
         })
       };
@@ -124,12 +137,22 @@ export function useSessionActivity() {
     const now = Date.now();
     const busy = Boolean(isBusy);
     const activityTs = toTimestamp(options.lastActivityAt);
+    const statusSeq = options.persistent === true && Number.isSafeInteger(options.statusSeq) && options.statusSeq >= 0 ? options.statusSeq : null;
 
     setActivity(prev => {
       const current = normalizeActivityState(prev[sessionId]);
-      if (activityTs > 0 && current.lastActivity > activityTs) {
-        return prev;
+      const lifecycle = lifecycleRef.current.get(sessionId);
+      if (statusSeq !== null) {
+        if (lifecycle && (statusSeq < lifecycle.seq || (statusSeq === lifecycle.seq && lifecycle.localChange))) return prev;
+        lifecycleRef.current.set(sessionId, { seq: statusSeq, localChange: false });
+      } else {
+        if (activityTs > 0 && current.lastActivity > activityTs) return prev;
+        if (options.persistent === true && current.isBusy !== busy) {
+          lifecycleRef.current.set(sessionId, { seq: lifecycle?.seq ?? -1, localChange: true });
+        }
       }
+      if (options.persistent === true && busy) persistentBusyRef.current.add(sessionId);
+      else if (options.persistent === false || !busy) persistentBusyRef.current.delete(sessionId);
 
       const nextLastActivity = activityTs || now;
       const completedOffscreen = current.isBusy && !busy && focusedSessionRef.current !== sessionId;
@@ -163,6 +186,8 @@ export function useSessionActivity() {
   }, [activity]);
 
   const removeSession = useCallback((sessionId) => {
+    persistentBusyRef.current.delete(sessionId);
+    lifecycleRef.current.delete(sessionId);
     setActivity(prev => {
       const { [sessionId]: removed, ...rest } = prev;
       return rest;
@@ -170,6 +195,7 @@ export function useSessionActivity() {
   }, []);
 
   return {
+    markUnread,
     activity,
     markActivity,
     clearUnread,

@@ -1,18 +1,24 @@
 import { useEffect, useCallback, useRef } from 'react';
+import { workspaceKeyboardBlocked } from '../utils/workspaceKeyboardScope';
+import { eventMatches, isMacPlatform, KEYBINDING_ACTIONS, loadBindings } from '../utils/keybindings';
+
+const ACTION_HANDLERS = {
+  commandPalette: 'onCommandPalette',
+  findInThread: 'onFindInThread',
+  toggleSidebar: 'onToggleSidebar',
+  togglePreview: 'onTogglePreview',
+  toggleFullScreen: 'onToggleFullScreen',
+  newTerminal: 'onNewTerminal',
+  closeTerminal: 'onCloseTerminal',
+};
 
 /**
- * Global keyboard shortcuts for desktop.
- *
- * Shortcuts:
- * - Cmd+B: Toggle sidebar
- * - Cmd+P: Toggle preview
- * - Cmd+\: Toggle full-screen terminal
- * - Cmd+1-8: Focus pane 1-8
- * - Cmd+T: New terminal
- * - Cmd+W: Close current terminal
- * - Escape: Exit full-screen mode
+ * Global keyboard shortcuts for desktop. Bindings come from Settings → Keyboard shortcuts
+ * (see utils/keybindings.js); Cmd/Ctrl+1-8 focuses a pane and Escape leaves full screen.
  */
 export function useKeyboardShortcuts({
+  onCommandPalette,
+  onFindInThread,
   onToggleSidebar,
   onTogglePreview,
   onToggleFullScreen,
@@ -24,105 +30,49 @@ export function useKeyboardShortcuts({
   paneCount = 1,
   enabled = true
 }) {
-  const handlersRef = useRef({
-    onToggleSidebar,
-    onTogglePreview,
-    onToggleFullScreen,
-    onFocusPane,
-    onNewTerminal,
-    onCloseTerminal,
-    onExitFullScreen
-  });
-
-  // Keep handlers up to date
-  useEffect(() => {
-    handlersRef.current = {
-      onToggleSidebar,
-      onTogglePreview,
-      onToggleFullScreen,
-      onFocusPane,
-      onNewTerminal,
-      onCloseTerminal,
-      onExitFullScreen
-    };
-  }, [onToggleSidebar, onTogglePreview, onToggleFullScreen, onFocusPane, onNewTerminal, onCloseTerminal, onExitFullScreen]);
+  const handlersRef = useRef({});
+  handlersRef.current = { onCommandPalette, onFindInThread, onToggleSidebar, onTogglePreview, onToggleFullScreen, onFocusPane, onNewTerminal, onCloseTerminal, onExitFullScreen };
 
   const handleKeyDown = useCallback((e) => {
-    // Don't trigger shortcuts when typing in inputs
+    if (e.defaultPrevented || e.isComposing) return;
     const target = e.target;
-    if (
-      target.tagName === 'INPUT' ||
-      target.tagName === 'TEXTAREA' ||
-      target.isContentEditable
-    ) {
-      // Allow Escape even in inputs
-      if (e.key !== 'Escape') {
-        return;
-      }
-    }
+    if (workspaceKeyboardBlocked(target)) return;
+    const terminalInput = target.classList?.contains('xterm-helper-textarea');
+    const typing = !terminalInput && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    const mac = isMacPlatform();
+    const cmdOrCtrl = mac ? e.metaKey : e.ctrlKey;
 
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const cmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
-
-    // Escape - exit full screen
     if (e.key === 'Escape' && isFullScreen) {
       e.preventDefault();
       handlersRef.current.onExitFullScreen?.();
       return;
     }
 
-    // Cmd+B - toggle sidebar
-    if (cmdOrCtrl && e.key === 'b') {
+    const bindings = loadBindings();
+    for (const action of KEYBINDING_ACTIONS) {
+      if ((typing && !action.inInputs) || !eventMatches(e, bindings[action.id], mac)) continue;
+      const handler = handlersRef.current[ACTION_HANDLERS[action.id]];
+      if (!handler) return;
       e.preventDefault();
-      handlersRef.current.onToggleSidebar?.();
+      handler();
       return;
     }
 
-    // Cmd+P - toggle preview (override browser print)
-    if (cmdOrCtrl && e.key === 'p') {
-      e.preventDefault();
-      handlersRef.current.onTogglePreview?.();
-      return;
-    }
-
-    // Cmd+\ - toggle full screen
-    if (cmdOrCtrl && e.key === '\\') {
-      e.preventDefault();
-      handlersRef.current.onToggleFullScreen?.();
-      return;
-    }
-
-    // Cmd+T - new terminal
-    if (cmdOrCtrl && e.key === 't') {
-      e.preventDefault();
-      handlersRef.current.onNewTerminal?.();
-      return;
-    }
-
-    // Cmd+W - close current terminal
-    if (cmdOrCtrl && e.key === 'w') {
-      e.preventDefault();
-      handlersRef.current.onCloseTerminal?.();
-      return;
-    }
-
-    // Cmd+1-8 - focus pane
-    if (cmdOrCtrl && e.key >= '1' && e.key <= '8') {
+    if (!typing && cmdOrCtrl && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '8') {
       const paneIndex = parseInt(e.key, 10) - 1;
       if (paneIndex < paneCount) {
         e.preventDefault();
         handlersRef.current.onFocusPane?.(paneIndex);
       }
-      return;
     }
   }, [isFullScreen, paneCount]);
 
   useEffect(() => {
     if (!enabled) return;
 
-    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keydown', handleKeyDown, true);
     return () => {
-      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', handleKeyDown, true);
     };
   }, [handleKeyDown, enabled]);
 }

@@ -6,6 +6,7 @@ import { useCallback, useRef } from 'react';
  */
 export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, options = {}) {
   const inCopyModeRef = useRef(false);
+  const copyModeGenerationRef = useRef(0);
   const copyModeTimeoutRef = useRef(null);
   const isScrollingRef = useRef(false);
   const scrollCooldownRef = useRef(null);
@@ -17,6 +18,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
 
   const setCopyModeActive = useCallback((nextValue) => {
     if (inCopyModeRef.current === nextValue) return;
+    copyModeGenerationRef.current += 1;
     inCopyModeRef.current = nextValue;
     if (onCopyModeChange) {
       onCopyModeChange(nextValue);
@@ -24,6 +26,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
   }, [onCopyModeChange]);
 
   const resetCopyModeState = useCallback(() => {
+    copyModeGenerationRef.current += 1;
     if (copyModeTimeoutRef.current) {
       clearTimeout(copyModeTimeoutRef.current);
       copyModeTimeoutRef.current = null;
@@ -229,16 +232,31 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
   }, []);
 
   // Exit copy-mode before sending user input
-  const exitCopyModeIfActive = useCallback(() => {
+  const exitCopyModeIfActive = useCallback((delivery) => {
     if (inCopyModeRef.current && (!usesTmuxRef || usesTmuxRef.current)) {
-      sendToTerminal('q');
-      setCopyModeActive(false);
-      if (copyModeTimeoutRef.current) {
-        clearTimeout(copyModeTimeoutRef.current);
-        copyModeTimeoutRef.current = null;
+      const receipt = delivery ? sendToTerminal('q', delivery) : sendToTerminal('q');
+      if (receipt === false) return false;
+      resetCopyModeState();
+      const generation = copyModeGenerationRef.current;
+      const restoreCopyMode = () => {
+        if (copyModeGenerationRef.current !== generation) return;
+        setCopyModeActive(true);
+        resetCopyModeTimeout();
+      };
+      if (receipt?.then) {
+        const completion = receipt.then(accepted => {
+          if (accepted === false) restoreCopyMode();
+          return accepted;
+        }, error => {
+          if (error.definitelyRejected === true) restoreCopyMode();
+          throw error;
+        });
+        completion.catch(() => {});
+        return completion;
       }
+      return true;
     }
-  }, [sendToTerminal, setCopyModeActive, usesTmuxRef]);
+  }, [sendToTerminal, resetCopyModeState, resetCopyModeTimeout, setCopyModeActive, usesTmuxRef]);
 
   // Cleanup function for unmount
   const cleanup = useCallback(() => {
@@ -253,8 +271,8 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
       clearTimeout(copyModeTimeoutRef.current);
     }
     copyModeTimeoutRef.current = null;
-    setCopyModeActive(false);
-  }, [exitCopyModeIfActive, setCopyModeActive]);
+    resetCopyModeState();
+  }, [exitCopyModeIfActive, resetCopyModeState]);
 
   return {
     inCopyModeRef,
@@ -263,6 +281,7 @@ export function useTerminalScrolling(xtermRef, sendToTerminal, usesTmuxRef, opti
     scrollDown,
     scrollInTmux,
     sendCopyModeKeys,
+    scrollByLines,
     scrollByWheel,
     jumpToLive,
     startScrolling,

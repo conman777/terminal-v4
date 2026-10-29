@@ -14,13 +14,13 @@ test('Claude branch rejects unknown fields, missing cursor, and same native ID',
  await assert.rejects(forkClaude({sessionId,workspace:process.cwd(),cursor}, async()=>({sessionId})));
 });
 
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 test('real SDK forks persisted native transcript at a prior assistant message while source is unchanged', async ()=> {
- const directory=await mkdtemp(join(tmpdir(),'terminal-v4-claude-rewind-'));
+ const directory=await realpath(await mkdtemp(join(tmpdir(),'terminal-v4-claude-rewind-')));
  try {
   const workspace=join(directory,'workspace');await mkdir(workspace);
   const home=join(directory,'claude');const project=join(home,'projects',workspace.replace(/[^a-zA-Z0-9]/g,'-'));await mkdir(project,{recursive:true});

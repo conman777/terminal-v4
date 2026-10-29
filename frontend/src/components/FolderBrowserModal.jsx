@@ -2,9 +2,12 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '../utils/api';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
+import { savedConnectionBinding, savedConnectionOptions } from '../utils/savedConnectionAgents';
 import { loadWorkspaceProfile, resolveWorkspaceDefaults } from '../utils/workspaceProfile';
 import { WorkspaceProfileButton } from './WorkspaceProfileButton';
 import { AgentModelPicker } from './AgentModelPicker';
+import { loadSavedAgentSelection, saveAgentSelection } from '../utils/agentSelection';
+import { serviceTierEntry } from '../utils/agentServiceTier';
 import './FolderBrowserModal.css';
 
 function resolveInitialAiOptionId(options, preferredId) {
@@ -20,17 +23,9 @@ function buildAiOptionsSignature(options) {
     .join('|');
 }
 
-const AGENT_SELECTION_STORAGE_KEY = 'terminalV4AgentModels';
-
-function loadSavedAgentSelection(agentId) {
-  if (typeof localStorage === 'undefined') return null;
-  try {
-    const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
-    const value = values?.[agentId];
-    return typeof value?.model === 'string' ? { model: value.model, reasoning: typeof value.reasoning === 'string' ? value.reasoning : '' } : null;
-  } catch {
-    return null;
-  }
+function resolveLaunchDefaults(profile, options) {
+  return resolveWorkspaceDefaults(profile, options) || (savedConnectionBinding(profile?.defaultAgent)
+    ? resolveWorkspaceDefaults(profile, [{ id: profile.defaultAgent }]) : null);
 }
 
 export function FolderBrowserModal({
@@ -41,15 +36,28 @@ export function FolderBrowserModal({
   onSelect,
   showAiSelector = false,
   aiOptions = NEW_TAB_AI_OPTIONS,
-  defaultAiOptionId = 'cli'
+  defaultAiOptionId = 'cli',
+  launchMode
 }) {
+  const terminalLaunch = launchMode === 'terminal';
+  const showAgentSelector = showAiSelector && !terminalLaunch;
+  const [connectionOptions, setConnectionOptions] = useState([]);
+  const [loadingConnections, setLoadingConnections] = useState(false);
+  const [connectionsError, setConnectionsError] = useState('');
+  const connectionRequestRef = useRef(null);
+  const dialogRef = useRef(null);
+  const launchedRef = useRef(false);
+  const agentControlRef = useRef(null);
+  const baseAiOptions = showAgentSelector && aiOptions.length > 0 ? aiOptions : NEW_TAB_AI_OPTIONS;
   const resolvedAiOptions = useMemo(
-    () => (showAiSelector && aiOptions.length > 0 ? aiOptions : NEW_TAB_AI_OPTIONS),
-    [showAiSelector, aiOptions]
+    () => [...baseAiOptions, ...connectionOptions.filter(option => !baseAiOptions.some(existing => existing.id === option.id))],
+    [baseAiOptions, connectionOptions]
   );
+  const resolvedOptionsRef = useRef(resolvedAiOptions);
+  resolvedOptionsRef.current = resolvedAiOptions;
   const aiOptionsSignature = useMemo(
-    () => buildAiOptionsSignature(resolvedAiOptions),
-    [resolvedAiOptions]
+    () => buildAiOptionsSignature(baseAiOptions),
+    [baseAiOptions]
   );
   const [path, setPath] = useState(currentPath || '');
   const [folders, setFolders] = useState([]);
@@ -58,23 +66,96 @@ export function FolderBrowserModal({
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const [selectedAiOptionId, setSelectedAiOptionId] = useState(() => (
-    resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)
+    terminalLaunch ? 'cli' : resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)
   ));
-  const [agentSelection, setAgentSelection] = useState(() => loadSavedAgentSelection(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)));
+  const [agentSelection, setAgentSelection] = useState(() => terminalLaunch ? null : loadSavedAgentSelection(resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId)));
   const [tabName, setTabName] = useState('');
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!agentMenuOpen) return undefined;
+    agentControlRef.current?.querySelector('.pro-fb-option.selected')?.focus({ preventScroll: true });
+    const closeOutside = event => { if (!agentControlRef.current?.contains(event.target)) setAgentMenuOpen(false); };
+    document.addEventListener('pointerdown', closeOutside);
+    return () => document.removeEventListener('pointerdown', closeOutside);
+  }, [agentMenuOpen]);
   const [loadingDefaults, setLoadingDefaults] = useState(false);
   const [loadingRecent, setLoadingRecent] = useState(false);
   const [opening, setOpening] = useState(false);
   const [defaultsError, setDefaultsError] = useState('');
   const manualAgentPathRef = useRef(null);
   const directoryRequestRef = useRef(0);
-  const recentRequestRef = useRef(null);
+  const requestedDirectoryRef = useRef(currentPath || '');
+  const launchRequestRef = useRef(null);
+  const selectedAiOption = resolvedAiOptions.find(option => option.id === selectedAiOptionId) || null;
+  const connectionBlocked = savedConnectionBinding(selectedAiOptionId) &&
+    (!agentSelection?.model?.trim() || selectedAiOption?.available !== true);
 
-  useEffect(() => () => recentRequestRef.current?.abort(), [isOpen, path]);
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const trigger = document.activeElement;
+    launchedRef.current = false;
+    dialogRef.current?.querySelector('input[aria-label="Search folders"]')?.focus();
+    // After a launch, focus belongs to the new terminal or thread rather than the opener.
+    return () => { if (!launchedRef.current && trigger?.isConnected) trigger.focus(); };
+  }, [isOpen]);
+
+  function handleDialogKeyDown(event) {
+    if (event.target.closest('[role="dialog"]') !== event.currentTarget) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (agentMenuOpen) setAgentMenuOpen(false);
+      else onClose();
+    }
+    if (event.key !== 'Tab') return;
+    const controls = [...event.currentTarget.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]')]
+      .filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
+
+  useEffect(() => () => {
+    const request = launchRequestRef.current;
+    request?.controller.abort();
+    if (request && !request.started) {
+      launchRequestRef.current = null;
+      setLoadingRecent(false);
+    }
+  }, [isOpen, path]);
+
+  const loadConnections = useCallback(async () => {
+    connectionRequestRef.current?.abort();
+    const controller = new AbortController();
+    connectionRequestRef.current = controller;
+    setLoadingConnections(true);
+    setConnectionsError('');
+    try {
+      const response = await apiFetch('/api/agent/catalog', { signal: controller.signal });
+      const catalog = await response.json();
+      if (controller.signal.aborted) return;
+      if (!response.ok || !Array.isArray(catalog?.agents)) throw new Error('Could not load saved connections.');
+      setConnectionOptions(savedConnectionOptions(catalog));
+    } catch {
+      if (!controller.signal.aborted) setConnectionsError('Could not load saved connections.');
+    } finally {
+      if (connectionRequestRef.current === controller) setLoadingConnections(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setConnectionOptions([]);
+    if (isOpen && showAgentSelector) void loadConnections();
+    return () => connectionRequestRef.current?.abort();
+  }, [isOpen, showAgentSelector, loadConnections]);
 
   const loadDirectory = useCallback(async (dirPath) => {
+    dialogRef.current?.querySelector('input[aria-label="Search folders"]')?.focus({ preventScroll: true });
+    requestedDirectoryRef.current = dirPath;
     const requestId = ++directoryRequestRef.current;
     setLoading(true);
+    setQuery('');
     setError(null);
     try {
       const url = dirPath
@@ -101,16 +182,20 @@ export function FolderBrowserModal({
     if (isOpen) {
       manualAgentPathRef.current = null;
       loadDirectory(currentPath);
-      setQuery('');
       setTabName('');
-      const nextAiOptionId = resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
+      setAgentMenuOpen(false);
+      const nextAiOptionId = terminalLaunch ? 'cli' : resolveInitialAiOptionId(resolvedOptionsRef.current, defaultAiOptionId);
       setSelectedAiOptionId(nextAiOptionId);
-      setAgentSelection(loadSavedAgentSelection(nextAiOptionId));
+      setAgentSelection(terminalLaunch ? null : loadSavedAgentSelection(nextAiOptionId));
     }
-  }, [isOpen, currentPath, loadDirectory, aiOptionsSignature, defaultAiOptionId]);
+  }, [isOpen, currentPath, loadDirectory, defaultAiOptionId, terminalLaunch]);
 
   useEffect(() => {
-    if (!isOpen || !showAiSelector || !path) return undefined;
+    if (!isOpen || !showAgentSelector || !path) return undefined;
+    if (manualAgentPathRef.current === path) {
+      setLoadingDefaults(false);
+      return undefined;
+    }
     const controller = new AbortController();
     const initialId = resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
     setLoadingDefaults(true);
@@ -121,7 +206,7 @@ export function FolderBrowserModal({
     }
     loadWorkspaceProfile(path, { signal: controller.signal }).then(profile => {
       if (controller.signal.aborted || manualAgentPathRef.current === path) return;
-      const defaults = resolveWorkspaceDefaults(profile, resolvedAiOptions);
+      const defaults = resolveLaunchDefaults(profile, resolvedAiOptions);
       if (defaults) {
         setSelectedAiOptionId(defaults.agentId);
         setAgentSelection(defaults.selection || loadSavedAgentSelection(defaults.agentId));
@@ -132,7 +217,7 @@ export function FolderBrowserModal({
       if (!controller.signal.aborted) setLoadingDefaults(false);
     });
     return () => controller.abort();
-  }, [isOpen, path, showAiSelector, aiOptionsSignature, defaultAiOptionId]);
+  }, [isOpen, path, showAgentSelector, aiOptionsSignature, defaultAiOptionId]);
 
   const handleFolderClick = (folderName) => {
     const separator = path.includes('\\') ? '\\' : '/';
@@ -148,71 +233,80 @@ export function FolderBrowserModal({
   };
 
   const handleSelect = async () => {
-    if (selectedAiOptionId !== 'cli' && agentSelection?.available === false) return;
+    if (!isOpen || loading || error || launchRequestRef.current) return;
+    if (showAgentSelector && selectedAiOptionId !== 'cli' && (agentSelection?.available === false || connectionBlocked)) return;
+    const request = { controller: new AbortController(), started: true };
+    launchRequestRef.current = request;
     setDefaultsError('');
     setOpening(true);
     const args = [
       path,
-      showAiSelector ? selectedAiOptionId : undefined,
-      showAiSelector ? tabName.trim() : undefined,
+      terminalLaunch ? 'cli' : showAgentSelector ? selectedAiOptionId : undefined,
+      terminalLaunch ? tabName.trim() || undefined : showAgentSelector ? tabName.trim() : undefined,
     ];
-    if (showAiSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
+    if (showAgentSelector && selectedAiOptionId !== 'cli') args.push(agentSelection);
     try {
       await onSelect(...args);
-      onClose();
+      if (!request.controller.signal.aborted) { launchedRef.current = true; onClose(); }
     } catch (failure) {
-      setDefaultsError(failure.message || 'Unable to start this agent');
-    } finally { setOpening(false); }
+      if (!request.controller.signal.aborted) setDefaultsError(failure.message || 'Unable to start this agent');
+    } finally {
+      if (launchRequestRef.current === request) {
+        launchRequestRef.current = null;
+        setOpening(false);
+      }
+    }
   };
 
   const handleRecentClick = async (recentPath) => {
-    recentRequestRef.current?.abort();
+    if (!isOpen || launchRequestRef.current) return;
     const controller = new AbortController();
-    recentRequestRef.current = controller;
-    setLoadingRecent(showAiSelector);
+    const request = { controller, started: false };
+    launchRequestRef.current = request;
+    setLoadingRecent(true);
     setDefaultsError('');
     try {
-      const useProjectDefault = showAiSelector && manualAgentPathRef.current !== path;
+      const useProjectDefault = showAgentSelector && manualAgentPathRef.current !== path;
       const defaults = useProjectDefault
-        ? resolveWorkspaceDefaults(await loadWorkspaceProfile(recentPath, { signal: controller.signal }), resolvedAiOptions)
+        ? resolveLaunchDefaults(await loadWorkspaceProfile(recentPath, { signal: controller.signal }), resolvedAiOptions)
         : null;
       if (controller.signal.aborted) return;
       const agentId = defaults?.agentId || selectedAiOptionId;
       let selection = defaults ? defaults.selection || loadSavedAgentSelection(agentId) : agentSelection;
-      if (showAiSelector && agentId !== 'cli') {
+      if (showAgentSelector && agentId !== 'cli') {
         const response = await apiFetch('/api/agent/catalog', { signal: controller.signal });
         const catalog = await response.json();
         if (controller.signal.aborted) return;
         if (!response.ok) throw new Error(catalog?.error || 'Unable to load agent launcher');
         const liveAgent = catalog.agents?.find(agent => agent.id === agentId);
+        if (savedConnectionBinding(agentId) && (!savedConnectionOptions(catalog).some(option => option.id === agentId && option.available === true) || !selection?.model?.trim())) {
+          throw new Error('Choose an available saved connection and an explicit model ID.');
+        }
         if (liveAgent) {
           if (liveAgent.available === false) throw new Error(liveAgent.label + ' runtime is unavailable on this host');
           const model = selection?.model ?? liveAgent.models?.find(model => model.default)?.id ?? liveAgent.models?.[0]?.id ?? '';
-          selection = { model, reasoning: selection?.reasoning || '', ...(liveAgent.launchCommand ? { launchCommand: liveAgent.launchCommand } : {}),
+          selection = { model, reasoning: selection?.reasoning || '', ...serviceTierEntry(selection?.serviceTier), ...(liveAgent.launchCommand ? { launchCommand: liveAgent.launchCommand } : {}),
             ...(liveAgent.hostShell ? { hostShell: liveAgent.hostShell } : {}), ...(typeof liveAgent.available === 'boolean' ? { available: liveAgent.available } : {}) };
         }
       }
-      const args = [recentPath, showAiSelector ? agentId : undefined, showAiSelector ? tabName.trim() : undefined];
-      if (showAiSelector && agentId !== 'cli') args.push(selection);
+      const args = [recentPath, terminalLaunch ? 'cli' : showAgentSelector ? agentId : undefined, terminalLaunch ? tabName.trim() || undefined : showAgentSelector ? tabName.trim() : undefined];
+      if (showAgentSelector && agentId !== 'cli') args.push(selection);
+      request.started = true;
       await onSelect(...args);
-      onClose();
+      if (!controller.signal.aborted) { launchedRef.current = true; onClose(); }
     } catch (loadError) {
       if (!controller.signal.aborted) setDefaultsError(loadError.message);
     } finally {
-      if (recentRequestRef.current === controller) setLoadingRecent(false);
+      if (launchRequestRef.current === request) {
+        launchRequestRef.current = null;
+        setLoadingRecent(false);
+      }
     }
   };
 
   const handleAgentSelectionChange = (selection) => {
     setAgentSelection(selection);
-    if (typeof localStorage !== 'undefined' && selectedAiOptionId !== 'cli') {
-      try {
-        const values = JSON.parse(localStorage.getItem(AGENT_SELECTION_STORAGE_KEY) || '{}');
-        localStorage.setItem(AGENT_SELECTION_STORAGE_KEY, JSON.stringify({ ...values, [selectedAiOptionId]: { model: selection.model, reasoning: selection.reasoning } }));
-      } catch {
-        // Ignore storage failures; the current selection remains usable for this launch.
-      }
-    }
+    if (selectedAiOptionId !== 'cli') saveAgentSelection(selectedAiOptionId, selection);
   };
 
   if (!isOpen) return null;
@@ -221,7 +315,6 @@ export function FolderBrowserModal({
   const visibleFolders = normalizedQuery
     ? folders.filter((folder) => folder.toLowerCase().includes(normalizedQuery))
     : folders;
-  const selectedAiOption = resolvedAiOptions.find((option) => option.id === selectedAiOptionId) || null;
 
   const pathSegments = path.split(/([/\\])/).filter(Boolean);
   const breadcrumbs = [];
@@ -235,7 +328,11 @@ export function FolderBrowserModal({
 
   const modal = (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="pro-folder-browser" onClick={(e) => e.stopPropagation()}>
+      <div className="pro-folder-browser" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="folder-browser-title" onKeyDown={handleDialogKeyDown} onClick={(e) => e.stopPropagation()}>
+        <div className="pro-fb-title-row">
+          <h2 id="folder-browser-title">{terminalLaunch ? 'New terminal' : showAgentSelector ? 'New thread' : 'Choose project'}</h2>
+          <button type="button" onClick={onClose} aria-label="Close folder browser">×</button>
+        </div>
         {/* Path bar with integrated back button and breadcrumbs */}
         <div className="pro-fb-header">
           {parent && (
@@ -251,6 +348,7 @@ export function FolderBrowserModal({
               </svg>
             </button>
           )}
+
           <div className="pro-fb-breadcrumbs">
             {breadcrumbs.map((crumb, i) => (
               <span key={i} className="pro-fb-breadcrumb-segment">
@@ -268,84 +366,6 @@ export function FolderBrowserModal({
         </div>
 
         <div className="pro-fb-content">
-          {/* AI selector and tab name in compact row */}
-          {showAiSelector && (
-            <div className="pro-fb-config-row">
-              <div className="pro-fb-field">
-                <label htmlFor="folder-browser-ai-select">AI</label>
-                <div className="pro-fb-custom-select" tabIndex={0} onBlur={(e) => {
-                  if (!e.currentTarget.contains(e.relatedTarget)) {
-                    document.getElementById('folder-browser-ai-options')?.classList.remove('open');
-                  }
-                }}>
-                  <div 
-                    className="pro-fb-select-trigger" 
-                    onClick={(e) => {
-                      const opts = document.getElementById('folder-browser-ai-options');
-                      if (opts) opts.classList.toggle('open');
-                    }}
-                  >
-                    <span>{resolvedAiOptions.find(o => o.id === selectedAiOptionId)?.label || 'Select AI'}</span>
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                      <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </div>
-                  <div id="folder-browser-ai-options" className="pro-fb-options-list">
-                    {resolvedAiOptions.map((option) => (
-                      <div 
-                        key={option.id} 
-                        className={`pro-fb-option ${option.id === selectedAiOptionId ? 'selected' : ''}`}
-                        onClick={() => {
-                          manualAgentPathRef.current = path;
-                          setSelectedAiOptionId(option.id);
-                          setAgentSelection(loadSavedAgentSelection(option.id));
-                          setTabName(option.label || '');
-                          document.getElementById('folder-browser-ai-options')?.classList.remove('open');
-                        }}
-                      >
-                        {option.label}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="pro-fb-field grow">
-                <label htmlFor="folder-browser-tabname-input">Tab name</label>
-                <input
-                  id="folder-browser-tabname-input"
-                  className="pro-fb-input"
-                  type="text"
-                  value={tabName}
-                  onChange={(e) => setTabName(e.target.value)}
-                  placeholder="Optional"
-                  maxLength={60}
-                />
-              </div>
-            </div>
-          )}
-
-          {showAiSelector && selectedAiOptionId !== 'cli' && !loadingDefaults && (
-            <div className="pro-fb-agent-config">
-              <AgentModelPicker
-                agentId={selectedAiOptionId}
-                value={agentSelection}
-                onChange={handleAgentSelectionChange}
-              />
-            </div>
-          )}
-
-          {showAiSelector && <div className="pro-fb-agent-config">
-            <WorkspaceProfileButton workspacePath={path} aiOptions={resolvedAiOptions} onSaved={profile => {
-              const defaults = resolveWorkspaceDefaults(profile, resolvedAiOptions);
-              manualAgentPathRef.current = null;
-              const agentId = defaults?.agentId || resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
-              setSelectedAiOptionId(agentId);
-              setAgentSelection(defaults?.selection || loadSavedAgentSelection(agentId));
-            }} />
-            {loadingDefaults && <small role="status">Loading project defaults…</small>}
-            {defaultsError && <p role="alert">{defaultsError}</p>}
-          </div>}
-
           {/* Search with icon */}
           <div className="pro-fb-search">
             <svg className="pro-fb-search-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -359,18 +379,19 @@ export function FolderBrowserModal({
               placeholder="Search folders..."
               aria-label="Search folders"
             />
+            {query && <button className="pro-fb-search-clear" type="button" aria-label="Clear folder search" title="Clear search" onClick={() => setQuery('')}>×</button>}
           </div>
 
           {/* Folder list */}
           <div className="pro-fb-list">
-            {loading && <div className="pro-fb-loading">Loading...</div>}
-            {error && <div className="pro-fb-error">{error}</div>}
+            {loading && <div role="status" className="pro-fb-loading">Loading...</div>}
+            {error && <div className="pro-fb-error"><p role="alert">{error}</p><button type="button" className="btn-secondary" onClick={() => loadDirectory(requestedDirectoryRef.current)}>Retry loading folder</button></div>}
             {!loading && !error && visibleFolders.length === 0 && (
               <div className="pro-fb-empty">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" style={{ opacity: 0.4, marginBottom: 8 }}>
                   <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H12L10 5H5C3.89543 5 3 5.89543 3 7Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/>
                 </svg>
-                No subfolders
+                {normalizedQuery ? `No folders match “${query.trim()}”.` : 'No subfolders'}
               </div>
             )}
             {!loading && !error && visibleFolders.map((folder) => (
@@ -410,7 +431,7 @@ export function FolderBrowserModal({
                       key={idx}
                       className="pro-fb-recent-chip"
                       onClick={() => handleRecentClick(recent)}
-                      disabled={loadingRecent}
+                      disabled={loadingRecent || opening}
                       title={recent}
                     >
                       {shortName}
@@ -420,6 +441,75 @@ export function FolderBrowserModal({
               </div>
             </div>
           )}
+          {showAgentSelector && <section className="pro-fb-launch-settings" aria-label="Thread settings">
+            <div className="pro-fb-launch-row">
+              <div className="pro-fb-field pro-fb-agent-field">
+                <label htmlFor="folder-browser-ai-select">Agent</label>
+                <div className="pro-fb-custom-select" ref={agentControlRef} onBlur={event => {
+                  if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setAgentMenuOpen(false);
+                }} onKeyDown={event => {
+                  if (event.key === 'Escape' && agentMenuOpen) {
+                    event.preventDefault(); event.stopPropagation(); setAgentMenuOpen(false);
+                    agentControlRef.current?.querySelector('button')?.focus({ preventScroll: true });
+                  }
+                  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+                  event.preventDefault(); event.stopPropagation(); setAgentMenuOpen(true);
+                  const options = [...agentControlRef.current.querySelectorAll('.pro-fb-option')];
+                  const index = options.indexOf(document.activeElement);
+                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : index < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0) : (index + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+                  options[next]?.focus({ preventScroll: true });
+                }}>
+                  <button type="button" id="folder-browser-ai-select" className="pro-fb-select-trigger"
+                    aria-expanded={agentMenuOpen} aria-controls="folder-browser-ai-options"
+                    onClick={() => setAgentMenuOpen(open => !open)}>
+                    <span>{selectedAiOption?.label || (savedConnectionBinding(selectedAiOptionId) ? 'Saved connection unavailable' : 'Choose agent')}</span>
+                    <span aria-hidden="true">⌄</span>
+                  </button>
+                  <div id="folder-browser-ai-options" className={`pro-fb-options-list${agentMenuOpen ? ' open' : ''}`}>
+                    {resolvedAiOptions.map(option => <button type="button" key={option.id}
+                      className={`pro-fb-option${option.id === selectedAiOptionId ? ' selected' : ''}`}
+                      aria-pressed={option.id === selectedAiOptionId}
+                      onClick={() => {
+                        manualAgentPathRef.current = path;
+                        setSelectedAiOptionId(option.id);
+                        setAgentSelection(loadSavedAgentSelection(option.id));
+                        setTabName(option.label || '');
+                        setAgentMenuOpen(false);
+                        agentControlRef.current?.querySelector('button')?.focus({ preventScroll: true });
+                      }}>{option.label}</button>)}
+                  </div>
+                </div>
+              </div>
+              {selectedAiOptionId !== 'cli' && !loadingDefaults && <div className="pro-fb-model-field">
+                <AgentModelPicker compact agentId={selectedAiOptionId} value={agentSelection} onChange={handleAgentSelectionChange} />
+              </div>}
+            </div>
+            {loadingConnections && <small role="status">Loading saved connections…</small>}
+            {connectionsError && <div className="pro-fb-launch-notice"><p role="alert">{connectionsError}</p><button type="button" onClick={() => void loadConnections()}>Retry saved connections</button></div>}
+            {loadingDefaults && <small role="status">Loading project defaults…</small>}
+            <details className="pro-fb-more-options">
+              <summary>More options</summary>
+              <div className="pro-fb-optional-fields">
+                <div className="pro-fb-field">
+                  <label htmlFor="folder-browser-tabname-input">Tab name</label>
+                  <input id="folder-browser-tabname-input" className="pro-fb-input" type="text" value={tabName}
+                    onChange={event => setTabName(event.target.value)} placeholder="Optional" maxLength={60} />
+                </div>
+                <WorkspaceProfileButton workspacePath={path} aiOptions={resolvedAiOptions} onSaved={profile => {
+                  const defaults = resolveLaunchDefaults(profile, resolvedAiOptions);
+                  manualAgentPathRef.current = null;
+                  const agentId = defaults?.agentId || resolveInitialAiOptionId(resolvedAiOptions, defaultAiOptionId);
+                  setSelectedAiOptionId(agentId);
+                  setAgentSelection(defaults?.selection || loadSavedAgentSelection(agentId));
+                }} />
+              </div>
+            </details>
+          </section>}
+          {terminalLaunch && <div className="pro-fb-field">
+            <label htmlFor="folder-browser-terminal-name">Terminal name (optional)</label>
+            <input id="folder-browser-terminal-name" className="pro-fb-input" value={tabName} disabled={opening || loadingRecent} onChange={event => setTabName(event.target.value)} placeholder="Optional" maxLength={60} />
+          </div>}
+          {defaultsError && <p role="alert">{defaultsError}</p>}
         </div>
 
         {/* Footer with path confirmation */}
@@ -432,8 +522,8 @@ export function FolderBrowserModal({
           </div>
           <div className="pro-fb-actions">
             <button type="button" className="pro-fb-btn-cancel" onClick={onClose}>Cancel</button>
-            <button type="button" className="pro-fb-btn-select" onClick={handleSelect} disabled={loading || loadingDefaults || loadingRecent || opening || (showAiSelector && selectedAiOptionId !== 'cli' && agentSelection?.available === false)}>
-              Open here
+            <button type="button" className="pro-fb-btn-select" onClick={handleSelect} disabled={loading || Boolean(error) || loadingDefaults || loadingRecent || opening || (showAgentSelector && selectedAiOptionId !== 'cli' && (agentSelection?.available === false || connectionBlocked))}>
+              {opening ? 'Starting…' : terminalLaunch ? 'Open terminal' : showAgentSelector ? 'Start thread' : 'Open here'}
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path d="M2 7H12M8 3L12 7L8 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>

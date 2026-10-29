@@ -1,21 +1,15 @@
-import { useState, useCallback, useEffect } from 'react';
-import { ContextMenu } from './ContextMenu';
+import { useState, useCallback, useEffect, useId, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getPreferredSessionTopic } from '../utils/sessionTopic';
+import { ProjectBadge } from './ProjectBadge';
 
-/**
- * Format a relative time string (e.g., "9m", "2h", "3d")
- */
 function formatRelativeTime(isoString) {
   if (!isoString) return '';
-
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now - date;
-  const diffSeconds = Math.floor(diffMs / 1000);
-  const diffMinutes = Math.floor(diffSeconds / 60);
+  const diffMs = Date.now() - new Date(isoString).getTime();
+  if (!Number.isFinite(diffMs)) return '';
+  const diffMinutes = Math.floor(Math.max(0, diffMs) / 60000);
   const diffHours = Math.floor(diffMinutes / 60);
   const diffDays = Math.floor(diffHours / 24);
-
   if (diffDays > 0) return `${diffDays}d`;
   if (diffHours > 0) return `${diffHours}h`;
   if (diffMinutes > 0) return `${diffMinutes}m`;
@@ -24,6 +18,8 @@ function formatRelativeTime(isoString) {
 
 export default function ThreadsSessionItem({
   session,
+  projectName = '',
+  branch = null,
   isBusy,
   isActive,
   hasActivity,
@@ -32,231 +28,259 @@ export default function ThreadsSessionItem({
   onUnpin,
   onArchive,
   onUnarchive,
-  onUpdateThreadMetadata,
   onTopicChange,
   onRenameSession,
-  onClose
+  onClose,
+  onMarkUnread,
+  onUpdateThreadMetadata,
+  onItemRef,
 }) {
-  const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
-  const [isTouch, setIsTouch] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
-
+  const [pendingAction, setPendingAction] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const pendingActionRef = useRef(null);
+  const inputRef = useRef(null);
+  const selectRef = useRef(null);
+  const actionsRef = useRef(null);
+  const menuRef = useRef(null);
+  const openerRef = useRef(null);
+  const restoreTitleFocusRef = useRef(false);
+  const menuId = useId();
+  const errorId = useId();
   const thread = session.thread || {};
   const topic = getPreferredSessionTopic(thread.topic, session.title || 'New session');
-  const isPinned = thread.pinned || false;
-  const isArchived = thread.archived || false;
-  const sessionAge = formatRelativeTime(session.createdAt);
+  const isPinned = Boolean(thread.pinned);
+  const isArchived = Boolean(thread.archived);
+  const lifecycle = session.threadLifecycle;
+  const activityAt = session.updatedAt || session.createdAt;
+  const sessionAge = formatRelativeTime(activityAt);
   const resolvedIsBusy = typeof isBusy === 'boolean' ? isBusy : Boolean(session.isBusy);
+  const needsAttention = lifecycle?.requiresAttention === true;
   const showReadyIndicator = !resolvedIsBusy && Boolean(hasActivity) && !isActive;
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const media = window.matchMedia('(hover: none)');
-    const update = () => setIsTouch(Boolean(media.matches));
-    update();
-    if (media.addEventListener) {
-      media.addEventListener('change', update);
-      return () => media.removeEventListener('change', update);
+    if (!isEditing && restoreTitleFocusRef.current) {
+      restoreTitleFocusRef.current = false;
+      selectRef.current?.focus();
     }
-    media.addListener(update);
-    return () => media.removeListener(update);
+  }, [isEditing]);
+
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setContextMenu(null);
+    if (restoreFocus) openerRef.current?.focus();
   }, []);
 
-  const showActions = isHovered || (isTouch && isActive);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const menu = menuRef.current;
+    const rect = menu.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft || 0;
+    const top = viewport?.offsetTop || 0;
+    menu.style.left = `${Math.max(left + 8, Math.min(contextMenu.x, left + (viewport?.width || window.innerWidth) - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(top + 8, Math.min(contextMenu.y, top + (viewport?.height || window.innerHeight) - rect.height - 8))}px`;
+    menu.querySelector('button')?.focus();
+    const dismiss = event => {
+      if (!menu.contains(event.target) && !actionsRef.current?.contains(event.target)) closeMenu();
+    };
+    const dismissOnResize = () => closeMenu(true);
+    const dismissOnScroll = event => { if (!menu.contains(event.target)) closeMenu(); };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('scroll', dismissOnScroll, true);
+    window.addEventListener('resize', dismissOnResize);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('scroll', dismissOnScroll, true);
+      window.removeEventListener('resize', dismissOnResize);
+    };
+  }, [contextMenu, closeMenu]);
 
-  const handleClick = useCallback(() => {
-    onSelect?.(session.id);
-  }, [session.id, onSelect]);
+  const openMenu = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (pendingActionRef.current) return;
+    openerRef.current = event.currentTarget;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({ x: event.clientX || rect.left, y: event.clientY || rect.bottom });
+  }, []);
 
-  const handleDoubleClick = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const startRename = () => {
+    if (pendingActionRef.current || isEditing) return;
+    setActionError(null);
     setEditValue(topic);
     setIsEditing(true);
-  }, [topic]);
+  };
 
-  const handleEditSubmit = useCallback(() => {
+  const runAction = async (label, action) => {
+    if (pendingActionRef.current) return false;
+    pendingActionRef.current = label;
+    setPendingAction(label);
+    setActionError(null);
+    try {
+      const result = await action();
+      if (result?.ok === false) throw result.error || new Error('Try again.');
+      return true;
+    } catch (error) {
+      setActionError({ label, action, message: `Could not ${label.toLowerCase()}. ${error?.message || 'Try again.'}` });
+      return false;
+    } finally {
+      pendingActionRef.current = null;
+      setPendingAction(null);
+    }
+  };
+
+  const handleEditSubmit = async (restoreFocus = false) => {
+    if (pendingActionRef.current) return;
+    const focusSource = document.activeElement;
+    const shouldRestoreFocus = restoreFocus && inputRef.current?.parentElement.contains(focusSource);
     const trimmed = editValue.trim();
     if (trimmed && trimmed !== topic) {
-      if (onRenameSession) {
-        onRenameSession(session.id, trimmed);
-      } else {
-        onTopicChange?.(session.id, trimmed);
-      }
+      const succeeded = await runAction('Rename session', () => (onRenameSession || onTopicChange)?.(session.id, trimmed));
+      if (!succeeded) return;
     }
+    setActionError(null);
+    restoreTitleFocusRef.current = shouldRestoreFocus && (document.activeElement === focusSource || document.activeElement === document.body);
     setIsEditing(false);
-  }, [editValue, onRenameSession, topic, session.id, onTopicChange]);
+  };
 
-  const handleEditKeyDown = useCallback((e) => {
-    if (e.key === 'Enter') {
-      handleEditSubmit();
-    } else if (e.key === 'Escape') {
-      setIsEditing(false);
-    }
-  }, [handleEditSubmit]);
-
-  const handlePinClick = useCallback((e) => {
-    e.stopPropagation();
-    if (isPinned) {
-      onUnpin?.(session.id);
-    } else {
-      onPin?.(session.id);
-    }
-  }, [isPinned, session.id, onPin, onUnpin]);
-
-  const handleArchiveClick = useCallback((e) => {
-    e.stopPropagation();
-    if (isArchived) {
-      onUnarchive?.(session.id);
-    } else {
-      onArchive?.(session.id);
-    }
-  }, [isArchived, session.id, onArchive, onUnarchive]);
-
-  const handleCloseClick = useCallback((e) => {
-    e.stopPropagation();
-    onClose?.(session.id);
-  }, [session.id, onClose]);
-
-  const handleContextMenu = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  }, []);
-
-  const contextMenuItems = contextMenu ? [
-    {
-      label: 'Rename',
-      onClick: () => { setEditValue(topic); setIsEditing(true); }
-    },
-    {
-      label: isPinned ? 'Unpin' : 'Pin',
-      onClick: () => isPinned ? onUnpin?.(session.id) : onPin?.(session.id)
-    },
-    {
-      label: isArchived ? 'Unarchive' : 'Archive',
-      onClick: () => isArchived ? onUnarchive?.(session.id) : onArchive?.(session.id)
-    },
-    {
-      label: 'Close',
-      danger: true,
-      onClick: () => onClose?.(session.id)
-    }
-  ] : [];
+  const folderPath = session.thread?.projectPath || session.cwd || '';
+  const menuItems = [
+    { label: 'Rename session', action: startRename },
+    { label: isPinned ? 'Unpin' : 'Pin', action: () => (isPinned ? onUnpin : onPin)?.(session.id) },
+    { label: isArchived ? 'Unarchive' : 'Archive', action: () => (isArchived ? onUnarchive : onArchive)?.(session.id) },
+    ...(onUpdateThreadMetadata && typeof session.id === 'string' && session.id.startsWith('ss-') && !isArchived && lifecycle?.supported === true && (lifecycle.snoozed || !lifecycle.requiresAttention)
+      ? [{ label: lifecycle.snoozed ? 'Wake thread' : 'Snooze for one hour', action: () => onUpdateThreadMetadata(session.id, lifecycle.snoozed ? { wakeSnooze: true } : { snoozeForSeconds: 3600 }) }] : []),
+    ...(onUpdateThreadMetadata && session.runtime === 'v4' && !isArchived && lifecycle?.settlementSupported === true
+      && (lifecycle.settled || lifecycle.canSettle === true) && lifecycle.requiresAttention === false
+      ? [{ label: lifecycle.settled ? 'Un-settle thread' : 'Settle thread', action: () => onUpdateThreadMetadata(session.id, { settled: !lifecycle.settled }) }] : []),
+    ...(onMarkUnread && !hasActivity ? [{ label: 'Mark as unread', action: () => onMarkUnread(session.id) }] : []),
+    ...(folderPath ? [{ label: 'Copy folder path', action: () => navigator.clipboard?.writeText(folderPath) }] : []),
+    ...(branch ? [{ label: 'Copy branch name', action: () => navigator.clipboard?.writeText(branch) }] : []),
+    { label: 'Copy thread ID', action: () => navigator.clipboard?.writeText(session.id) },
+    { label: 'Close session', action: () => onClose?.(session.id), danger: true }
+  ];
 
   return (
     <div
-      className={`threads-session-item ${isActive ? 'active' : ''} ${isArchived ? 'archived' : ''}`}
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      onContextMenu={handleContextMenu}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      title={undefined}
+      ref={onItemRef}
+      className={`threads-session-item threads-card ${isActive ? 'active' : (!isEditing && !actionError ? 'compact' : '')} ${isArchived ? 'archived' : ''}`}
+      aria-busy={Boolean(pendingAction)}
+      onClick={event => { if (!event.target.closest('button, input')) onSelect?.(session.id); }}
+      onDoubleClick={event => {
+        if (event.target.closest('button, input') && !event.target.closest('.threads-session-select')) return;
+        event.preventDefault();
+        startRename();
+      }}
+      onContextMenu={event => {
+        if (event.target.closest('input')) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (pendingActionRef.current) return;
+        openerRef.current = selectRef.current;
+        setContextMenu({x: event.clientX, y: event.clientY});
+      }}
     >
-      {(resolvedIsBusy || showReadyIndicator) && (
-        <div
-          className={`threads-session-indicator ${resolvedIsBusy ? 'busy' : 'ready'}`}
-          aria-label={resolvedIsBusy ? 'Working' : 'Ready to review'}
-        >
-          {resolvedIsBusy ? (
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-              <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <span className="threads-session-ready-dot" aria-hidden="true" />
-          )}
-        </div>
-      )}
-
-      {/* Topic/title */}
-      <div className="threads-session-content">
+      <div className="threads-card-head">
+        {projectName && <ProjectBadge name={projectName} />}
+        {projectName && <span className="threads-card-project" title={projectName}>{projectName}</span>}
+        {sessionAge && <time className="threads-session-time" dateTime={activityAt} title={activityAt}>{sessionAge}</time>}
+      </div>
+      <div className={`threads-session-content ${actionError ? 'has-action-error' : ''}`}>
         {isEditing ? (
           <input
+            ref={inputRef}
             type="text"
             className="threads-session-edit"
+            aria-label="Thread title"
+            aria-invalid={actionError?.label === 'Rename session' ? true : undefined}
+            aria-describedby={actionError ? errorId : undefined}
+            readOnly={Boolean(pendingAction)}
             value={editValue}
-            onChange={(e) => setEditValue(e.target.value)}
-            onBlur={handleEditSubmit}
-            onKeyDown={handleEditKeyDown}
+            onChange={event => { setEditValue(event.target.value); setActionError(null); }}
+            onBlur={() => { if (!actionError) handleEditSubmit(); }}
+            onKeyDown={event => {
+              if (pendingActionRef.current) return;
+              if (event.key === 'Enter') { event.preventDefault(); handleEditSubmit(true); }
+              if (event.key === 'Escape') { event.preventDefault(); setActionError(null); restoreTitleFocusRef.current = true; setIsEditing(false); }
+            }}
             autoFocus
-            onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <>
+          <button
+            ref={selectRef}
+            type="button"
+            className="threads-session-select"
+            aria-label={`Select ${topic}`}
+            aria-pressed={Boolean(isActive)}
+            title={topic}
+            onClick={() => onSelect?.(session.id)}
+            onKeyDown={event => {
+              if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) openMenu(event);
+            }}
+          >
             <span className="threads-session-topic">{topic}</span>
-          </>
+          </button>
         )}
-      </div>
-
-      {/* Session age and actions */}
-      <div className="threads-session-meta">
-        {!showActions && sessionAge && (
-          <span className="threads-session-time">{sessionAge}</span>
-        )}
-
-        {showActions && (
-          <div className="threads-session-actions">
-            <button
-              type="button"
-              className="threads-action-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditValue(topic);
-                setIsEditing(true);
-              }}
-              title="Rename session"
-              aria-label="Rename session"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 20h9" />
-                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`threads-action-btn ${isPinned ? 'active' : ''}`}
-              onClick={handlePinClick}
-              title={isPinned ? 'Unpin' : 'Pin'}
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M4.456.734a1.75 1.75 0 0 1 2.826.504l.613 1.327a3.08 3.08 0 0 0 2.084 1.707l2.454.584c1.332.317 1.8 1.972.832 2.94L11.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06L10 11.06l-2.204 2.205c-.968.968-2.623.5-2.94-.832l-.584-2.454a3.08 3.08 0 0 0-1.707-2.084l-1.327-.613a1.75 1.75 0 0 1-.504-2.826L4.456.734Z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className={`threads-action-btn ${isArchived ? 'active' : ''}`}
-              onClick={handleArchiveClick}
-              title={isArchived ? 'Unarchive' : 'Archive'}
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M5 8.25a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 5 8.25ZM2 2.75a.75.75 0 0 0-.75.75v1c0 .414.336.75.75.75h12a.75.75 0 0 0 .75-.75v-1a.75.75 0 0 0-.75-.75H2Zm-.5 5.75A1.5 1.5 0 0 1 3 7h10a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5H3a1.5 1.5 0 0 1-1.5-1.5v-4Z" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="threads-action-btn close"
-              onClick={handleCloseClick}
-              title="Close session"
-            >
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-              </svg>
-            </button>
+        {actionError && (
+          <div className="threads-session-action-error">
+            <span id={errorId} role="alert">{actionError.message}</span>
+            <button type="button" onClick={() => actionError.label === 'Rename session' ? handleEditSubmit(true) : runAction(actionError.label, actionError.action)}>Retry</button>
           </div>
         )}
       </div>
-
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          items={contextMenuItems}
-          onClose={() => setContextMenu(null)}
-        />
+      <button
+        ref={actionsRef}
+        type="button"
+        className="threads-action-btn threads-session-more"
+        aria-label={`Thread actions for ${topic}`}
+        aria-haspopup="menu"
+        aria-expanded={Boolean(contextMenu)}
+        aria-controls={contextMenu ? menuId : undefined}
+        title="Thread actions"
+        disabled={Boolean(pendingAction)}
+        onClick={event => contextMenu ? closeMenu(true) : openMenu(event)}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" /></svg>
+      </button>
+      {(branch || resolvedIsBusy || showReadyIndicator || needsAttention || isPinned) && <div className="threads-card-foot">
+        {branch && <span className="threads-card-branch" title={branch}>{branch}</span>}
+        {(resolvedIsBusy || showReadyIndicator || needsAttention) && <span className={`threads-session-indicator ${needsAttention ? 'attention' : resolvedIsBusy ? 'busy' : 'ready'}`} role="img" aria-label={needsAttention ? 'Needs attention' : resolvedIsBusy ? 'Working' : 'Ready to review'}>
+          {resolvedIsBusy && !needsAttention ? (
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.8" opacity=".2" />
+                <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+          ) : <span className="threads-session-ready-dot" aria-hidden="true" />}
+        </span>}
+        {isPinned && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-label="Pinned" role="img">
+              <path d="m16 3 5 5-4 1-3 5v4l-3-3-6 6 6-6-3-3h4l5-3z" />
+            </svg>}
+      </div>}
+      {contextMenu && createPortal(
+        <div
+          ref={menuRef}
+          id={menuId}
+          className="threads-session-menu"
+          role="menu"
+          aria-label={`Actions for ${topic}`}
+          style={{left: contextMenu.x, top: contextMenu.y}}
+          onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) closeMenu(); }}
+          onKeyDown={event => {
+            if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(true); return; }
+            const buttons = [...event.currentTarget.querySelectorAll('button')];
+            const index = buttons.indexOf(document.activeElement);
+            const next = {ArrowDown: (index + 1) % buttons.length, ArrowUp: (index + buttons.length - 1) % buttons.length, Home: 0, End: buttons.length - 1}[event.key];
+            if (next !== undefined) { event.preventDefault(); buttons[next].focus(); }
+          }}
+        >
+          {menuItems.map(item => <button key={item.label} type="button" role="menuitem" className={item.danger ? 'danger' : undefined} onClick={() => {
+            closeMenu(true);
+            if (item.label === 'Rename session') startRename();
+            else runAction(item.label, item.action);
+          }}>{item.label}</button>)}
+        </div>, document.body
       )}
     </div>
   );

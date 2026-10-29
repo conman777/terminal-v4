@@ -1,0 +1,22 @@
+.browser-settings-root { margin: 0; padding: 0; color: var(--text-primary); font: 14px/1.5 var(--font-ui); min-width: 0; }
+.browser-settings-loading { padding: 16px; color: var(--text-secondary); font: 13px/1.5 var(--font-ui); }
+.browser-settings-loading [role="alert"] { color: var(--error); }
+.browser-settings-banner { margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: 6px; font-size: 13px; background: var(--bg-base); }
+.browser-settings-banner-success { color: var(--success); }
+.browser-settings-banner-error { color: var(--error); }
+.browser-settings-sections { display: flex; flex-direction: column; gap: 16px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.browser-settings-card { padding: 14px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); min-width: 0; }
+.browser-settings-card-title { margin: 0 0 12px; color: var(--text-primary); font: 500 14px/1.5 var(--font-ui); }
+.browser-settings-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.browser-settings-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.browser-settings-label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; color: var(--text-primary); font-size: 13px; font-weight: 500; }
+.browser-settings-label-hint, .browser-settings-meta { color: var(--text-secondary); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.browser-settings-root .browser-settings-input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px; padding: 7px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font: 13px/1.5 var(--font-ui); }
+.browser-settings-input:disabled { opacity: .6; }
+.browser-settings-root :is(input, select, button):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.browser-settings-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-subtle); }
+@media (max-width: 560px) { .browser-settings-fields { grid-template-columns: 1fr; } }
+@media (max-width: 768px), (pointer: coarse) {
+  .browser-settings-root .browser-settings-input { min-height: 44px; font-size: 16px; }
+  .browser-settings-root button, .browser-settings-loading button { min-height: 44px; }
+}

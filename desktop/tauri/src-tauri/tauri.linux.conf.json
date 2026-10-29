@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "../../../rust/target/release/terminal-v4-api": "terminal-v4-api"
+    }
+  }
+}

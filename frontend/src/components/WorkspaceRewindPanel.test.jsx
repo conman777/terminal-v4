@@ -56,3 +56,41 @@ describe('WorkspaceRewindPanel', () => {
   });
 
 });
+
+it('retries an initial rewind load failure in place', async () => {
+  apiFetch.mockRejectedValueOnce(new Error('Rewind offline'));
+  render(<WorkspaceRewindPanel workspacePath="/managed" />);
+  await screen.findByText('Rewind offline');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry rewind' }));
+  expect(await screen.findByRole('option', { name: /Implement parser/ })).toBeInTheDocument();
+});
+
+it('reconciles a lost apply response with the server recovery state on retry',async()=>{
+  apiFetch.mockImplementation(async(url)=>{
+    if(url.includes('/plan'))return reply({id:'operation-a',status:'planned',sourceId:'source-a',targetTurnId:'turn-a',checkpointId:'checkpoint-a'});
+    if(url.includes('/apply')){listing.operations=[{id:'operation-a',status:'failed',recoveryCheckpointId:'saved-current',error:'Provider fork failed'}];throw new Error('Apply response lost');}
+    return reply(listing);
+  });
+  render(<WorkspaceRewindPanel workspacePath="/managed"/>);
+  await screen.findByRole('option',{name:/Implement parser/});
+  fireEvent.change(screen.getByLabelText('Native conversation'),{target:{value:'source-a'}});
+  fireEvent.change(screen.getByLabelText('Rewind before user turn'),{target:{value:'turn-a'}});
+  fireEvent.change(screen.getByLabelText('Files checkpoint'),{target:{value:'checkpoint-a'}});
+  fireEvent.click(screen.getByRole('button',{name:'Review rewind plan'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Apply rewind'}));
+  await screen.findByText('Apply response lost');
+  fireEvent.click(screen.getByRole('button',{name:'Retry rewind'}));
+  expect(await screen.findByRole('button',{name:'Recover files for operation-a'})).toBeEnabled();
+  expect(screen.queryByRole('button',{name:'Apply rewind'})).not.toBeInTheDocument();
+});
+
+it('refreshes checkpoints created from a sibling retained tool without resetting the selected conversation',async()=>{
+ listing.checkpoints=[];
+ render(<WorkspaceRewindPanel workspacePath="/managed"/>);
+ await screen.findByRole('option',{name:/Implement parser/});
+ fireEvent.change(screen.getByLabelText('Native conversation'),{target:{value:'source-a'}});
+ listing={...listing,checkpoints:[{id:'new-checkpoint',label:'Saved in Git tool'}]};
+ fireEvent.click(screen.getByRole('button',{name:'Refresh checkpoints'}));
+ expect(await screen.findByRole('option',{name:'Saved in Git tool'})).toBeInTheDocument();
+ expect(screen.getByLabelText('Native conversation')).toHaveValue('source-a');
+});

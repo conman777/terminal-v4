@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { setActiveEnvironment, getEnvironmentStorage } from '../utils/remoteEnvironments';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -141,4 +142,71 @@ describe('FolderContext', () => {
     expect([folders.recentFolders,JSON.parse(localStorage.getItem('recentFolders')),JSON.parse(storage.getItem('recentFolders')),apiFetch.mock.calls.filter(([url])=>url==='/api/settings')]).toEqual([['/new-remote','/remote-only'],['/home-only'],['/new-remote','/remote-only'],[]]);
   });
 
+});
+
+
+describe('FolderContext pending hydration', () => {
+  beforeEach(() => { setActiveEnvironment(null); localStorage.clear(); apiFetch.mockReset(); });
+
+  it.each(['recent', 'pin', 'remove'])('hydrates untouched fields while preserving a newer %s action', async action => {
+    localStorage.setItem('sidebarProjects', JSON.stringify([{ path: '/removed-project' }]));
+    let finishSettings;
+    let folders;
+    function Consumer() { folders = useFolders(); return <TestConsumer />; }
+    apiFetch.mockImplementation(async (url, options = {}) => {
+      if (url === '/api/settings' && !options.method) return new Promise(resolve => { finishSettings = resolve; });
+      return { ok: true, json: async () => ({ projects: [] }) };
+    });
+    render(<FolderProvider><Consumer /></FolderProvider>);
+    await act(async () => {
+      if (action === 'recent') folders.addRecentFolder('/new-active');
+      if (action === 'pin') folders.pinFolder('/new-pin');
+      if (action === 'remove') folders.removeSidebarProject('/removed-project');
+    });
+    await act(async () => finishSettings({ ok: true, json: async () => ({ recentFolders: ['/server-recent'], pinnedFolders: ['/server-pin'], sidebarProjects: [{ path: '/removed-project' }] }) }));
+    expect({ recent: folders.recentFolders, pinned: folders.pinnedFolders, projects: folders.sidebarProjects.map(p => p.path) }).toEqual({
+      recent: action === 'recent' ? ['/new-active'] : ['/server-recent'],
+      pinned: action === 'pin' ? ['/new-pin'] : ['/server-pin'],
+      projects: action === 'remove' ? [] : ['/removed-project'],
+    });
+    expect(apiFetch.mock.calls.filter(([url, options]) => url === '/api/settings' && !options?.method)).toHaveLength(1);
+  });
+
+  it('retries failed settings on focus without repeating successful hydration or losing local actions', async () => {
+    let folders;
+    let reads = 0;
+    function Consumer() { folders = useFolders(); return <TestConsumer />; }
+    apiFetch.mockImplementation(async (url, options = {}) => {
+      if (url === '/api/settings' && !options.method) {
+        reads++;
+        return reads === 1 ? { ok: false, status: 503 } : { ok: true, json: async () => ({ recentFolders: ['/stale'], pinnedFolders: ['/recovered-pin'] }) };
+      }
+      return { ok: true, json: async () => ({ projects: [] }) };
+    });
+    render(<FolderProvider><Consumer /></FolderProvider>);
+    await act(async () => {});
+    await act(async () => folders.addRecentFolder('/new-active'));
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect([reads, folders.recentFolders, folders.pinnedFolders]).toEqual([2, ['/new-active'], ['/recovered-pin']]);
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(reads).toBe(2);
+  });
+});
+
+
+describe('FolderContext effect lifecycle', () => {
+  it('hydrates the current StrictMode effect after the abandoned request resolves late', async () => {
+    setActiveEnvironment(null); localStorage.clear(); apiFetch.mockReset();
+    const reads = [];
+    apiFetch.mockImplementation(async (url, options = {}) => {
+      if (url === '/api/settings' && !options.method) return new Promise(resolve => reads.push(resolve));
+      return {ok: true, json: async () => ({projects: []})};
+    });
+    render(<StrictMode><FolderProvider><TestConsumer /></FolderProvider></StrictMode>);
+    expect(reads).toHaveLength(2);
+    await act(async () => reads[1]({ok: true, json: async () => ({pinnedFolders: ['/current-pin']})}));
+    await act(async () => reads[0]({ok: true, json: async () => ({pinnedFolders: ['/stale-pin']})}));
+    expect(screen.getByTestId('pinned-folders')).toHaveTextContent('/current-pin');
+    expect(JSON.parse(localStorage.getItem('pinnedFolders'))).toEqual(['/current-pin']);
+  });
 });

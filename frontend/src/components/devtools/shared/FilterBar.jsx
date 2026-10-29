@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import './FilterBar.css';
 
 /**
  * FilterBar - Reusable filter component for DevTools tabs
@@ -11,7 +11,9 @@ export function FilterBar({ filters, activeFilter, onFilterChange, searchValue, 
         {filters.map(filter => (
           <button
             key={filter.value}
+            type="button"
             className={`devtools-filter-btn ${activeFilter === filter.value ? 'active' : ''}`}
+            aria-pressed={activeFilter === filter.value}
             onClick={() => onFilterChange(filter.value)}
             title={filter.tooltip}
           >

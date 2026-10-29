@@ -2,8 +2,7 @@ use std::path::Path;
 use tokio::process::Command;
 
 pub(crate) fn supported_task_provider(provider: &str) -> bool {
-    ["claude", "codex", "hermes"].contains(&provider)
-        || crate::hermes_provider_bridge::provider_mapping(provider).is_some()
+    ["claude", "codex"].contains(&provider) || crate::v4_agent::supports_tasks(provider)
 }
 
 pub(crate) fn task_command(
@@ -12,7 +11,7 @@ pub(crate) fn task_command(
     model: Option<&str>,
     cwd: &Path,
 ) -> Result<Command, String> {
-    if !["claude", "codex", "hermes"].contains(&provider) {
+    if !["claude", "codex"].contains(&provider) {
         return Err("Unsupported task provider".into());
     }
     if prompt.trim().is_empty()
@@ -55,12 +54,6 @@ fn build_task_command(
             }
             command.args(["--", prompt]);
         }
-        "hermes" => {
-            command.args(["chat", "--query", prompt, "--quiet"]);
-            if let Some(model) = model {
-                command.args(["--model", model]);
-            }
-        }
         _ => unreachable!(),
     }
     Ok(command)
@@ -90,7 +83,6 @@ mod tests {
                     prompt,
                 ],
             ),
-            ("hermes", vec!["chat", "--query", prompt, "--quiet"]),
         ];
         for (provider, arguments) in expected {
             let command =
@@ -118,7 +110,7 @@ pub(crate) fn native_command_in(
     directories: &[std::path::PathBuf],
     windows: bool,
 ) -> Option<Command> {
-    if !["codex", "claude", "gemini", "hermes", "node"].contains(&provider) {
+    if !["codex", "claude", "gemini", "node"].contains(&provider) {
         return None;
     }
     let filename = if windows {
@@ -178,16 +170,9 @@ mod resolution_tests {
 }
 
 pub(crate) fn native_command(provider: &str) -> Option<Command> {
-    if provider == "hermes" {
-        if let Some(executable) = std::env::var_os("HERMES_EXECUTABLE") {
-            let path = std::path::PathBuf::from(executable);
-            let extension_valid = !cfg!(windows)
-                || path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
-            if path.is_absolute() && path.is_file() && extension_valid {
-                return Some(Command::new(path));
-            }
+    if provider == "codex" {
+        if let Some(binary) = std::env::var_os("CODEX_BIN").filter(|value| !value.is_empty()) {
+            return Some(Command::new(binary));
         }
     }
     let directories: Vec<_> = std::env::var_os("PATH")

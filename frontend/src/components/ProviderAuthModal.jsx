@@ -1,6 +1,10 @@
-import { getActiveEnvironment } from '../utils/remoteEnvironments';
-import { useEffect, useState } from 'react';
+import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { useEffect, useLayoutEffect, useState, useRef, useId, useSyncExternalStore } from 'react';
+import './AccountAccess.css';
+import './ProviderAuthModal.css';
 import { apiDelete, apiGet, apiPost, apiPut } from '../utils/api';
+import { PreviewIcon } from './preview/PreviewIcon';
+import { isStructuredSessionId } from '../utils/structuredSessions';
 
 function statusLabel(provider) {
   if (provider.status === 'ready') {
@@ -22,7 +26,51 @@ function setupLabel(provider) {
 }
 
 export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
-  const remoteEnvironment = getActiveEnvironment();
+  const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
+  const writing = useRef(false);
+  const [pending, setPending] = useState(false);
+  return isOpen ? <OpenProviderAuthModal key={`${environment?.id || 'home'}:${sessionId || ''}`} onClose={onClose} sessionId={sessionId} remoteEnvironment={environment} writing={writing} pending={pending} onWritingChange={setPending} /> : null;
+}
+
+function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing, pending, onWritingChange }) {
+  const dialog = useRef(null);
+  const mounted = useRef(false);
+  const inheritedWrite = useRef(pending);
+  const copyTimer = useRef(null);
+  const statusRequest = useRef(null);
+  const terminalSessionId = sessionId && !isStructuredSessionId(sessionId) ? sessionId : null;
+  const titleId = useId();
+  const descriptionId = useId();
+  useLayoutEffect(() => {
+    const opener = document.activeElement;
+    const element = dialog.current;
+    const coderTrigger = element.closest('.desktop-status-bar')?.querySelector('.status-ai-selector');
+    element.showModal();
+    element.focus();
+    return () => {
+      if (element.open) element.close();
+      const returnTarget = opener?.isConnected && opener !== document.body ? opener : coderTrigger;
+      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pending && inheritedWrite.current) { inheritedWrite.current = false; void load(); }
+  }, [pending]);
+  function keyDown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const fields = dialog.current?.querySelectorAll(':is(button, input, a[href]):not(:disabled)');
+    if (!fields?.length) return;
+    const first = fields[0], last = fields[fields.length - 1];
+    if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first.focus(); }
+  }
   const [providers, setProviders] = useState([]);
   const [values, setValues] = useState({});
   const [loading, setLoading] = useState(false);
@@ -32,102 +80,136 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
   const [notice, setNotice] = useState(null);
 
   const load = async () => {
+    statusRequest.current?.abort();
+    const controller = new AbortController();
+    statusRequest.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const data = await apiGet('/api/agent/auth');
+      const data = await apiGet('/api/agent/auth', { signal: controller.signal });
+      if (!mounted.current || controller.signal.aborted) return;
       setProviders(data.providers || []);
     } catch (loadError) {
-      setError(loadError?.message || 'Unable to load provider authentication status');
+      if (mounted.current && !controller.signal.aborted) setError(loadError?.message || 'Unable to load provider authentication status');
     } finally {
-      setLoading(false);
+      if (mounted.current && !controller.signal.aborted) setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (isOpen) load();
-  }, [isOpen]);
+    mounted.current = true;
+    load();
+    return () => { mounted.current = false; statusRequest.current?.abort(); clearTimeout(copyTimer.current); };
+  }, []);
 
   const save = async provider => {
-    if (remoteEnvironment) return;
+    if (remoteEnvironment || writing.current) return;
     const value = values[provider.id]?.trim();
     if (!value) return;
+    writing.current = true;
+    onWritingChange(true);
     setSaving(provider.id);
     setError(null);
     setNotice(null);
     try {
       await apiPut(`/api/agent/auth/${provider.id}/api-key`, { apiKey: value });
+      if (!mounted.current) return;
       setValues(current => ({ ...current, [provider.id]: '' }));
       setNotice(`${provider.label} API key saved securely.`);
       await load();
     } catch (saveError) {
-      setError(saveError?.message || `Unable to save ${provider.label} credentials`);
+      if (mounted.current) setError(saveError?.message || `Unable to save ${provider.label} credentials`);
     } finally {
-      setSaving(null);
+      writing.current = false;
+      onWritingChange(false);
+      if (mounted.current) setSaving(null);
     }
   };
 
   const remove = async provider => {
-    if (remoteEnvironment) return;
+    if (remoteEnvironment || writing.current) return;
+    writing.current = true;
+    onWritingChange(true);
     setSaving(provider.id);
     setError(null);
+    setNotice(null);
     try {
       await apiDelete(`/api/agent/auth/${provider.id}/api-key`);
+      if (!mounted.current) return;
       setNotice(`${provider.label} API key removed.`);
       await load();
     } catch (removeError) {
-      setError(removeError?.message || `Unable to remove ${provider.label} credentials`);
+      if (mounted.current) setError(removeError?.message || `Unable to remove ${provider.label} credentials`);
     } finally {
-      setSaving(null);
+      writing.current = false;
+      onWritingChange(false);
+      if (mounted.current) setSaving(null);
     }
   };
 
   const copyCommand = async provider => {
     try {
       await navigator.clipboard.writeText(provider.command);
+      if (!mounted.current) return;
       setCopied(provider.id);
-      setTimeout(() => setCopied(null), 1800);
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(null), 1800);
     } catch {
-      setError('Clipboard access was unavailable.');
+      if (mounted.current) setError('Clipboard access was unavailable.');
     }
   };
 
   const runOAuth = async provider => {
-    if (!provider.command || !sessionId) {
+    if (writing.current) return;
+    if (!provider.command || !terminalSessionId) {
       await copyCommand(provider);
       return;
     }
+    writing.current = true;
+    onWritingChange(true);
     setSaving(provider.id);
     setError(null);
     setNotice(null);
     try {
-      await apiPost(`/api/terminal/${sessionId}/input`, { command: `${provider.command}\n` });
+      await apiPost(`/api/terminal/${terminalSessionId}/input`, { command: `${provider.command}\n` });
+      if (!mounted.current) return;
       const setupKind = provider.methods?.includes('oauth') ? 'OAuth login' : 'provider setup';
       setNotice(`${provider.label} ${setupKind} started in the current terminal.`);
     } catch (runError) {
       const setupKind = provider.methods?.includes('oauth') ? 'OAuth login' : 'provider setup';
-      setError(runError?.message || `Unable to start ${provider.label} ${setupKind}`);
+      if (mounted.current) setError(runError?.message || `Unable to start ${provider.label} ${setupKind}`);
     } finally {
-      setSaving(null);
+      writing.current = false;
+      onWritingChange(false);
+      if (mounted.current) setSaving(null);
     }
   };
 
-  if (!isOpen) return null;
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content tv4-provider-auth-modal" onClick={event => event.stopPropagation()}>
+    <dialog
+      className="modal-overlay tv4-provider-auth-overlay"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={descriptionId}
+      ref={dialog}
+      tabIndex={-1}
+      onKeyDown={keyDown}
+      onCancel={event => { event.preventDefault(); event.stopPropagation(); onClose(); }}
+      onClick={event => { if (event.target === event.currentTarget) onClose(); }}
+    >
+      <div className="modal-content account-access-modal tv4-provider-auth-modal" onClick={event => event.stopPropagation()}>
         <div className="modal-header">
-          <div>
-            <h2>Provider authentication</h2>
-            <p className="tv4-provider-auth-subtitle">API keys stay encrypted on the Terminal v4 server; OAuth sessions remain managed by the provider&apos;s native login.</p>
-          </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+          <h2 id={titleId}>Provider authentication</h2>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Close"><PreviewIcon name="close" /></button>
         </div>
         <div className="modal-body">
+          <p id={descriptionId} className="tv4-provider-auth-subtitle">API keys stay encrypted on the Terminal v4 server; OAuth sessions remain managed by the provider&apos;s native login.</p>
           {remoteEnvironment && <p role="note">Configure API keys on {remoteEnvironment.label || remoteEnvironment.url} directly. This connection grants runtime access.</p>}
-          {loading && <div className="loading">Checking provider status…</div>}
-          {error && <div className="tv4-provider-auth-error">{error}</div>}
-          {notice && <div className="tv4-provider-auth-notice">{notice}</div>}
+          {loading && <div className="loading" role="status">Checking provider status…</div>}
+          {error && <div className="tv4-provider-auth-error" role="alert">{error}</div>}
+          {notice && <div className="tv4-provider-auth-notice" role="status">{notice}</div>}
+          {pending && saving === null && <p role="status">An earlier provider update is still pending. Wait before making another change.</p>}
+          {!loading && !error && providers.length === 0 && <p role="status">No providers are available.</p>}
           {!loading && (
             <div className="tv4-provider-auth-list">
               {providers.map(provider => (
@@ -141,24 +223,24 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
                       <span className="tv4-provider-auth-method-label">{setupLabel(provider)}</span>
                       {provider.help && <small>{provider.help}</small>}
                       <code>{provider.command}</code>
-                      <button type="button" className="btn-secondary" onClick={() => runOAuth(provider)} disabled={saving === provider.id}>{saving === provider.id ? 'Starting…' : sessionId ? 'Run in current terminal' : 'Copy login command'}</button>
-                      {sessionId && <button type="button" className="btn-secondary" onClick={() => copyCommand(provider)}>{copied === provider.id ? 'Copied' : 'Copy login command'}</button>}
-                      <small>Run the command in a Terminal v4 terminal, then reopen this panel to refresh the connection status.</small>
+                      <button type="button" className="btn-secondary" onClick={() => runOAuth(provider)} disabled={saving !== null || pending}>{saving === provider.id ? 'Starting…' : terminalSessionId ? 'Run in current terminal' : copied === provider.id ? 'Copied' : 'Copy login command'}</button>
+                      {terminalSessionId && <button type="button" className="btn-secondary" onClick={() => copyCommand(provider)}>{copied === provider.id ? 'Copied' : 'Copy login command'}</button>}
+                      <small>Run the command in a Terminal v4 terminal, then use Refresh provider status to check the connection.</small>
                     </div>
                   )}
                   {provider.methods?.includes('api-key') && (
                     <div className="tv4-provider-auth-key-row">
                       <input
                         type="password"
-                        disabled={Boolean(remoteEnvironment)}
+                        disabled={Boolean(remoteEnvironment) || saving !== null || pending}
                         value={values[provider.id] || ''}
                         onChange={event => setValues(current => ({ ...current, [provider.id]: event.target.value }))}
                         placeholder={provider.masked || 'Paste API key'}
                         autoComplete="off"
                         aria-label={`${provider.label} API key`}
                       />
-                      <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || saving === provider.id} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
-                      {provider.configured && <button type="button" className="btn-secondary" disabled={Boolean(remoteEnvironment) || saving === provider.id} onClick={() => remove(provider)}>Remove</button>}
+                      <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || saving !== null || pending} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
+                      {provider.configured && <button type="button" className="btn-secondary" disabled={Boolean(remoteEnvironment) || saving !== null || pending} onClick={() => remove(provider)}>Remove</button>}
                     </div>
                   )}
                   {provider.models && <div className="tv4-provider-auth-model-count">{provider.models} models available</div>}
@@ -166,8 +248,9 @@ export function ProviderAuthModal({ isOpen, onClose, sessionId = null }) {
               ))}
             </div>
           )}
+          <button type="button" className="btn-secondary" disabled={loading || saving !== null} onClick={load}>Refresh provider status</button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

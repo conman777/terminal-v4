@@ -1,54 +1,52 @@
 /* ===========================================
-   Carbon & Amber Terminal Theme
-   A premium dark theme with warm amber accents
+   Neutral workspace theme
    =========================================== */
 
 /* CSS Variables */
 :root {
-  /* Background colors - warm charcoal */
-  --bg-base: #14110d;
-  --bg-primary: #14110d;
-  --bg-surface: #1c1814;
-  --bg-elevated: #26211b;
-  --terminal-chrome-bg: #1a1713;
-  --terminal-bg: #1a1713;
-  --bg-overlay: rgba(20, 17, 13, 0.86);
+  /* Background colors */
+  --bg-base: #11191c;
+  --bg-primary: #11191c;
+  --bg-surface: #182328;
+  --bg-elevated: #213036;
+  --terminal-chrome-bg: #11191c;
+  --terminal-bg: #11191c;
+  --bg-overlay: rgba(17, 25, 28, 0.9);
   --bg-secondary: var(--bg-surface);
   --border-color: var(--border-subtle);
 
-  /* Primary accent - amber */
-  --accent-primary: #d97706;
-  --accent-primary-light: #fbbf24;
-  --accent-primary-dim: rgba(217, 119, 6, 0.18);
-  --accent-primary-glow: rgba(217, 119, 6, 0.32);
-  --accent-ember: #78350f;
+  /* Accent reserved for interactive and selected states */
+  --accent-primary: #56c8af;
+  --accent-primary-light: #8cdac7;
+  --accent-primary-dim: rgba(86, 200, 175, 0.14);
+  --accent-primary-glow: transparent;
+  --accent-ember: #27315a;
 
-  /* Secondary accent - warm coral (distinct from primary) */
-  --accent-secondary: #e6875b;
-  --accent-secondary-dim: rgba(230, 135, 91, 0.16);
+  --accent-secondary: #79a7f6;
+  --accent-secondary-dim: rgba(121, 167, 246, 0.16);
 
-  /* Text colors - warm cream */
-  --text-primary: #f4eee3;
-  --text-secondary: #d5cab4;
-  --text-muted: #8c8172;
-  --text-placeholder: #a89d8f;
+  /* Text colors */
+  --text-primary: #edf4f3;
+  --text-secondary: #afc2c1;
+  --text-muted: #829997;
+  --text-placeholder: #91aaa7;
 
   /* Border colors */
-  --border-subtle: #2a241c;
-  --border-default: #4a4033;
-  --border-hover: #5c4f3e;
+  --border-subtle: #26383e;
+  --border-default: #354c52;
+  --border-hover: #5a777b;
 
   /* Status colors */
   --success: #10b981;
   --error: #fb3654;
   --warning: #f59e0b;
-  --accent-info: #e6875b;
+  --accent-info: #79a7f6;
 
   /* Session tab colors */
-  --tab-active-bg: rgba(217, 119, 6, 0.22);
-  --tab-active-border: rgba(251, 191, 36, 0.85);
-  --tab-active-text: #f4eee3;
-  --tab-active-shadow: 0 0 0 1px rgba(217, 119, 6, 0.45), 0 0 14px rgba(180, 83, 9, 0.32);
+  --tab-active-bg: #333333;
+  --tab-active-border: #606060;
+  --tab-active-text: #ececec;
+  --tab-active-shadow: none;
   --tab-busy-border: rgba(59, 130, 246, 0.5);
   --tab-busy-bg: rgba(59, 130, 246, 0.16);
   --tab-busy-text: #dbeafe;
@@ -58,7 +56,7 @@
   --tab-busy-shadow-peak: 0 0 0 1px rgba(96, 165, 250, 0.6), 0 0 22px rgba(59, 130, 246, 0.4);
   --tab-dot-busy: #60a5fa;
   --tab-dot-ready-active: #4ade80;
-  --tab-dot-ready-inactive: #5c4f3e;
+  --tab-dot-ready-inactive: #606060;
   /* Spacing */
   --radius-sm: 6px;
   --radius-md: 10px;
@@ -76,40 +74,38 @@
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.6);
   --shadow-glow: 0 0 20px var(--accent-primary-glow);
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
-  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 40px rgba(217, 119, 6, 0.06);
+  --shadow-modal: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 80px rgba(0, 0, 0, 0.5);
 
   /* Shared scrollbar palette – track matches composer card background */
   --scrollbar-track: var(--bg-surface);
   --scrollbar-thumb: color-mix(in srgb, var(--border-default) 74%, var(--text-muted) 26%);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 78%, var(--text-secondary) 22%);
   --composer-shell-fill: var(--bg-elevated);
-  --composer-shell-edge: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default) 66%);
+  --composer-shell-edge: var(--border-default);
   --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 44%, var(--border-hover) 56%);
 
-  /* Atmospheric backgrounds - warm amber glow from top */
-  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(217, 119, 6, 0.18), transparent 50%),
-                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(230, 135, 91, 0.10), transparent 40%);
+  --bg-gradient: none;
 
   /* Glass effects */
-  --surface-glass: rgba(28, 24, 20, 0.84);
-  --surface-glass-border: rgba(217, 119, 6, 0.18);
+  --surface-glass: rgba(33, 33, 33, 0.94);
+  --surface-glass-border: rgba(255, 255, 255, 0.1);
 
-  /* Amber glow system */
-  --amber-glow-subtle: 0 0 20px rgba(217, 119, 6, 0.24);
-  --amber-glow-medium: 0 0 30px rgba(217, 119, 6, 0.38);
-  --amber-glow-strong: 0 0 40px rgba(217, 119, 6, 0.46), 0 0 80px rgba(180, 83, 9, 0.24);
+  /* Legacy token names remain available to existing components. */
+  --amber-glow-subtle: none;
+  --amber-glow-medium: none;
+  --amber-glow-strong: none;
 
   /* Font stacks */
-  --font-display: 'Syne', 'Space Grotesk', sans-serif;
-  --font-ui: 'Space Grotesk', 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
 
   /* Interactive state colors */
-  --bg-hover: #2f2920;
-  --bg-active: #3a3226;
-  --bg-tertiary: #100d09;
-  --border-dim: #2a241c;
-  --accent-primary-hover: #b45309;
+  --bg-hover: #25373d;
+  --bg-active: #2e454b;
+  --bg-tertiary: #0e1619;
+  --border-dim: #26383e;
+  --accent-primary-hover: #40ad95;
   --accent: var(--accent-primary);
 
   color-scheme: dark;
@@ -117,44 +113,44 @@
 
 /* Light Theme Override */
 [data-theme="light"] {
-  --bg-base: #fbf6ec;
-  --bg-primary: #fbf6ec;
-  --bg-surface: #f3ecdb;
-  --bg-elevated: #eadfc6;
-  --terminal-chrome-bg: #f5eedb;
-  --terminal-bg: #f5eedb;
-  --bg-overlay: rgba(251, 246, 236, 0.9);
+  --bg-base: #f8fbfa;
+  --bg-primary: #f8fbfa;
+  --bg-surface: #eff5f3;
+  --bg-elevated: #e2eeea;
+  --terminal-chrome-bg: #f8fbfa;
+  --terminal-bg: #f8fbfa;
+  --bg-overlay: rgba(255, 255, 255, 0.9);
 
-  --accent-primary: #b45309;
-  --accent-primary-light: #92400e;
-  --accent-primary-dim: rgba(180, 83, 9, 0.14);
-  --accent-primary-glow: rgba(180, 83, 9, 0.18);
+  --accent-primary: #087b65;
+  --accent-primary-light: #086b59;
+  --accent-primary-dim: rgba(8, 123, 101, 0.1);
+  --accent-primary-glow: transparent;
 
-  --accent-secondary: #c2410c;
-  --accent-secondary-dim: rgba(194, 65, 12, 0.12);
+  --accent-secondary: #3e68a8;
+  --accent-secondary-dim: rgba(62, 104, 168, 0.12);
 
-  /* Text colors - warm slate */
-  --text-primary: #1f1a13;
-  --text-secondary: #4a3f30;
-  --text-muted: #5f5144;
-  --text-placeholder: #4f4337;
+  /* Text colors */
+  --text-primary: #20332f;
+  --text-secondary: #48615b;
+  --text-muted: #5e746e;
+  --text-placeholder: #5e746e;
 
   /* Border colors */
-  --border-subtle: #e4d8bf;
-  --border-default: #b8a684;
-  --border-hover: #8a785b;
+  --border-subtle: #dce7e2;
+  --border-default: #cadad3;
+  --border-hover: #90aaa0;
 
   /* Status colors - slightly deeper for light bg */
   --success: #059669;
   --error: #e11d48;
   --warning: #d97706;
-  --accent-info: #c2410c;
+  --accent-info: #3e68a8;
 
   /* Session tab colors */
-  --tab-active-bg: rgba(180, 83, 9, 0.18);
-  --tab-active-border: rgba(180, 83, 9, 0.72);
-  --tab-active-text: #1f1a13;
-  --tab-active-shadow: 0 0 0 1px rgba(180, 83, 9, 0.26), 0 0 14px rgba(146, 64, 14, 0.20);
+  --tab-active-bg: #e5e5e5;
+  --tab-active-border: #a0a0a0;
+  --tab-active-text: #242424;
+  --tab-active-shadow: none;
   --tab-busy-border: rgba(59, 130, 246, 0.45);
   --tab-busy-bg: rgba(59, 130, 246, 0.15);
   --tab-busy-text: #1e3a8a;
@@ -164,44 +160,41 @@
   --tab-busy-shadow-peak: 0 0 0 1px rgba(37, 99, 235, 0.52), 0 0 20px rgba(59, 130, 246, 0.32);
   --tab-dot-busy: #3b82f6;
   --tab-dot-ready-active: #16a34a;
-  --tab-dot-ready-inactive: #b8a684;
+  --tab-dot-ready-inactive: #a0a0a0;
   /* Shadows - lighter */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
   --shadow-glow: 0 0 20px var(--accent-primary-glow);
 
-  /* Atmospheric backgrounds - subtle warm tint */
-  --bg-gradient: radial-gradient(ellipse 120% 80% at 50% -20%, rgba(180, 83, 9, 0.08), transparent 50%),
-                 radial-gradient(ellipse 80% 60% at 100% 100%, rgba(194, 65, 12, 0.05), transparent 40%);
+  --bg-gradient: none;
 
   /* Glass effects */
-  --surface-glass: rgba(251, 246, 236, 0.9);
-  --surface-glass-border: rgba(180, 83, 9, 0.14);
+  --surface-glass: rgba(255, 255, 255, 0.94);
+  --surface-glass-border: rgba(0, 0, 0, 0.1);
 
-  /* Amber glow system - subtle for light */
-  --amber-glow-subtle: 0 0 20px rgba(180, 83, 9, 0.10);
-  --amber-glow-medium: 0 0 30px rgba(180, 83, 9, 0.16);
-  --amber-glow-strong: 0 0 40px rgba(180, 83, 9, 0.20), 0 0 80px rgba(180, 83, 9, 0.10);
+  --amber-glow-subtle: none;
+  --amber-glow-medium: none;
+  --amber-glow-strong: none;
 
   /* Shadows - lighter */
   --shadow-float: 0 1px 0 rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15), 0 0 40px rgba(180, 83, 9, 0.05);
+  --shadow-modal: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 24px 80px rgba(0, 0, 0, 0.15);
 
   /* Shared scrollbar palette – track matches composer card background */
   --scrollbar-track: var(--bg-surface);
   --scrollbar-thumb: color-mix(in srgb, var(--border-default) 72%, var(--text-muted) 28%);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--border-hover) 76%, var(--text-secondary) 24%);
   --composer-shell-fill: var(--bg-elevated);
-  --composer-shell-edge: color-mix(in srgb, var(--accent-primary) 26%, var(--border-default) 74%);
+  --composer-shell-edge: var(--border-default);
   --composer-shell-edge-hover: color-mix(in srgb, var(--accent-primary-light) 34%, var(--border-hover) 66%);
 
   /* Interactive state colors */
-  --bg-hover: #ebe0c5;
-  --bg-active: #dccfae;
-  --bg-tertiary: #f6eedc;
-  --border-dim: #e4d8bf;
-  --accent-primary-hover: #92400e;
+  --bg-hover: #e5f0ec;
+  --bg-active: #d5e6df;
+  --bg-tertiary: #f2f7f5;
+  --border-dim: #dce7e2;
+  --accent-primary-hover: #066b58;
   --accent: var(--accent-primary);
 
   color-scheme: light;
@@ -3694,33 +3687,14 @@ button {
    =========================================== */
 
 .preview-panel {
-  --preview-chrome: #1f1f1f;
-  --preview-border: #2a2a2a;
-  --preview-input: #111827;
-  --preview-accent: #60a5fa;
-  --preview-accent-strong: #3b82f6;
-  --bg-base: #111827;
-  --bg-surface: #1f1f1f;
-  --bg-elevated: #252526;
-  --bg-overlay: rgba(17, 24, 39, 0.85);
-  --bg-surface-rgb: 31, 31, 31;
-  --bg-elevated-rgb: 37, 37, 38;
-  --text-primary: #e5e7eb;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
-  --border-subtle: #2a2a2a;
-  --border-default: #3f3f46;
-  --border-hover: #52525b;
-  --accent-primary: #3b82f6;
-  --accent-primary-light: #60a5fa;
-  --accent-primary-dim: rgba(59, 130, 246, 0.15);
-  --accent-primary-rgb: 59, 130, 246;
-  --accent-secondary: #22c55e;
-  --accent-success: #22c55e;
-  --error: #ef4444;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.45);
+  --preview-chrome: var(--bg-surface);
+  --preview-border: var(--border-subtle);
+  --preview-input: var(--bg-base);
+  --preview-accent: var(--accent-primary);
+  --preview-accent-strong: var(--accent-fill);
+  --bg-overlay: color-mix(in srgb, var(--bg-base) 85%, transparent);
+  --accent-secondary: var(--success);
+  --accent-success: var(--success);
   flex: 1;
   min-width: 300px;
   min-height: 0;
@@ -3734,36 +3708,7 @@ button {
 }
 
 [data-theme="light"] .preview-panel {
-  --preview-chrome: #f0f0f2;
-  --preview-border: #d4d4d8;
-  --preview-input: #fafaf9;
-  --preview-accent: #2563eb;
-  --preview-accent-strong: #1d4ed8;
-  --bg-base: #fafaf9;
-  --bg-surface: #f0f0f2;
-  --bg-elevated: #e4e4e7;
-  --bg-overlay: rgba(250, 250, 249, 0.9);
-  --bg-surface-rgb: 240, 240, 242;
-  --bg-elevated-rgb: 228, 228, 231;
-  --text-primary: #18181b;
-  --text-secondary: #52525b;
-  --text-muted: #a1a1aa;
-  --border-subtle: #d4d4d8;
-  --border-default: #a1a1aa;
-  --border-hover: #71717a;
-  --accent-primary: #1d4ed8;
-  --accent-primary-light: #2563eb;
-  --accent-primary-dim: rgba(29, 78, 216, 0.12);
-  --accent-primary-rgb: 29, 78, 216;
-  --accent-secondary: #059669;
-  --accent-success: #059669;
-  --error: #e11d48;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.12);
-  background:
-    radial-gradient(1200px 280px at 50% -120px, rgba(37, 99, 235, 0.06), transparent 65%),
-    #f4f4f5;
+  background: var(--bg-base);
 }
 
 /* Compact chrome: tighter preview URL bar */

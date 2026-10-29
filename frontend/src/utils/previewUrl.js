@@ -12,7 +12,7 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
 const PRIVATE_IPV4_PATTERN = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/;
 
 function normalizeHost(host) {
-  return typeof host === 'string' ? host.trim().toLowerCase() : '';
+  return typeof host === 'string' ? host.trim().toLowerCase().replace(/^\[([^\]]+)\]$/, '$1') : '';
 }
 
 function isLoopbackHost(hostname) {
@@ -21,6 +21,16 @@ function isLoopbackHost(hostname) {
 
 function isPrivateIpv4Host(hostname) {
   return PRIVATE_IPV4_PATTERN.test(normalizeHost(hostname));
+}
+
+export function isFilePreviewTarget(value) {
+  if (typeof value !== 'string') return false;
+  const target = value.trim();
+  if (/^file:\/\/\//i.test(target) || /^[A-Za-z]:[/\\]/.test(target)) return true;
+  return target.startsWith('/')
+    && !target.startsWith('//')
+    && !/^\/(?:api|preview)(?:\/|[?#]|$)/.test(target)
+    && /\/[^/]+\.[^/]+$/.test(target);
 }
 
 function getPreviewDefaultMode() {
@@ -201,24 +211,35 @@ function isResolvableLoopbackSubdomainBase(base) {
   );
 }
 
-/**
- * Add auth token to URL as query parameter.
- *
- * The preview proxy is auth-gated: /preview/:port/* and preview-<port>.*
- * requests require a valid token (query param, cookie, or Authorization
- * header). Sandboxed preview iframes cannot send headers, so the token is
- * carried in the URL; the backend sets an httpOnly preview cookie on the
- * first proxied response so subsequent navigations keep working.
- */
+export function getPreviewNavigationTarget(url) {
+  if (!url) return null;
+  try {
+    const parsed = new URL(resolveApiUrl(url), window.location.origin);
+    const homeApi = new URL(resolveApiUrl('/api/auth/me'), window.location.origin);
+    const apiPrefix = homeApi.pathname.slice(0, -'/api/auth/me'.length);
+    if (parsed.origin !== homeApi.origin || !parsed.pathname.startsWith(`${apiPrefix}/`)) return null;
+    const targetPath = parsed.pathname.slice(apiPrefix.length);
+    const previewPath = targetPath.replace(/^\/api\/environments\/[^/]+\/proxy(?=\/)/, '');
+    if (previewPath !== '/api/preview' && previewPath !== '/api/proxy-external' && !/^\/preview\/\d+(?:\/|$)/.test(previewPath)) return null;
+    return { url: parsed.toString(), targetPath: targetPath + parsed.search + parsed.hash, apiPrefix };
+  } catch { return null; }
+}
+
+/** Resolve preview navigation without embedding owner credentials; resource grants are prepared separately. */
 export function withAuthToken(url) {
   if (!url) return url;
-  const token = getAccessToken();
-  if (!token) return url;
+  const navigation = getPreviewNavigationTarget(url);
+  if (navigation) return navigation.url;
   try {
     const routed = resolveApiUrl(url);
     const parsed = new URL(routed, window.location.origin);
-    const homeOrigin = new URL(resolveApiUrl('/api/auth/me'), window.location.origin).origin;
-    if (parsed.origin !== homeOrigin || !/^\/(api\/|preview\/)/.test(parsed.pathname)) return url;
+    const homeApi = new URL(resolveApiUrl('/api/auth/me'), window.location.origin);
+    const apiPrefix = homeApi.pathname.slice(0, -'/api/auth/me'.length);
+    if (parsed.origin !== homeApi.origin || !parsed.pathname.startsWith(`${apiPrefix}/`)) return url;
+    const targetPath = parsed.pathname.slice(apiPrefix.length);
+    if (!/^\/(api\/|preview\/)/.test(targetPath)) return url;
+    const token = getAccessToken();
+    if (!token) return url;
     if (!parsed.searchParams.has('token')) {
       parsed.searchParams.set('token', token);
     }
@@ -250,11 +271,15 @@ function buildPreviewUrl(inputUrl) {
   }
 
   // Handle file:// URLs
-  if (normalizedInput.startsWith('file:///')) {
-    const filePath = decodeURIComponent(normalizedInput.replace('file:///', ''));
+  if (/^file:\/\/\//i.test(normalizedInput)) {
+    let filePath = new URL(normalizedInput).pathname;
+    filePath = filePath.replace(/(?:%[0-9a-f]{2})+/gi, encoded => {
+      try { return decodeURIComponent(encoded); } catch { return encoded; }
+    });
+    if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
     const lastSlash = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
-    const directory = filePath.substring(0, lastSlash);
-    const filename = filePath.substring(lastSlash + 1);
+    const directory = filePath.substring(0, lastSlash) || '/';
+    const filename = filePath.substring(lastSlash + 1) || 'index.html';
     return withAuthToken(`/api/preview?path=${encodeURIComponent(directory)}&file=${encodeURIComponent(filename)}`);
   }
 

@@ -20,5 +20,21 @@ describe('MobileGestureHints', () => {
     expect(screen.queryByRole('dialog', { name: /mobile gesture tips/i })).not.toBeInTheDocument();
     expect(localStorage.getItem('gestureHintsSeen')).toBe('1');
   });
+
+  it('traps focus, dismisses with Escape, and restores the opener', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    render(<MobileGestureHints />);
+    const close = screen.getByRole('button', { name: 'Close gesture tips' });
+    const confirm = screen.getByRole('button', { name: 'Got it' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(confirm).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
 });
 

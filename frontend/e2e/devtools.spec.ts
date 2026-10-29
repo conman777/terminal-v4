@@ -11,7 +11,12 @@ test.describe('DevTools Integration', () => {
     await expect(page.locator('.devtools-tab', { hasText: 'Network' })).toBeVisible();
     await expect(page.locator('.devtools-tab', { hasText: 'Console' })).toBeVisible();
     await expect(page.locator('.devtools-tab', { hasText: 'Storage' })).toBeVisible();
-    await expect(page.locator('.devtools-tab', { hasText: 'Performance' })).toBeVisible();
+    const performanceTab = page.locator('.devtools-tab', { hasText: 'Performance' });
+    if (process.env.E2E_PERFORMANCE_TAB_ENABLED === 'true') {
+      await expect(performanceTab).toBeVisible();
+    } else {
+      await expect(performanceTab).toHaveCount(0);
+    }
     await expect(page.locator('.devtools-tab', { hasText: 'WebSocket' })).toBeVisible();
   });
 

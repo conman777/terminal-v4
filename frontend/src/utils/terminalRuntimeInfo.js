@@ -1,7 +1,15 @@
+import { screenShowsShellPrompt } from './terminalBusyState';
+
 function compactText(value) {
   return String(value || '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+// A saved agent choice outlives the agent process; the screen shows what is running now.
+export function resolveForegroundAiType(inferredAiType, runtimeInfo, screen) {
+  if (screenShowsShellPrompt(screen)) return null;
+  return inferredAiType ?? runtimeInfo?.providerId ?? null;
 }
 
 const CODEX_MODEL_RE = /\bgpt-5(?:\.\d+)?\b/i;

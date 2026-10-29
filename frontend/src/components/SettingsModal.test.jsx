@@ -6,6 +6,20 @@ vi.mock('./FolderBrowserModal', () => ({
   FolderBrowserModal: () => null,
 }));
 
+vi.mock('./AgentBrowserSettingsPanel', () => ({
+  AgentBrowserSettingsPanel: () => <div>Agent browser test settings panel</div>,
+}));
+vi.mock('./McpSettingsPanel', () => ({
+  McpSettingsPanel: () => <div>MCP test settings panel</div>,
+}));
+vi.mock('./ProviderConnectionsPanel', () => ({
+  ProviderConnectionsPanel: () => <div>Provider connection test settings panel</div>,
+}));
+
+vi.mock('./AccountKnowledgePanel', () => ({
+  AccountKnowledgePanel: () => <div>Account knowledge test settings panel</div>,
+}));
+
 vi.mock('../utils/auth', () => ({
   getAccessToken: () => null,
 }));
@@ -50,8 +64,47 @@ function withNavigator(navigatorLike, testFn) {
 }
 
 describe('SettingsModal', () => {
+  it('exposes the current settings section and selected toggle state', () => {
+    render(<SettingsModal {...buildProps({ showTabStatusLabels: false })} />);
+    expect(screen.getByRole('dialog', { name: 'Session Settings' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Workspace' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
+    expect(screen.getByRole('button', { name: 'Workspace' })).not.toHaveAttribute('aria-current');
+    expect(screen.getByRole('button', { name: 'Interface' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('button', { name: 'Compact', pressed: true })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Show', pressed: false })).toBeVisible();
+  });
+  it('opens system resources from process tooling', () => {
+    const onOpenSystemResources = vi.fn();
+    render(<SettingsModal {...buildProps({ onOpenSystemResources })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Processes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open System Resources' }));
+    expect(onOpenSystemResources).toHaveBeenCalledTimes(1);
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('opens agent settings panels only after selecting their sections', () => {
+    render(<SettingsModal {...buildProps()} />);
+    expect(screen.queryByText('MCP test settings panel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Account knowledge test settings panel')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
+    expect(screen.getByText('MCP test settings panel')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Done', exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText(/Changes are kept between sections.*Save before closing settings/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Account knowledge' }));
+    expect(screen.getByText('MCP test settings panel')).not.toBeVisible();
+    expect(screen.getByText('Account knowledge test settings panel')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Agent browser' }));
+    expect(screen.getByText('Account knowledge test settings panel')).not.toBeVisible();
+    expect(screen.getByText('Agent browser test settings panel')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Provider connections' }));
+    expect(screen.getByText('Provider connection test settings panel')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Done', exact: true })).not.toBeInTheDocument();
   });
 
   it('disables the WebGL renderer toggle on Linux desktops', () => {
@@ -122,7 +175,7 @@ describe('SettingsModal', () => {
 
     render(<SettingsModal {...buildProps({ onSave, onClose, currentCwd: '/workspace' })} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
 
     expect(onSave).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledTimes(1);

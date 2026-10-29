@@ -1,0 +1,62 @@
+.app-workspace-surface {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-workspace-surface > :is(.main-content, .terminal-main) {
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-workspace-covered {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-resources-surface {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.app-resources-surface:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.mobile-workspace-body { position: relative; }
+.mobile-workspace-surface {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.mobile-workspace-surface[aria-hidden="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.main-content > .workspace-preview-resizer {
+  width: 8px;
+  touch-action: none;
+  user-select: none;
+}
+
+.main-content > .workspace-preview-resizer:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+@media (pointer: coarse) {
+  .main-content > .workspace-preview-resizer { width: 16px; }
+}

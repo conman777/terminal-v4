@@ -25,6 +25,10 @@ use std::{
 use tokio::sync::{mpsc, Semaphore};
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
 use uuid::Uuid;
+const FRAGMENT_HEADER: &str = "x-terminal-v4-relay-fragments";
+const WS_MESSAGE_LIMIT: usize = 8 * 1024 * 1024;
+const RELAY_SIZE_RECOVERY: &str =
+    "Relay message limit exceeded; fetch history over HTTP or upgrade both relay endpoints";
 const CHUNK: usize = 65536;
 const BODY_LIMIT: usize = 32 * 1024 * 1024;
 const FRAME_LIMIT: usize = CHUNK + 1024;
@@ -65,6 +69,7 @@ enum Event {
 #[derive(Clone)]
 struct HostPeer {
     generation: Uuid,
+    fragments: bool,
     tx: mpsc::Sender<Message>,
     streams: Arc<Mutex<HashMap<Uuid, mpsc::Sender<Event>>>>,
     permits: Arc<Semaphore>,
@@ -194,7 +199,7 @@ fn decode(message: Message) -> Option<(Uuid, Event)> {
                 _ => None,
             }
         }
-        Message::Binary(data) if data.len() >= 17 && data.len() <= FRAME_LIMIT => Some((
+        Message::Binary(data) if data.len() >= 17 && data.len() <= CHUNK + 17 => Some((
             Uuid::from_slice(&data[..16]).ok()?,
             Event::Data(data[16], data[17..].to_vec()),
         )),
@@ -206,6 +211,65 @@ async fn send(tx: &mpsc::Sender<Message>, message: Message) -> Result<(), ()> {
         .await
         .map_err(|_| ())?
         .map_err(|_| ())
+}
+// Kinds 2/3 remain complete text/binary messages. Negotiated kinds 4/5
+// continue the same message; the final chunk uses its original 2/3 kind.
+async fn send_ws(
+    tx: &mpsc::Sender<Message>,
+    id: Uuid,
+    kind: u8,
+    bytes: &[u8],
+    fragments: bool,
+) -> Result<(), ()> {
+    if bytes.len() > WS_MESSAGE_LIMIT || (!fragments && bytes.len() > CHUNK) {
+        let _ = send(tx, binary(id, 6, RELAY_SIZE_RECOVERY.as_bytes())).await;
+        return Err(());
+    }
+    if bytes.is_empty() {
+        return send(tx, binary(id, kind, bytes)).await;
+    }
+    let count = bytes.len().div_ceil(CHUNK);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for (index, chunk) in bytes.chunks(CHUNK).enumerate() {
+            send(
+                tx,
+                binary(id, if index + 1 == count { kind } else { kind + 2 }, chunk),
+            )
+            .await?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| ())?
+}
+#[derive(Default)]
+struct WsAssembly(Option<(u8, Vec<u8>)>);
+impl WsAssembly {
+    fn accept(&mut self, kind: u8, bytes: Vec<u8>, fragments: bool) -> Result<Option<Message>, ()> {
+        if bytes.len() > CHUNK
+            || !matches!(kind, 2..=5)
+            || (!fragments && kind >= 4)
+            || (kind >= 4 && bytes.is_empty())
+        {
+            return Err(());
+        }
+        let final_chunk = kind <= 3;
+        let message_kind = if final_chunk { kind } else { kind - 2 };
+        let (previous_kind, mut body) = self.0.take().unwrap_or((message_kind, Vec::new()));
+        if previous_kind != message_kind || body.len() + bytes.len() > WS_MESSAGE_LIMIT {
+            return Err(());
+        }
+        body.extend_from_slice(&bytes);
+        if !final_chunk {
+            self.0 = Some((message_kind, body));
+            return Ok(None);
+        }
+        Ok(Some(if message_kind == 2 {
+            Message::Text(String::from_utf8(body).map_err(|_| ())?.into())
+        } else {
+            Message::Binary(body.into())
+        }))
+    }
 }
 async fn send_socket(socket: &mut WebSocket, message: Message) -> bool {
     matches!(
@@ -273,6 +337,7 @@ fn headers(headers: &HeaderMap) -> Vec<(String, String)> {
                     | "cache-control"
                     | "x-terminal-v4-framing"
                     | "sec-websocket-protocol"
+                    | "x-terminal-v4-tcp-half-close"
             )
         })
         .filter_map(|(name, value)| {
@@ -330,6 +395,7 @@ fn clean_path(rest: &str, query: Option<&str>) -> Result<String, ApiError> {
 async fn register(
     State(state): State<AppState>,
     Path(device): Path<String>,
+    headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let id = Uuid::parse_str(&device)
@@ -343,10 +409,17 @@ async fn register(
     {
         return Err(ApiError::not_found("Relay broker disabled"));
     }
-    Ok(upgrade
+    let fragments = headers.get(FRAGMENT_HEADER).is_some_and(|v| v == "1");
+    let mut response = upgrade
         .max_message_size(FRAME_LIMIT)
         .max_frame_size(FRAME_LIMIT)
-        .on_upgrade(move |socket| register_socket(state, id, socket)))
+        .on_upgrade(move |socket| register_socket(state, id, socket, fragments));
+    if fragments {
+        response
+            .headers_mut()
+            .insert(FRAGMENT_HEADER, "1".parse().unwrap());
+    }
+    Ok(response)
 }
 fn pin(state: &AppState, id: &str, secret: &str) -> Result<bool, ApiError> {
     if secret.len() != 64 || !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -371,7 +444,7 @@ fn pin(state: &AppState, id: &str, secret: &str) -> Result<bool, ApiError> {
         .map_err(|_| ApiError::internal("Relay identity storage unavailable"))?;
     Ok(secure_equal(&hash, &digest(secret)))
 }
-async fn register_socket(state: AppState, id: String, mut socket: WebSocket) {
+async fn register_socket(state: AppState, id: String, mut socket: WebSocket, fragments: bool) {
     let Ok(Some(Ok(Message::Text(text)))) =
         tokio::time::timeout(Duration::from_secs(5), socket.recv()).await
     else {
@@ -398,6 +471,7 @@ async fn register_socket(state: AppState, id: String, mut socket: WebSocket) {
     let (tx, mut rx) = mpsc::channel::<Message>(128);
     let peer = HostPeer {
         generation: Uuid::new_v4(),
+        fragments,
         tx,
         streams: Default::default(),
         permits: Arc::new(Semaphore::new(32)),
@@ -548,6 +622,9 @@ async fn proxy(
             "Device relay closed before responding",
         ));
     };
+    if !valid_headers(&response_headers) {
+        return Err(ApiError::bad_request("Invalid relayed headers"));
+    }
     if let Some(upgrade) = upgrade {
         if code != 101 {
             return Err(ApiError {
@@ -555,12 +632,30 @@ async fn proxy(
                 message: "Remote WebSocket rejected".into(),
             });
         }
-        return Ok(upgrade
-            .max_message_size(CHUNK)
-            .on_upgrade(move |socket| client_socket(socket, rx, guard)));
-    }
-    if !valid_headers(&response_headers) {
-        return Err(ApiError::bad_request("Invalid relayed headers"));
+        let protocols = response_headers
+            .iter()
+            .filter(|(name, _)| name == "sec-websocket-protocol")
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>();
+        let limit = if peer.fragments {
+            WS_MESSAGE_LIMIT
+        } else {
+            CHUNK
+        };
+        let mut response = upgrade
+            .protocols(protocols)
+            .max_message_size(limit)
+            .max_frame_size(limit)
+            .on_upgrade(move |socket| client_socket(socket, rx, guard));
+        if response_headers
+            .iter()
+            .any(|(name, value)| name == "x-terminal-v4-tcp-half-close" && value == "1")
+        {
+            response
+                .headers_mut()
+                .insert("x-terminal-v4-tcp-half-close", "1".parse().unwrap());
+        }
+        return Ok(response);
     }
     let stream = futures_util::stream::unfold((rx, Some(guard)), |(mut rx, guard)| async move {
         guard.as_ref()?;
@@ -585,27 +680,41 @@ async fn proxy(
         .map_err(|_| ApiError::internal("Invalid relay response"))
 }
 async fn client_socket(mut socket: WebSocket, mut rx: mpsc::Receiver<Event>, guard: StreamGuard) {
+    let mut assembly = WsAssembly::default();
+    let mut size_failure = false;
     loop {
         tokio::select! {
             event = rx.recv() => {
                 let message = match event {
-                    Some(Event::Data(2,data)) => match String::from_utf8(data) { Ok(text)=>Message::Text(text.into()),Err(_)=>break },
-                    Some(Event::Data(3,data)) => Message::Binary(data.into()),
+                    Some(Event::Data(6,_)) => {size_failure=true;break;},
+                    Some(Event::Data(kind,data)) => match assembly.accept(kind,data,guard.peer.fragments) {
+                        Ok(Some(message))=>message,Ok(None)=>continue,Err(())=>{size_failure=true;break;}
+                    },
                     _ => break,
                 };
                 if !send_socket(&mut socket,message).await { break; }
             }
             message = socket.recv() => {
-                let message = match message {
-                    Some(Ok(Message::Text(text))) => binary(guard.id,2,text.as_bytes()),
-                    Some(Ok(Message::Binary(bytes))) => binary(guard.id,3,&bytes),
+                let (kind, data) = match message {
+                    Some(Ok(Message::Text(text))) => (2,text.as_bytes().to_vec()),
+                    Some(Ok(Message::Binary(bytes))) => (3,bytes.to_vec()),
                     Some(Ok(Message::Ping(bytes))) => {if !send_socket(&mut socket,Message::Pong(bytes)).await{break;}continue;}
                     Some(Ok(Message::Pong(_))) => continue,
                     _ => break,
                 };
-                if send(&guard.peer.tx,message).await.is_err() { break; }
+                if send_ws(&guard.peer.tx,guard.id,kind,&data,guard.peer.fragments).await.is_err() {size_failure=true;break;}
             }
         }
+    }
+    if size_failure {
+        let _ = send_socket(
+            &mut socket,
+            Message::Close(Some(axum::extract::ws::CloseFrame {
+                code: 1009,
+                reason: RELAY_SIZE_RECOVERY.into(),
+            })),
+        )
+        .await;
     }
     let _ = tokio::time::timeout(Duration::from_secs(3), socket.close()).await;
 }
@@ -731,10 +840,16 @@ async fn host_connection(
     if url.set_scheme(scheme).is_err() {
         return false;
     }
-    let Ok(Ok((mut socket, _))) = tokio::time::timeout(
+    let Ok(mut request) = url.as_str().into_client_request() else {
+        return false;
+    };
+    request
+        .headers_mut()
+        .insert(FRAGMENT_HEADER, "1".parse().unwrap());
+    let Ok(Ok((mut socket, response))) = tokio::time::timeout(
         Duration::from_secs(10),
         tokio_tungstenite::connect_async_with_config(
-            url.as_str(),
+            request,
             Some(
                 tungstenite::protocol::WebSocketConfig::default()
                     .max_message_size(Some(FRAME_LIMIT))
@@ -747,6 +862,10 @@ async fn host_connection(
     else {
         return false;
     };
+    let fragments = response
+        .headers()
+        .get(FRAGMENT_HEADER)
+        .is_some_and(|v| v == "1");
     let register = serde_json::to_string(&Control::Register {
         key: key.into(),
         secret: secret.into(),
@@ -807,7 +926,7 @@ async fn host_connection(
                                 let (output,streams,local) = (tx.clone(),streams.clone(),local.to_string());
                                 children.spawn(async move {
                                     let _permit = permit;
-                                    if websocket { host_socket(id,&local,&path,headers,output.clone(),stream_rx).await; }
+                                    if websocket { host_socket(id,&local,&path,headers,output.clone(),stream_rx,fragments).await; }
                                     else { host_http(id,&local,&method,&path,headers,output.clone(),stream_rx).await; }
                                     streams.lock().unwrap_or_else(|e|e.into_inner()).remove(&id);
                                     let _=send(&output,control(Control::Close { id })).await;
@@ -932,6 +1051,7 @@ async fn host_http(
     }
     let _ = send(&output, control(Control::End { id })).await;
 }
+#[allow(clippy::too_many_arguments)]
 async fn host_socket(
     id: Uuid,
     local: &str,
@@ -939,6 +1059,7 @@ async fn host_socket(
     request_headers: Vec<(String, String)>,
     output: mpsc::Sender<Message>,
     mut incoming: mpsc::Receiver<Event>,
+    fragments: bool,
 ) {
     let mut url = match url::Url::parse(&format!("{local}{path}")) {
         Ok(url) => url,
@@ -956,7 +1077,11 @@ async fn host_socket(
         .map(|(_, value)| value.clone())
         .unwrap_or_default();
     for (name, value) in request_headers {
-        if name == "authorization" || name == "x-terminal-v4-framing" {
+        if name == "authorization"
+            || name == "x-terminal-v4-framing"
+            || name == "sec-websocket-protocol"
+            || name == "x-terminal-v4-tcp-half-close"
+        {
             let (Ok(name), Ok(value)) = (
                 tungstenite::http::HeaderName::try_from(name),
                 tungstenite::http::HeaderValue::try_from(value),
@@ -966,9 +1091,17 @@ async fn host_socket(
             request.headers_mut().insert(name, value);
         }
     }
-    let Ok(Ok((mut socket, _))) = tokio::time::timeout(
+    let Ok(Ok((mut socket, response))) = tokio::time::timeout(
         Duration::from_secs(10),
-        tokio_tungstenite::connect_async(request),
+        tokio_tungstenite::connect_async_with_config(
+            request,
+            Some(
+                tungstenite::protocol::WebSocketConfig::default()
+                    .max_message_size(Some(WS_MESSAGE_LIMIT))
+                    .max_frame_size(Some(WS_MESSAGE_LIMIT)),
+            ),
+            false,
+        ),
     )
     .await
     else {
@@ -983,12 +1116,28 @@ async fn host_socket(
         .await;
         return;
     };
+    let response_headers = response
+        .headers()
+        .iter()
+        .filter(|(name, _)| {
+            matches!(
+                name.as_str(),
+                "sec-websocket-protocol" | "x-terminal-v4-tcp-half-close"
+            )
+        })
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.to_string(), value.to_string()))
+        })
+        .collect();
     if send(
         &output,
         control(Control::Opened {
             id,
             status: 101,
-            headers: vec![],
+            headers: response_headers,
         }),
     )
     .await
@@ -996,27 +1145,34 @@ async fn host_socket(
     {
         return;
     }
+    let mut assembly = WsAssembly::default();
     let mut grant_check = tokio::time::interval(Duration::from_secs(2));
     let client = reqwest::Client::new();
     loop {
         tokio::select! {
             event = incoming.recv() => {
                 let message = match event {
-                    Some(Event::Data(2,data)) => match String::from_utf8(data) {Ok(text)=>tungstenite::Message::Text(text.into()),Err(_)=>break},
-                    Some(Event::Data(3,data)) => tungstenite::Message::Binary(data.into()),
+                    Some(Event::Data(kind,data)) => match assembly.accept(kind,data,fragments) {
+                        Ok(Some(Message::Text(text)))=>tungstenite::Message::Text(text.to_string().into()),
+                        Ok(Some(Message::Binary(bytes)))=>tungstenite::Message::Binary(bytes),
+                        Ok(None)=>continue,_=>break,
+                    },
                     _ => break,
                 };
                 if !send_host(&mut socket,message).await {break;}
             }
             event = socket.next() => {
-                let message = match event {
-                    Some(Ok(tungstenite::Message::Text(text))) if text.len()<=CHUNK => binary(id,2,text.as_bytes()),
-                    Some(Ok(tungstenite::Message::Binary(data))) if data.len()<=CHUNK => binary(id,3,&data),
+                let (kind, data) = match event {
+                    Some(Ok(tungstenite::Message::Text(text))) => (2,text.as_bytes().to_vec()),
+                    Some(Ok(tungstenite::Message::Binary(data))) => (3,data.to_vec()),
                     Some(Ok(tungstenite::Message::Ping(data))) => {if !send_host(&mut socket,tungstenite::Message::Pong(data)).await{break;}continue;},
                     Some(Ok(tungstenite::Message::Pong(_))) => continue,
+                    Some(Err(tungstenite::Error::Capacity(_))) => {
+                        let _=send(&output,binary(id,6,RELAY_SIZE_RECOVERY.as_bytes())).await;break;
+                    },
                     _ => break,
                 };
-                if send(&output,message).await.is_err(){break;}
+                if send_ws(&output,id,kind,&data,fragments).await.is_err(){break;}
             }
             _=grant_check.tick()=> {
                 let alive=client.get(format!("{local}/api/environments/check")).header("authorization",&authorization).timeout(Duration::from_secs(2)).send().await;
@@ -1030,6 +1186,61 @@ async fn host_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn websocket_fragments_preserve_utf8_binary_and_legacy_frames_with_explicit_size_recovery(
+    ) {
+        let id = Uuid::new_v4();
+        let (tx, mut rx) = mpsc::channel(128);
+        for (kind, payload) in [
+            (2, "∆".repeat(CHUNK).into_bytes()),
+            (3, vec![255; CHUNK + 1]),
+            (3, Vec::new()),
+        ] {
+            send_ws(&tx, id, kind, &payload, true).await.unwrap();
+            let mut assembly = WsAssembly::default();
+            let mut completed = None;
+            while let Ok(frame) = rx.try_recv() {
+                let Message::Binary(ref body) = frame else {
+                    panic!("Binary wire frame required");
+                };
+                assert!(body.len() <= CHUNK + 17);
+                let Some((decoded, Event::Data(frame_kind, bytes))) = decode(frame) else {
+                    panic!("Invalid wire frame");
+                };
+                assert_eq!(decoded, id);
+                if let Some(message) = assembly.accept(frame_kind, bytes, true).unwrap() {
+                    assert!(completed.is_none());
+                    completed = Some(message);
+                }
+            }
+            assert_eq!(completed.unwrap().into_data().as_ref(), payload.as_slice());
+        }
+        send_ws(&tx, id, 2, b"legacy", false).await.unwrap();
+        assert!(
+            matches!(decode(rx.recv().await.unwrap()),Some((_,Event::Data(2,data))) if data == b"legacy")
+        );
+        assert!(send_ws(&tx, id, 2, &vec![0; CHUNK + 1], false)
+            .await
+            .is_err());
+        assert!(
+            matches!(decode(rx.recv().await.unwrap()),Some((_,Event::Data(6,data))) if data == RELAY_SIZE_RECOVERY.as_bytes())
+        );
+        assert!(send_ws(&tx, id, 3, &vec![0; WS_MESSAGE_LIMIT + 1], true)
+            .await
+            .is_err());
+        assert!(matches!(
+            decode(rx.recv().await.unwrap()),
+            Some((_, Event::Data(6, _)))
+        ));
+        let mut assembly = WsAssembly::default();
+        assert!(assembly.accept(4, vec![0], false).is_err());
+        assert!(assembly.accept(4, vec![0], true).unwrap().is_none());
+        assert!(assembly.accept(3, vec![0], true).is_err());
+        for _ in 0..WS_MESSAGE_LIMIT / CHUNK {
+            assert!(assembly.accept(5, vec![0; CHUNK], true).unwrap().is_none());
+        }
+        assert!(assembly.accept(3, vec![0], true).is_err());
+    }
     #[test]
     fn relay_has_a_narrow_runtime_boundary() {
         assert!(allowed("POST", "/api/environments/exchange"));
@@ -1104,7 +1315,11 @@ mod transport_tests {
         }
     }
     async fn server() -> Server {
-        let directory = tempfile::tempdir().unwrap();
+        server_with_legacy_registration(false).await
+    }
+    async fn server_with_legacy_registration(legacy: bool) -> Server {
+        let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        std::fs::create_dir(directory.path().join(".git")).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let state = AppState::new_with_external_auth(
@@ -1117,7 +1332,15 @@ mod transport_tests {
             None,
         )
         .unwrap();
-        let router = crate::app(state.clone());
+        let mut router = crate::app(state.clone());
+        if legacy {
+            router = router.layer(axum::middleware::from_fn(
+                |mut request: Request, next: axum::middleware::Next| async move {
+                    request.headers_mut().remove(FRAGMENT_HEADER);
+                    next.run(request).await
+                },
+            ));
+        }
         let task = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         });
@@ -1160,10 +1383,122 @@ mod transport_tests {
         id
     }
     #[tokio::test]
+    async fn relay_delivers_large_structured_history_event_without_changing_application_message() {
+        for mode in ["legacy", "upgraded", "oversized"] {
+            let legacy = mode == "legacy";
+            let broker = server_with_legacy_registration(legacy).await;
+            let target = server().await;
+            let home = server().await;
+            let key = "synthetic-relay-large-event-key-32-chars";
+            *runtime(&broker.state).server_key.lock().unwrap() = Some(key.into());
+            let device = host(&broker, &target, key).await;
+            let client = reqwest::Client::new();
+            let code = json(
+                client
+                    .post(format!("{}/api/environments/pairing-code", target.url))
+                    .bearer_auth(token(&target, "remote-owner"))
+                    .json(&json!({"label":"Large event","profile":"custom","capabilities":{"tunnels":true}}))
+                    .send()
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            let environment = json(client.post(format!("{}/api/environments/connect",home.url))
+            .bearer_auth(token(&home,"home-owner")).json(&json!({"relayUrl":broker.url,"deviceId":device,"code":code["code"],"label":"Large event"})).send().await.unwrap()).await;
+            let session_id = "ss-33333333333343338333333333333333";
+            let content = "synthetic ∆".repeat(if mode == "upgraded" { 10000 } else { 2 });
+            let folder = target
+                .state
+                .config()
+                .data_dir
+                .join("structured-sessions")
+                .join(hex::encode(Sha256::digest(b"remote-owner")));
+            std::fs::create_dir_all(&folder).unwrap();
+            let event = json!({"type":"message_completed","messageId":"large-message","role":"assistant","content":content,"ts":1,"seq":1});
+            let snapshot = json!({"id":session_id,"title":"Synthetic large event","cwd":target.directory.path(),"provider":"claude","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","events":[event,{"type":"message_delta","messageId":"oversized","role":"assistant","content":if mode == "oversized" { "X".repeat(9*1024*1024) } else { "synthetic ∆".repeat(10000) },"ts":2,"seq":2}]});
+            std::fs::write(
+                folder.join(format!("{session_id}.json")),
+                json!({"version":1,"ownerId":"remote-owner","snapshot":snapshot}).to_string(),
+            )
+            .unwrap();
+            let url = format!(
+                "{}/api/environments/{}/proxy/api/structured/sessions/{session_id}/ws?token={}",
+                home.url.replacen("http://", "ws://", 1),
+                environment["id"].as_str().unwrap(),
+                token(&home, "home-owner")
+            );
+            let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+            let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(message.is_text(), "{message:?}");
+            let received: serde_json::Value =
+                serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert!(
+                received["event"]["content"].as_str() == Some(content.as_str()),
+                "Structured event content must survive unchanged"
+            );
+            let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            if mode != "upgraded" {
+                assert!(
+                    matches!(next,tungstenite::Message::Close(Some(ref frame)) if frame.code == tungstenite::protocol::frame::coding::CloseCode::Size && frame.reason == RELAY_SIZE_RECOVERY)
+                );
+                let (origin, credential) = crate::paired_environments::tunnel_destination(
+                    &home.state,
+                    &AuthenticatedUser {
+                        user_id: "home-owner".into(),
+                        username: "home-owner".into(),
+                    },
+                    environment["id"].as_str().unwrap(),
+                )
+                .unwrap();
+                let mut request = format!(
+                    "{}/api/structured/sessions/{session_id}/ws",
+                    origin.replacen("http://", "ws://", 1)
+                )
+                .into_client_request()
+                .unwrap();
+                request.headers_mut().insert(
+                    "authorization",
+                    format!("Bearer {credential}").parse().unwrap(),
+                );
+                let (mut direct, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+                assert!(direct.next().await.unwrap().unwrap().is_text());
+                let diagnostic = tokio::time::timeout(Duration::from_secs(5), direct.next())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    matches!(diagnostic,tungstenite::Message::Close(Some(ref frame)) if frame.code == tungstenite::protocol::frame::coding::CloseCode::Size && frame.reason == RELAY_SIZE_RECOVERY)
+                );
+            } else {
+                let received: serde_json::Value =
+                    serde_json::from_str(next.to_text().unwrap()).unwrap();
+                assert_eq!(
+                    received["event"]["content"].as_str().unwrap().len(),
+                    "synthetic ∆".len() * 10000
+                );
+            }
+            let _ = socket.close(None).await;
+        }
+    }
+    #[tokio::test]
     async fn device_id_routes_real_http_download_and_pty_websocket_then_revokes() {
         let broker = server().await;
         let target = server().await;
         let home = server().await;
+        assert_ne!(
+            crate::workspace_activity::workspace_key(broker.directory.path()).unwrap(),
+            crate::workspace_activity::workspace_key(target.directory.path()).unwrap(),
+            "relay hosts must not share their checkout's rewind coordination key"
+        );
         let key = "relay-key-for-three-host-test-32-characters";
         *runtime(&broker.state).server_key.lock().unwrap() = Some(key.into());
         let device = host(&broker, &target, key).await;
@@ -1323,6 +1658,44 @@ mod transport_tests {
         .await
         .unwrap();
         assert_eq!(echoed, payload);
+        let eof_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let eof_port = eof_listener.local_addr().unwrap().port();
+        let eof_service = tokio::spawn(async move {
+            let (mut stream, _) = eof_listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).await.unwrap();
+            assert_eq!(request, b"relayed EOF request");
+            stream.write_all(b"relayed EOF response").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let eof_tunnel = json(
+            client
+                .post(format!("{}/api/tunnels", home.url))
+                .bearer_auth(&local_token)
+                .json(&json!({"environmentId":id,"targetPort":eof_port}))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        let mut eof_stream = tokio::net::TcpStream::connect((
+            std::net::Ipv4Addr::LOCALHOST,
+            eof_tunnel["localPort"].as_u64().unwrap() as u16,
+        ))
+        .await
+        .unwrap();
+        eof_stream.write_all(b"relayed EOF request").await.unwrap();
+        eof_stream.shutdown().await.unwrap();
+        let mut eof_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            eof_stream.read_to_end(&mut eof_response),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        eof_service.await.unwrap();
+        assert_eq!(eof_response, b"relayed EOF response");
         let grants = json(
             client
                 .get(format!("{}/api/environments", target.url))

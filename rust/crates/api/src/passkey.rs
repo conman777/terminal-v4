@@ -10,6 +10,9 @@ use webauthn_rs::prelude::*;
 use terminal_v4_core::AppConfig;
 
 const CHALLENGE_TTL_MS: i64 = 5 * 60 * 1000;
+const MAX_PENDING_PER_USER: usize = 16;
+const MAX_PENDING_CHALLENGES: usize = 1024;
+type PendingKey = (String, &'static str, Vec<u8>);
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +29,7 @@ pub struct StoredCredential {
 #[derive(Clone)]
 pub struct PasskeyService {
     webauthn: Arc<Webauthn>,
-    pending: Arc<Mutex<HashMap<String, PendingChallenge>>>,
+    pending: Arc<Mutex<HashMap<PendingKey, PendingChallenge>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,13 +88,17 @@ impl PasskeyService {
             .map_err(|e| format!("Failed to start passkey registration: {e}"))?;
 
         self.store_pending(
-            pending_registration_key(user_id),
+            (
+                user_id.to_owned(),
+                "registration",
+                options.public_key.challenge.as_ref().to_vec(),
+            ),
             PendingChallenge::Registration {
                 state,
                 expires_at: expiry_timestamp(),
             },
         )
-        .await;
+        .await?;
 
         Ok(options)
     }
@@ -101,17 +108,22 @@ impl PasskeyService {
         user_id: &str,
         credential: RegisterPublicKeyCredential,
     ) -> Result<Passkey, String> {
-        let PendingChallenge::Registration { state, .. } = self
-            .consume_pending(&pending_registration_key(user_id))
-            .await
-            .ok_or_else(|| "Registration challenge not found or expired".to_string())?
-        else {
-            return Err("Registration challenge mismatch".to_string());
+        let key = (
+            user_id.to_owned(),
+            "registration",
+            client_challenge(credential.response.client_data_json.as_ref())?,
+        );
+        let mut pending = self.pending.lock().await;
+        prune_expired(&mut pending);
+        let Some(PendingChallenge::Registration { state, .. }) = pending.get(&key) else {
+            return Err("Registration challenge not found or expired".into());
         };
-
-        self.webauthn
-            .finish_passkey_registration(&credential, &state)
-            .map_err(|e| format!("Passkey registration failed: {e}"))
+        let result = self
+            .webauthn
+            .finish_passkey_registration(&credential, state)
+            .map_err(|e| format!("Passkey registration failed: {e}"))?;
+        pending.remove(&key);
+        Ok(result)
     }
 
     pub async fn begin_authentication(
@@ -125,13 +137,17 @@ impl PasskeyService {
             .map_err(|e| format!("Failed to start passkey authentication: {e}"))?;
 
         self.store_pending(
-            pending_authentication_key(user_id),
+            (
+                user_id.to_owned(),
+                "authentication",
+                options.public_key.challenge.as_ref().to_vec(),
+            ),
             PendingChallenge::Authentication {
                 state,
                 expires_at: expiry_timestamp(),
             },
         )
-        .await;
+        .await?;
 
         Ok(options)
     }
@@ -141,45 +157,54 @@ impl PasskeyService {
         user_id: &str,
         credential: PublicKeyCredential,
     ) -> Result<AuthenticationResult, String> {
-        let PendingChallenge::Authentication { state, .. } = self
-            .consume_pending(&pending_authentication_key(user_id))
-            .await
-            .ok_or_else(|| "Authentication challenge not found or expired".to_string())?
-        else {
-            return Err("Authentication challenge mismatch".to_string());
+        let key = (
+            user_id.to_owned(),
+            "authentication",
+            client_challenge(credential.response.client_data_json.as_ref())?,
+        );
+        let mut pending = self.pending.lock().await;
+        prune_expired(&mut pending);
+        let Some(PendingChallenge::Authentication { state, .. }) = pending.get(&key) else {
+            return Err("Authentication challenge not found or expired".into());
         };
-
-        self.webauthn
-            .finish_passkey_authentication(&credential, &state)
-            .map_err(|e| format!("Passkey authentication failed: {e}"))
+        // Keep selection, verification and successful consumption atomic to reject concurrent replays.
+        let result = self
+            .webauthn
+            .finish_passkey_authentication(&credential, state)
+            .map_err(|e| format!("Passkey authentication failed: {e}"))?;
+        pending.remove(&key);
+        Ok(result)
     }
 
-    async fn store_pending(&self, key: String, value: PendingChallenge) {
+    async fn store_pending(&self, key: PendingKey, value: PendingChallenge) -> Result<(), String> {
         let mut pending = self.pending.lock().await;
         prune_expired(&mut pending);
+        if pending.len() >= MAX_PENDING_CHALLENGES
+            || pending.keys().filter(|entry| entry.0 == key.0).count() >= MAX_PENDING_PER_USER
+        {
+            return Err("Too many pending passkey attempts. Complete an existing attempt or wait five minutes.".into());
+        }
         pending.insert(key, value);
-    }
-
-    async fn consume_pending(&self, key: &str) -> Option<PendingChallenge> {
-        let mut pending = self.pending.lock().await;
-        prune_expired(&mut pending);
-        pending.remove(key)
+        Ok(())
     }
 }
 
-fn pending_registration_key(user_id: &str) -> String {
-    format!("reg:{user_id}")
+fn client_challenge(client_data: &[u8]) -> Result<Vec<u8>, String> {
+    #[derive(serde::Deserialize)]
+    struct ClientData {
+        challenge: Base64UrlSafeData,
+    }
+    // This selects server state only; webauthn-rs still verifies the original signed client data.
+    let client: ClientData = serde_json::from_slice(client_data)
+        .map_err(|_| "Invalid passkey client data".to_string())?;
+    Ok(client.challenge.as_ref().to_vec())
 }
 
-fn pending_authentication_key(user_id: &str) -> String {
-    format!("auth:{user_id}")
-}
-
-fn prune_expired(pending: &mut HashMap<String, PendingChallenge>) {
+fn prune_expired(pending: &mut HashMap<PendingKey, PendingChallenge>) {
     let now = now_millis();
     pending.retain(|_, value| match value {
-        PendingChallenge::Registration { expires_at, .. } => *expires_at >= now,
-        PendingChallenge::Authentication { expires_at, .. } => *expires_at >= now,
+        PendingChallenge::Registration { expires_at, .. }
+        | PendingChallenge::Authentication { expires_at, .. } => *expires_at > now,
     });
 }
 
@@ -303,14 +328,12 @@ pub mod db {
         let rows = stmt
             .query_map([user_id], |row| {
                 let public_key: Vec<u8> = row.get(7)?;
-                let passkey: Passkey = serde_json::from_slice(&public_key).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        public_key.len(),
-                        rusqlite::types::Type::Blob,
-                        Box::new(error),
-                    )
-                })?;
-                Ok(StoredPasskey {
+                // Fastify stored raw COSE keys without the registration policy needed by webauthn-rs.
+                // Preserve unsupported rows for management and recovery; never fabricate that policy.
+                let Ok(passkey) = serde_json::from_slice::<Passkey>(&public_key) else {
+                    return Ok(None);
+                };
+                Ok(Some(StoredPasskey {
                     record: StoredCredential {
                         id: row.get(0)?,
                         credential_id: row.get(1)?,
@@ -321,13 +344,15 @@ pub mod db {
                         last_used_at: row.get(6)?,
                     },
                     passkey,
-                })
+                }))
             })
             .map_err(|e| e.to_string())?;
 
         let mut passkeys = Vec::new();
         for row in rows {
-            passkeys.push(row.map_err(|e| e.to_string())?);
+            if let Some(passkey) = row.map_err(|e| e.to_string())? {
+                passkeys.push(passkey);
+            }
         }
         Ok(passkeys)
     }
@@ -451,3 +476,7 @@ pub mod db {
         super::credential_id_to_string(credential_id)
     }
 }
+
+#[cfg(test)]
+#[path = "state/passkey_lifecycle_tests.rs"]
+mod tests;

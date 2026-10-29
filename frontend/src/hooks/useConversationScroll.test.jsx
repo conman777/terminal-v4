@@ -9,7 +9,7 @@ function setScrollMetrics(element, { scrollTop, scrollHeight, clientHeight }) {
 }
 
 describe('useConversationScroll', () => {
-  it('auto-scrolls with auto behavior while following the latest content', () => {
+  it('auto-scrolls only the message container while following the latest content', () => {
     const { result, rerender } = renderHook(
       ({ tick }) => useConversationScroll({ deps: [tick] }),
       { initialProps: { tick: 1 } }
@@ -17,10 +17,15 @@ describe('useConversationScroll', () => {
 
     const scrollIntoView = vi.fn();
     result.current.bottomRef.current = { scrollIntoView };
+    const container = document.createElement('div');
+    setScrollMetrics(container, { scrollTop: 100, scrollHeight: 1000, clientHeight: 400 });
+    container.scrollTo = vi.fn();
+    result.current.containerRef.current = container;
 
     rerender({ tick: 2 });
 
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto' });
+    expect(container.scrollTo).toHaveBeenCalledWith({ top: 600, behavior: 'auto' });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('shows the jump button and pauses auto-follow when scrolled away from the bottom', () => {
@@ -42,6 +47,10 @@ describe('useConversationScroll', () => {
     const { result } = renderHook(() => useConversationScroll());
     const scrollIntoView = vi.fn();
     result.current.bottomRef.current = { scrollIntoView };
+    const container = document.createElement('div');
+    setScrollMetrics(container, { scrollTop: 100, scrollHeight: 1000, clientHeight: 400 });
+    container.scrollTo = vi.fn();
+    result.current.containerRef.current = container;
 
     act(() => {
       result.current.jumpToBottom();
@@ -49,7 +58,8 @@ describe('useConversationScroll', () => {
 
     expect(result.current.autoScrollRef.current).toBe(true);
     expect(result.current.showScrollBtn).toBe(false);
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth' });
+    expect(container.scrollTo).toHaveBeenCalledWith({ top: 600, behavior: 'smooth' });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it('reports viewport state when the user scrolls away and returns to bottom', () => {

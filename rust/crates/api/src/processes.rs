@@ -45,6 +45,7 @@ struct ManagedProcess {
     info: ProcessInfo,
     logs: Vec<ProcessLogEntry>,
     child: Option<tokio::process::Child>,
+    tree: Option<crate::process_tree::ProcessTree>,
 }
 
 impl ProcessManager {
@@ -61,15 +62,26 @@ impl ProcessManager {
         command: &str,
         args: &[&str],
     ) -> Result<ProcessInfo, String> {
-        let mut child = Command::new(command)
+        let mut process_command = Command::new(command);
+        process_command
             .args(args)
             .current_dir(cwd)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        process_command.process_group(0);
+        let mut child = process_command
             .spawn()
             .map_err(|e| format!("Failed to start process: {e}"))?;
 
         let pid = child.id().ok_or("Process has no PID")?;
+        #[cfg(unix)]
+        let tree = crate::process_tree::ProcessTree::attach_new_process_group(&child)
+            .map_err(|e| format!("Failed to track process tree: {e}"))?;
+        #[cfg(not(unix))]
+        let tree = crate::process_tree::ProcessTree::attach(&child)
+            .map_err(|e| format!("Failed to track process tree: {e}"))?;
         let now = iso_timestamp();
 
         let info = ProcessInfo {
@@ -108,6 +120,7 @@ impl ProcessManager {
             info: info.clone(),
             logs: Vec::new(),
             child: Some(child),
+            tree: Some(tree),
         };
 
         {
@@ -125,7 +138,11 @@ impl ProcessManager {
                     if !proc.info.running {
                         done = true;
                     } else if let Some(ref mut child) = proc.child {
-                        match child.try_wait() {
+                        let status = match &proc.tree {
+                            Some(tree) => tree.try_wait(child),
+                            None => child.try_wait(),
+                        };
+                        match status {
                             Ok(Some(status)) => {
                                 proc.info.running = false;
                                 proc.info.exit_code = status.code();
@@ -162,9 +179,19 @@ impl ProcessManager {
             return Ok(false);
         };
 
+        if let Some(tree) = &proc.tree {
+            tree.stop(std::time::Duration::from_millis(500))
+                .await
+                .map_err(|e| format!("Failed to stop process tree: {e}"))?;
+        }
         if let Some(ref mut child) = proc.child {
-            let _ = child.kill().await;
+            let status = match &proc.tree {
+                Some(tree) => tree.wait(child).await,
+                None => child.wait().await,
+            }
+            .map_err(|e| format!("Failed to reap process: {e}"))?;
             proc.info.running = false;
+            proc.info.exit_code = status.code();
             proc.info.exited_at = Some(iso_timestamp());
         }
 
@@ -214,7 +241,7 @@ impl ProcessManager {
         since: Option<i64>,
     ) -> Option<Vec<ProcessLogEntry>> {
         let procs = self.processes.lock().await;
-        let proc = procs.values().find(|p| p.info.port == Some(port))?;
+        let proc = process_for_port(&procs, port)?;
         let logs = if let Some(since) = since {
             proc.logs
                 .iter()
@@ -233,7 +260,7 @@ impl ProcessManager {
         cursor: LogCursor,
     ) -> Option<Vec<ProcessLogEntry>> {
         let procs = self.processes.lock().await;
-        let proc = procs.values().find(|p| p.info.port == Some(port))?;
+        let proc = process_for_port(&procs, port)?;
 
         if cursor.timestamp <= 0 {
             return Some(proc.logs.clone());
@@ -275,10 +302,7 @@ impl ProcessManager {
     /// Get process info by port.
     pub async fn get_info_by_port(&self, port: u16) -> Option<ProcessInfo> {
         let procs = self.processes.lock().await;
-        procs
-            .values()
-            .find(|p| p.info.port == Some(port))
-            .map(|p| p.info.clone())
+        process_for_port(&procs, port).map(|p| p.info.clone())
     }
 
     /// Clear logs for a process.
@@ -291,6 +315,23 @@ impl ProcessManager {
             false
         }
     }
+}
+
+fn process_for_port(
+    processes: &HashMap<u32, ManagedProcess>,
+    port: u16,
+) -> Option<&ManagedProcess> {
+    processes
+        .values()
+        .filter(|process| process.info.port == Some(port))
+        .max_by_key(|process| {
+            (
+                process.info.running,
+                // UTC RFC3339 timestamps may omit the fractional seconds.
+                process.info.started_at.trim_end_matches('Z'),
+                process.info.pid,
+            )
+        })
 }
 
 /// Port detection patterns matching the Node implementation.
@@ -330,7 +371,10 @@ async fn read_stream(
 
     while let Ok(Some(line)) = lines.next_line().await {
         let truncated = if line.len() > MAX_LOG_ENTRY_BYTES {
-            format!("{}...(truncated)", &line[..MAX_LOG_ENTRY_BYTES])
+            format!(
+                "{}...(truncated)",
+                &line[..line.floor_char_boundary(MAX_LOG_ENTRY_BYTES)]
+            )
         } else {
             line.clone()
         };
@@ -375,6 +419,202 @@ fn now_millis() -> i64 {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn port_lookups_prefer_running_then_latest_start_with_stable_pid_ties() {
+        const PORT: u16 = 5173;
+        for records in [
+            vec![
+                (11, false, "2026-10-23T11:00:00Z"),
+                (12, false, "2026-10-23T11:00:00.5Z"),
+            ],
+            vec![
+                (11, false, "2026-10-23T12:00:00Z"),
+                (12, true, "2026-10-23T11:00:00Z"),
+            ],
+            vec![
+                (11, false, "2026-10-23T10:00:00Z"),
+                (12, false, "2026-10-23T11:00:00Z"),
+            ],
+            vec![
+                (11, true, "2026-10-23T11:00:00Z"),
+                (12, true, "2026-10-23T11:00:00Z"),
+            ],
+            vec![
+                (11, true, "2026-10-23T10:00:00Z"),
+                (12, true, "2026-10-23T11:00:00Z"),
+            ],
+        ] {
+            for _ in 0..32 {
+                let manager = ProcessManager::new();
+                for &(pid, running, started_at) in &records {
+                    manager.processes.lock().await.insert(
+                        pid,
+                        ManagedProcess {
+                            info: ProcessInfo {
+                                pid,
+                                command: "synthetic".into(),
+                                cwd: String::new(),
+                                port: Some(PORT),
+                                started_at: started_at.into(),
+                                exited_at: None,
+                                exit_code: None,
+                                running,
+                            },
+                            logs: vec![ProcessLogEntry {
+                                id: pid.to_string(),
+                                timestamp: 100,
+                                stream: "stdout".into(),
+                                data: format!("server {pid}"),
+                            }],
+                            child: None,
+                            tree: None,
+                        },
+                    );
+                }
+                let pid = manager.get_info_by_port(PORT).await.unwrap().pid;
+                let logs = manager.get_logs_by_port(PORT, Some(99)).await.unwrap();
+                let cursor_logs = manager
+                    .get_logs_by_port_after_cursor(
+                        PORT,
+                        LogCursor {
+                            timestamp: 100,
+                            id: Some("old-server-cursor".into()),
+                        },
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    (
+                        pid,
+                        logs.iter().map(|log| log.data.as_str()).collect::<Vec<_>>(),
+                        cursor_logs
+                            .iter()
+                            .map(|log| log.data.as_str())
+                            .collect::<Vec<_>>()
+                    ),
+                    (12, vec!["server 12"], vec!["server 12"])
+                );
+                assert!(manager
+                    .get_logs_by_port(PORT, Some(100))
+                    .await
+                    .unwrap()
+                    .is_empty());
+                assert!(manager.get_info_by_port(PORT + 1).await.is_none());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_terminates_owned_descendants() {
+        assert_stop_terminates_owned_descendants("wait").await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_terminates_descendants_after_the_parent_has_been_reaped() {
+        assert_stop_terminates_owned_descendants("exit 0").await;
+    }
+
+    #[cfg(unix)]
+    async fn assert_stop_terminates_owned_descendants(parent_action: &str) {
+        let manager = ProcessManager::new();
+        let fixture = tempfile::tempdir().unwrap();
+        let child_pid_file = fixture.path().join("child.pid");
+        let command =
+            format!("sleep 60 & child=$!; printf '%s' \"$child\" > \"$1\"; {parent_action}");
+        let started = manager
+            .start(
+                fixture.path().to_str().unwrap(),
+                "sh",
+                &["-c", &command, "fixture", child_pid_file.to_str().unwrap()],
+            )
+            .await
+            .unwrap();
+        let child_pid: i32 = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(pid) = std::fs::read_to_string(&child_pid_file)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let stopped = manager.stop(started.pid).await;
+        let exited = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let state = std::process::Command::new("ps")
+                    .args(["-o", "stat=", "-p", &child_pid.to_string()])
+                    .output()
+                    .unwrap();
+                let state = String::from_utf8_lossy(&state.stdout);
+                if state.trim().is_empty() || state.trim().starts_with('Z') {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        if exited.is_err() {
+            unsafe {
+                libc::kill(child_pid, libc::SIGKILL);
+            }
+        }
+        assert!(stopped.unwrap());
+        assert!(exited.is_ok(), "Owned descendant survived Stop");
+        assert!(manager.list_active().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unicode_log_truncation_keeps_subsequent_lines() {
+        let processes = Arc::new(Mutex::new(HashMap::new()));
+        let pid = 1;
+        processes.lock().await.insert(
+            pid,
+            ManagedProcess {
+                info: ProcessInfo {
+                    pid,
+                    command: "fixture".into(),
+                    cwd: String::new(),
+                    port: None,
+                    started_at: iso_timestamp(),
+                    exited_at: None,
+                    exit_code: None,
+                    running: false,
+                },
+                logs: Vec::new(),
+                child: None,
+                tree: None,
+            },
+        );
+        let prefix = "a".repeat(MAX_LOG_ENTRY_BYTES - 1);
+        let input = format!("{prefix}🙂\nListening on localhost:5173\n");
+        read_stream(processes.clone(), pid, "stdout", input.as_bytes()).await;
+        let procs = processes.lock().await;
+        let proc = procs.get(&pid).unwrap();
+        assert_eq!(
+            (
+                proc.logs
+                    .iter()
+                    .map(|entry| entry.data.as_str())
+                    .collect::<Vec<_>>(),
+                proc.info.port
+            ),
+            (
+                vec![
+                    format!("{prefix}...(truncated)").as_str(),
+                    "Listening on localhost:5173"
+                ],
+                Some(5173)
+            )
+        );
+    }
 
     #[test]
     fn detect_port_from_localhost() {

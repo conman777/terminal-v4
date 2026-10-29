@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import './EnvironmentIdentityGate.css';
 import { apiFetch } from '../utils/api';
 import { resolveApiBase } from '../utils/apiBase';
 import { setEnvironmentIdentity, restoreActiveEnvironment } from '../utils/remoteEnvironments';
@@ -21,6 +22,6 @@ export function EnvironmentIdentityGate({ userId, children }) {
     }).finally(() => { if (!controller.signal.aborted) setReadyFor(userId); });
     return () => controller.abort();
   }, [userId]);
-  if (readyFor !== userId) return <p role="status">Restoring your workspace connection…</p>;
-  return <>{error && <p role="alert">{error}. Your home workspace is available.</p>}{children}</>;
+  if (readyFor !== userId) return <p className="environment-identity-status" role="status">Restoring your workspace connection…</p>;
+  return <>{error && <p className="environment-identity-status" role="alert">{error}. Your home workspace is available.</p>}{children}</>;
 }

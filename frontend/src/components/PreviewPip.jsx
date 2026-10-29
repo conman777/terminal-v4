@@ -1,5 +1,8 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { toPreviewUrl, withAuthToken } from '../utils/previewUrl';
+import { toPreviewUrl } from '../utils/previewUrl';
+import { usePreviewTelemetryBroker } from '../hooks/usePreviewTelemetryBroker';
+import { usePreviewResourceUrl } from '../hooks/usePreviewResourceUrl';
+import './preview/PreviewPanel.css';
 
 /**
  * Picture-in-Picture preview window.
@@ -20,11 +23,15 @@ export function PreviewPip({
   const [isResizing, setIsResizing] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const containerRef = useRef(null);
+  const iframeRef = useRef(null);
   const dragStartRef = useRef({ x: 0, y: 0, posX: 0, posY: 0 });
   const resizeStartRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
   const refreshingRef = useRef(false);
 
   const iframeSrc = useMemo(() => toPreviewUrl(url), [url]);
+  const { url: authorizedIframeSrc, error: previewAuthError, retry: retryPreviewAuth } = usePreviewResourceUrl(isMinimized ? null : iframeSrc);
+
+  usePreviewTelemetryBroker(iframeRef, authorizedIframeSrc);
 
   // Default position and size
   const pos = position || { x: window.innerWidth - 420, y: 80 };
@@ -32,7 +39,7 @@ export function PreviewPip({
 
   // Drag handlers
   const handleDragStart = useCallback((e) => {
-    if (e.target.closest('.pip-resize-handle')) return;
+    if (e.target.closest('button, .pip-resize-handle')) return;
     e.preventDefault();
     setIsDragging(true);
     dragStartRef.current = {
@@ -113,19 +120,14 @@ export function PreviewPip({
     if (refreshingRef.current) return;
     refreshingRef.current = true;
 
-    if (containerRef.current) {
-      const iframe = containerRef.current.querySelector('iframe');
-      if (iframe) {
-        setIsLoading(true);
-        iframe.src = iframe.src;
-      }
-    }
+    setIsLoading(true);
+    retryPreviewAuth();
 
     // Reset debounce after 1 second
     setTimeout(() => {
       refreshingRef.current = false;
     }, 1000);
-  }, []);
+  }, [retryPreviewAuth]);
 
   const handleToggleMinimize = useCallback(() => {
     setIsMinimized(prev => !prev);
@@ -141,7 +143,7 @@ export function PreviewPip({
         left: pos.x,
         top: pos.y,
         width: isMinimized ? 200 : sz.width,
-        height: isMinimized ? 36 : sz.height
+        height: isMinimized ? 52 : sz.height
       }}
     >
       {/* Header - draggable */}
@@ -153,6 +155,7 @@ export function PreviewPip({
             className="pip-btn"
             onClick={handleRefresh}
             title="Refresh"
+            aria-label="Refresh"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="23 4 23 10 17 10" />
@@ -164,6 +167,8 @@ export function PreviewPip({
             className="pip-btn"
             onClick={handleToggleMinimize}
             title={isMinimized ? 'Expand' : 'Minimize'}
+            aria-label={isMinimized ? 'Expand' : 'Minimize'}
+            aria-expanded={!isMinimized}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="5" y1="12" x2="19" y2="12" />
@@ -174,6 +179,7 @@ export function PreviewPip({
             className="pip-btn"
             onClick={onDock}
             title="Dock to side panel"
+            aria-label="Dock to side panel"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -185,6 +191,7 @@ export function PreviewPip({
             className="pip-btn pip-close"
             onClick={onClose}
             title="Close"
+            aria-label="Close"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -197,18 +204,21 @@ export function PreviewPip({
       {/* Content */}
       {!isMinimized && (
         <div className="pip-content">
-          {isLoading && (
-            <div className="pip-loading">
-              <div className="pip-spinner" />
+          {previewAuthError && <div role="alert">{previewAuthError}<button type="button" onClick={retryPreviewAuth}>Retry preview</button></div>}
+          {isLoading && !previewAuthError && (
+            <div className="pip-loading" role="status">
+              <div className="pip-spinner" aria-hidden="true" />
+              <span>Loading preview…</span>
             </div>
           )}
           <iframe
-            src={withAuthToken(iframeSrc)}
+            ref={iframeRef}
+            src={authorizedIframeSrc || undefined}
             className="pip-iframe"
             onLoad={handleLoad}
             title="Preview"
             allow="camera; microphone"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals"
+            sandbox="allow-scripts allow-forms allow-popups allow-modals"
             style={{ opacity: isLoading ? 0 : 1 }}
           />
         </div>

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { DesktopConversationView } from './DesktopConversationView';
+import { WorkspacePanel } from './WorkspacePanel';
 
-vi.mock('./ToolCallBlock', () => ({
+vi.mock('./ToolCallBlock', async (importOriginal) => ({
+  ...(await importOriginal()),
   default: ({ item }) => (
     <div
       data-testid={`tool-call-${item.type}`}
@@ -10,6 +12,7 @@ vi.mock('./ToolCallBlock', () => ({
       data-result={item.result ? JSON.stringify(item.result) : ''}
     >
       {item.content || item.result?.toolResult || item.tool || ''}
+      {item.actions?.map(action => <button key={action.label} type="button" onClick={action.onClick}>{action.label}</button>)}
     </div>
   )
 }));
@@ -38,6 +41,65 @@ function buildProps(overrides = {}) {
 }
 
 describe('DesktopConversationView', () => {
+  it('identifies rendered structured messages and folded message candidates by exact identity', () => {
+    const id = 'message" ] [data-other="danger';
+    const { container } = render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages: [
+      { role: 'user', messageId: 'prompt', content: 'Prompt', ts: 1 },
+      { role: 'assistant', messageId: id, content: 'Intermediate answer', ts: 2 },
+      { role: 'tool', toolCallId: 'tool', toolName: 'read', result: 'Read', ts: 3 },
+      { role: 'assistant', messageId: 'final', content: 'Final answer', ts: 4 },
+    ] })} />);
+    expect([...container.querySelectorAll('[data-message-id]')].map(node => [node.dataset.messageId, node.dataset.messageRole])).toEqual([
+      ['prompt', 'user'], ['final', 'assistant'],
+    ]);
+    const candidate = [...container.querySelectorAll('[data-folded-message-id]')].find(node => node.dataset.foldedMessageId === id);
+    expect(candidate?.dataset.foldedMessageRole).toBe('assistant');
+    fireEvent.click(candidate.parentElement.querySelector('button'));
+    expect([...container.querySelectorAll('[data-message-id]')].map(node => node.dataset.messageId)).toContain(id);
+  });
+
+  it('announces history loading without a duplicate startup message', () => {
+    render(<DesktopConversationView {...buildProps({ mode: 'structured', isLoadingHistory: true })} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading conversation history');
+    expect(screen.queryByText(/Send a message to start/)).not.toBeInTheDocument();
+  });
+
+  it('explains unavailable approval actions while preserving the request and disabled controls', () => {
+    render(<DesktopConversationView {...buildProps({ mode: 'structured', onApprove: null, pendingApproval: { description: 'Allow reading the selected file?', toolInput: { path: '/work/selected.txt' } } })} />);
+    expect(screen.getByRole('group', { name: 'Approval required' })).toHaveTextContent('Allow reading the selected file?');
+    expect(screen.getByText('Approval actions are unavailable in this view.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  });
+  it('groups consecutive activity without hiding the intervening assistant response', () => {
+    render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages: [
+      { role: 'tool', toolCallId: 'one', toolName: 'read', result: 'First file' },
+      { role: 'tool', toolCallId: 'two', toolName: 'read', result: 'Second file' },
+      { role: 'assistant', messageId: 'progress', content: 'I found the relevant code.' },
+      { role: 'tool', toolCallId: 'three', toolName: 'test', result: 'Tests passed' },
+    ] })} />);
+    expect(screen.getByText('Read 2 files')).toBeVisible();
+    expect(screen.getByText('I found the relevant code.')).toBeVisible();
+    expect(screen.getByText('Tests passed')).toBeVisible();
+    expect(screen.queryByText('First file')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['cancelled', 'Stopped — partial response'],
+    ['interrupted', 'Stopped — partial response'],
+    ['failed', 'Failed — partial response'],
+    ['unconfirmed', 'Completion not confirmed — partial response'],
+    ['streaming', 'Partial response'],
+  ])('labels %s structured output without marking validated output as partial', (completionStatus, label) => {
+    render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages: [
+      { role: 'assistant', messageId: 'complete', content: 'Validated answer', completionStatus: 'completed' },
+      { role: 'assistant', messageId: 'partial', content: 'Tentative answer', completionStatus },
+    ] })} />);
+    expect(screen.getByText('Validated answer')).toBeInTheDocument();
+    expect(screen.getByText('Tentative answer')).toBeInTheDocument();
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getAllByText(label)).toHaveLength(1);
+  });
   it('renders AI-specific provider label in header', () => {
     render(<DesktopConversationView {...buildProps()} />);
     expect(screen.getByText('Codex')).toBeInTheDocument();
@@ -1031,6 +1093,71 @@ describe('DesktopConversationView', () => {
     ]);
   });
 
+  it('keeps browser and modal keys out of a background interactive terminal prompt', () => {
+    const onSendRaw = vi.fn();
+    const { rerender } = render(<>
+      <DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />
+      <div className="workspace-browser" data-testid="browser-surface" />
+    </>);
+    fireEvent.keyDown(screen.getByTestId('browser-surface'), { key: 'y', code: 'KeyY' });
+    rerender(<>
+      <DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />
+      <div role="dialog" aria-modal="true">Browser panel</div>
+    </>);
+    fireEvent.keyDown(document.body, { key: 'Enter', code: 'Enter' });
+    expect(onSendRaw).not.toHaveBeenCalled();
+  });
+
+  it.each(['preview-panel', 'preview-panel-mobile'])('keeps Console log scrolling in %s separate from background terminal input', surface => {
+    const onSendRaw = vi.fn(), scrollKey = vi.fn();
+    render(<>
+      <DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />
+      <section className={surface}><div role="log" tabIndex={0} aria-label="Console log" onKeyDown={scrollKey} /></section>
+    </>);
+    fireEvent.keyDown(screen.getByRole('log', { name: 'Console log' }), { key: 'ArrowDown', code: 'ArrowDown' });
+    expect(onSendRaw).not.toHaveBeenCalled();
+    expect(scrollKey).toHaveBeenCalledOnce();
+    expect(scrollKey.mock.calls[0][0].defaultPrevented).toBe(false);
+  });
+
+  it('lets browser resize handles receive arrows without forwarding to a raw terminal prompt', () => {
+    const onSendRaw = vi.fn(), resize = vi.fn();
+    render(<>
+      <DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />
+      <div className="workspace-panel-tools"><div role="separator" tabIndex={0} aria-label="Resize browser panel" onKeyDown={resize} /></div>
+    </>);
+    fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize browser panel' }), { key: 'ArrowLeft', code: 'ArrowLeft' });
+    expect(onSendRaw).not.toHaveBeenCalled();
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize.mock.calls[0][0].defaultPrevented).toBe(false);
+  });
+
+  it('resizes navigation without forwarding arrows to an interactive terminal prompt', () => {
+    localStorage.removeItem('terminal-workspace-navigation-width');
+    const onSendRaw = vi.fn();
+    render(<>
+      <DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />
+      <WorkspacePanel kind="navigation"><span>Navigation</span></WorkspacePanel>
+    </>);
+    const handle = screen.getByRole('separator', { name: 'Resize navigation' });
+    expect(handle).toHaveAttribute('aria-valuenow', '256');
+    fireEvent.keyDown(handle, { key: 'ArrowRight', code: 'ArrowRight' });
+    expect({ sent: onSendRaw.mock.calls, width: handle.getAttribute('aria-valuenow') }).toEqual({ sent: [], width: '280' });
+    localStorage.removeItem('terminal-workspace-navigation-width');
+  });
+
+  it.each(['button', 'select', 'summary', 'a'])('preserves keyboard activation of workspace %s controls during a terminal prompt', tag => {
+    const onSendRaw = vi.fn();
+    render(<DesktopConversationView {...buildProps({ allowPromptKeyboardCapture: true, showTerminalMirror: true, onSendRaw, terminalScreenSnapshot: 'Continue anyway? [y/N]' })} />);
+    const control = document.createElement(tag);
+    if (tag === 'a') control.setAttribute('href', '#workspace');
+    document.body.append(control);
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    control.dispatchEvent(event);
+    expect({ sent: onSendRaw.mock.calls, prevented: event.defaultPrevented }).toEqual({ sent: [], prevented: false });
+    control.remove();
+  });
+
   it('does not forward raw keyboard controls in mirror mode when direct terminal typing is disabled', () => {
     const onSendRaw = vi.fn();
     render(
@@ -1152,4 +1279,125 @@ describe('DesktopConversationView', () => {
       ['\r']
     ]);
   });
+});
+
+
+it('retains a structured approval card while submitting and binds a click to the displayed action', () => {
+  const pendingApproval = { seq: 7, toolName: 'Bash', toolInput: { command: 'echo fixture' }, description: 'Run fixture?' };
+  const onApprove = vi.fn();
+  const { rerender } = render(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove, isApproving: true })} />);
+  expect(screen.getByText('Run fixture?')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  rerender(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove, actionError: 'Approval not accepted.' })} />);
+  expect(screen.getByRole('alert')).toHaveTextContent('Approval not accepted.');
+  fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  expect(onApprove).toHaveBeenCalledWith(true, pendingApproval);
+});
+
+it('preserves a structured tool card DOM identity when earlier replayed messages are inserted', () => {
+  const tool = { role: 'tool', toolName: 'run_command', toolCallId: 'owned-tool-id', turnId: 'owned-turn-id', result: 'Fixture complete', ts: 20 };
+  const { rerender } = render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages: [tool] })} />);
+  const card = screen.getByTestId('tool-call-tool_use');
+  rerender(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages: [{ role: 'user', messageId: 'earlier-user-id', content: 'Earlier replay', ts: 10 }, tool] })} />);
+  expect(screen.getByTestId('tool-call-tool_use')).toBe(card);
+});
+
+
+it('offers a structured Stop control and disables decisions while cancellation is pending', () => {
+  const onInterrupt = vi.fn(), pendingApproval = { approvalId: 'approval-stop', description: 'Keep this pending action', toolName: 'fixture' };
+  const props = buildProps({ mode: 'structured', isStreaming: true, onInterrupt, pendingApproval, onApprove: vi.fn() });
+  const { rerender } = render(<DesktopConversationView {...props} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop response' }));
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+  rerender(<DesktopConversationView {...props} isInterrupting={true} />);
+  expect(screen.getByRole('button', { name: 'Stop response' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Approve', exact: true })).toBeDisabled();
+  expect(screen.getByText('Keep this pending action')).toBeInTheDocument();
+  expect(screen.getByText('Stopping response…')).toBeInTheDocument();
+});
+
+
+it('keeps cancellation recovery visible after streaming ends and disables unresolved decisions until cleanup', () => {
+  const onInterrupt = vi.fn();
+  render(<DesktopConversationView {...buildProps({ mode: 'structured', isStreaming: false, requiresCleanup: true, onInterrupt, onApprove: vi.fn(), pendingApproval: { approvalId: 'cleanup-action', description: 'Retained exact action', toolName: 'fixture' } })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Retry cancellation' }));
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Cleanup required')).toBeInTheDocument();
+  expect(screen.getByText('Retained exact action')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Approve', exact: true })).toBeDisabled();
+});
+
+it('shows an agent question as a question card and sends the chosen answer with the approval', () => {
+  const onApprove = vi.fn();
+  const pendingApproval = { approvalId: 'question-1', toolName: 'ask_user', description: 'Codex has a question for you.',
+    toolInput: { questions: [{ id: 'colour', question: 'Which accent colour?', options: [{ label: 'Indigo' }, { label: 'Amber' }] }] } };
+  render(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove })} />);
+  expect(screen.getByText('Waiting for your answer')).toBeVisible();
+  fireEvent.click(screen.getByRole('radio', { name: 'Indigo' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send answers' }));
+  expect([screen.queryByRole('button', { name: 'Approve' }), onApprove.mock.calls]).toEqual([null, [[true, pendingApproval, { colour: ['Indigo'] }]]]);
+});
+
+it('keeps pending approvals and questions outside the scrolling transcript', () => {
+  const pendingApproval = { approvalId: 'question-adjacent', toolName: 'ask_user',
+    toolInput: { questions: [{ id: 'colour', question: 'Which colour?', options: [{ label: 'Indigo' }] }] } };
+  const { container, rerender } = render(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove: vi.fn() })} />);
+  const rail = screen.getByRole('region', { name: 'Pending requests' });
+  expect(rail).toContainElement(screen.getByRole('group', { name: 'Question from the agent' }));
+  expect(container.querySelector('.desktop-thread')).not.toContainElement(rail);
+  rerender(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval: { approvalId: 'run', toolName: 'Bash', description: 'Run it?' }, onApprove: vi.fn() })} />);
+  expect(screen.getByRole('region', { name: 'Pending requests' })).toContainElement(screen.getByRole('group', { name: 'Approval required' }));
+  expect(screen.getAllByRole('button', { name: 'Approve', exact: true })).toHaveLength(1);
+});
+
+it('disables agent question decisions while a browser decision is in flight', () => {
+  const onApprove = vi.fn();
+  const pendingApproval = { approvalId: 'question-gated', toolName: 'ask_user',
+    toolInput: { questions: [{ id: 'colour', question: 'Which colour?', options: [{ label: 'Indigo' }] }] } };
+  render(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove, isBrowserApproving: true })} />);
+  expect(screen.getByRole('button', { name: 'Dismiss question' })).toBeDisabled();
+  expect(screen.getByRole('radio', { name: 'Indigo' })).toBeDisabled();
+  expect(onApprove).not.toHaveBeenCalled();
+});
+
+it('offers to allow an action for the rest of the session where the agent supports it', () => {
+  const onApprove = vi.fn();
+  const pendingApproval = { approvalId: 'run-1', toolName: 'run_command', toolInput: { command: 'npm test' }, description: 'Run the tests?' };
+  const view = render(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove, allowApprovalForSession: true })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Allow for this session' }));
+  view.rerender(<DesktopConversationView {...buildProps({ mode: 'structured', pendingApproval, onApprove })} />);
+  expect([onApprove.mock.calls, screen.queryByRole('button', { name: 'Allow for this session' })]).toEqual([[[true, pendingApproval, undefined, { forSession: true }]], null]);
+});
+
+it('marks plan requests and offers to implement the finished plan', () => {
+  const onImplementPlan = vi.fn();
+  const onImplementPlanInNewThread = vi.fn();
+  const structuredMessages = [
+    { role: 'user', content: '[Plan] Add search', messageId: 'u1', ts: 1 },
+    { role: 'assistant', content: '1. Index files\n2. Add a search box', messageId: 'a1', ts: 2 },
+  ];
+  render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages, onImplementPlan, onImplementPlanInNewThread })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Implement plan' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Implement in a new thread' }));
+  expect([
+    screen.queryByText('[Plan] Add search'), screen.getByText('Plan', { selector: '.cc-plan-chip' }).nextSibling?.textContent === 'Add search',
+    onImplementPlan.mock.calls, onImplementPlanInNewThread.mock.calls,
+  ]).toEqual([null, true, [['1. Index files\n2. Add a search box']], [['1. Index files\n2. Add a search box']]]);
+});
+
+it('lets a message be edited as a new message or forked into a new thread', () => {
+  const onEditMessage = vi.fn();
+  const onForkFromMessage = vi.fn();
+  const structuredMessages = [
+    { role: 'user', content: 'Add search', messageId: 'u1', ts: 1 },
+    { role: 'assistant', content: 'Added it', messageId: 'a1', ts: 2 },
+  ];
+  render(<DesktopConversationView {...buildProps({ mode: 'structured', structuredMessages, onEditMessage, onForkFromMessage })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Edit as new message' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Fork from here' }));
+  expect([onEditMessage.mock.calls, onForkFromMessage.mock.calls]).toEqual([
+    [['Add search']],
+    [['Continue from this earlier conversation:\n\nUser: Add search\n\nAssistant: Added it\n\nPick up from here.']],
+  ]);
 });

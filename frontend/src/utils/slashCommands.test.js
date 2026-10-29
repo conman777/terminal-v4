@@ -57,4 +57,11 @@ describe('slashCommands', () => {
     expect(getComposerSlashSuggestions('/', 'shell')).toEqual([]);
     expect(getComposerSlashSuggestions('hello', 'claude')).toEqual([]);
   });
+
+  it('offers installed skills by name, inserting an instruction to use them', () => {
+    const skills = [{ id: 's1', name: 'Release Notes', provider: 'claude', path: '/skills/release-notes/SKILL.md' }];
+    expect(getComposerSlashSuggestions('/rel', 'codex', [], skills)).toEqual([
+      { cmd: '/release-notes', desc: 'Skill · claude', insert: 'Use the "Release Notes" skill (instructions: /skills/release-notes/SKILL.md). ' },
+    ]);
+  });
 });

@@ -1,0 +1,47 @@
+.session-settings-modal.ui-utility-dialog { max-width: 840px; background: var(--bg-surface); overflow: hidden; }
+.session-settings-modal .session-settings-header { align-items: center; }
+.session-settings-title-wrap, .session-settings-title-copy { min-width: 0; }
+.session-settings-modal .session-settings-body { display: grid; grid-template-columns: 156px minmax(0, 1fr); align-items: start; gap: 20px; }
+.session-settings-nav { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.session-settings-nav-btn { min-height: 32px; padding: 6px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); text-align: left; font: 400 13px/1.4 var(--font-ui); cursor: pointer; }
+.session-settings-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.session-settings-nav-btn.active { background: var(--bg-hover); border-color: var(--border-default); color: var(--text-primary); font-weight: 500; }
+.session-settings-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.session-settings-section[hidden], .session-settings-panel[hidden] { display: none; }
+.session-settings-section-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.session-settings-section-kicker, .session-settings-utility-label { font: 500 12px/1.4 var(--font-ui); color: var(--text-secondary); letter-spacing: 0; text-transform: none; }
+.session-settings-section-heading h3 { margin: 0; font: 500 14px/1.5 var(--font-ui); color: var(--text-primary); }
+.session-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.session-settings-panel { min-width: 0; border: 1px solid var(--border-subtle); background: var(--bg-surface); border-radius: 8px; padding: 14px; box-shadow: none; }
+.session-settings-modal .session-settings-field { gap: 8px; margin: 0; }
+.session-settings-inline-utility { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-subtle); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.session-settings-inline-utility p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.settings-inline-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.settings-inline-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+.session-settings-modal .input-with-actions, .session-settings-modal .input-actions { flex-wrap: wrap; min-width: 0; }
+.session-settings-modal .input-with-dropdown { min-width: 0; flex: 1 1 180px; }
+.session-settings-modal .input-actions { display: flex; gap: 6px; }
+.session-settings-modal .folder-dropdown { max-width: 100%; max-height: 220px; overflow: auto; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 8px; }
+.session-settings-modal .folder-dropdown-item { font-family: var(--font-ui); font-size: 13px; min-height: 32px; }
+.session-settings-modal .folder-path { overflow: hidden; text-overflow: ellipsis; }
+.session-settings-modal .mode-toggle { display: flex; flex-wrap: wrap; border-radius: 6px; background: var(--bg-base); }
+.session-settings-modal .mode-btn { min-height: 32px; padding: 6px 10px; border-radius: 6px; font: 400 13px/1.4 var(--font-ui); }
+.session-settings-modal .mode-btn.active { background: var(--bg-hover); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--border-default); }
+.session-settings-modal .session-settings-footer { justify-content: space-between; align-items: center; gap: 16px; }
+.session-settings-footer-copy { min-width: 0; flex: 1; }
+.session-settings-footer-status { display: block; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.session-settings-footer-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+@media (max-width: 720px) {
+  .session-settings-modal .session-settings-body, .session-settings-grid { grid-template-columns: 1fr; }
+  .session-settings-nav { flex-direction: row; flex-wrap: wrap; gap: 4px; padding-bottom: 12px; border-bottom: 1px solid var(--border-subtle); }
+  .session-settings-nav-btn { flex: 0 1 auto; }
+  .session-settings-inline-utility, .session-settings-modal .session-settings-footer { flex-direction: column; align-items: stretch; }
+  .session-settings-footer-actions { justify-content: flex-end; flex-wrap: wrap; }
+}
+@media (pointer: coarse) {
+  .session-settings-modal .session-settings-nav-btn, .session-settings-modal .mode-btn, .session-settings-modal .folder-dropdown-item { min-height: 44px; }
+}
+@media (max-width: 480px) {
+  .session-settings-nav { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 8px; }
+  .session-settings-nav-btn { flex: 0 0 auto; white-space: nowrap; }
+}

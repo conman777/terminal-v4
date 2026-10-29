@@ -1,0 +1,45 @@
+.conversation-activity-group.cc-structured-activity { min-width: 0; margin: 12px 0 16px; color: var(--text-secondary); }
+.conversation-activity-group.cc-structured-activity > summary {
+  box-sizing: border-box;
+  min-height: 32px;
+  gap: 8px;
+  border-radius: 6px;
+  font: 13px/1.5 var(--font-ui);
+}
+.cc-structured-activity .activity-summary-text { white-space: normal; overflow-wrap: anywhere; }
+.cc-structured-activity .activity-summary-failed { font: 12px/1.5 var(--font-ui); }
+.cc-structured-activity .conversation-activity-items { min-width: 0; }
+@media (pointer: coarse) {
+  .conversation-activity-group.cc-structured-activity > summary { min-height: 44px; }
+}
+
+/* T3's "Worked for 2m 30s ›" row: one quiet disclosure per finished turn, with a hairline divider. */
+.conversation-work-group { margin: 8px 0 4px; }
+.conversation-work-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 0; border: 0;
+  background: transparent; color: var(--text-secondary); font: 13px/1.5 var(--font-ui); cursor: pointer;
+}
+.conversation-work-toggle:hover { color: var(--text-primary); }
+.conversation-work-chevron { display: inline-block; transition: transform 120ms; }
+.conversation-work-group.open .conversation-work-chevron { transform: rotate(90deg); }
+.conversation-work-group::after { content: ''; display: block; height: 1px; margin-top: 6px; background: var(--border-subtle); }
+.conversation-work-items { padding: 4px 0 0; }
+@media (pointer: coarse) { .conversation-work-toggle { min-height: 44px; } }
+
+.structured-reasoning { margin: 8px 0; color: var(--text-secondary); font: 13px/1.6 var(--font-ui); }
+.structured-reasoning-label { display: block; margin-bottom: 2px; color: var(--text-muted); font: 500 12px/1.5 var(--font-ui); }
+.structured-reasoning-text { overflow-wrap: anywhere; }
+.structured-reasoning-text p { margin: 0 0 6px; }
+.structured-reasoning-text .lightweight-markdown,
+.structured-reasoning-text .lightweight-markdown :is(p, strong, em, li, h1, h2, h3, h4) { color: inherit; font-size: 13px; }
+.structured-plan { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; font: 13px/1.6 var(--font-ui); }
+.structured-plan-title { display: block; margin-bottom: 4px; color: var(--text-muted); font: 500 12px/1.5 var(--font-ui); }
+.structured-plan-explanation { margin: 0 0 6px; color: var(--text-secondary); }
+.structured-plan-steps { margin: 0; padding: 0; list-style: none; }
+.structured-plan-step { display: flex; gap: 8px; color: var(--text-primary); overflow-wrap: anywhere; }
+.structured-plan-step.status-completed { color: var(--text-secondary); }
+.structured-plan-step.status-completed > span:last-child { text-decoration: line-through; }
+.structured-plan-icon { flex: 0 0 1em; color: var(--text-muted); text-align: center; }
+.structured-plan-step.status-inProgress .structured-plan-icon { color: var(--accent-primary); }
+.structured-plan-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.structured-working { margin: 8px 0; color: var(--text-secondary); font: 13px/1.5 var(--font-ui); font-variant-numeric: tabular-nums; }

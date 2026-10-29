@@ -153,7 +153,7 @@ async fn list_route(
     let path = workspace(&input.path)?;
     let files =
         workspace_git::rewind_files(&state.config().data_dir, &user.user_id, &input.path).await?;
-    let conversations = provider_rewind::list(&path, &user.user_id)
+    let conversations = provider_rewind::list(&state.config().data_dir, &path, &user.user_id)
         .await
         .map_err(ApiError::bad_request)?;
     let sessions = state
@@ -211,6 +211,7 @@ async fn plan_route(
         ));
     }
     let native_plan = provider_rewind::plan(
+        &state.config().data_dir,
         &path,
         &user.user_id,
         &input.source_id,
@@ -279,6 +280,7 @@ async fn apply_route(
         return Err(ApiError::bad_request("Workspace files, index, HEAD, or checkpoint capacity changed; create a new rewind plan"));
     }
     let refreshed = provider_rewind::plan(
+        data,
         &path,
         &user.user_id,
         &operation.source_id,
@@ -303,7 +305,7 @@ async fn apply_route(
     );
     operation.status = "applying".into();
     save(data, &user.user_id, &path, &operation)?;
-    match provider_rewind::apply(&path, &user.user_id, &operation.native_plan).await {
+    match provider_rewind::apply(data, &path, &user.user_id, &operation.native_plan).await {
         Ok(branch) => {
             operation.native_fork = Some(branch);
             operation.status = "branchCreated".into();
@@ -407,8 +409,22 @@ async fn resume_route(
         .native_fork
         .as_ref()
         .ok_or_else(|| ApiError::internal("Native rewind branch unavailable"))?;
-    let mut command = crate::agent_runtime::native_command(&fork.provider)
-        .ok_or_else(|| ApiError::bad_request("Native provider is not installed"))?;
+    let mut command = if crate::v4_agent::supports(&fork.provider) {
+        let mut command = tokio::process::Command::new(
+            std::env::current_exe().map_err(|_| ApiError::internal("V4 runtime unavailable"))?,
+        );
+        command.args([
+            "agent",
+            "--provider",
+            &fork.provider,
+            "--owner-hex",
+            &hex::encode(user.user_id.as_bytes()),
+        ]);
+        command
+    } else {
+        crate::agent_runtime::native_command(&fork.provider)
+            .ok_or_else(|| ApiError::bad_request("Native provider is not installed"))?
+    };
     command.args(&fork.resume_args);
     let initial_command =
         crate::agent_runtime::native_launch_command(&command).ok_or_else(|| {

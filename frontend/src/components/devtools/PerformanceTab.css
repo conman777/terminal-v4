@@ -1,0 +1,79 @@
+.performance-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  font: 13px/1.4 var(--font-ui, sans-serif);
+  overflow-wrap: anywhere;
+}
+
+.performance-tab, .performance-tab * { box-sizing: border-box; }
+.performance-tab :is(h2, h3, h4, p) { margin: 0; }
+.performance-tab .performance-tab__title { font-size: 15px; }
+.performance-tab .performance-tab__section-title { margin-bottom: 8px; font-size: 14px; }
+.performance-tab__header, .performance-tab__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.performance-tab__header { justify-content: space-between; margin-bottom: 16px; }
+.performance-tab__section { margin-bottom: 16px; }
+.performance-tab button {
+  min-width: 32px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.performance-tab button:hover { background: var(--bg-hover); }
+.performance-tab button[aria-pressed="true"] { color: var(--success); border-color: currentColor; }
+.performance-tab:focus-visible, .performance-tab button:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+.performance-tab__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 10px;
+}
+.performance-tab__metric, .performance-tab__chart, .performance-tab__tasks {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+}
+.performance-tab__metric > :first-child { color: var(--text-muted); font-size: 12px; font-weight: 500; }
+.performance-tab__metric > :nth-child(2) { margin-top: 4px; font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.performance-tab__metric > :nth-child(2) > span { margin-left: 4px; font-size: 14px; }
+.performance-tab__metric > :nth-child(3) { margin-top: 4px; color: var(--text-muted); font-size: 12px; }
+.performance-tab__metric > .text-green-600 { color: var(--success); }
+.performance-tab__metric > .text-yellow-600 { color: var(--warning); }
+.performance-tab__metric > .text-red-600, .performance-tab__duration { color: var(--error); }
+.performance-tab__metric > .text-gray-900 { color: var(--text-primary); }
+.performance-tab__chart { margin-top: 10px; }
+.performance-tab .performance-tab__chart-title { margin-bottom: 8px; font-size: 13px; }
+.performance-tab__chart-bars { display: flex; align-items: flex-end; gap: 2px; height: 128px; overflow: hidden; }
+.performance-tab__chart-bar { flex: 1 1 0; min-width: 0; background: var(--accent-primary); border-radius: 2px 2px 0 0; }
+.performance-tab__chart-axis { display: flex; justify-content: space-between; margin-top: 4px; color: var(--text-muted); font-size: 12px; }
+.performance-tab__tasks { padding: 0; }
+.performance-tab table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; font-variant-numeric: tabular-nums; }
+.performance-tab :is(th, td) { padding: 8px; border-bottom: 1px solid var(--border-subtle); text-align: left; }
+.performance-tab tbody tr:last-child td { border-bottom: 0; }
+.performance-tab__duration { font-weight: 600; }
+.performance-tab__empty { padding: 24px 8px; color: var(--text-muted); }
+.performance-tab .performance-tab__unavailable-title { margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+
+@media (pointer: coarse) {
+  .performance-tab button { min-width: 44px; min-height: 44px; }
+}

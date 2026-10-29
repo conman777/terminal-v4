@@ -38,3 +38,23 @@ describe('NativeHistoryPanel', () => {
   await waitFor(() => expect(screen.queryByLabelText('Review handoff prompt')).not.toBeInTheDocument());
  });
 });
+
+it('distinguishes a completed empty native scan from a scan that has not run', async () => {
+  apiFetch.mockReset();
+  apiFetch.mockResolvedValue(response([]));
+  render(<NativeHistoryPanel workspacePath={workspacePath} />);
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+  expect(screen.queryByText('No native conversations found for this workspace.')).not.toBeInTheDocument();
+  apiFetch.mockResolvedValueOnce(response({ sources: [], warnings: [] }));
+  fireEvent.click(screen.getByRole('button', { name: 'Find native conversations' }));
+  expect(await screen.findByText('No native conversations found for this workspace.')).toBeInTheDocument();
+});
+
+it('retries a failed imported-snapshot list without scanning native conversation files',async()=>{
+ apiFetch.mockReset().mockRejectedValueOnce(new Error('Snapshot list offline')).mockResolvedValue(response([row]));
+ render(<NativeHistoryPanel workspacePath={workspacePath}/>);
+ await screen.findByText('Snapshot list offline');
+ fireEvent.click(screen.getByRole('button',{name:'Retry native imports'}));
+ expect(await screen.findByRole('button',{name:'Open imported Fix build'})).toBeInTheDocument();
+ expect(apiFetch.mock.calls.every(([url])=>url.includes('/imports?'))).toBe(true);
+});

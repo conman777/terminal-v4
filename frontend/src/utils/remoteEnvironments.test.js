@@ -62,3 +62,15 @@ describe('paired environment restoration', () => {
       .toEqual([true, null, 'late-alice-write']);
   });
 });
+
+describe('known expiry restoration', () => {
+ it('rejects known expired selection while preserving offline valid devices', () => {
+  setEnvironmentIdentity('synthetic-owner');
+  for (const expiresAt of [0, Math.floor(Date.now() / 1000) - 1, 'invalid']) {
+   setActiveEnvironment({ id: 'expired' });
+   expect(restoreActiveEnvironment([{ id: 'expired', expiresAt }])).toBeNull();
+  }
+  setActiveEnvironment({ id: 'offline' });
+  expect(restoreActiveEnvironment([{ id: 'offline', online: false, expiresAt: Math.floor(Date.now() / 1000) + 60 }])).toEqual({ id: 'offline', online: false, expiresAt: expect.any(Number) });
+ });
+});

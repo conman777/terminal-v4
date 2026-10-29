@@ -155,7 +155,7 @@ function SelectControl({ label, value, options, onChange }) {
   return (
     <div className="style-control style-control-select">
       <label>{label}</label>
-      <select value={value || ''} onChange={(e) => onChange(e.target.value)}>
+      <select aria-label={label} value={value || ''} onChange={(e) => onChange(e.target.value)}>
         {options.map(opt => (
           <option key={opt.value} value={opt.value}>{opt.label}</option>
         ))}

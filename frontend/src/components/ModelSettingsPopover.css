@@ -1,0 +1,15 @@
+.model-settings-popover .model-settings-trigger { min-height: 32px; padding: 5px 8px; gap: 6px; border-radius: 6px; font: 13px/1.4 var(--font-ui); }
+.model-settings-popover .model-settings-trigger .mobile-model-mark,
+.model-settings-dialog .mobile-model-dialog-heading .mobile-model-mark { background: var(--bg-hover); color: var(--text-secondary); }
+.model-settings-popover .model-settings-chevron { flex-shrink: 0; color: var(--text-muted); }
+.model-settings-backdrop { background: color-mix(in srgb, var(--bg-base) 35%, transparent); }
+.model-settings-backdrop .model-settings-dialog { border-radius: 8px; box-shadow: var(--shadow-md); font: 14px/1.5 var(--font-ui); }
+.model-settings-dialog > header { min-height: 44px; height: auto; border-bottom: 1px solid var(--border-subtle); }
+.model-settings-dialog h2 { font: 500 13px/1.4 var(--font-ui); }
+.model-settings-dialog .mobile-model-dialog-heading > span:last-child { font-size: 12px; }
+.model-settings-dialog > header button { width: 28px; height: 28px; border-radius: 6px; font-size: 20px; }
+.model-settings-dialog .mobile-model-dialog-body > .mobile-model-dialog-error { color: var(--error); }
+@media (max-width: 768px), (pointer: coarse) {
+  .model-settings-popover .model-settings-trigger { min-height: 44px; }
+  .model-settings-dialog > header button { width: 44px; height: 44px; }
+}

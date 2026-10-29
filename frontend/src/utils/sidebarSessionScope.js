@@ -6,8 +6,12 @@ function buildVisibleSessionIdSet(activeSessions) {
   );
 }
 
+export function isCompanionSession(session) {
+  return Boolean(session?.thread?.companionOf);
+}
+
 function filterSessionsById(sessions, visibleIds) {
-  return (sessions || []).filter((session) => visibleIds.has(session?.id));
+  return (sessions || []).filter((session) => visibleIds.has(session?.id) && !isCompanionSession(session));
 }
 
 export function scopeThreadsSidebarData({

@@ -1,0 +1,14 @@
+.context-menu[role="group"] { box-sizing: border-box; position: fixed; z-index: 10000; min-width: 180px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow: auto; padding: 4px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font: 13px/1.4 var(--font-ui); box-shadow: var(--shadow-modal, 0 8px 24px rgb(0 0 0 / 18%)); }
+.context-menu[role="group"] .context-menu-item { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 8px; gap: 10px; border-radius: 6px; color: var(--text-primary); background: transparent; font: inherit; }
+.context-menu[role="group"] .context-menu-item:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.context-menu[role="group"] .context-menu-item.danger { color: var(--error); }
+.context-menu[role="group"] .context-menu-item.danger:hover:not(:disabled) { background: var(--bg-hover); color: var(--error); }
+.context-menu[role="group"] .context-menu-item:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; background: var(--bg-hover); }
+.context-menu[role="group"] .context-menu-icon { width: 16px; height: 16px; font-size: 14px; }
+.context-menu[role="group"] .context-menu-icon svg { width: 16px; height: 16px; stroke-width: 1.75; }
+.context-menu[role="group"] .context-menu-label { overflow-wrap: anywhere; white-space: normal; }
+.context-menu[role="group"] .context-menu-shortcut { font: 11px/1.4 var(--font-ui); color: var(--text-secondary); }
+.context-menu[role="group"] .context-menu-separator { margin: 4px 0; background: var(--border-subtle); }
+@media (max-width: 768px), (pointer: coarse) {
+  .context-menu[role="group"] .context-menu-item { min-height: 44px; }
+}

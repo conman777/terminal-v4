@@ -1,0 +1,121 @@
+.websocket-tab {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 10px;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  font: 13px/1.4 var(--font-ui, sans-serif);
+}
+
+.websocket-tab, .websocket-tab * { box-sizing: border-box; }
+.websocket-tab h2, .websocket-tab h3, .websocket-tab h4, .websocket-tab p { margin: 0; }
+.websocket-tab h2 { font-size: 15px; }
+.websocket-tab h3, .websocket-tab h4 { font-size: 13px; }
+.websocket-tab__toolbar, .websocket-tab__actions, .websocket-tab__row-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.websocket-tab__toolbar, .websocket-tab__row-heading { justify-content: space-between; }
+.websocket-tab__toolbar { flex: 0 0 auto; }
+.websocket-tab button, .websocket-tab select {
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-elevated);
+  color: inherit;
+  font: inherit;
+}
+.websocket-tab button { cursor: pointer; }
+.websocket-tab button:hover { background: var(--bg-hover); }
+.websocket-tab button[aria-pressed="true"] {
+  border-color: var(--accent-primary);
+  background: var(--accent-primary-dim);
+  color: var(--accent-primary-light);
+}
+.websocket-tab :is(button, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+.websocket-tab__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  gap: 10px;
+  overflow: hidden;
+}
+.websocket-tab__pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.websocket-tab__scroll {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-surface);
+}
+.websocket-tab button.websocket-tab__connection {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.websocket-tab button.websocket-tab__connection:hover { background: var(--bg-hover); }
+.websocket-tab button.websocket-tab__connection[aria-pressed="true"] {
+  background: var(--accent-primary-dim);
+  box-shadow: inset 3px 0 var(--accent-primary);
+}
+.websocket-tab__row-heading { width: 100%; }
+.websocket-tab__url { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.websocket-tab__muted, .websocket-tab dt { color: var(--text-muted); }
+.websocket-tab .websocket-tab__error, .websocket-tab__status[data-status="error"] { color: var(--error); }
+.websocket-tab__status { padding: 1px 4px; border: 1px solid currentColor; border-radius: 4px; font-size: 11px; }
+.websocket-tab__status[data-status="connected"], .websocket-tab__direction[data-direction="received"] { color: var(--success); }
+.websocket-tab__status:is([data-status="connecting"], [data-status="closing"]) { color: var(--warning); }
+.websocket-tab__direction[data-direction="sent"] { color: var(--accent-primary-light); }
+.websocket-tab__empty { padding: 12px; color: var(--text-muted); }
+.websocket-tab__mono, .websocket-tab__message, .websocket-tab pre { font-family: var(--font-mono, monospace); }
+.websocket-tab__table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.websocket-tab__table th, .websocket-tab__table td { padding: 6px; text-align: left; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
+.websocket-tab__table th { position: sticky; top: 0; z-index: 1; background: var(--bg-elevated); }
+.websocket-tab__table tr:hover td { background: var(--bg-hover); }
+.websocket-tab button.websocket-tab__message { display: block; width: 240px; overflow: hidden; text-overflow: ellipsis; text-align: left; white-space: nowrap; background: transparent; }
+.websocket-tab__details { padding: 10px; overflow-wrap: anywhere; }
+.websocket-tab__details dl { margin: 10px 0; }
+.websocket-tab__details dd { margin: 0 0 8px; }
+.websocket-tab pre { margin: 8px 0 0; padding: 8px; max-width: 100%; overflow: auto; background: var(--bg-elevated); font-size: 12px; }
+
+@media (max-width: 600px) {
+  .websocket-tab { padding: 6px; gap: 6px; }
+}
+
+@media (pointer: coarse) {
+  .websocket-tab button, .websocket-tab select { min-height: 44px; }
+  .websocket-tab select { max-width: 164px; font-size: 16px; }
+}

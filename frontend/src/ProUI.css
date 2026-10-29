@@ -1,104 +1,104 @@
 /* frontend/src/ProUI.css */
-/* Overrides for PreviewPanel, NotesModal, BookmarkModal, and DesktopStatusBar — consume canonical tokens from styles.css */
+/* Compatibility styles for legacy surfaces; component styles own their final presentation. */
 
 /* ===========================================
    Preview Panel
    =========================================== */
 
 .preview-panel {
-  background: var(--bg-base) !important;
-  border-radius: var(--radius-xl) !important;
-  border: 1px solid var(--border-subtle) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
-  overflow: hidden !important;
-  margin: 12px 12px 12px 0 !important;
+  background: var(--bg-base);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-subtle);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+  margin: 12px 12px 12px 0;
 }
 
 .preview-header {
-  background: rgba(255, 255, 255, 0.02) !important;
-  border-bottom: 1px solid var(--border-subtle) !important;
-  padding: 8px 12px !important;
-  height: auto !important;
-  min-height: 48px !important;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 12px;
+  height: auto;
+  min-height: 48px;
 }
 
 .preview-port-btn {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: var(--text-primary) !important;
-  border-radius: var(--radius-md) !important;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
 }
 
 .preview-port-btn:hover {
-  background: var(--bg-hover) !important;
-  border-color: rgba(255, 255, 255, 0.2) !important;
+  background: var(--bg-hover);
+  border-color: var(--border-hover);
 }
 
 .preview-url-input {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: #fff !important;
-  border-radius: var(--radius-md) !important;
-  padding: 6px 12px !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  padding: 6px 12px;
 }
 
 .preview-url-input:focus {
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .preview-action-btn {
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  color: var(--text-muted) !important;
-  border-radius: 6px !important;
-  transition: all 0.2s ease !important;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  transition: all 0.2s ease;
 }
 
 .preview-action-btn:hover:not(:disabled) {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  border-color: var(--border-subtle) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 
 .preview-action-btn.active {
-  color: var(--accent-primary) !important;
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .preview-layout-presets {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-md) !important;
-  padding: 2px !important;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 2px;
 }
 
 .preview-layout-chip {
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  border-radius: 4px !important;
-  padding: 4px 10px !important;
-  font-weight: 500 !important;
-  border: none !important;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-weight: 500;
+  border: none;
 }
 
 .preview-layout-chip:hover {
-  color: #fff !important;
+  color: var(--text-primary);
 }
 
 .preview-layout-chip.active {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.5) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
 }
 
 .preview-close-btn {
-  color: var(--text-muted) !important;
+  color: var(--text-muted);
 }
 
 .preview-close-btn:hover {
-  background: rgba(255, 77, 79, 0.1) !important;
-  color: #ff4d4f !important;
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
 }
 
 /* ===========================================
@@ -106,61 +106,61 @@
    =========================================== */
 
 .notes-v2 {
-  background: var(--bg-base) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-xl) !important;
-  box-shadow: var(--shadow-lg) !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
 }
 
 .notes-v2-sidebar {
-  background: var(--bg-surface) !important;
-  border-right: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
 }
 
 .notes-v2-sidebar-header {
-  border-bottom: 1px solid var(--border-subtle) !important;
-  padding: 12px !important;
-  background: rgba(255, 255, 255, 0.02) !important;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .notes-v2-search {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: #fff !important;
-  border-radius: var(--radius-md) !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
 }
 
 .notes-v2-search:focus {
-  border-color: var(--accent-primary) !important;
+  border-color: var(--accent-primary);
 }
 
 /* .notes-v2-new-btn visual rules unified in styles.css (.btn-primary group) */
 
 .notes-v2-main {
-  background: var(--bg-base) !important;
+  background: var(--bg-base);
 }
 
 .notes-v2-empty-state {
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: center !important;
-  justify-content: center !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 /* .notes-v2-create-btn visual rules unified in styles.css (.btn-primary group) */
 
 .notes-v2-close {
-  color: var(--text-muted) !important;
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
 }
 
 .notes-v2-close:hover {
-  color: #fff !important;
-  background: var(--bg-hover) !important;
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 /* ===========================================
@@ -168,157 +168,157 @@
    =========================================== */
 
 .bookmark-modal {
-  background: var(--bg-base) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-xl) !important;
-  box-shadow: var(--shadow-lg) !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
 }
 
 .bookmark-modal-header {
-  background: rgba(255, 255, 255, 0.02) !important;
-  border-bottom: 1px solid var(--border-subtle) !important;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .bookmark-modal-title h2 {
-  color: #fff !important;
+  color: var(--text-primary);
 }
 
 .bookmark-modal-title svg {
-  color: var(--accent-primary) !important;
+  color: var(--accent-primary);
 }
 
 .modal-close {
-  color: var(--text-muted) !important;
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  border-radius: 6px !important;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
 }
 
 .modal-close:hover {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  border-color: var(--border-subtle) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 
 .bookmark-modal-search {
-  border-bottom: 1px solid var(--border-subtle) !important;
-  background: var(--bg-surface) !important;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
 }
 
 .bookmark-modal-search input {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: #fff !important;
-  border-radius: var(--radius-md) !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
 }
 
 .bookmark-modal-search input:focus {
-  border-color: var(--accent-primary) !important;
+  border-color: var(--accent-primary);
 }
 
 .bookmark-categories {
-  background: var(--bg-surface) !important;
-  border-right: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
 }
 
 .bookmark-category-item {
-  color: var(--text-primary) !important;
-  border-radius: 6px !important;
+  color: var(--text-primary);
+  border-radius: 6px;
 }
 
 .bookmark-category-item:hover {
-  background: var(--bg-hover) !important;
+  background: var(--bg-hover);
 }
 
 .bookmark-category-item.active {
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
-  color: var(--accent-primary) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--accent-primary);
 }
 
 .bookmark-count {
-  background: rgba(255, 255, 255, 0.1) !important;
-  color: var(--text-muted) !important;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
 }
 
 .bookmark-category-item.active .bookmark-count {
-  background: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
-  color: var(--accent-primary) !important;
+  background: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  color: var(--accent-primary);
 }
 
 .bookmark-list-pane {
-  background: var(--bg-base) !important;
+  background: var(--bg-base);
 }
 
 .bookmark-list-header {
-  border-bottom: 1px solid var(--border-subtle) !important;
-  background: rgba(255, 255, 255, 0.01) !important;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.01);
 }
 
 .bookmark-list-header h3 {
-  color: #fff !important;
+  color: var(--text-primary);
 }
 
 /* .bookmark-add-btn visual rules unified in styles.css (.btn-primary group) */
 
 .bookmark-item {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-md) !important;
-  transition: all 0.2s ease !important;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
 }
 
 .bookmark-item:hover {
-  border-color: rgba(255, 255, 255, 0.2) !important;
-  background: var(--bg-hover) !important;
+  border-color: var(--border-hover);
+  background: var(--bg-hover);
 }
 
 .bookmark-execute-btn {
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
-  color: var(--accent-primary) !important;
-  border-radius: 6px !important;
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--accent-primary);
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .bookmark-execute-btn:hover {
-  background: var(--accent-primary) !important;
-  color: #000 !important;
+  background: var(--accent-primary);
+  color: #000;
 }
 
 .bookmark-name {
-  color: #fff !important;
+  color: var(--text-primary);
 }
 
 .bookmark-command {
-  color: var(--text-muted) !important;
-  font-family: var(--font-mono) !important;
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: 4px !important;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
 }
 
 .bookmark-category-badge {
-  background: var(--border-subtle) !important;
-  color: var(--text-primary) !important;
-  border-radius: 4px !important;
+  background: var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: 4px;
 }
 
 .bookmark-edit-btn, .bookmark-delete-btn {
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  border: 1px solid transparent !important;
-  border-radius: 4px !important;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: 4px;
 }
 
 .bookmark-edit-btn:hover {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  border-color: var(--border-subtle) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 
 .bookmark-delete-btn:hover {
-  background: rgba(255, 77, 79, 0.1) !important;
-  color: #ff4d4f !important;
-  border-color: rgba(255, 77, 79, 0.2) !important;
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
+  border-color: rgba(255, 77, 79, 0.2);
 }
 
 /* ===========================================
@@ -326,120 +326,120 @@
    =========================================== */
 
 .desktop-status-bar-shell {
-  background: transparent !important;
-  min-height: 58px !important;
-  padding: 3px 12px 8px !important;
-  border: none !important;
+  background: transparent;
+  min-height: 58px;
+  padding: 3px 12px 8px;
+  border: none;
 }
 
 .status-composer-shell {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: 12px !important;
-  box-shadow: var(--shadow-sm) !important;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .status-composer-shell:focus-within {
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 .status-composer-input {
-  color: var(--text-primary) !important;
-  font-family: var(--font-ui) !important;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
 }
 
 .status-composer-input::placeholder {
-  color: var(--text-placeholder) !important;
+  color: var(--text-placeholder);
   opacity: 1;
 }
 
 .status-bar-right {
-  border-top-color: var(--border-subtle) !important;
-  padding-top: 4px !important;
+  border-top-color: var(--border-subtle);
+  padding-top: 4px;
 }
 
 .desktop-status-bar-shell.pane-active .status-composer-shell {
-  background: var(--bg-base) !important;
-  border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent) !important;
-  box-shadow: var(--shadow-sm) !important;
+  background: var(--bg-base);
+  border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  box-shadow: var(--shadow-sm);
 }
 
 .desktop-status-bar-shell.pane-active .status-bar-right {
-  background: color-mix(in srgb, var(--accent-primary) 5%, transparent) !important;
-  border-top-color: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
-  border-radius: var(--radius-md) !important;
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+  border-top-color: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  border-radius: var(--radius-md);
 }
 
 .status-bar-btn {
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  color: var(--text-muted) !important;
-  border-radius: 6px !important;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
 }
 
 .status-bar-btn:hover {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  border-color: var(--border-subtle) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 
 .status-ai-selector {
-  background: var(--bg-base) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: var(--text-primary) !important;
-  border-radius: var(--radius-md) !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
 }
 
 .status-ai-selector:hover,
 .status-ai-selector.active {
-  border-color: var(--accent-primary) !important;
-  color: var(--accent-primary) !important;
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 .desktop-status-bar-shell.pane-active .status-ai-selector,
 .desktop-status-bar-shell.pane-active .status-bar-btn {
-  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
-  background: color-mix(in srgb, var(--accent-primary) 5%, transparent) !important;
-  color: var(--text-primary) !important;
+  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
+  color: var(--text-primary);
 }
 
 .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
 .desktop-status-bar-shell.pane-active .status-bar-btn:hover {
-  border-color: var(--accent-primary) !important;
-  background: color-mix(in srgb, var(--accent-primary) 15%, transparent) !important;
-  color: #fff !important;
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  color: var(--text-primary);
 }
 
 /* .status-send-btn visual rules unified in styles.css (.btn-primary group) */
 
 .status-ai-menu {
-  background: var(--bg-surface) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-md) !important;
-  box-shadow: var(--shadow-lg) !important;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .status-ai-menu-item {
-  color: var(--text-primary) !important;
-  border-radius: 6px !important;
+  color: var(--text-primary);
+  border-radius: 6px;
 }
 
 .status-ai-menu-item:hover,
 .status-ai-menu-item.selected {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .status-ai-menu-add {
-  border-top-color: var(--border-subtle) !important;
+  border-top-color: var(--border-subtle);
 }
 
 .status-ai-menu-auth {
-  border-top: 1px solid var(--border-subtle) !important;
-  color: var(--text-secondary) !important;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
 
 .tv4-provider-auth-modal {
@@ -538,109 +538,109 @@
 
 /* Header */
 .mobile-shell-header {
-  background: var(--bg-base) !important;
-  border-bottom: 1px solid var(--border-subtle) !important;
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .mobile-shell-btn {
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  border: 1px solid transparent !important;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
 }
 
 .mobile-shell-btn:hover, .mobile-shell-btn.active {
-  background: var(--bg-hover) !important;
-  color: #fff !important;
-  border-color: var(--border-subtle) !important;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
 }
 
 /* Shell / Stage */
 .mobile-shell-parity {
-  background: var(--bg-base) !important;
+  background: var(--bg-base);
 }
 
 .mobile-shell-session-strip {
-  background: var(--bg-surface) !important;
-  border-bottom: 1px solid var(--border-subtle) !important;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .mobile-shell-session-card {
-  background: transparent !important;
-  color: var(--text-muted) !important;
-  border: 1px solid transparent !important;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
 }
 
 .mobile-shell-session-card.active {
-  background: color-mix(in srgb, var(--accent-primary) 10%, transparent) !important;
-  color: var(--accent-primary) !important;
-  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
+  color: var(--accent-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 20%, transparent);
 }
 
 .mobile-shell-session-title {
-  color: inherit !important;
+  color: inherit;
 }
 
 /* Mobile Terminal Runtime */
 .mobile-terminal-runtime {
-  background: var(--bg-base) !important;
-  border-top: 1px solid var(--border-subtle) !important;
+  background: var(--bg-base);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* Mobile Composer (Overrides DesktopStatusBar on Mobile) */
 .mobile-shell .desktop-status-bar-shell {
-  min-height: auto !important;
-  padding: 8px 12px 10px !important;
-  border-top: 1px solid var(--border-subtle) !important;
-  background: var(--bg-surface) !important;
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.8) !important;
-  gap: 6px !important;
+  min-height: auto;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  box-shadow: none;
+  gap: 6px;
 }
 
 .mobile-shell .status-composer-shell {
-  padding: 8px 12px !important;
-  gap: 8px !important;
-  min-height: auto !important;
-  box-shadow: none !important;
-  border-color: var(--border-subtle) !important;
-  border-radius: 12px !important;
+  padding: 8px 12px;
+  gap: 8px;
+  min-height: auto;
+  box-shadow: none;
+  border-color: var(--border-subtle);
+  border-radius: 12px;
 }
 
 .mobile-shell .status-composer-input {
-  min-height: 40px !important;
-  font-size: 14px !important;
+  min-height: 40px;
+  font-size: 14px;
 }
 
 .mobile-shell .status-bar-right {
-  padding-top: 4px !important;
-  gap: 6px !important;
+  padding-top: 4px;
+  gap: 6px;
 }
 
 .mobile-shell .status-ai-selector {
-  height: 28px !important;
-  padding: 0 8px !important;
+  height: 28px;
+  padding: 0 8px;
 }
 
 .mobile-shell .status-send-btn {
-  width: 28px !important;
-  height: 28px !important;
+  width: 28px;
+  height: 28px;
 }
 
 /* Keybar (Composer attached to keyboard) */
 .mobile-keybar-composer {
-  background: var(--bg-surface) !important;
-  border-top: 1px solid var(--border-subtle) !important;
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.8) !important;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-subtle);
+  box-shadow: none;
 }
 
 .mobile-composer-input {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border: 1px solid var(--border-subtle) !important;
-  color: #fff !important;
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
 }
 
 .mobile-composer-input:focus {
-  border-color: var(--accent-primary) !important;
-  box-shadow: 0 0 0 2px var(--accent-primary-dim) !important;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px var(--accent-primary-dim);
 }
 
 /* .mobile-composer-send visual rules unified in styles.css (.btn-primary group) */

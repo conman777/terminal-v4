@@ -62,20 +62,19 @@ pub fn strip_ansi(input: &str) -> String {
                 b'(' | b')' => {
                     // Character set designation: ESC ( X or ESC ) X
                     i += 1;
-                    if i < len {
+                    if i < len && (0x30..=0x7e).contains(&bytes[i]) {
                         i += 1;
                     }
                 }
                 b'N' | b'O' => {
-                    // Single character escapes
+                    // Single shifts change the next glyph's charset, not its visibility.
                     i += 1;
-                    if i < len {
-                        i += 1;
-                    }
                 }
                 _ => {
-                    // Other ESC sequences: skip one char
-                    i += 1;
+                    // An invalid escape before Unicode must leave its code point intact.
+                    if bytes[i].is_ascii() {
+                        i += 1;
+                    }
                 }
             }
         } else if bytes[i] <= 0x08
@@ -272,6 +271,15 @@ fn is_prompt_line(line: &str) -> bool {
     trimmed == ">" || trimmed == "❯"
 }
 
+/// Busy state implied by a chunk of output, or `None` when it carries no
+/// visible text (e.g. zsh's trailing bracketed-paste toggle after a prompt).
+pub fn output_busy_signal(output: &str) -> Option<bool> {
+    if strip_ansi(output).trim().is_empty() {
+        return None;
+    }
+    Some(!output_indicates_idle_prompt(output))
+}
+
 /// Detect whether terminal output ends with an idle prompt.
 pub fn output_indicates_idle_prompt(output: &str) -> bool {
     let stripped = strip_ansi(output);
@@ -331,6 +339,18 @@ mod tests {
     fn strip_ansi_preserves_tabs_and_newlines() {
         let input = "line1\n\tindented\n";
         assert_eq!(strip_ansi(input), input);
+    }
+
+    #[test]
+    fn busy_signal_ignores_output_with_no_visible_text() {
+        let signals = [
+            output_busy_signal("\x1b[K\x1b[?2004h"),
+            output_busy_signal(
+                "\r\x1b[0m\x1b[27m\x1b[24m\x1b[Jconordart@host ~ % \x1b[K\x1b[?2004h",
+            ),
+            output_busy_signal("Compiling terminal-v4-api\r\n"),
+        ];
+        assert_eq!(signals, [None, Some(false), Some(true)]);
     }
 
     #[test]
@@ -453,5 +473,29 @@ mod tests {
     #[test]
     fn idle_prompt_handles_trailing_whitespace() {
         assert!(output_indicates_idle_prompt("C:\\Users\\conor>  \n"));
+    }
+
+    #[test]
+    fn strip_ansi_single_shift_preserves_the_following_glyph() {
+        for shift in ["N", "O"] {
+            for glyph in ["A", "é", "界", "🙂"] {
+                let input = format!("before\u{1b}{shift}{glyph} after\nuser@host:~$ ");
+                assert_eq!(
+                    strip_ansi(&input),
+                    format!("before{glyph} after\nuser@host:~$ ")
+                );
+                assert!(output_indicates_idle_prompt(&input));
+            }
+        }
+    }
+
+    #[test]
+    fn strip_ansi_malformed_escape_before_unicode_preserves_char_boundaries() {
+        for escape in ["\u{1b}", "\u{1b}(", "\u{1b})", "\u{1b}["] {
+            for glyph in ["é", "界", "🙂"] {
+                let input = format!("before{escape}{glyph} after");
+                assert_eq!(strip_ansi(&input), format!("before{glyph} after"));
+            }
+        }
     }
 }

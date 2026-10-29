@@ -1,7 +1,7 @@
 import { getEnvironmentStorage, getActiveEnvironment } from '../utils/remoteEnvironments';
 import { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { apiFetch } from '../utils/api';
-import { extractPortFromUrl, getActivePortsInfo } from '../utils/previewUrl';
+import { extractPortFromUrl, getActivePortsInfo, isFilePreviewTarget } from '../utils/previewUrl';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
 
 const PreviewContext = createContext(null);
@@ -19,6 +19,7 @@ export function PreviewProvider({ children }) {
   const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   function sanitizePreviewUrl(value) {
     if (!value || typeof value !== 'string') return null;
+    if (isFilePreviewTarget(value)) return value.trim();
     try {
       const parsed = new URL(value, window.location.origin);
       const isPreviewPath = parsed.pathname.startsWith('/preview/') || /^\/api\/environments\/[^/]+\/proxy\/preview\//.test(parsed.pathname);
@@ -26,6 +27,9 @@ export function PreviewProvider({ children }) {
       const isSameOrigin = parsed.origin === window.location.origin;
       const uiPort = window.location.port;
       const isLoopbackHost = ['localhost', '127.0.0.1', '0.0.0.0', '::1'].includes(parsed.hostname);
+      if (getActiveEnvironment() && isLoopbackHost && parsed.port && /^https?:\/\//i.test(value.trim())) {
+        return value.trim();
+      }
       if (isSameOrigin && !isPreviewPath && !isApiPreview) {
         return null;
       }
@@ -68,7 +72,7 @@ export function PreviewProvider({ children }) {
       lastPortsRefreshAtRef.current = Date.now();
 
       const currentUrl = previewUrlRef.current;
-      if (currentUrl && previewUrlSourceRef.current === 'user') {
+      if (currentUrl && previewUrlSourceRef.current === 'auto') {
         const currentPort = extractPortFromUrl(currentUrl);
         if (currentPort && !listeningSet.has(currentPort)) {
           previewUrlSourceRef.current = 'auto';
@@ -162,18 +166,8 @@ export function PreviewProvider({ children }) {
       }
     }
 
-    // Only block auto-detection if:
-    // 1. This is an auto-detected URL
-    // 2. User previously set a URL manually
-    // 3. Current URL exists
-    // 4. Current URL's port is actually listening
     if (source === 'auto' && previewUrlSourceRef.current === 'user' && current) {
-      const currentPort = extractPortFromUrl(current);
-      const isCurrentPortListening = currentPort && listeningPortsRef.current.has(currentPort);
-      if (isCurrentPortListening) {
-        return; // Block auto-detection only if current port is alive
-      }
-      // Current port is not listening, allow auto-detection to override
+      return;
     }
 
     previewUrlSourceRef.current = normalized ? source : 'auto';

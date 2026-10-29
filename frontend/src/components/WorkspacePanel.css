@@ -1,0 +1,18 @@
+.workspace-panel { position:relative; display:flex; flex:0 0 var(--workspace-panel-width); width:var(--workspace-panel-width); min-width:0; min-height:0; max-width:100%; }
+.workspace-panel-content { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+.environment-workspace .workspace-panel-navigation .pro-sidebar { width:100%; min-width:0; }
+.workspace-panel-resizer { position:absolute; top:0; bottom:0; width:8px; z-index:12; touch-action:none; cursor:col-resize; outline:none; }
+.workspace-panel-navigation > .workspace-panel-resizer { right:-4px; }
+.workspace-panel-tools > .workspace-panel-resizer { left:-4px; }
+.workspace-panel-resizer::after { content:''; position:absolute; top:0; bottom:0; left:3px; width:2px; background:transparent; }
+.workspace-panel-resizer:hover::after,.workspace-panel-resizer:focus-visible::after { background:var(--accent-primary); }
+.workspace-panel-tools { border-left:1px solid var(--border-subtle); background:var(--bg-base); }
+.workspace-panel-tools .workspace-browser-heading { box-sizing:border-box; min-height:var(--workspace-topbar-height); }
+.workspace-panel-tools.expanded { flex:1; width:auto; }
+.main-content.with-browser > .terminal-pane { flex:1; min-width:0; }
+.main-content.browser-expanded > .terminal-pane { display:none; }
+.workspace-panel-backdrop { position:fixed; inset:0; z-index:1599; border:0; padding:0; background:rgba(0,0,0,.28); cursor:default; }
+.workspace-panel-tools.sheet { position:fixed; top:calc(var(--mobile-viewport-offset,0px) + var(--environment-bar-height,0px)); right:0; bottom:auto; height:calc(var(--mobile-viewport-height,100dvh) - var(--environment-bar-height,0px)); z-index:1600; width:clamp(320px,42vw,448px); max-width:calc(100vw - 12px); padding-top:env(safe-area-inset-top); padding-bottom:env(safe-area-inset-bottom); box-shadow:var(--shadow-lg); }
+.workspace-panel-tools.sheet.expanded { width:calc(100vw - 12px); }
+.mobile-workspace-body { display:flex; flex:1; flex-direction:column; min-height:0; min-width:0; }
+@media(max-width:768px) { .workspace-panel-tools.sheet { width:min(88vw,384px); } }

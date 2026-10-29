@@ -1,6 +1,16 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { FilterBar } from './shared/FilterBar';
-import { JsonTreeView } from './shared/JsonTreeView';
+import './NetworkTab.css';
+
+const requestType = req => {
+  const contentType = (req.contentType || '').toLowerCase();
+  const path = (req.url || '').split(/[?#]/)[0].toLowerCase();
+  if (req.method !== 'GET' || contentType.includes('json')) return 'fetch';
+  if (contentType.includes('javascript') || /\.(m?js)$/.test(path)) return 'js';
+  if (contentType.includes('css') || path.endsWith('.css')) return 'css';
+  if (contentType.includes('image') || /\.(png|jpe?g|gif|svg|webp|ico)$/.test(path)) return 'img';
+  return 'other';
+};
 
 /**
  * NetworkTab - Network monitoring with request/response details
@@ -16,6 +26,19 @@ export function NetworkTab({ requests = [], onClear }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [detailTab, setDetailTab] = useState('headers');
+  const [copyError, setCopyError] = useState('');
+
+  useEffect(() => {
+    if (!selectedRequest) return;
+    const current = requests.find(request => request === selectedRequest || (
+      request.id != null && selectedRequest.id != null
+        ? request.id === selectedRequest.id
+        : request.timestamp === selectedRequest.timestamp && request.method === selectedRequest.method && request.url === selectedRequest.url
+    ));
+    if (current !== selectedRequest) setSelectedRequest(current || null);
+  }, [requests, selectedRequest]);
+
+  useEffect(() => { setCopyError(''); }, [selectedRequest]);
 
   // Filter requests by type
   const filteredRequests = useMemo(() => {
@@ -23,31 +46,7 @@ export function NetworkTab({ requests = [], onClear }) {
 
     // Apply type filter
     if (filter !== 'all') {
-      filtered = filtered.filter(req => {
-        const contentType = req.contentType || '';
-        const url = req.url || '';
-
-        if (filter === 'fetch') {
-          return req.method !== 'GET' || contentType.includes('json');
-        }
-        if (filter === 'js') {
-          return contentType.includes('javascript') || url.endsWith('.js') || url.endsWith('.mjs');
-        }
-        if (filter === 'css') {
-          return contentType.includes('css') || url.endsWith('.css');
-        }
-        if (filter === 'img') {
-          return contentType.includes('image') || /\.(png|jpg|jpeg|gif|svg|webp|ico)(\?|$)/.test(url);
-        }
-        if (filter === 'other') {
-          const isCommon = contentType.includes('javascript') ||
-                          contentType.includes('css') ||
-                          contentType.includes('image') ||
-                          contentType.includes('json');
-          return !isCommon;
-        }
-        return true;
-      });
+      filtered = filtered.filter(req => requestType(req) === filter);
     }
 
     // Apply search filter
@@ -68,20 +67,7 @@ export function NetworkTab({ requests = [], onClear }) {
   const counts = useMemo(() => {
     const result = { all: requests.length, fetch: 0, js: 0, css: 0, img: 0, other: 0 };
     requests.forEach(req => {
-      const contentType = req.contentType || '';
-      const url = req.url || '';
-
-      if (req.method !== 'GET' || contentType.includes('json')) {
-        result.fetch++;
-      } else if (contentType.includes('javascript') || url.endsWith('.js') || url.endsWith('.mjs')) {
-        result.js++;
-      } else if (contentType.includes('css') || url.endsWith('.css')) {
-        result.css++;
-      } else if (contentType.includes('image') || /\.(png|jpg|jpeg|gif|svg|webp|ico)(\?|$)/.test(url)) {
-        result.img++;
-      } else {
-        result.other++;
-      }
+      result[requestType(req)]++;
     });
     return result;
   }, [requests]);
@@ -146,6 +132,15 @@ export function NetworkTab({ requests = [], onClear }) {
     return str.replace(/'/g, "'\\''");
   };
 
+  const copyText = async text => {
+    setCopyError('');
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      setCopyError('Could not copy request. Clipboard access is unavailable; try again with clipboard permission.');
+    }
+  };
+
   const handleCopyAsCurl = (req) => {
     const escapedUrl = escapeSingleQuotes(req.url);
     let curl = `curl '${escapedUrl}' \\\n  -X ${req.method}`;
@@ -160,7 +155,7 @@ export function NetworkTab({ requests = [], onClear }) {
       const escapedBody = escapeSingleQuotes(req.requestBody);
       curl += ` \\\n  --data '${escapedBody}'`;
     }
-    navigator.clipboard.writeText(curl);
+    void copyText(curl);
   };
 
   const handleCopyAsFetch = (req) => {
@@ -174,7 +169,7 @@ export function NetworkTab({ requests = [], onClear }) {
     }
     // Use JSON.stringify for safe escaping in JavaScript code
     const code = `fetch(${JSON.stringify(req.url)}, ${JSON.stringify(options, null, 2)})`;
-    navigator.clipboard.writeText(code);
+    void copyText(code);
   };
 
   const handleCopyAsAxios = (req) => {
@@ -187,7 +182,7 @@ export function NetworkTab({ requests = [], onClear }) {
       config.data = req.requestBody;
     }
     const code = `axios(${JSON.stringify(config, null, 2)})`;
-    navigator.clipboard.writeText(code);
+    void copyText(code);
   };
 
   const getStatusClass = (status) => {
@@ -260,7 +255,9 @@ export function NetworkTab({ requests = [], onClear }) {
                     onClick={() => setSelectedRequest(req)}
                   >
                     <td className="col-method">{req.method}</td>
-                    <td className="col-url" title={req.url}>{req.url}</td>
+                    <td className="col-url" title={req.url}>
+                      <button type="button" className="network-request-open" aria-label={`Inspect ${req.method} ${req.url}`} onClick={() => setSelectedRequest(req)}>{req.url}</button>
+                    </td>
                     <td className={`col-status ${getStatusClass(req.status)}`}>
                       {req.error ? 'Failed' : req.status || '-'}
                     </td>
@@ -296,6 +293,8 @@ export function NetworkTab({ requests = [], onClear }) {
                 </button>
               </div>
             </div>
+
+            {copyError && <p role="alert">{copyError}</p>}
 
             <div className="network-details-tabs">
               <button

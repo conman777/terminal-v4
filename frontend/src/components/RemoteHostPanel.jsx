@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import './RemoteAccess.css';
 import './RemoteHostPanel.css';
 
 const literal = value => "'" + value.replaceAll("'", "''") + "'";
@@ -18,7 +19,7 @@ export default function RemoteHostPanel() {
     '& ' + script + ' -Action Status',
     "$env:TERMINAL_V4_BACKEND_MODE = 'attach'",
   ].join('\n') : '';
-  return <section className="remote-host-panel" aria-label="Background host setup">
+  return <section className="remote-access-panel remote-host-panel" aria-label="Background host setup">
     <h3>Keep this computer available</h3>
     <p>Run the Terminal v4 API in the background, independently of the desktop window. The optional startup task launches after you sign in to Windows, including after a reboot.</p>
     <p>Connections still require your existing login and pairing permissions. Before initialization, set the same <code>JWT_SECRET</code>, <code>REFRESH_SECRET</code>, <code>STORAGE_DATABASE_URL</code>, and <code>TERMINAL_DATA_DIR</code> used by this host in the PowerShell environment. Initialization preserves the supplied signing secrets and encrypts credentials for your Windows user.</p>

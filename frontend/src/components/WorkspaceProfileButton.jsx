@@ -2,10 +2,21 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NEW_TAB_AI_OPTIONS } from '../utils/aiProviders';
 import { buildWorkspaceContext, loadWorkspaceProfile, saveWorkspaceProfile } from '../utils/workspaceProfile';
+import { validateKnowledgeProfile } from '../utils/skillPackages';
+import { SkillPackagesEditor } from './SkillPackagesEditor';
 import { AgentModelPicker } from './AgentModelPicker';
 import './WorkspaceProfileButton.css';
 
-function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onSaved, onClose }) {
+function readFileText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('unreadable'));
+    reader.readAsText(file);
+  });
+}
+
+function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onSaved, onClose, triggerRef }) {
   const [profile, setProfile] = useState(null);
   const [savedProfile, setSavedProfile] = useState(null);
   const [error, setError] = useState('');
@@ -16,6 +27,16 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
   const dialogRef = useRef(null);
   const mountedRef = useRef(false);
   const fieldId = useId();
+
+  useEffect(() => {
+    const background = [...new Set([document.getElementById('root'), triggerRef.current?.closest('[role="dialog"]')])].filter(Boolean);
+    const previous = background.map(element => element.inert);
+    background.forEach(element => { element.inert = true; });
+    return () => {
+      background.forEach((element, index) => { element.inert = previous[index]; });
+      triggerRef.current?.focus({ preventScroll: true });
+    };
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -41,6 +62,7 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
     setError('');
     setSaved(false);
     try {
+      validateKnowledgeProfile(profile);
       const value = await saveWorkspaceProfile(workspacePath, profile);
       if (!mountedRef.current) return;
       setSavedProfile(profile);
@@ -53,6 +75,29 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
         setSaving(false);
         dialogRef.current?.focus();
       }
+    }
+  }
+
+  function exportProfile() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(profile, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${(workspacePath.split(/[\\/]/).filter(Boolean).pop() || 'workspace')}-knowledge.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importProfile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      const imported = JSON.parse(await readFileText(file));
+      validateKnowledgeProfile(imported);
+      setProfile({ ...profile, ...imported });
+      setSaved(false); setError('');
+    } catch (failure) {
+      setError(`That file is not workspace knowledge: ${failure.message || 'unreadable'}`);
     }
   }
 
@@ -75,15 +120,8 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
     }
   }
 
-  function updateSkill(id, changes) {
-    setProfile(current => ({
-      ...current,
-      skills: current.skills.map(skill => skill.id === id ? { ...skill, ...changes } : skill),
-    }));
-    setSaved(false);
-  }
-
   const context = buildWorkspaceContext(profile, selectedSkills, includeMemory);
+  const contextWithinBudget = Array.from(context).length <= 50000;
   const dirty = profile && JSON.stringify(profile) !== JSON.stringify(savedProfile);
 
   return createPortal(
@@ -113,51 +151,29 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
                 <option value="">Use app default</option>
                 {aiOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
-              {profile.defaultAgent && profile.defaultAgent !== 'cli' && <AgentModelPicker
+              {profile.defaultAgent && profile.defaultAgent !== 'cli' && <AgentModelPicker compact showSpeed={false}
                 agentId={profile.defaultAgent} value={profile.selection}
                 onChange={selection => setProfile(current => ({
                   ...current, selection: { model: selection.model, reasoning: selection.reasoning || '' },
                 }))} />}
             </div>
-            <div className="workspace-profile-section-heading">
-              <h3>Reusable skills</h3>
-              <button type="button" disabled={profile.skills.length >= 20}
-                onClick={() => { setProfile({ ...profile, skills: [...profile.skills, { id: crypto.randomUUID(), name: '', instructions: '' }] }); setSaved(false); }}>
-                Add skill
-              </button>
-            </div>
-            {profile.skills.length === 0 && <p>Save a repeatable workflow, then choose it when preparing a prompt.</p>}
-            {profile.skills.map(skill => (
-              <div className="workspace-profile-skill" key={skill.id}>
-                <div className="workspace-profile-skill-heading">
-                  <input aria-label="Skill name" value={skill.name} maxLength={80} required placeholder="Skill name"
-                    onChange={event => updateSkill(skill.id, { name: event.target.value })} />
-                  <button type="button" aria-label={'Remove ' + (skill.name || 'skill')}
-                    onClick={() => { setProfile({ ...profile, skills: profile.skills.filter(item => item.id !== skill.id) }); setSaved(false); }}>Remove</button>
-                </div>
-                <textarea aria-label={'Instructions for ' + (skill.name || 'skill')} value={skill.instructions}
-                  maxLength={6000} rows={3} required placeholder="Instructions to follow for this workflow"
-                  onChange={event => updateSkill(skill.id, { instructions: event.target.value })} />
-                {onInsertContext && <label className="workspace-profile-check">
-                  <input type="checkbox" checked={selectedSkills.includes(skill.id)}
-                    onChange={event => setSelectedSkills(current => event.target.checked
-                      ? [...current, skill.id] : current.filter(id => id !== skill.id))} />
-                  {'Include ' + (skill.name || 'skill')}
-                </label>}
-              </div>
-            ))}
+            <SkillPackagesEditor skills={profile.skills} onChange={skills => { setProfile(current => ({ ...current, skills })); setSaved(false); }}
+              selectedSkillIds={selectedSkills} onSelectSkill={onInsertContext ? (id, selected) => setSelectedSkills(current => selected ? [...current, id] : current.filter(value => value !== id)) : undefined} />
             {onInsertContext && <div className="workspace-profile-context">
               <label className="workspace-profile-check">
                 <input type="checkbox" checked={includeMemory} onChange={event => setIncludeMemory(event.target.checked)} />
                 Include project knowledge
               </label>
               <p>Selected context is added to the editable prompt. Review it before sending.</p>
+              {!contextWithinBudget && <p role="alert" className="workspace-profile-error">Select fewer skills to keep the prompt within 50000 characters.</p>}
             </div>}
           </fieldset>
           <footer>
             <span role="status">{saving ? 'Saving…' : dirty ? 'Unsaved changes' : saved ? 'Workspace saved' : 'Saved on this host for your account'}</span>
-            {onInsertContext && <button type="button" disabled={!context || saving}
+            {onInsertContext && <button type="button" disabled={!context || !contextWithinBudget || saving}
               onClick={() => { onInsertContext(context); onClose(); }}>Add to prompt</button>}
+            <button type="button" disabled={saving} onClick={exportProfile}>Export</button>
+            <label className="workspace-profile-import">Import<input type="file" accept="application/json,.json" aria-label="Import knowledge file" disabled={saving} onChange={importProfile} /></label>
             <button type="submit" disabled={saving}>Save workspace</button>
           </footer>
         </form>}
@@ -166,7 +182,7 @@ function WorkspaceProfileEditor({ workspacePath, aiOptions, onInsertContext, onS
   );
 }
 
-export function WorkspaceProfileButton({ workspacePath, aiOptions = NEW_TAB_AI_OPTIONS, onInsertContext, onSaved }) {
+export function WorkspaceProfileButton({ workspacePath, aiOptions = NEW_TAB_AI_OPTIONS, onInsertContext, onSaved, iconOnly = false }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
 
@@ -176,14 +192,15 @@ export function WorkspaceProfileButton({ workspacePath, aiOptions = NEW_TAB_AI_O
 
   function close() {
     setOpen(false);
-    triggerRef.current?.focus();
   }
 
   return <>
-    <button type="button" className="workspace-profile-trigger" ref={triggerRef} disabled={!workspacePath}
-      aria-label="Workspace knowledge" aria-haspopup="dialog" aria-expanded={open}
-      onClick={() => setOpen(true)}>Knowledge</button>
+    <button type="button" className={`workspace-profile-trigger${iconOnly ? ' workspace-profile-trigger-icon-only' : ''}`} ref={triggerRef} disabled={!workspacePath}
+      aria-label="Workspace knowledge" aria-haspopup="dialog" aria-expanded={open} title="Knowledge"
+      onClick={() => setOpen(true)}>{iconOnly
+        ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" /><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" /></svg>
+        : 'Knowledge'}</button>
     {open && <WorkspaceProfileEditor key={workspacePath} workspacePath={workspacePath} aiOptions={aiOptions}
-      onInsertContext={onInsertContext} onSaved={onSaved} onClose={close} />}
+      onInsertContext={onInsertContext} onSaved={onSaved} onClose={close} triggerRef={triggerRef} />}
   </>;
 }

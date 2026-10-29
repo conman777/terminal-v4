@@ -31,6 +31,18 @@ describe('StorageTab', () => {
     vi.restoreAllMocks();
   });
 
+  it('explains denied native storage and disables mutations', () => {
+    render(<StorageTab storage={{ ...mockStorage, available: { localStorage: false, sessionStorage: false } }} onUpdateStorage={mockOnUpdateStorage} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Browser storage is unavailable');
+    expect(screen.getByTitle('Add new item')).toBeDisabled();
+    expect(screen.getByTitle('Clear all')).toBeDisabled();
+    expect(screen.getByTitle('Import storage').querySelector('input')).toBeDisabled();
+    fireEvent.click(screen.getByText('Session Storage'));
+    expect(screen.getByTitle('Add new item')).toBeDisabled();
+    fireEvent.click(screen.getByText('Cookies'));
+    expect(screen.getByTitle('Add new item')).toBeEnabled();
+  });
+
   it('should render storage tree', () => {
     render(<StorageTab storage={mockStorage} onUpdateStorage={mockOnUpdateStorage} />);
 

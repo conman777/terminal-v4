@@ -1,0 +1,64 @@
+.account-access-modal.modal-content { box-sizing: border-box; display: flex; flex-direction: column; width: min(720px, calc(100vw - 32px)); max-width: 720px; max-height: calc(100dvh - 32px); background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 8px; font: 14px/1.5 var(--font-ui); animation: none; box-shadow: var(--shadow-sm); }
+.account-access-modal.account-password-modal { max-width: 460px; }
+.account-access-modal .modal-header { box-sizing: border-box; flex-shrink: 0; align-items: flex-start; gap: 12px; min-height: 52px; padding: 16px 20px; border-bottom: 1px solid var(--border-subtle); }
+.account-access-modal .modal-header > div { min-width: 0; }
+.account-access-modal .modal-header h2 { margin: 0; font-size: 16px; line-height: 1.5; font-weight: 600; letter-spacing: normal; }
+.account-access-modal .modal-close { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 6px; color: var(--text-secondary); }
+.account-access-modal .modal-body { min-height: 0; max-height: none; padding: 16px 20px; overflow-y: auto; overscroll-behavior: contain; }
+.account-access-modal .modal-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--border-subtle); }
+.account-access-modal .form-group + .form-group { margin-top: 12px; }
+.account-access-modal .form-group { gap: 6px; }
+.account-access-modal .form-group label { font-size: 13px; }
+.account-access-modal .tv4-provider-auth-subtitle { margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.account-access-modal .tv4-provider-auth-list { display: grid; gap: 0; }
+.account-access-modal .tv4-provider-auth-card { padding: 12px 0; border: 0; border-bottom: 1px solid var(--border-subtle); border-radius: 0; background: transparent; }
+.account-access-modal .tv4-provider-auth-card:first-child { padding-top: 0; }
+.account-access-modal .tv4-provider-auth-card:last-child { border-bottom: 0; }
+.account-access-modal .tv4-provider-auth-card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.account-access-modal .tv4-provider-auth-card-header strong { font-size: 14px; font-weight: 600; }
+.account-access-modal .tv4-provider-auth-status { font-size: 12px; color: var(--text-secondary); }
+.account-access-modal .tv4-provider-auth-status-ready { color: var(--success); }
+.account-access-modal .tv4-provider-auth-status-auth-required { color: var(--warning); }
+.account-access-modal .tv4-provider-auth-status-not-installed { color: var(--text-secondary); }
+.account-access-modal .tv4-provider-auth-key-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.account-access-modal .tv4-provider-auth-key-row input { flex: 1 1 180px; min-width: 0; }
+.account-access-modal .tv4-provider-auth-oauth { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 13px; }
+.account-access-modal .tv4-provider-auth-oauth small { flex-basis: 100%; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.account-access-modal .tv4-provider-auth-oauth code { min-width: 0; padding: 6px 8px; border: 1px solid var(--border-subtle); border-radius: 6px; color: var(--text-primary); background: var(--bg-base); font: 12px/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.account-access-modal .tv4-provider-auth-method-label { color: var(--text-primary); font-weight: 500; }
+.account-access-modal .tv4-provider-auth-model-count { margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
+.account-access-modal :is(.tv4-provider-auth-error, .tv4-provider-auth-notice, .form-error, .form-success) { margin: 12px 0; padding: 10px 12px; background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+.account-access-modal :is(.tv4-provider-auth-error, .form-error) { color: var(--error); }
+.account-access-modal :is(.tv4-provider-auth-notice, .form-success) { color: var(--success); }
+.account-access-modal :is(.loading, [role="note"]) { color: var(--text-secondary); font-size: 13px; margin: 0 0 12px; }
+.passkey-manager { color: var(--text-primary); font: 14px/1.5 var(--font-ui); min-width: 0; }
+.passkey-manager h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.passkey-manager .form-help { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.passkey-manager .passkey-entry { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+.passkey-manager .passkey-entry-details { flex: 1; min-width: min(140px, 100%); overflow-wrap: anywhere; }
+.passkey-manager .passkey-entry strong { display: block; font-weight: 600; }
+.passkey-manager .passkey-entry span { color: var(--text-secondary); font-size: 12px; }
+.passkey-manager .passkey-registration { display: flex; flex-wrap: wrap; gap: 8px; }
+.passkey-manager .passkey-registration input { flex: 1 1 160px; min-width: 0; }
+.passkey-manager :is(.form-error, .form-success) { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.passkey-manager .form-error { color: var(--error); }
+.passkey-manager .form-success { color: var(--success); }
+:is(.account-access-modal, .passkey-manager) :is(input, button) { box-sizing: border-box; min-height: 32px; border-radius: 6px; font: 13px/1.4 var(--font-ui); }
+:is(.account-access-modal, .passkey-manager) input { max-width: 100%; min-width: 0; padding: 6px 10px; color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-default); }
+:is(.account-access-modal, .passkey-manager) input::placeholder { color: var(--text-muted); }
+:is(.account-access-modal, .passkey-manager) button:not(.modal-close) { padding: 6px 10px; border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); font-weight: 500; cursor: pointer; box-shadow: none; transform: none; }
+:is(.account-access-modal, .passkey-manager) button.btn-primary { background: var(--accent-primary); border-color: transparent; color: var(--bg-base); }
+.passkey-manager button.btn-danger { background: transparent; color: var(--error); }
+:is(.account-access-modal, .passkey-manager) button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-default); box-shadow: none; transform: none; }
+:is(.account-access-modal, .passkey-manager) :is(input, button):disabled { cursor: not-allowed; opacity: .55; box-shadow: none; transform: none; }
+:is(.account-access-modal, .passkey-manager) :is(input, button):focus-visible, .account-access-modal:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; box-shadow: none; }
+@media (max-width: 600px) {
+  .account-access-modal.modal-content { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .account-access-modal :is(.modal-header, .modal-body, .modal-footer) { padding-inline: 12px; }
+  .account-access-modal .tv4-provider-auth-key-row input { flex-basis: 100%; }
+}
+@media (pointer: coarse) {
+  :is(.account-access-modal, .passkey-manager) :is(input, button) { min-height: 44px; }
+  :is(.account-access-modal, .passkey-manager) input { font-size: 16px; }
+  .account-access-modal .modal-close { min-width: 44px; flex-basis: 44px; }
+}

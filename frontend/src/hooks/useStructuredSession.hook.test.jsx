@@ -191,6 +191,7 @@ describe('useStructuredSession websocket lifecycle', () => {
         text: 'Hello from composer\n',
         fallbackToMessage: true,
       },
+      signal: expect.any(AbortSignal),
     });
   });
   it('connects a paired native session only through the home socket proxy and closes it on workspace unmount', async () => {
@@ -287,6 +288,117 @@ describe('useStructuredSession websocket lifecycle', () => {
       await result.current.interrupt();
     });
     expect([apiFetch.mock.calls,result.current.messages,MockWebSocket.instances.length]).toEqual([[],[],1]);
+  });
+
+  it('keeps rejected sends out of the transcript and reports the backend error for retry', async () => {
+    apiFetch.mockResolvedValue({ ok: false, status: 413, json: async () => ({ error: 'Message is too large.' }) });
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-rejected', active: false }));
+    await act(async () => { await expect(result.current.sendMessage('Keep this draft')).rejects.toThrow('Message is too large.'); });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.actionError).toContain('Message is too large.');
+    expect(result.current.isSending).toBe(false);
+  });
+
+  it('waits for acceptance and prevents concurrent duplicate sends', async () => {
+    let resolve;
+    apiFetch.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-ack', active: false }));
+    let first;
+    act(() => { first = result.current.sendMessage('One message'); });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.isSending).toBe(true);
+    await act(async () => { expect(await result.current.sendMessage('One message')).toMatchObject({ accepted: false }); });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    await act(async () => { resolve({ ok: true }); expect(await first).toEqual({ accepted: true }); });
+    expect(result.current.messages.map(message => [message.role, message.content])).toEqual([['user', 'One message']]);
+    expect(result.current.isSending).toBe(false);
+  });
+
+  it('reports an ambiguous network failure without automatically resending', async () => {
+    apiFetch.mockRejectedValueOnce(new TypeError('Network unavailable'));
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-network', active: false }));
+    await act(async () => { await expect(result.current.sendMessage('Keep attachment context')).rejects.toThrow(/confirm|network/i); });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.actionError).toMatch(/check.*conversation.*retry/i);
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('inserts an accepted user turn before output that arrived while acknowledgement was pending', async () => {
+    let resolve;
+    apiFetch.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-order', active: true }));
+    await act(async () => { await Promise.resolve(); });
+    let pending;
+    act(() => { pending = result.current.sendMessage('Question'); });
+    act(() => { MockWebSocket.instances[0].onmessage({ data: JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { seq: 1, type: 'message_delta', role: 'assistant', content: 'Answer' } }) }); });
+    await act(async () => { resolve({ ok: true }); await pending; });
+    expect(result.current.messages.map(message => [message.role, message.content])).toEqual([['user', 'Question'], ['assistant', 'Answer']]);
+  });
+
+  it('retains a pending approval until the decision is accepted and exposes failed decisions', async () => {
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-approval', active: true }));
+    await act(async () => { await Promise.resolve(); });
+    act(() => { MockWebSocket.instances[0].onmessage({ data: JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { seq: 1, ts: 5, type: 'approval_required', toolName: 'Bash', toolInput: { command: 'echo fixture' }, description: 'Run fixture?' } }) }); });
+    const approval = result.current.pendingApproval;
+    let resolve;
+    apiFetch.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    let decision;
+    act(() => { decision = result.current.approve(true, approval); });
+    expect(result.current.pendingApproval).toEqual(approval);
+    expect(result.current.isApproving).toBe(true);
+    await act(async () => { resolve({ ok: false, json: async () => ({ error: 'Decision unavailable.' }) }); await decision; });
+    expect(result.current.pendingApproval).toEqual(approval);
+    expect(result.current.actionError).toContain('Decision unavailable.');
+    apiFetch.mockResolvedValueOnce({ ok: true });
+    await act(async () => { expect(await result.current.approve(false, approval)).toEqual({ accepted: true }); });
+    expect(result.current.pendingApproval).toBeNull();
+    expect(apiFetch.mock.calls.at(-1)).toEqual(['/api/structured/sessions/ss-approval/approve', expect.objectContaining({ method: 'POST', body: { approved: false } })]);
+  });
+
+  it('does not clear a newer approval on a late receipt or submit an outdated approval snapshot', async () => {
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-approval-order', active: true }));
+    await act(async () => { await Promise.resolve(); });
+    const emit = seq => MockWebSocket.instances[0].onmessage({ data: JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { seq, ts: seq, type: 'approval_required', toolName: 'Bash', toolInput: { command: 'fixture' + seq } } }) });
+    act(() => emit(1));
+    const old = result.current.pendingApproval;
+    let resolve;
+    apiFetch.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    let decision;
+    act(() => { decision = result.current.approve(true, old); });
+    await act(async () => { await result.current.approve(true, old); });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    act(() => emit(2));
+    const latest = result.current.pendingApproval;
+    await act(async () => { resolve({ ok: true }); await decision; });
+    expect(result.current.pendingApproval).toEqual(latest);
+    await act(async () => { expect(await result.current.approve(true, old)).toMatchObject({ accepted: false }); });
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a delayed send acknowledgement after switching sessions', async () => {
+    let resolve;
+    apiFetch.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const { result, rerender } = renderHook(({ sessionId }) => useStructuredSession({ sessionId, active: false }), { initialProps: { sessionId: 'ss-before' } });
+    let pending;
+    act(() => { pending = result.current.sendMessage('Old session only'); });
+    rerender({ sessionId: 'ss-after' });
+    await act(async () => { resolve({ ok: true }); expect(await pending).toMatchObject({ accepted: false }); });
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.isSending).toBe(false);
+    expect(apiFetch.mock.calls[0][1].signal.aborted).toBe(true);
+  });
+
+  it('keeps a newer approval failure visible alongside an earlier failed send', async () => {
+    const { result } = renderHook(() => useStructuredSession({ sessionId: 'ss-errors', active: true }));
+    await act(async () => { await Promise.resolve(); });
+    apiFetch.mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Draft rejected.' }) });
+    await act(async () => { await expect(result.current.sendMessage('Kept draft')).rejects.toThrow('Draft rejected.'); });
+    act(() => { MockWebSocket.instances[0].onmessage({ data: JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { seq: 1, type: 'approval_required', toolName: 'Fixture', toolInput: {} } }) }); });
+    apiFetch.mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'Approval rejected.' }) });
+    await act(async () => { await result.current.approve(true, result.current.pendingApproval); });
+    expect(result.current.actionError).toContain('Draft rejected.');
+    expect(result.current.actionError).toContain('Approval rejected.');
+    expect(result.current.pendingApproval).not.toBeNull();
   });
 
 });

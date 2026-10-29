@@ -1,0 +1,6 @@
+.ownership-recovery { border-top: 1px solid var(--border-color); margin-top: 10px; padding-top: 10px; }
+.ownership-recovery p { margin: 0 0 10px; }
+.ownership-recovery label { display: flex; align-items: flex-start; gap: 8px; min-height: 44px; padding: 6px 0; cursor: pointer; }
+.ownership-recovery label input { width: 18px; height: 18px; flex: none; margin: 2px 0 0; }
+.ownership-recovery-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ownership-recovery button { min-height: 44px; }

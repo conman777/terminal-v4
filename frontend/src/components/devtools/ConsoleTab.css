@@ -1,0 +1,62 @@
+.console-tab {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  container: console / size;
+}
+
+.console-tab .console-toolbar {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.console-tab .devtools-filter-bar {
+  flex: 1 1 240px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.console-tab .devtools-search,
+.console-tab .devtools-search-input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.console-tab .console-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 104px;
+  min-height: 104px;
+}
+
+.console-tab .log-viewer {
+  flex: 1 1 0;
+  min-height: 64px;
+  height: auto !important;
+  overscroll-behavior: contain;
+}
+
+/* LogViewer supplies fixed inline heights; expanded objects and stacks need natural rows. */
+.console-tab .log-viewer-row {
+  height: auto !important;
+  min-height: 32px;
+}
+
+.console-tab .console-repl { flex: 0 0 auto; }
+.console-tab .repl-input { min-width: 0; }
+.console-tab [role="alert"] { margin: 6px 0; color: var(--error); overflow-wrap: anywhere; }
+
+@media (pointer: coarse) {
+  .console-tab .console-content {
+    flex-basis: 116px;
+    min-height: 116px;
+  }
+  .console-tab .repl-input { font-size: 16px; }
+}
+
+@container console (max-height: 360px) {
+  .console-tab .devtools-filter-bar,
+  .console-tab .console-repl { padding-block: 4px; }
+  .console-tab .repl-hint { display: none; }
+}

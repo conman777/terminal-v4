@@ -1,0 +1,60 @@
+Original V4 profile inference foundation. This is an isolated library candidate;
+the installed app, application routes, model picker, structured engine, CLI and
+durable task consumers have not been switched to this foundation.
+
+Inert preparation binds the authenticated scope, exact saved profile revision,
+credential reference/generation, protocol, canonical API prefix, cluster and
+explicit model. Each request body must keep that model. Encoded bodies are
+limited to24,000,000bytes. Endpoint/credential fields are not transport controls;
+the named overrides are rejected. Only the trusted coordinator decrypts a key
+under the configuration fence. Keys never become a public field or return value.
+
+The coordinator durably registers the actor before entering its original HTTP
+action. Inference request IDs are reserved in the scoped actor journal across
+process restarts. A repeated ID is a conflict, not an automatic replay or an
+implied receipt for the earlier model answer. All four consumer variants label
+the actual actor; they do not establish integration with those application flows.
+
+The own HTTP worker disables redirects and ambient proxies and retains its
+dedicated runtime/thread until original join. Only application/json,+json and
+text/event-stream bodies are accepted. Total response limits are8,000,000bytes
+for JSON and16,000,000bytes for SSE. Each queue holds at most1MiB/32events, with
+chunks no larger than64KiB. The complete exchange, including backpressure, has
+a120second deadline. At most8unreleased and128retained requests are admitted per
+service. After the last caller drops its ticket, background polling can retire
+the entry and its original coordinator owner only after join, durable release,
+and an exact original-proof-to-stored-stop-fact check. Dropped tickets do not
+erase pending joins, retry proofs, uncertain reserved owners or durable receipts.
+Completed held tickets remain readable until their caller releases them.
+Caller input Value memory, HTTP/TLS allocator overhead and OS socket
+buffers are outside the application queue bound. Admission has a4096actor limit
+per owner/execution scope, counted in the same fenced SQLite transaction before
+insertion or dispatch; completed receipts still count and restart does not reset
+it. Existing receipts are never automatically deleted or treated as new work.
+The limit includes discovery and inference actors. Profile saves, cleanup and
+existing lookups remain available at capacity. A user-facing archival/reset or
+long-term retention workflow still needs its own completion gate; this quota is
+a fail-closed guard, not a claim of unlimited ordinary conversation readiness.
+
+Chunks are published under the same profile fence as a current-revision check.
+Cancel, dropped tickets, shutdown, stale profiles and profile-read failures
+signal the original cancellation token. Confirmation still requires the original
+thread join and a bound durable stop fact. A failed stop-fact write preserves its
+original proof and buffered result for retry. Drop only signals cancellation;
+it never fabricates join or durable cleanup. A retained service must continue
+ticking/shutting down until its actual owners stop. Unknown prior-process actor
+cleanup remains unknown. An uncertain reserved admission with no returned owner
+also remains cleanup-unconfirmed under the existing cooperative lease contract;
+it is never converted into an inferred no-work success. No inference bodies or
+responses are persisted here.
+
+InferencePoll::Complete means transport EOF, original join and durable release.
+The application consumer must still validate JSON or SSE model completion,
+tool boundaries and error/finish signals. Model capabilities and load state are
+not inferred by this module. Existing model schema/image/reasoning validation
+must remain effective when consumers are wired.
+
+Verification uses only synthetic loopback HTTP fixtures and fresh private stores.
+Actual relay is covered by inert fixed-target plan checks; real TLS/DNS/IPv6,
+proxy environments, vendor compatibility, paid inference, native UI and Windows
+are not certified by these library checks. No Hermes/T3 implementation is used.

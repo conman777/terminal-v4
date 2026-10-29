@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { FilterBar } from './shared/FilterBar';
 import { LogViewer } from './shared/LogViewer';
 import { JsonTreeView } from './shared/JsonTreeView';
+import './ConsoleTab.css';
 
 /**
  * ConsoleTab - Console logging with virtualization for 10K+ logs
@@ -18,6 +19,23 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
   const [replInput, setReplInput] = useState('');
   const [replHistory, setReplHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const historyDraft = useRef('');
+  const currentInput = useRef('');
+  const evaluation = useRef(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState('');
+
+  useEffect(() => {
+    evaluation.current = null;
+    currentInput.current = '';
+    historyDraft.current = '';
+    setReplInput('');
+    setReplHistory([]);
+    setHistoryIndex(-1);
+    setIsEvaluating(false);
+    setEvaluationError('');
+    return () => { evaluation.current = null; };
+  }, [previewPort]);
 
   // Filter logs by level
   const filteredLogs = useMemo(() => {
@@ -25,7 +43,7 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
 
     // Apply level filter
     if (filter !== 'all') {
-      filtered = filtered.filter(log => log.level === filter);
+      filtered = filtered.filter(log => (log.level || 'log') === filter);
     }
 
     // Apply search filter
@@ -78,31 +96,50 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
   };
 
   const handleEvaluateRepl = async () => {
-    if (!replInput.trim() || !onEvaluate) return;
+    if (!replInput.trim() || !onEvaluate || evaluation.current) return;
 
     const expression = replInput.trim();
+    const owner = {};
+    evaluation.current = owner;
+    setIsEvaluating(true);
+    setEvaluationError('');
     setReplHistory(prev => [...prev, expression]);
     setHistoryIndex(-1);
     setReplInput('');
+    currentInput.current = '';
+    historyDraft.current = '';
 
     try {
-      const result = await onEvaluate(expression);
-      // Add result to logs (handled by parent component)
+      await onEvaluate(expression);
     } catch (error) {
-      console.error('REPL evaluation failed:', error);
+      if (evaluation.current === owner) {
+        setEvaluationError(`Evaluation failed. ${error?.message || 'Try again.'}`);
+        if (!currentInput.current) {
+          setReplInput(expression);
+          currentInput.current = expression;
+        }
+      }
+    } finally {
+      if (evaluation.current === owner) {
+        evaluation.current = null;
+        setIsEvaluating(false);
+      }
     }
   };
 
   const handleReplKeyDown = (e) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleEvaluateRepl();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (replHistory.length > 0) {
+        if (historyIndex === -1) historyDraft.current = replInput;
         const newIndex = historyIndex === -1 ? replHistory.length - 1 : Math.max(0, historyIndex - 1);
         setHistoryIndex(newIndex);
         setReplInput(replHistory[newIndex]);
+        currentInput.current = replHistory[newIndex];
       }
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -110,10 +147,12 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
         const newIndex = historyIndex + 1;
         if (newIndex >= replHistory.length) {
           setHistoryIndex(-1);
-          setReplInput('');
+          setReplInput(historyDraft.current);
+          currentInput.current = historyDraft.current;
         } else {
           setHistoryIndex(newIndex);
           setReplInput(replHistory[newIndex]);
+          currentInput.current = replHistory[newIndex];
         }
       }
     }
@@ -168,7 +207,7 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
           placeholder="Filter console..."
         />
         <div className="console-actions">
-          <button onClick={onClear} className="btn-icon" title="Clear console">
+          <button type="button" onClick={onClear} className="btn-icon" title="Clear console">
             🗑️
           </button>
         </div>
@@ -196,19 +235,26 @@ export function ConsoleTab({ logs = [], onClear, onEvaluate, previewPort }) {
             <input
               type="text"
               value={replInput}
-              onChange={(e) => setReplInput(e.target.value)}
+              onChange={(e) => {
+                setReplInput(e.target.value);
+                currentInput.current = e.target.value;
+                setHistoryIndex(-1);
+              }}
               onKeyDown={handleReplKeyDown}
               placeholder="Evaluate JavaScript in preview context..."
               className="repl-input"
+              aria-label="JavaScript expression"
             />
             <button
               onClick={handleEvaluateRepl}
-              disabled={!replInput.trim()}
+              type="button"
+              disabled={!replInput.trim() || isEvaluating}
               className="repl-button"
             >
               Run
             </button>
           </div>
+          {evaluationError && <p role="alert">{evaluationError}</p>}
           <div className="repl-hint">
             Press Enter to evaluate, ↑/↓ for history
           </div>

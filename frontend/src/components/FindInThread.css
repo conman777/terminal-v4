@@ -1,0 +1,15 @@
+.find-in-thread { position: fixed; top: 60px; right: 24px; z-index: 900; display: flex; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-md); font: 13px/1.4 var(--font-ui); }
+.find-in-thread input { width: 200px; padding: 5px 8px; border: 1px solid var(--border-default); border-radius: 7px; background: var(--bg-base); color: var(--text-primary); font: inherit; outline: none; }
+.find-in-thread input:focus { border-color: var(--accent-primary); }
+.find-in-thread-count { min-width: 64px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.find-in-thread button { width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-primary); cursor: pointer; }
+.find-in-thread button:hover:not(:disabled) { background: var(--bg-hover); }
+.find-in-thread button:disabled { opacity: .4; cursor: default; }
+.cc-find-match { outline: 1px dashed color-mix(in srgb, var(--accent-primary) 55%, transparent); outline-offset: 4px; border-radius: 8px; }
+.cc-find-current { outline: 2px solid var(--accent-primary); }
+@media (max-width: 768px), (pointer: coarse) {
+  .find-in-thread { box-sizing: border-box; left: 12px; right: 12px; flex-wrap: wrap; }
+  .find-in-thread input { flex: 1 0 100%; width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
+  .find-in-thread button { flex: 0 0 44px; width: 44px; height: 44px; }
+  .find-in-thread-count { min-width: 52px; margin-right: auto; }
+}

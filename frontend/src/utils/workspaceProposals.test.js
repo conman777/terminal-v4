@@ -42,3 +42,29 @@ describe('buildProposalRequest', () => {
     expect(prompt).toContain('Do not write');
   });
 });
+
+describe('package proposal review', () => {
+  const supportFiles = { 'references/review.md': 'Check async boundaries.' };
+  it('preserves exact previous and proposed support files for stale checks', () => {
+    const operations = [{ kind: 'skillUpdate', id: requestId, beforeName: 'Review', beforeInstructions: 'Check errors.', beforeSupportFiles: { 'references/old.md': 'Old review.' }, name: 'Review', instructions: 'Check errors.', supportFiles }];
+    expect(parseWorkspaceProposal(JSON.stringify({ ...envelope, operations }), requestId).operations).toEqual(operations);
+  });
+  it('accepts packages within the expanded review budget and rejects unsafe support paths', () => {
+    const operations = [{ kind: 'skillCreate', skill: { id: requestId, name: 'Review', instructions: 'Use references.', supportFiles: { 'references/large.md': 'x'.repeat(40000) } } }];
+    expect(parseWorkspaceProposal(JSON.stringify({ ...envelope, operations }), requestId).operations).toEqual(operations);
+    operations[0].skill.supportFiles = { '../outside': 'no' };
+    expect(() => parseWorkspaceProposal(JSON.stringify({ ...envelope, operations }), requestId)).toThrow();
+  });
+  it('isolates account envelope identity from workspace proposals', () => {
+    const text = JSON.stringify({ ...envelope, type: 'terminal-account-proposal' });
+    expect(parseWorkspaceProposal(text, requestId, 'account').operations).toEqual(envelope.operations);
+    expect(() => parseWorkspaceProposal(text, requestId)).toThrow();
+    expect(buildProposalRequest({ memory: '', skills: [] }, requestId, 'account')).toContain('terminal-account-proposal');
+  });
+});
+
+
+it('reviews complete support-file replacement without losing either version', () => {
+  const operations = [{ kind: 'skillUpdate', id: requestId, beforeName: 'Review', beforeInstructions: 'Read references.', beforeSupportFiles: { 'a.md': 'a'.repeat(64000), 'b.md': 'b'.repeat(64000) }, name: 'Review', instructions: 'Read references.', supportFiles: { 'a.md': 'c'.repeat(64000), 'b.md': 'd'.repeat(64000) } }];
+  expect(parseWorkspaceProposal(JSON.stringify({ ...envelope, operations }), requestId).operations).toEqual(operations);
+});

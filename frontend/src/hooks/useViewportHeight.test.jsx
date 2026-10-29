@@ -166,6 +166,22 @@ describe('useViewportHeight', () => {
     input.remove();
   });
 
+  it('keeps the visible height when the viewport scrolls to zero while typing', () => {
+    setVisualViewport(402, 248);
+    setInnerHeight(812);
+    const input = document.createElement('textarea');
+    document.body.appendChild(input);
+    input.focus();
+    const { result } = renderHook(() => useViewportMetrics());
+    expect(result.current).toEqual({ height: 402, width: 390, offsetTop: 248, offsetLeft: 0 });
+    act(() => {
+      window.visualViewport.offsetTop = 0;
+      window.visualViewport.__listeners.get('scroll')?.();
+    });
+    expect(result.current).toEqual({ height: 402, width: 390, offsetTop: 0, offsetLeft: 0 });
+    input.remove();
+  });
+
   it('tracks horizontal visual viewport drift while text entry remains focused', () => {
     setVisualViewport(670, 0, 385, 27);
     setInnerWidth(440);

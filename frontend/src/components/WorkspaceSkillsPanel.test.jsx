@@ -30,3 +30,11 @@ describe('WorkspaceSkillsPanel', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add installed skills to prompt' })).toBeDisabled());
   });
 });
+
+it('retries a failed skill discovery without closing the tools', async () => {
+  apiFetch.mockRejectedValueOnce(new Error('Skills offline')).mockResolvedValue({ ok: true, json: async () => ({ skills: [skill], warnings: [] }) });
+  render(<WorkspaceSkillsPanel workspacePath={path} onInsertContext={vi.fn()} />);
+  await screen.findByText('Skills offline');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry skills' }));
+  expect(await screen.findByRole('checkbox', { name: 'Include review (claude, project)' })).toBeEnabled();
+});

@@ -13,18 +13,18 @@ use std::{
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct InstalledSkill {
-    id: String,
-    provider: String,
-    scope: String,
-    name: String,
-    path: String,
-    instructions: String,
+pub(crate) struct InstalledSkill {
+    pub(crate) id: String,
+    pub(crate) provider: String,
+    pub(crate) scope: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
+    pub(crate) instructions: String,
 }
 #[derive(Debug, Serialize)]
-struct SkillsResult {
-    skills: Vec<InstalledSkill>,
-    warnings: Vec<String>,
+pub(crate) struct SkillsResult {
+    pub(crate) skills: Vec<InstalledSkill>,
+    pub(crate) warnings: Vec<String>,
 }
 #[derive(Deserialize)]
 struct SkillsQuery {
@@ -185,6 +185,28 @@ fn skill_roots(workspace: &Path) -> Vec<(PathBuf, &'static str, &'static str)> {
             || std::fs::canonicalize(root).is_ok_and(|root| root.starts_with(workspace))
     });
     roots
+}
+
+pub(crate) fn project_skills(workspace: &Path) -> SkillsResult {
+    let roots: Vec<_> = [".v4/skills", ".agents/skills", ".claude/skills"]
+        .into_iter()
+        .filter_map(|relative| {
+            let mut path = workspace.to_path_buf();
+            for part in Path::new(relative).components() {
+                path.push(part);
+                if std::fs::symlink_metadata(&path)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    return None;
+                }
+            }
+            let canonical = std::fs::canonicalize(&path).ok()?;
+            canonical
+                .starts_with(workspace)
+                .then_some((canonical, "workspace", "project"))
+        })
+        .collect();
+    scan_roots(&roots)
 }
 
 async fn list(

@@ -1,0 +1,25 @@
+.log-viewer-actions {
+  display: flex;
+  justify-content: center;
+  flex: 0 0 40px;
+  min-height: 40px;
+}
+
+.log-viewer-latest {
+  flex: 0 0 auto;
+  align-self: center;
+  min-height: 32px;
+  padding: 4px 12px;
+  margin: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .log-viewer-actions { flex-basis: 52px; min-height: 52px; }
+  .log-viewer-latest { min-height: 44px; }
+}

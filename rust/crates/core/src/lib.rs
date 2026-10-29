@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub jwt_secret: String,
     pub allowed_username: Option<String>,
     pub storage_database_url: Option<String>,
+    pub local_testing_login: bool,
 }
 
 impl AppConfig {
@@ -50,6 +51,8 @@ impl AppConfig {
             jwt_secret,
             allowed_username,
             storage_database_url,
+            local_testing_login: env::var("TERMINAL_V4_LOCAL_TESTING")
+                .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true")),
         }
     }
 
@@ -58,6 +61,19 @@ impl AppConfig {
     }
 
     pub fn validate_runtime(&self) -> Result<(), String> {
+        if self.jwt_secret.trim().is_empty() {
+            return Err(
+                "JWT_SECRET must not be empty or whitespace. Set it to a strong random value."
+                    .into(),
+            );
+        }
+        if self.local_testing_login
+            && (!self.host.is_loopback() || self.storage_database_url.is_some())
+        {
+            return Err(
+                "Username-only testing requires a loopback host and local account storage".into(),
+            );
+        }
         if !self.host.is_loopback() && self.jwt_secret == DEFAULT_JWT_SECRET {
             return Err(
                 "Refusing to start with the default JWT secret on a non-loopback host. Set JWT_SECRET to a strong random value."
@@ -78,6 +94,7 @@ impl Default for AppConfig {
             jwt_secret: DEFAULT_JWT_SECRET.to_string(),
             allowed_username: None,
             storage_database_url: None,
+            local_testing_login: false,
         }
     }
 }
@@ -217,6 +234,9 @@ pub struct ThreadMetadata {
     pub sandbox_workspace_root: Option<String>,
     pub git_stats: Option<ThreadGitStats>,
     pub last_activity_at: String,
+    /// Conversation this terminal serves as a drawer for; companions are hidden from the thread list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -278,6 +298,17 @@ pub struct TerminalSessionSnapshot {
     pub sandbox: Option<TerminalSandboxInfo>,
 }
 
+/// Immutable descriptor for bytes uploaded in one owned conversation scope.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageAttachment {
+    pub attachment_id: String,
+    pub artifact_id: String,
+    pub mime_type: String,
+    pub bytes: u64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StructuredSessionEvent {
@@ -296,23 +327,37 @@ pub enum StructuredSessionEvent {
         reason: String,
     },
     MessageStarted {
+        #[serde(default, rename = "messageId", skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         role: String,
     },
     MessageDelta {
+        #[serde(default, rename = "messageId", skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         role: String,
         content: String,
     },
     MessageCompleted {
+        #[serde(default, rename = "messageId", skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         role: String,
         content: String,
     },
     ToolStarted {
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         #[serde(rename = "toolName")]
@@ -323,6 +368,10 @@ pub enum StructuredSessionEvent {
         tool_call_id: Option<String>,
     },
     ToolOutput {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stream: Option<String>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         #[serde(rename = "toolName")]
@@ -332,6 +381,10 @@ pub enum StructuredSessionEvent {
         tool_call_id: Option<String>,
     },
     ToolCompleted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<Value>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
         ts: i64,
         seq: i64,
         #[serde(rename = "toolName")]
@@ -343,6 +396,22 @@ pub enum StructuredSessionEvent {
         tool_call_id: Option<String>,
     },
     ApprovalRequired {
+        #[serde(default, rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+        expires_at: Option<i64>,
+        #[serde(
+            default,
+            rename = "approvalId",
+            skip_serializing_if = "Option::is_none"
+        )]
+        approval_id: Option<String>,
+        #[serde(default, rename = "turnId", skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(
+            default,
+            rename = "toolCallId",
+            skip_serializing_if = "Option::is_none"
+        )]
+        tool_call_id: Option<String>,
         ts: i64,
         seq: i64,
         #[serde(rename = "toolName")]
@@ -350,6 +419,102 @@ pub enum StructuredSessionEvent {
         #[serde(rename = "toolInput")]
         tool_input: Value,
         description: String,
+    },
+    UserMessageAccepted {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        #[serde(rename = "messageId")]
+        message_id: String,
+        content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<ImageAttachment>,
+    },
+    TurnStarted {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+    },
+    TurnCompleted {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        status: String,
+    },
+    ApprovalDecisionReserved {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        #[serde(rename = "reservationId")]
+        reservation_id: String,
+        #[serde(rename = "tokenHash")]
+        token_hash: String,
+    },
+    ApprovalDecisionStarted {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        approved: bool,
+        #[serde(rename = "forSession")]
+        for_session: bool,
+    },
+    ApprovalDecisionReviewed {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+    },
+    ApprovalResolved {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "approvalId")]
+        approval_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        approved: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ContextUsage {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        usage: Value,
+    },
+    Compaction {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receipt: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    CommandAccepted {
+        ts: i64,
+        seq: i64,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "turnId")]
+        turn_id: String,
+        command: String,
+        input: Value,
     },
     InputRequired {
         ts: i64,
@@ -377,6 +542,34 @@ pub enum StructuredSessionEvent {
 }
 
 impl StructuredSessionEvent {
+    pub fn with_sequence(mut self, sequence: i64) -> Self {
+        match &mut self {
+            Self::SessionStarted { seq, .. }
+            | Self::SessionEnded { seq, .. }
+            | Self::MessageStarted { seq, .. }
+            | Self::MessageDelta { seq, .. }
+            | Self::MessageCompleted { seq, .. }
+            | Self::ToolStarted { seq, .. }
+            | Self::ToolOutput { seq, .. }
+            | Self::ToolCompleted { seq, .. }
+            | Self::ApprovalRequired { seq, .. }
+            | Self::UserMessageAccepted { seq, .. }
+            | Self::TurnStarted { seq, .. }
+            | Self::TurnCompleted { seq, .. }
+            | Self::ApprovalDecisionReserved { seq, .. }
+            | Self::ApprovalDecisionStarted { seq, .. }
+            | Self::ApprovalDecisionReviewed { seq, .. }
+            | Self::ApprovalResolved { seq, .. }
+            | Self::ContextUsage { seq, .. }
+            | Self::Compaction { seq, .. }
+            | Self::CommandAccepted { seq, .. }
+            | Self::InputRequired { seq, .. }
+            | Self::Status { seq, .. }
+            | Self::Error { seq, .. }
+            | Self::RawProviderEvent { seq, .. } => *seq = sequence,
+        }
+        self
+    }
     /// Return the sequence number common to every event variant.
     pub fn seq(&self) -> i64 {
         match self {
@@ -389,10 +582,20 @@ impl StructuredSessionEvent {
             | Self::ToolOutput { seq, .. }
             | Self::ToolCompleted { seq, .. }
             | Self::ApprovalRequired { seq, .. }
+            | Self::CommandAccepted { seq, .. }
             | Self::InputRequired { seq, .. }
             | Self::Status { seq, .. }
             | Self::Error { seq, .. }
-            | Self::RawProviderEvent { seq, .. } => *seq,
+            | Self::RawProviderEvent { seq, .. }
+            | Self::UserMessageAccepted { seq, .. }
+            | Self::TurnStarted { seq, .. }
+            | Self::TurnCompleted { seq, .. }
+            | Self::ApprovalDecisionReserved { seq, .. }
+            | Self::ApprovalDecisionStarted { seq, .. }
+            | Self::ApprovalDecisionReviewed { seq, .. }
+            | Self::ApprovalResolved { seq, .. }
+            | Self::ContextUsage { seq, .. }
+            | Self::Compaction { seq, .. } => *seq,
         }
     }
 }
@@ -404,6 +607,29 @@ mod tests {
     #[test]
     fn default_config_uses_loopback_host() {
         assert_eq!(AppConfig::default().host, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[test]
+    fn username_only_testing_is_local_only_and_opt_in() {
+        assert!(!AppConfig::default().local_testing_login);
+        let config = AppConfig {
+            local_testing_login: true,
+            ..AppConfig::default()
+        };
+        assert!(config.validate_runtime().is_ok());
+        assert!(AppConfig {
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            jwt_secret: "custom-secret".into(),
+            ..config.clone()
+        }
+        .validate_runtime()
+        .is_err());
+        assert!(AppConfig {
+            storage_database_url: Some("postgres://fixture".into()),
+            ..config
+        }
+        .validate_runtime()
+        .is_err());
     }
 
     #[test]
@@ -429,6 +655,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_runtime_rejects_blank_secrets_on_every_host() {
+        for host in ["127.0.0.1", "::1", "0.0.0.0", "::"] {
+            for secret in ["", " ", "\t\n", "\u{2003}"] {
+                let error = AppConfig {
+                    host: host.parse().unwrap(),
+                    jwt_secret: secret.into(),
+                    ..AppConfig::default()
+                }
+                .validate_runtime()
+                .expect_err("blank signing keys must fail startup");
+                assert!(
+                    error.contains("JWT_SECRET") && error.contains("empty"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn validate_runtime_allows_custom_secret_for_non_loopback_hosts() {
         let config = AppConfig {
             host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
@@ -442,6 +687,20 @@ mod tests {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct StructuredSnooze {
+    pub until_ms: i64,
+    pub after_seq: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredSettlement {
+    pub after_seq: i64,
+    pub queue_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct StructuredThreadMetadata {
     pub topic: Option<String>,
     pub topic_auto_generated: bool,
@@ -449,11 +708,26 @@ pub struct StructuredThreadMetadata {
     pub archived: bool,
     pub project_path: Option<String>,
     pub last_activity_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snooze: Option<StructuredSnooze>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<StructuredSettlement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StructuredSessionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// "supervised", "auto-edit" (the default when absent) or "full".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     pub id: String,
     #[serde(default)]
     pub title: String,

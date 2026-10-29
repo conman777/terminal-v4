@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MobileChatView } from './MobileChatView';
 
@@ -98,4 +98,22 @@ describe('MobileChatView', () => {
     expect(screen.queryByText('~/sc')).not.toBeInTheDocument();
     expect(screen.queryByText('reen')).not.toBeInTheDocument();
   });
+});
+
+
+it('retains a mobile conversation draft until accepted and reports failed sends', async () => {
+  let resolve;
+  const onSend = vi.fn(() => new Promise(done => { resolve = done; }));
+  render(<MobileChatView {...buildProps({ onSend })} />);
+  fireEvent.change(screen.getByPlaceholderText('Message Codex...'), { target: { value: 'Keep this phone message' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  expect(screen.getByPlaceholderText('Message Codex...')).toHaveValue('Keep this phone message');
+  expect(screen.getByRole('button', { name: 'Send message' })).toBeDisabled();
+  await act(async () => { resolve({ accepted: false }); });
+  expect(screen.getByPlaceholderText('Message Codex...')).toHaveValue('Keep this phone message');
+  expect(screen.getByRole('alert')).toHaveTextContent(/not accepted/i);
+  onSend.mockResolvedValueOnce({ accepted: true });
+  fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+  await act(async () => {});
+  expect(screen.getByPlaceholderText('Message Codex...')).toHaveValue('');
 });

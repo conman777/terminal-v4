@@ -1,0 +1,40 @@
+.conversation-context-trigger { min-height: 32px; }
+.conversation-context-overlay { box-sizing: border-box; position: fixed; inset: 0; z-index: 20000; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(0, 0, 0, .65); overscroll-behavior: contain; }
+.conversation-context-dialog { width: min(760px, 100%); max-height: 90dvh; overflow: auto; min-width: 0; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-md); }
+.conversation-context-dialog:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 3px; }
+.conversation-context-panel { font: 14px/1.5 var(--font-ui); padding: 20px; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+.conversation-context-panel h3 { margin: 0 0 6px; }
+.conversation-context-panel h4 { margin: 20px 0 8px; }
+.conversation-context-panel p { margin: 8px 0 14px; }
+.conversation-context-heading { display: flex; gap: 14px; align-items: flex-start; justify-content: space-between; }
+.conversation-context-panel button { font: 13px/1.4 var(--font-ui); border-radius: 6px; min-height: 32px; padding: 8px 12px; white-space: normal; }
+.conversation-context-heading > button { flex: 0 0 auto; }
+.conversation-context-panel form { display: grid; gap: 8px; margin-top: 20px; }
+.conversation-context-panel textarea { box-sizing: border-box; width: 100%; max-width: 100%; min-height: 100px; resize: vertical; padding: 10px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-base); color: inherit; font: inherit; }
+.conversation-context-panel form > button { justify-self: end; }
+.conversation-context-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.conversation-context-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; margin: 14px 0; }
+.conversation-context-metrics div { min-width: 0; }
+.conversation-context-metrics dt { color: var(--text-secondary); font-size: 12px; }
+.conversation-context-metrics dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.conversation-context-byte-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.conversation-context-muted { color: var(--text-secondary); font-size: 12px; }
+.conversation-context-error { color: var(--error); white-space: pre-wrap; }
+.conversation-context-command { margin: 18px 0; padding: 14px; border: 1px solid var(--border-default); border-radius: 8px; }
+.conversation-context-command code { display: block; overflow-wrap: anywhere; white-space: normal; }
+.conversation-context-command summary { cursor: pointer; padding: 10px 0; }
+.conversation-context-panel :is(button, textarea, summary):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.conversation-context-panel h3 { font: 600 16px/1.4 var(--font-ui); }
+.conversation-context-panel h4 { font: 500 14px/1.4 var(--font-ui); }
+.conversation-context-panel textarea { font: 13px/1.5 var(--font-ui); }
+@media (max-width: 768px), (pointer: coarse) {
+  .conversation-context-trigger, .conversation-context-panel button, .conversation-context-command summary { min-height: 44px; }
+  .conversation-context-panel textarea { font-size: 16px; }
+}
+@media (max-width: 600px) {
+  .conversation-context-overlay { padding: 8px; }
+  .conversation-context-dialog { max-height: 96dvh; }
+  .conversation-context-panel { padding: 16px; }
+  .conversation-context-heading { flex-wrap: wrap; }
+  .conversation-context-metrics { grid-template-columns: minmax(0, 1fr); }
+}

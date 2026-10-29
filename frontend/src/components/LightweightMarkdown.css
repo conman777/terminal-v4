@@ -1,0 +1,58 @@
+.lightweight-markdown {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--text-primary);
+  font: 14px/1.6 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+.cc-message .cc-assistant-content .lightweight-markdown p { margin: 0 0 12px; }
+.cc-message .cc-assistant-content .lightweight-markdown :is(h1, h2, h3, h4) {
+  margin: 20px 0 8px;
+  color: var(--text-primary);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: normal;
+}
+.cc-message .cc-assistant-content .lightweight-markdown h1 { font-size: 18px; }
+.cc-message .cc-assistant-content .lightweight-markdown h2 { font-size: 16px; }
+.cc-message .cc-assistant-content .lightweight-markdown :is(h3, h4) { font-size: 14px; }
+.cc-message .cc-assistant-content .lightweight-markdown .md-list { display: grid; gap: 4px; margin: 4px 0 12px; padding-left: 22px; }
+.cc-message .cc-assistant-content .lightweight-markdown li { padding-left: 2px; line-height: 1.6; }
+.cc-message .cc-assistant-content .lightweight-markdown li::marker { color: var(--text-secondary); }
+.cc-message .cc-assistant-content .lightweight-markdown .md-list .md-list { margin: 6px 0 0; }
+.cc-message .cc-assistant-content .lightweight-markdown .md-list li > :last-child { margin-bottom: 0; }
+.lightweight-markdown > :first-child { margin-top: 0 !important; }
+.lightweight-markdown > :last-child { margin-bottom: 0 !important; }
+.lightweight-markdown .inline-code { padding: 1px 4px; border-radius: 4px; background: var(--bg-elevated); color: var(--text-primary); font: 12px/1.6 var(--font-mono); }
+.lightweight-markdown a { color: var(--accent-primary); text-underline-offset: 3px; }
+.lightweight-markdown a:hover { text-decoration: underline; }
+.lightweight-markdown .md-code-block { overflow: hidden; margin: 12px 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-surface); }
+.lightweight-markdown .md-code-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; min-height: 32px; padding: 2px 8px 2px 12px; border-bottom: 1px solid var(--border-subtle); }
+.lightweight-markdown .md-code-language { color: var(--text-secondary); font: 12px/1.4 var(--font-ui); }
+.lightweight-markdown .md-code-block pre { max-height: 480px; overflow: auto; margin: 0; padding: 12px; border: none; border-radius: 0; background: transparent; color: var(--text-primary); white-space: pre; font: 12px/1.6 var(--font-mono); }
+.lightweight-markdown .md-code-block pre code { padding: 0; background: transparent; color: inherit; font: inherit; }
+.lightweight-markdown .md-math-block { max-width: 100%; overflow-x: auto; margin: 12px 0; }
+.lightweight-markdown .md-math-block .katex-display { margin: 0; }
+.lightweight-markdown .md-math-fallback { max-width: 100%; overflow: auto; white-space: pre-wrap; }
+.lightweight-markdown .md-flowchart-scroll { max-width: 100%; overflow: auto; padding: 12px; color: var(--text-primary); }
+.lightweight-markdown .md-flowchart-scroll svg { display: block; max-width: none; font: 13px var(--font-ui); }
+.lightweight-markdown .md-flowchart-scroll :is(rect, polygon) { fill: var(--bg-surface); stroke: var(--border-default); }
+.lightweight-markdown .md-flowchart-scroll text { fill: currentColor; }
+.lightweight-markdown .md-flowchart-edge-label { paint-order: stroke; stroke: var(--bg-surface); stroke-width: 4px; stroke-linejoin: round; }
+.lightweight-markdown .md-sequence-scroll { max-width: 100%; max-height: min(60vh, 480px); overflow: auto; padding: 12px; color: var(--text-primary); }
+.lightweight-markdown .md-sequence-scroll svg { display: block; max-width: none; font: 13px var(--font-ui); }
+.lightweight-markdown .md-sequence-scroll rect { fill: var(--bg-surface); stroke: var(--border-default); }
+.lightweight-markdown .md-sequence-scroll .md-sequence-loop-outline { fill: none; }
+.lightweight-markdown .md-sequence-scroll text { fill: currentColor; }
+.lightweight-markdown .md-diagram-source summary { padding: 8px 12px; color: var(--text-secondary); cursor: pointer; }
+.lightweight-markdown .md-table-scroll { max-width: 100%; overflow-x: auto; margin: 12px 0; border-radius: 6px; }
+.lightweight-markdown .md-table { width: 100%; border-collapse: collapse; font: 13px/1.5 var(--font-ui); }
+.lightweight-markdown .md-table :is(th, td) { min-width: 90px; padding: 8px 12px; border: none; border-bottom: 1px solid var(--border-subtle); text-align: left; vertical-align: top; }
+.lightweight-markdown .md-table th { color: var(--text-secondary); background: var(--bg-surface); font: 500 12px/1.5 var(--font-ui); }
+.lightweight-markdown .md-table tr:nth-child(even) { background: transparent; }
+.lightweight-markdown .md-blockquote { margin: 12px 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--border-default); color: var(--text-secondary); }
+.lightweight-markdown .md-image { max-width: 100%; margin: 12px 0; }
+.lightweight-markdown .md-image img { display: block; max-width: 100%; max-height: 480px; height: auto; object-fit: contain; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.lightweight-markdown .md-image figcaption { margin-top: 6px; color: var(--text-secondary); font: 12px/1.5 var(--font-ui); }
+.lightweight-markdown .md-image-fallback { display: block; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; color: var(--text-secondary); font: 13px/1.5 var(--font-ui); }
+.lightweight-markdown :is(a, .md-table-scroll, pre):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }

@@ -1,17 +1,12 @@
 #!/bin/bash
-set -e
-cd /home/conor/terminal-v4
+set -euo pipefail
+project_root="${REBUILD_PROJECT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+cd -- "$project_root"
 
 echo "Building frontend..."
-cd frontend && npm run build
+npm run frontend:build
 
-echo "Building backend..."
-cd ../backend && npm run build
+echo "Building Rust backend..."
+cargo build --release -p terminal-v4-api --manifest-path rust/Cargo.toml
 
-echo "Restarting service..."
-# Note: Requires passwordless sudo for systemctl restart terminal-v4
-# Add this to /etc/sudoers.d/terminal-v4:
-# conor ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart terminal-v4
-sudo /usr/bin/systemctl restart terminal-v4
-
-echo "Done! App updated."
+echo "Build complete. Restart the owning application or service to use the updated runtime."

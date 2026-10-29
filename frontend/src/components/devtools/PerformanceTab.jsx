@@ -1,10 +1,13 @@
 import { resolveWebSocketUrl } from '../../utils/apiBase';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { MetricCard } from './shared/MetricCard';
 import { apiFetch } from '../../utils/api';
 import { getAccessToken } from '../../utils/auth';
+import './PerformanceTab.css';
 
 const MAX_METRICS = 1000;
+const emptyMetrics = () => ({ coreWebVitals: [], loadMetrics: [], runtimeMetrics: [] });
+const validMetrics = metrics => ['coreWebVitals', 'loadMetrics', 'runtimeMetrics'].every(key => Array.isArray(metrics?.[key]));
 
 /**
  * Limit array size to prevent unbounded growth
@@ -20,23 +23,59 @@ const limitArraySize = (arr, newItems, maxSize) => {
  * Displays performance metrics including Core Web Vitals, load metrics, and runtime metrics
  */
 export function PerformanceTab({ port }) {
-  const [metrics, setMetrics] = useState({
-    coreWebVitals: [],
-    loadMetrics: [],
-    runtimeMetrics: []
-  });
+  const [metrics, setMetrics] = useState(emptyMetrics);
   const [isLive, setIsLive] = useState(false);
   const [notAvailable, setNotAvailable] = useState(false);
-  const wsRef = useRef(null);
+  const [error, setError] = useState('');
+  const [isClearing, setIsClearing] = useState(false);
+  const scope = useRef(null);
 
-  // Fetch initial metrics
-  useEffect(() => {
-    fetchMetrics();
+  const fetchMetrics = useCallback(async () => {
+    const owner = scope.current;
+    if (!port || !owner || owner.clearing) return;
+    owner.controller?.abort();
+    const controller = new AbortController();
+    owner.controller = controller;
+    const streamRevision = owner.streamRevision;
+    const current = () => scope.current === owner && !controller.signal.aborted && owner.streamRevision === streamRevision;
+    try {
+      const response = await apiFetch(`/api/preview/${port}/performance`, { signal: controller.signal });
+      if (!current()) return;
+      if (response.status === 404) {
+        setNotAvailable(true);
+        setIsLive(false);
+        return;
+      }
+      if (!response.ok) throw new Error('Performance request failed');
+      const data = await response.json();
+      if (!current()) return;
+      if (!validMetrics(data.metrics)) throw new Error('Invalid metrics');
+      setMetrics(data.metrics);
+      setNotAvailable(false);
+      setError('');
+    } catch {
+      if (current()) setError('Could not load performance metrics. Try refreshing.');
+    }
   }, [port]);
+
+  useEffect(() => {
+    const owner = { controller: null, clearing: false, streamRevision: 0 };
+    scope.current = owner;
+    setMetrics(emptyMetrics());
+    setNotAvailable(false);
+    setError('');
+    setIsLive(false);
+    setIsClearing(false);
+    void fetchMetrics();
+    return () => {
+      owner.controller?.abort();
+      if (scope.current === owner) scope.current = null;
+    };
+  }, [fetchMetrics]);
 
   // WebSocket for live updates
   useEffect(() => {
-    if (!isLive || notAvailable) return;
+    if (!isLive || notAvailable || !port) return;
 
     const token = getAccessToken();
     if (!token) return;
@@ -44,12 +83,15 @@ export function PerformanceTab({ port }) {
     const wsUrl = resolveWebSocketUrl(`/api/preview/${port}/performance/stream?${params.toString()}`);
 
     const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    const owner = scope.current;
+    let active = true;
 
     ws.onmessage = (event) => {
+      if (!active) return;
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'performance-update' && data.metrics) {
+        if (scope.current === owner && data.type === 'performance-update' && validMetrics(data.metrics)) {
+          owner.streamRevision += 1;
           setMetrics((prev) => ({
             coreWebVitals: limitArraySize(prev.coreWebVitals, data.metrics.coreWebVitals, MAX_METRICS),
             loadMetrics: limitArraySize(prev.loadMetrics, data.metrics.loadMetrics, MAX_METRICS),
@@ -62,45 +104,39 @@ export function PerformanceTab({ port }) {
     };
 
     ws.onerror = (err) => {
+      if (!active) return;
       console.error('WebSocket error:', err);
       setIsLive(false);
     };
 
     ws.onclose = () => {
-      setIsLive(false);
+      if (active) setIsLive(false);
     };
 
     return () => {
+      active = false;
       ws.close();
     };
   }, [isLive, port, notAvailable]);
 
-  const fetchMetrics = async () => {
-    try {
-      const response = await apiFetch(`/api/preview/${port}/performance`);
-      if (response.status === 404) {
-        setNotAvailable(true);
-        return;
-      }
-      if (response.ok) {
-        const data = await response.json();
-        setMetrics(data.metrics);
-      }
-    } catch (err) {
-      setNotAvailable(true);
-    }
-  };
-
   const clearMetrics = async () => {
+    const owner = scope.current;
+    if (!port || !owner || owner.clearing) return;
+    owner.clearing = true;
+    owner.controller?.abort();
+    setIsClearing(true);
+    setIsLive(false);
+    setError('');
     try {
-      await apiFetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
-      setMetrics({
-        coreWebVitals: [],
-        loadMetrics: [],
-        runtimeMetrics: []
-      });
-    } catch (err) {
-      console.error('Error clearing metrics:', err);
+      const response = await apiFetch(`/api/preview/${port}/performance`, { method: 'DELETE' });
+      if (scope.current !== owner) return;
+      if (!response.ok) throw new Error('Clear request failed');
+      setMetrics(emptyMetrics());
+    } catch {
+      if (scope.current === owner) setError('Could not clear performance metrics. Try again.');
+    } finally {
+      owner.clearing = false;
+      if (scope.current === owner) setIsClearing(false);
     }
   };
 
@@ -126,21 +162,21 @@ export function PerformanceTab({ port }) {
 
   // Calculate status for Core Web Vitals
   const getLCPStatus = (lcp) => {
-    if (!lcp) return null;
+    if (lcp == null) return null;
     if (lcp <= 2500) return 'good';
     if (lcp <= 4000) return 'warning';
     return 'error';
   };
 
   const getFIDStatus = (fid) => {
-    if (!fid) return null;
+    if (fid == null) return null;
     if (fid <= 100) return 'good';
     if (fid <= 300) return 'warning';
     return 'error';
   };
 
   const getCLSStatus = (cls) => {
-    if (!cls) return null;
+    if (cls == null) return null;
     if (cls <= 0.1) return 'good';
     if (cls <= 0.25) return 'warning';
     return 'error';
@@ -148,66 +184,69 @@ export function PerformanceTab({ port }) {
 
   // FPS chart data (last 60 samples)
   const fpsData = metrics.runtimeMetrics
-    .filter((m) => m.data.fps !== null)
+    .filter((m) => Number.isFinite(m.data?.fps))
     .slice(-60)
     .map((m) => m.data.fps);
 
   if (notAvailable) {
     return (
-      <div className="p-4 h-full overflow-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold">Performance Monitor</h2>
+      <div className="performance-tab" role="region" aria-label="Performance metrics" tabIndex={0}>
+        <div className="performance-tab__header">
+          <h2 className="performance-tab__title">Performance Monitor</h2>
         </div>
-        <div className="text-center py-12 text-gray-500">
-          <p className="text-lg font-medium mb-2">Performance monitoring not available</p>
-          <p>The backend endpoints for performance metrics have not been implemented yet.</p>
+        <div className="performance-tab__empty">
+          <p className="performance-tab__unavailable-title">Performance monitoring not available</p>
+          <p>This preview server does not provide performance metrics.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-4 h-full overflow-auto">
+    <div className="performance-tab" role="region" aria-label="Performance metrics" tabIndex={0}>
       {/* Header */}
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-semibold">Performance Monitor</h2>
-        <div className="flex gap-2">
+      <div className="performance-tab__header">
+        <h2 className="performance-tab__title">Performance Monitor</h2>
+        <div className="performance-tab__actions">
           <button
+            type="button"
             onClick={() => setIsLive(!isLive)}
-            className={`px-3 py-1 rounded text-sm font-medium ${
-              isLive
-                ? 'bg-green-600 text-white'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-            }`}
+            aria-pressed={isLive}
+            disabled={!port || isClearing}
           >
             {isLive ? 'Live' : 'Start Live'}
           </button>
           <button
+            type="button"
             onClick={fetchMetrics}
-            className="px-3 py-1 bg-amber-600 text-white rounded text-sm font-medium hover:bg-amber-700"
+            disabled={!port || isClearing}
           >
             Refresh
           </button>
           <button
+            type="button"
             onClick={exportReport}
-            className="px-3 py-1 bg-gray-600 text-white rounded text-sm font-medium hover:bg-gray-700"
           >
             Export
           </button>
           <button
+            type="button"
             onClick={clearMetrics}
-            className="px-3 py-1 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700"
+            disabled={!port || isClearing}
           >
             Clear
           </button>
         </div>
       </div>
 
+      {error && <p role="alert">{error}</p>}
+
       {/* Core Web Vitals */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-3">Core Web Vitals</h3>
-        <div className="grid grid-cols-3 gap-4">
+      <div className="performance-tab__section">
+        <h3 className="performance-tab__section-title">Core Web Vitals</h3>
+        <div className="performance-tab__grid">
           <MetricCard
+            className="performance-tab__metric"
             label="LCP (Largest Contentful Paint)"
             value={latestCWV.lcp}
             unit="ms"
@@ -215,6 +254,7 @@ export function PerformanceTab({ port }) {
             subtext="Good: ≤2500ms, Needs improvement: ≤4000ms"
           />
           <MetricCard
+            className="performance-tab__metric"
             label="FID (First Input Delay)"
             value={latestCWV.fid}
             unit="ms"
@@ -222,6 +262,7 @@ export function PerformanceTab({ port }) {
             subtext="Good: ≤100ms, Needs improvement: ≤300ms"
           />
           <MetricCard
+            className="performance-tab__metric"
             label="CLS (Cumulative Layout Shift)"
             value={latestCWV.cls?.toFixed(3)}
             status={getCLSStatus(latestCWV.cls)}
@@ -231,20 +272,23 @@ export function PerformanceTab({ port }) {
       </div>
 
       {/* Load Metrics */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-3">Load Metrics</h3>
-        <div className="grid grid-cols-3 gap-4">
+      <div className="performance-tab__section">
+        <h3 className="performance-tab__section-title">Load Metrics</h3>
+        <div className="performance-tab__grid">
           <MetricCard
+            className="performance-tab__metric"
             label="DOM Content Loaded"
             value={latestLoad.domContentLoaded}
             unit="ms"
           />
           <MetricCard
+            className="performance-tab__metric"
             label="Full Page Load"
             value={latestLoad.fullPageLoad}
             unit="ms"
           />
           <MetricCard
+            className="performance-tab__metric"
             label="Time to Interactive (TTI)"
             value={latestLoad.timeToInteractive}
             unit="ms"
@@ -253,16 +297,18 @@ export function PerformanceTab({ port }) {
       </div>
 
       {/* Runtime Metrics */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold mb-3">Runtime Performance</h3>
-        <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="performance-tab__section">
+        <h3 className="performance-tab__section-title">Runtime Performance</h3>
+        <div className="performance-tab__grid">
           <MetricCard
+            className="performance-tab__metric"
             label="FPS (Frames Per Second)"
             value={latestRuntime.fps?.toFixed(1)}
-            status={latestRuntime.fps >= 55 ? 'good' : latestRuntime.fps >= 30 ? 'warning' : 'error'}
+            status={latestRuntime.fps == null ? null : latestRuntime.fps >= 55 ? 'good' : latestRuntime.fps >= 30 ? 'warning' : 'error'}
             subtext="Target: 60 FPS"
           />
           <MetricCard
+            className="performance-tab__metric"
             label="JS Heap Used"
             value={
               latestRuntime.memory
@@ -280,19 +326,19 @@ export function PerformanceTab({ port }) {
 
         {/* FPS Graph */}
         {fpsData.length > 0 && (
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
-            <h4 className="text-sm font-medium text-gray-700 mb-2">FPS Over Time</h4>
-            <div className="h-32 flex items-end gap-1">
+          <div className="performance-tab__chart">
+            <h4 className="performance-tab__chart-title">FPS Over Time</h4>
+            <div className="performance-tab__chart-bars" role="img" aria-label={`FPS over time, last ${fpsData.length} samples`}>
               {fpsData.map((fps, i) => (
                 <div
                   key={i}
-                  className="flex-1 bg-amber-500 rounded-t"
-                  style={{ height: `${(fps / 60) * 100}%` }}
+                  className="performance-tab__chart-bar"
+                  style={{ height: `${Math.max(0, Math.min(100, (fps / 60) * 100))}%` }}
                   title={`${fps.toFixed(1)} FPS`}
                 />
               ))}
             </div>
-            <div className="flex justify-between text-xs text-gray-500 mt-1">
+            <div className="performance-tab__chart-axis">
               <span>0 FPS</span>
               <span>60 FPS</span>
             </div>
@@ -301,22 +347,22 @@ export function PerformanceTab({ port }) {
       </div>
 
       {/* Long Tasks */}
-        {latestRuntime.longTasks && latestRuntime.longTasks.length > 0 && (
-          <div className="mb-6">
-            <h3 className="text-lg font-semibold mb-3">Long Tasks ({'>'}50ms)</h3>
-          <div className="bg-white rounded-lg border border-gray-200">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b">
+      {latestRuntime.longTasks && latestRuntime.longTasks.length > 0 && (
+        <div className="performance-tab__section">
+          <h3 className="performance-tab__section-title">Long Tasks ({'>'}50ms)</h3>
+          <div className="performance-tab__tasks">
+            <table aria-label="Long tasks over 50 milliseconds">
+              <thead>
                 <tr>
-                  <th className="text-left p-2">Start Time</th>
-                  <th className="text-left p-2">Duration</th>
+                  <th scope="col">Start Time</th>
+                  <th scope="col">Duration</th>
                 </tr>
               </thead>
               <tbody>
                 {latestRuntime.longTasks.map((task, i) => (
-                  <tr key={i} className="border-b last:border-b-0">
-                    <td className="p-2">{task.startTime.toFixed(2)}ms</td>
-                    <td className="p-2 text-red-600 font-medium">
+                  <tr key={i}>
+                    <td>{task.startTime.toFixed(2)}ms</td>
+                    <td className="performance-tab__duration">
                       {task.duration.toFixed(2)}ms
                     </td>
                   </tr>
@@ -331,7 +377,7 @@ export function PerformanceTab({ port }) {
       {metrics.coreWebVitals.length === 0 &&
         metrics.loadMetrics.length === 0 &&
         metrics.runtimeMetrics.length === 0 && (
-          <div className="text-center py-12 text-gray-500">
+          <div className="performance-tab__empty">
             No performance metrics available. Metrics will be collected as the app runs.
           </div>
         )}

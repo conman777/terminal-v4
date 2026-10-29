@@ -38,52 +38,28 @@ describe('windowActivity', () => {
     expect(isWindowActive()).toBe(false);
   });
 
-  it('treats blurred documents as inactive even when visible', () => {
+  it('keeps a visible document active without focus so live terminals stay connected', () => {
     mockWindowState({ hidden: false, hasFocus: false });
-    expect(isWindowActive()).toBe(false);
-  });
-
-  it('treats focused text entry as active even when document.hasFocus() is false', () => {
-    mockWindowState({ hidden: false, hasFocus: false });
-    const input = document.createElement('textarea');
-    document.body.appendChild(input);
-    input.focus();
-
     expect(isWindowActive()).toBe(true);
-
-    input.remove();
   });
 
-  it('notifies subscribers for blur and focus transitions', () => {
+  it('notifies subscribers when visibility changes and stays active across blur', () => {
     mockWindowState({ hidden: false, hasFocus: true });
     const listener = vi.fn();
     const unsubscribe = subscribeWindowActivity(listener);
 
     document.hasFocus = vi.fn(() => false);
     window.dispatchEvent(new Event('blur'));
-    expect(listener).toHaveBeenLastCalledWith(false);
+    const afterBlur = listener.mock.lastCall[0];
 
-    document.hasFocus = vi.fn(() => true);
-    window.dispatchEvent(new Event('focus'));
-    expect(listener).toHaveBeenLastCalledWith(true);
+    mockWindowState({ hidden: true, hasFocus: false });
+    document.dispatchEvent(new Event('visibilitychange'));
+    const afterHide = listener.mock.lastCall[0];
 
-    unsubscribe();
-  });
-
-  it('keeps subscribers active when blur happens during focused text entry', () => {
     mockWindowState({ hidden: false, hasFocus: true });
-    const input = document.createElement('textarea');
-    document.body.appendChild(input);
-    input.focus();
-
-    const listener = vi.fn();
-    const unsubscribe = subscribeWindowActivity(listener);
-
-    document.hasFocus = vi.fn(() => false);
-    window.dispatchEvent(new Event('blur'));
-    expect(listener).toHaveBeenLastCalledWith(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect([afterBlur, afterHide, listener.mock.lastCall[0]]).toEqual([true, false, true]);
 
     unsubscribe();
-    input.remove();
   });
 });

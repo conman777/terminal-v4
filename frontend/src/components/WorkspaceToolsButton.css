@@ -1,22 +1,52 @@
-.workspace-tools-button { border: 1px solid var(--border-color, #374151); background: transparent; color: inherit; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.workspace-tools-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 5px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 13px/1.5 var(--font-ui); cursor: pointer; white-space: nowrap; }
+.workspace-tools-button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.workspace-tools-button-icon-only { width: 32px; min-width: 32px; padding: 0; }
+.workspace-tools-button:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .workspace-tools-button:disabled { opacity: .5; cursor: default; }
-.workspace-tools-overlay { z-index: 1200; padding: 20px; }
-.workspace-tools-dialog { width: min(100%, 1050px); max-height: min(90dvh, 900px); display: flex; flex-direction: column; overflow: hidden; color: var(--text-primary, #e5e7eb); background: var(--bg-primary, #111827); border: 1px solid var(--border-color, #374151); border-radius: 12px; box-shadow: 0 20px 80px #0008; }
-.workspace-tools-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 20px; }
+.workspace-tools-button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.workspace-tools-overlay { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; z-index: 2000; box-sizing: border-box; padding: 20px; }
+.workspace-tools-dialog { box-sizing: border-box; width: min(100%, 1050px); max-height: min(100%, 900px); display: flex; flex-direction: column; overflow: hidden; color: var(--text-primary); background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 8px; box-shadow: var(--shadow-lg); font: 14px/1.5 var(--font-ui); }
+.workspace-tools-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; flex-shrink: 0; padding: 8px 16px; border-bottom: 1px solid var(--border-subtle); }
 .workspace-tools-dialog > header > div { min-width: 0; }
-.workspace-tools-dialog h2 { margin: 0; font-size: 20px; }
-.workspace-tools-dialog > header p { margin: 6px 0 0; color: var(--text-secondary, #9ca3af); overflow-wrap: anywhere; font-size: 12px; }
-.workspace-tools-dialog > header button { background: transparent; color: inherit; border: 0; min-width: 40px; min-height: 40px; font-size: 24px; }
-.workspace-tools-tabs { display: flex; gap: 4px; overflow-x: auto; flex-shrink: 0; padding: 0 16px 12px; border-bottom: 1px solid var(--border-color, #374151); }
-.workspace-tools-tabs > button { flex-shrink: 0; border: 0; background: transparent; color: var(--text-secondary, #9ca3af); padding: 10px 12px; border-radius: 6px; cursor: pointer; }
-.workspace-tools-tabs > button[aria-selected=true] { color: var(--text-primary, #e5e7eb); background: var(--bg-secondary, #1f2937); }
-.workspace-tools-content { padding: 18px; min-height: 160px; overflow: auto; overscroll-behavior: contain; }
-@media (max-width: 600px) { .workspace-tools-overlay { padding: 8px; } .workspace-tools-dialog { max-height: calc(100dvh - 16px); } .workspace-tools-content { padding: 12px; } .workspace-tools-dialog > header { padding: 12px; } .workspace-tools-tabs { padding-inline: 8px; } }
-
-@media (max-width: 600px) {
-  .workspace-tools-dialog button, .workspace-tools-content input:not([type=checkbox]):not([type=range]), .workspace-tools-content select { min-height: 44px; }
-  .workspace-tools-content input[type=checkbox] { width: 18px; height: 18px; }
-  .session-replay-output { box-sizing: border-box; }
+.workspace-tools-dialog h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
+.workspace-tools-dialog > header p { margin: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 16px; }
+.workspace-tools-dialog > header > button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 28px; padding: 0; flex-shrink: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 22px; cursor: pointer; }
+.workspace-tools-body { display: grid; grid-template-columns: 208px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.workspace-tools-tabs { display: flex; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 8px; border-right: 1px solid var(--border-subtle); }
+.workspace-tools-group { flex-shrink: 0; }
+.workspace-tools-group h3 { margin: 4px 8px 6px; color: var(--text-muted); font-size: 11px; line-height: 1.5; font-weight: 500; }
+.workspace-tools-group > button { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); text-align: left; font: 13px/1.5 var(--font-ui); cursor: pointer; }
+.workspace-tools-group > button > span:first-child { display: grid; gap: 3px; min-width: 0; }
+.workspace-tools-group small { display: none; color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.workspace-tools-group > button[aria-selected=true], .workspace-tools-group > button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.workspace-tools-group > button[aria-selected=true] { border-color: var(--border-default); }
+.workspace-tools-chevron { display: none; color: var(--text-muted); font-size: 20px; }
+.workspace-tools-content { padding: 16px; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.workspace-tools-content > [role=tabpanel] { min-width: 0; }
+.workspace-tools-content > [role=tabpanel]:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 4px; }
+.workspace-tools-content > [role=alert] { color: var(--error); font-size: 13px; overflow-wrap: anywhere; }
+.workspace-tools-content :is(.workspace-git-panel, .workspace-rewind-panel, .workspace-proposals, .workspace-installed-skills, .file-transfer-panel, .collaboration-panel, .session-replay-panel) > header { display: grid; gap: 6px; }
+.workspace-tools-back { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: 13px var(--font-ui); cursor: pointer; }
+.workspace-tools-back > span { font-size: 22px; }
+.workspace-tools-dialog [hidden] { display: none !important; }
+.workspace-tools-dialog :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+@media (max-width: 980px) {
+  .workspace-tools-overlay { padding: 12px; }
+  .workspace-tools-dialog { width: 100%; max-height: 100%; }
 }
-
-@media (max-width: 600px) { .workspace-tools-dialog > header button { min-height: 44px; min-width: 44px; } }
+@media (max-width: 768px) {
+  .workspace-tools-overlay { padding: 8px; }
+  .workspace-tools-body { display: flex; flex-direction: column; }
+  .workspace-tools-tabs { gap: 12px; padding: 12px 8px; border: 0; }
+  .workspace-tools-group > button { min-height: 52px; }
+  .workspace-tools-group small, .workspace-tools-chevron { display: block; }
+  .workspace-tools-group > button[aria-selected=true] { background: transparent; border-color: transparent; }
+  .workspace-tools-content { padding: 12px; }
+}
+@media (pointer: coarse), (max-width: 768px) {
+  .workspace-tools-button, .workspace-tools-dialog > header > button { min-width: 44px; min-height: 44px; }
+  .workspace-tools-button-icon-only { width: 44px; min-width: 44px; }
+  .workspace-tools-dialog > header > button { width: 44px; height: 44px; }
+  .workspace-tools-dialog button, .workspace-tools-content :is(input:not([type=checkbox]):not([type=range]), select, summary) { min-height: 44px; }
+  .workspace-tools-dialog .workspace-tools-content :is(input:not([type=checkbox]):not([type=range]), select, textarea) { font-size: 16px; }
+}

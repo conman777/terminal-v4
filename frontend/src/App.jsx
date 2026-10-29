@@ -5,22 +5,39 @@ import RemoteTunnelsPanel from './components/RemoteTunnelsPanel';
 import { GuestInvitationGate } from './components/GuestInvitationGate';
 import { EnvironmentIdentityGate } from './components/EnvironmentIdentityGate';
 import { RemoteEnvironmentSwitcher } from './components/RemoteEnvironmentsPanel';
-import { getEnvironmentStorage, getActiveEnvironment, subscribeEnvironment, setActiveEnvironment, setEnvironmentIdentity } from './utils/remoteEnvironments';
+import { getEnvironmentStorage, getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment, setActiveEnvironment, setEnvironmentIdentity } from './utils/remoteEnvironments';
+import { captureAuthScope, isAuthScopeCurrent } from './utils/auth';
 import { shouldInitializeWorkspacePane } from './utils/paneSessionAssignments';
-import { resolveAgentLaunchCommand } from './utils/agentLauncher';
+import { resolveAgentSessionLaunch } from './utils/agentLauncher';
 import { reopenWorkspaceSession } from './utils/workspaceNavigation';
+import { isStructuredSessionId } from './utils/structuredSessions';
+import { busyTransitions, notifyAgent } from './utils/agentNotifications';
+import { CommandPalette } from './components/CommandPalette';
+import { FindInThread } from './components/FindInThread';
+import { ScreenshotGallery } from './components/ScreenshotGallery';
+import { formatBinding, loadBindings } from './utils/keybindings';
+import { isCompanionSession } from './utils/sidebarSessionScope';
+import { projectNameFromPath } from './utils/projectBadge';
 import { useCallback, useEffect, useState, useRef, useMemo, lazy, Suspense, useSyncExternalStore } from 'react';
 import { TerminalMicButton } from './components/TerminalMicButton';
 import { SplitPaneContainer } from './components/SplitPaneContainer';
 // SessionTabBar is now rendered inside Header
 import { FolderBrowserModal } from './components/FolderBrowserModal';
 import { AddScanFolderModal } from './components/AddScanFolderModal';
-import { Header } from './components/Header';
 import { FileManager } from './components/FileManager';
 import ThreadsSidebar from './components/ThreadsSidebar';
 import { MobileHeader } from './components/MobileHeader';
 import { MobileShell } from './components/MobileShell';
 import { WorkspaceStartView } from './components/WorkspaceStartView';
+import { WorkspaceToolsButton } from './components/WorkspaceToolsButton';
+import { WorkspaceProfileButton } from './components/WorkspaceProfileButton';
+import OwnershipRecovery from './components/OwnershipRecovery';
+import OwnerCleanupRecovery from './components/OwnerCleanupRecovery';
+import { RawInputRecovery } from './components/RawInputRecovery';
+import { RawInputPending } from './components/RawInputPending';
+import { getComposerDraftStore } from './utils/composerDraftStore';
+import { openWorkspaceImageConversation, startWorkspacePrompt } from './utils/workspaceStart';
+import { environmentAllows } from './utils/runtimePermissions';
 import { MobileKeyboardDebugOverlay } from './components/MobileKeyboardDebugOverlay';
 import LoginPage from './components/LoginPage';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -39,23 +56,24 @@ import { useScrollDirection } from './hooks/useScrollDirection';
 import { useSessionActivity } from './hooks/useSessionActivity';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useModalState } from './hooks/useModalState';
+import { useBrowserApprovals } from './hooks/useBrowserApprovals';
+import { MountOnFirstOpen } from './components/MountOnFirstOpen';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './ProTerminalEmpty.css';
 import './ProUI.css';
+import { WorkspacePanel } from './components/WorkspacePanel';
+import './AppSurface.css';
 import { apiFetch } from './utils/api';
 import {
   createCustomAiProvider,
   getNewTabAiOptions,
-  normalizeAiType,
-  shouldCreateStructuredSession
+  normalizeAiType
 } from './utils/aiProviders';
 import { isMeaningfulSessionTopic } from './utils/sessionTopic';
 import { scopeThreadsSidebarData } from './utils/sidebarSessionScope';
 import { persistSidebarProject } from './utils/sidebarProjectPersistence';
 import {
-  createWorkspaceAutoStartKey,
   resolveStartupWorkspacePath,
-  shouldAutoStartWorkspaceSession,
 } from './utils/startupWorkspace';
 import { resolveTerminalWebglEnabled } from './utils/terminalRendererPolicy';
 import { resolveDesktopTerminalInputPreference } from './utils/desktopTypingPreference';
@@ -133,6 +151,11 @@ function lazyWithChunkRecovery(importer, chunkName, pickDefault = (module) => mo
   });
 }
 
+const WorkspaceBrowser = lazyWithChunkRecovery(
+  () => import('./components/WorkspaceBrowser'),
+  'WorkspaceBrowser',
+  (module) => module.default
+);
 const PreviewPanel = lazyWithChunkRecovery(
   () => import('./components/PreviewPanel'),
   'PreviewPanel',
@@ -173,12 +196,22 @@ const SystemResourcesView = lazyWithChunkRecovery(
   (module) => module.SystemResourcesView
 );
 
-function AppContent() {
+function AppContent({ serverControl }) {
   const [showWorkspaceStart, setShowWorkspaceStart] = useState(false);
+  const [workspaceDraftPath, setWorkspaceDraftPath] = useState('');
+  const [workspaceResponses, setWorkspaceResponses] = useState(() => new Map());
+  const handleWorkspaceResponseChange = useCallback((sessionId, text) => {
+    if (sessionId) setWorkspaceResponses(previous => previous.get(sessionId) === text ? previous : new Map(previous).set(sessionId, text));
+  }, []);
   const storage = useMemo(() => getEnvironmentStorage(), []);
   const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   const { logout, user } = useAuth();
-  const { setTheme } = useTheme();
+  const { setTheme, toggleTheme } = useTheme();
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [findInThreadOpen, setFindInThreadOpen] = useState(false);
+  const [findFocusRequest, setFindFocusRequest] = useState(null);
+  const [pendingPaneFind, setPendingPaneFind] = useState(null);
+  const [showScreenshots, setShowScreenshots] = useState(false);
 
   useEffect(() => {
     if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
@@ -254,13 +287,16 @@ function AppContent() {
     () => resolveStartupWorkspacePath(projectInfo?.cwd, recentFolders),
     [projectInfo?.cwd, recentFolders]
   );
+  const currentWorkspacePath = projectInfo?.cwd || (!activeSessionId ? startupWorkspacePath : '');
 
   const {
     bookmarks, addBookmark, updateBookmark, deleteBookmark, executeBookmark,
+    bookmarksLoadStatus, bookmarksLoadError, reloadBookmarks, bookmarksScopeKey,
   } = useBookmarks();
 
   const {
     notes, addNote, updateNote, deleteNote,
+    notesLoadStatus, notesLoadError, reloadNotes, notesScopeKey,
   } = useNotes();
 
   const {
@@ -274,6 +310,7 @@ function AppContent() {
     reconcilePaneSessions,
     focusPane,
     splitPane,
+    resizeSplit,
     closePane,
     toggleFullscreen,
     exitFullscreen,
@@ -290,6 +327,30 @@ function AppContent() {
     moveSessionToDesktop,
     addSessionToDesktop,
   } = usePaneLayout();
+  const historyPaneScope = useRef(null);
+  historyPaneScope.current = { desktopId: activeDesktopId, panes: legacyLayout.panes, activePaneId: fullscreenPaneId || legacyLayout.activePaneId, activeSessionId, sessions, showWorkspaceStart };
+  const imageStartDesktopRef = useRef({ desktopId: activeDesktopId });
+  if (imageStartDesktopRef.current.desktopId !== activeDesktopId) imageStartDesktopRef.current = { desktopId: activeDesktopId };
+  const imageStartDesktop = imageStartDesktopRef.current;
+  const historyNavigationRequest = useRef(0);
+  const historyInteractionCleanup = useRef(null);
+  const historyNavigationExpanding = useRef(false);
+  const [historyNavigation, setHistoryNavigation] = useState(null);
+  const [historyNavigationNotice, setHistoryNavigationNotice] = useState('');
+  const cancelHistoryNavigation = useCallback(() => {
+    historyNavigationRequest.current += 1;
+    historyInteractionCleanup.current?.();
+    historyInteractionCleanup.current = null;
+    setHistoryNavigation(null);
+    setHistoryNavigationNotice('');
+  }, []);
+  useEffect(() => () => historyInteractionCleanup.current?.(), []);
+  const mobileHistoryContentRef = useRef(null);
+  const filePaneScope = useRef(null);
+  const activeFilePaneId = fullscreenPaneId || legacyLayout.activePaneId;
+  filePaneScope.current = { desktopId: activeDesktopId, pane: legacyLayout.panes.find(pane => pane.id === activeFilePaneId) };
+  const [filePaneTarget, setFilePaneTarget] = useState(null);
+  const filePaneRequest = useRef(0);
 
   const {
     previewUrl,
@@ -316,16 +377,52 @@ function AppContent() {
     showSystemResources, setShowSystemResources,
     showNewSessionModal, setShowNewSessionModal,
   } = useModalState();
+  const [newSessionLaunchMode, setNewSessionLaunchMode] = useState(undefined);
+  const openNewTerminal = useCallback(() => {
+    setNewSessionLaunchMode('terminal');
+    setShowNewSessionModal(true);
+  }, [setShowNewSessionModal]);
   const [keybarOpen, setKeybarOpen] = useState(false);
   const [keybarHeight, setKeybarHeight] = useState(0);
   const [mobileView, setMobileView] = useState('terminal');
+  const [mobileThreadTerminal, setMobileThreadTerminal] = useState(null);
   const [chatMode, setChatMode] = useState(false);
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [browserExpanded, setBrowserExpanded] = useState(false);
+  const browserOpenerRef = useRef(null);
+  const isMobile = useMobileDetect();
+  const browserVisible = showBrowser && !showSystemResources && (isMobile || !fullscreenPaneId);
+  const browserRequests = useBrowserApprovals(!browserVisible, 2500, 10000);
+  const toggleBrowser = () => {
+    if (!browserVisible) browserOpenerRef.current = (isMobile && document.querySelector('[aria-label="Menu"]')) || document.activeElement;
+    setShowBrowser(!browserVisible);
+    setBrowserExpanded(false);
+    if (fullscreenPaneId) exitFullscreen();
+    setShowSystemResources(false);
+    setShowPreview(false);
+    setMainTerminalMinimized(false);
+  };
+  const closeBrowser = () => {
+    setShowBrowser(false);
+    setBrowserExpanded(false);
+    requestAnimationFrame(() => {
+      const opener = browserOpenerRef.current;
+      if (opener?.isConnected && opener !== document.body && opener !== document.documentElement) opener.focus();
+      else document.querySelector('[aria-label="Toggle browser pane"], [aria-label="Browser"], [aria-label="More actions"], [aria-label="Menu"]')?.focus();
+    });
+  };
+  const toggleWorkspacePreview = () => {
+    setShowBrowser(false);
+    setBrowserExpanded(false);
+    togglePreview();
+  };
   const [mobileTerminalIndex, setMobileTerminalIndex] = useState(0);
   const [showAddScanFolderModal, setShowAddScanFolderModal] = useState(false);
   const [addScanFolderError, setAddScanFolderError] = useState('');
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [mainTerminalFitToken, setMainTerminalFitToken] = useState(0);
   const mainTerminalFitRafRef = useRef(null);
+  const previewDragRef = useRef(null);
   const [mainTerminalMinimized, setMainTerminalMinimized] = useState(() => {
     try {
       return storage.getItem('mainTerminalMinimized') === 'true';
@@ -347,19 +444,39 @@ function AppContent() {
   }, [showPreview]); // Only trigger when showPreview changes
 
   const mainContentRef = useRef(null);
+  const handlePreviewOpenTerminal = useCallback(() => {
+    setMobileView('terminal');
+    setShowPreview(false);
+    setMainTerminalMinimized(false);
+    openNewTerminal();
+  }, [openNewTerminal, setShowPreview]);
+  const resourcesSurfaceRef = useRef(null);
+  const workspaceFocusRef = useRef(null);
+  const rememberWorkspaceFocus = event => { workspaceFocusRef.current = event.target; };
+  const closeSystemResources = () => {
+    setShowSystemResources(false);
+    requestAnimationFrame(() => {
+      const previous = workspaceFocusRef.current;
+      if (previous?.isConnected && !previous.closest('[inert]')) previous.focus();
+      else document.querySelector('.app-workspace-surface textarea:not(:disabled), .app-workspace-surface button:not(:disabled)')?.focus();
+    });
+  };
+  useEffect(() => {
+    if (showSystemResources) resourcesSurfaceRef.current?.focus();
+  }, [showSystemResources]);
   const focusTerminalRef = useRef(null);
-  const autoStartedWorkspaceRef = useRef('');
   const mobileViewportAtBottomRef = useRef(true);
   const previousActiveSessionRef = useRef(null);
   const [isMobileTextEntryFocused, setIsMobileTextEntryFocused] = useState(false);
-  const isMobile = useMobileDetect();
   const {
     height: measuredViewportHeight,
     width: viewportWidth,
     offsetTop: viewportOffsetTop,
     offsetLeft: viewportOffsetLeft
   } = useViewportMetrics();
-  const viewportHeight = measuredViewportHeight ? Math.max(0, measuredViewportHeight - 44) : measuredViewportHeight;
+  const touchDesktopViewport = !isMobile && Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+  const viewportChromeHeight = isMobile || (touchDesktopViewport && viewportOffsetTop > 0) ? 0 : 44;
+  const viewportHeight = measuredViewportHeight ? Math.max(0, measuredViewportHeight - viewportChromeHeight) : measuredViewportHeight;
   useMobileInputZoomLock(isMobile && isMobileTextEntryFocused);
   const { isCollapsed: isNavCollapsed, handleScroll: handleScrollDirection, reset: resetScrollDirection } = useScrollDirection();
   const terminalFontSizeStorageKey = isMobile ? 'terminalFontSizeMobile' : 'terminalFontSizeDesktop';
@@ -371,6 +488,12 @@ function AppContent() {
       return shell === 'claude' || title.includes('claude');
     }) || null
   ), [activeSessions]);
+  // Preview's split shows a live shell, so agent chats (which have no terminal) stay out of it.
+  const previewTerminalSessions = useMemo(
+    () => activeSessions.filter(session => !isStructuredSessionId(session.id)),
+    [activeSessions]
+  );
+  const previewTerminalSessionId = previewTerminalSessions.some(session => session.id === activeSessionId) ? activeSessionId : null;
 
   // Derive the effective carousel index synchronously to avoid a stale-index render
   // when activeSessions reorders between loadSessions calls.
@@ -425,10 +548,16 @@ function AppContent() {
     setMobileView(normalizedView);
   }, [activeSessionId, activeSessions, keybarOpen]);
 
-  useEffect(() => {
-    if (!isMobile || mobileView !== 'preview' || previewUrl) return;
-    setMobileView('terminal');
-  }, [isMobile, mobileView, previewUrl]);
+  const closeMobilePreview = () => {
+    const previous = document.activeElement;
+    handleMobileViewChange('terminal');
+    handlePreviewClose();
+    requestAnimationFrame(() => {
+      if (document.activeElement === previous || document.activeElement === document.body) {
+        document.querySelector('.mobile-header [aria-label="Menu"]')?.focus({ preventScroll: true });
+      }
+    });
+  };
 
   const handleMobileViewportStateChange = useCallback((atBottom) => {
     mobileViewportAtBottomRef.current = atBottom;
@@ -525,10 +654,20 @@ function AppContent() {
   const {
     activity: sessionActivity,
     markActivity: markSessionActivity,
+    markUnread: markSessionUnread,
     setFocusedSession,
     setBusy: setSessionBusy,
     removeSession: removeSessionActivity
   } = useSessionActivity();
+  const previousActivityRef = useRef({});
+  const busySinceRef = useRef({});
+  useEffect(() => {
+    for (const id of busyTransitions(sessionActivity, previousActivityRef.current, busySinceRef.current)) {
+      notifyAgent('finished', sessions.find(session => session.id === id)?.title);
+    }
+    previousActivityRef.current = sessionActivity;
+  }, [sessionActivity, sessions]);
+
 
   // Keep a stable ref to sessions so handleSessionBusyChange can read current
   // session data without adding `sessions` to its dependency array.
@@ -542,7 +681,7 @@ function AppContent() {
     if (isBusy && sessionId && sessionId !== activeSessionId) {
       markSessionActivity(sessionId);
     }
-    setSessionBusy(sessionId, Boolean(isBusy));
+    setSessionBusy(sessionId, Boolean(isBusy), { persistent: isStructuredSessionId(sessionId) });
     // Auto-generate topic once, on the first idle transition, if no topic yet
     if (!isBusy && sessionId && !topicGeneratedRef.current.has(sessionId)) {
       const session = sessionsRef.current?.find((s) => s.id === sessionId);
@@ -568,7 +707,7 @@ function AppContent() {
       const parsedLastActivity = Date.parse(session.lastActivityAt || '');
       const snapshotTs = Number.isFinite(parsedLastActivity) ? parsedLastActivity : 0;
 
-      setSessionBusy(session.id, session.isBusy, { lastActivityAt: snapshotTs });
+      setSessionBusy(session.id, session.isBusy, { lastActivityAt: snapshotTs, persistent: isStructuredSessionId(session.id), statusSeq: session.statusSeq });
     });
   }, [sessions, setSessionBusy]);
 
@@ -995,43 +1134,204 @@ function AppContent() {
 
   // Handlers that wrap context functions with local logic
   const handleSelectSession = useCallback((sessionId) => {
+    cancelHistoryNavigation();
     setShowWorkspaceStart(false);
     selectSession(sessionId);
+    const displayedPane = legacyLayout.panes.find(pane => pane.sessionId === sessionId);
+    if (displayedPane) {
+      focusPane(displayedPane.id);
+      if (fullscreenPaneId && displayedPane.id !== fullscreenPaneId) toggleFullscreen(displayedPane.id);
+    } else if (visibleDesktopSessions.some(session => session.id === sessionId)) {
+      setPaneSession(fullscreenPaneId || legacyLayout.activePaneId, sessionId);
+    }
     setShowPreview(false);
-  }, [selectSession, setShowPreview]);
+    if (isMobile) setMobileView('terminal');
+  }, [cancelHistoryNavigation, focusPane, setPaneSession, legacyLayout, selectSession, setShowPreview, visibleDesktopSessions, fullscreenPaneId, toggleFullscreen, isMobile]);
 
   const handleRestoreSession = useCallback(async (sessionId) => {
-    await restoreSession(sessionId);
+    const result = await restoreSession(sessionId);
+    if (result?.isCurrent?.() === false) return;
     addSessionToDesktop(sessionId);
     setShowPreview(false);
   }, [restoreSession, addSessionToDesktop, setShowPreview]);
 
-  const handleSelectHistorySession = useCallback(async (sessionId, paneId = legacyLayout.activePaneId) => {
+  const handleSelectHistorySession = useCallback(async (sessionId, paneId = fullscreenPaneId || legacyLayout.activePaneId) => {
+    cancelHistoryNavigation();
     setShowWorkspaceStart(false);
-    await reopenWorkspaceSession(sessionId, { restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane }, paneId);
+    const desktopId = activeDesktopId;
+    const isTargetCurrent = () => historyPaneScope.current.desktopId === desktopId
+      && (!paneId || historyPaneScope.current.panes.some(pane => pane.id === paneId));
+    const result = await reopenWorkspaceSession(sessionId, { restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, isTargetCurrent }, paneId);
+    if (result?.reopened === false || result?.isCurrent?.() === false) return;
     setShowPreview(false);
-  }, [restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, legacyLayout.activePaneId, setShowPreview]);
+  }, [cancelHistoryNavigation, restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, legacyLayout.activePaneId, setShowPreview, fullscreenPaneId, activeDesktopId]);
+
+  const handleSelectHistoryResult = useCallback(async row => {
+    historyInteractionCleanup.current?.();
+    const request = ++historyNavigationRequest.current;
+    const cancelOnInteraction = () => cancelHistoryNavigation();
+    document.addEventListener('pointerdown', cancelOnInteraction, true);
+    document.addEventListener('keydown', cancelOnInteraction, true);
+    document.addEventListener('input', cancelOnInteraction, true);
+    historyInteractionCleanup.current = () => {
+      document.removeEventListener('pointerdown', cancelOnInteraction, true);
+      document.removeEventListener('keydown', cancelOnInteraction, true);
+      document.removeEventListener('input', cancelOnInteraction, true);
+    };
+    setHistoryNavigation(null);
+    setHistoryNavigationNotice('Opening conversation…');
+    const paneId = fullscreenPaneId || legacyLayout.activePaneId;
+    const initial = historyPaneScope.current;
+    const initialPane = initial.panes.find(pane => pane.id === paneId);
+    const isTargetCurrent = () => {
+      const scope = historyPaneScope.current;
+      return historyNavigationRequest.current === request && scope.desktopId === initial.desktopId
+        && scope.activePaneId === paneId && scope.activeSessionId === initial.activeSessionId
+        && (!scope.showWorkspaceStart || initial.showWorkspaceStart)
+        && scope.panes.find(pane => pane.id === paneId)?.sessionId === initialPane?.sessionId;
+    };
+    setShowWorkspaceStart(false);
+    try {
+      const result = await reopenWorkspaceSession(row.sessionId, { restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, isTargetCurrent }, paneId);
+      if (!result?.reopened || result.isCurrent?.() === false || historyNavigationRequest.current !== request) {
+        if (historyNavigationRequest.current === request) cancelHistoryNavigation();
+        return;
+      }
+      setShowPreview(false);
+      if (isMobile) setMobileView('terminal');
+      const anchor = row.matchType === 'message' && row.anchor?.type === 'message' && typeof row.anchor.messageId === 'string' && row.anchor.messageId && ['user', 'assistant'].includes(row.anchor.role) ? row.anchor : null;
+      setHistoryNavigationNotice(anchor ? 'Finding the matching message…' : 'Opening conversation…');
+      setHistoryNavigation({ request, paneId, desktopId: initial.desktopId, sessionId: row.sessionId, anchor, isCurrent: result.isCurrent, mobile: isMobile });
+    } catch (error) {
+      if (historyNavigationRequest.current === request) {
+        historyInteractionCleanup.current?.();
+        historyInteractionCleanup.current = null;
+        setHistoryNavigationNotice('Could not open this conversation. It may no longer be available.');
+      }
+    }
+  }, [fullscreenPaneId, legacyLayout.activePaneId, restoreSession, unarchiveSession, addSessionToDesktop, selectSession, setPaneSession, focusPane, setShowPreview, isMobile, cancelHistoryNavigation]);
+
+  useEffect(() => {
+    if (!historyNavigation) return undefined;
+    const { request, paneId, desktopId, sessionId, anchor, isCurrent, mobile } = historyNavigation;
+    let finished = false;
+    const finish = notice => {
+      if (finished) return;
+      finished = true;
+      observer.disconnect();
+      clearTimeout(timeout);
+      if (historyNavigationRequest.current !== request) return;
+      historyInteractionCleanup.current?.();
+      historyInteractionCleanup.current = null;
+      setHistoryNavigationNotice(notice);
+      setHistoryNavigation(null);
+    };
+    const findMessage = () => {
+      const scope = historyPaneScope.current;
+      if (historyNavigationRequest.current === request && !scope.sessions.some(session => session.id === sessionId)) {
+        finish('This conversation is no longer available.');
+        return;
+      }
+      if (historyNavigationRequest.current !== request || isCurrent?.() === false || scope.desktopId !== desktopId
+        || scope.activePaneId !== paneId || scope.activeSessionId !== sessionId || scope.showWorkspaceStart) {
+        finish('');
+        return;
+      }
+      const host = mobile ? mobileHistoryContentRef.current : [...(mainContentRef.current?.querySelectorAll('[data-pane-host]') || [])].find(node => node.dataset.paneHost === paneId);
+      if (!host || scope.panes.find(pane => pane.id === paneId)?.sessionId !== sessionId || !scope.sessions.some(session => session.id === sessionId)) return;
+      if (!anchor) {
+        finish('Conversation opened. An exact message location is not available for this result.');
+        return;
+      }
+      const view = [...host.querySelectorAll('[data-conversation-session-id]')].find(node => node.dataset.conversationSessionId === sessionId);
+      if (!view) return;
+      const target = [...view.querySelectorAll('[data-message-id]')].find(node => node.dataset.messageId === anchor.messageId && node.dataset.messageRole === anchor.role);
+      if (target) {
+        target.focus({ preventScroll: true });
+        target.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+        target.classList.add('history-search-highlight');
+        setTimeout(() => target.classList.remove('history-search-highlight'), 4000);
+        finish('Matching message located.');
+        return;
+      }
+      const folded = [...view.querySelectorAll('[data-folded-message-id]')].find(node => node.dataset.foldedMessageId === anchor.messageId && node.dataset.foldedMessageRole === anchor.role);
+      const toggle = folded?.parentElement?.querySelector('.conversation-work-toggle[aria-expanded="false"]');
+      if (toggle) {
+        historyNavigationExpanding.current = true;
+        try { toggle.click(); } finally { historyNavigationExpanding.current = false; }
+      }
+    };
+    const observer = new MutationObserver(findMessage);
+    observer.observe((mobile ? mobileHistoryContentRef.current : mainContentRef.current) || document.body, { childList: true, subtree: true });
+    const timeout = setTimeout(() => {
+      if (historyNavigationRequest.current !== request || isCurrent?.() === false) { finish(''); return; }
+      const exists = historyPaneScope.current.sessions.some(session => session.id === sessionId);
+      finish(exists ? 'The matching message could not be located in this conversation.' : 'This conversation is no longer available.');
+    }, 8000);
+    findMessage();
+    return () => {
+      observer.disconnect();
+      clearTimeout(timeout);
+    };
+  }, [historyNavigation, activeDesktopId, activeSessionId, fullscreenPaneId, legacyLayout.activePaneId, desktopPaneAssignmentSignature, showWorkspaceStart, cancelHistoryNavigation]);
 
   const handlePaneSessionSelect = useCallback((paneId, sessionId) => {
+    cancelHistoryNavigation();
     // Ensure this pane is active before syncing global active session state.
     focusPane(paneId);
     const newSessionId = setPaneSession(paneId, sessionId);
     if (newSessionId) {
       selectSession(newSessionId);
     }
-  }, [focusPane, setPaneSession, selectSession]);
+  }, [cancelHistoryNavigation, focusPane, setPaneSession, selectSession]);
 
   const handleRenameThread = useCallback(async (sessionId, title) => {
-    await renameSession(sessionId, title);
-    await updateSessionTopic(sessionId, title, false);
+    const auth = captureAuthScope();
+    const signal = getEnvironmentSignal();
+    const result = await renameSession(sessionId, title);
+    if (result?.ok === false) return result;
+    if (signal.aborted || signal !== getEnvironmentSignal() || !isAuthScopeCurrent(auth)) {
+      return { ok: false, error: new Error('The account or environment changed. Check the original thread before trying again.') };
+    }
+    try {
+      return await updateSessionTopic(sessionId, title, false);
+    } catch (error) {
+      return { ok: false, error };
+    }
   }, [renameSession, updateSessionTopic]);
 
   const handlePaneFocus = useCallback((paneId) => {
+    if (historyNavigationExpanding.current) return;
+    cancelHistoryNavigation();
+    filePaneScope.current = { desktopId: historyPaneScope.current.desktopId, pane: historyPaneScope.current.panes.find(pane => pane.id === paneId) };
     const sessionId = focusPane(paneId);
     if (sessionId) {
       selectSession(sessionId);
     }
-  }, [focusPane, selectSession]);
+    if (fullscreenPaneId && paneId !== fullscreenPaneId) toggleFullscreen(paneId);
+  }, [cancelHistoryNavigation, focusPane, selectSession, fullscreenPaneId, toggleFullscreen]);
+
+  const handlePaneFind = useCallback((paneId, sessionId, opener) => {
+    setPendingPaneFind({ paneId, sessionId, opener, desktopId: activeDesktopId });
+  }, [activeDesktopId]);
+
+  useEffect(() => {
+    if (!pendingPaneFind) return;
+    setPendingPaneFind(null);
+    const { paneId, sessionId, opener, desktopId } = pendingPaneFind;
+    const pane = legacyLayout.panes.find(item => item.id === paneId);
+    if (isMobile || showWorkspaceStart || activeDesktopId !== desktopId
+      || (fullscreenPaneId || legacyLayout.activePaneId) !== paneId || pane?.sessionId !== sessionId
+      || !opener?.isConnected || document.activeElement !== opener) return;
+    setFindFocusRequest({ opener });
+    setFindInThreadOpen(true);
+  }, [pendingPaneFind, isMobile, showWorkspaceStart, activeDesktopId, fullscreenPaneId, legacyLayout]);
+
+  const handlePaneFullscreen = useCallback((paneId) => {
+    const sessionId = focusPane(paneId);
+    if (sessionId) selectSession(sessionId);
+    toggleFullscreen(paneId);
+  }, [focusPane, selectSession, toggleFullscreen]);
 
   const handleOpenSettings = useCallback(() => {
     setShowSettings(true);
@@ -1040,7 +1340,7 @@ function AppContent() {
   const handleSidebarFolderSelect = useCallback((path) => {
     if (!path) return;
     if (activeSessionId) {
-      navigateSession(activeSessionId, path);
+      void navigateSession(activeSessionId, path).catch(error => window.alert(error.message));
     } else {
       addRecentFolder(path);
     }
@@ -1065,45 +1365,30 @@ function AppContent() {
         }
       } catch { /* createSession already logs */ }
     } else {
+      setNewSessionLaunchMode(undefined);
       setShowNewSessionModal(true);
     }
   }, [addSessionToDesktop, addSidebarProject, createSession, setShowNewSessionModal]);
 
-  useEffect(() => {
-    const autoStartKey = createWorkspaceAutoStartKey(activeDesktopId, startupWorkspacePath);
-    if (!shouldAutoStartWorkspaceSession({
-      loadingSessions,
-      visibleSessionCount: visibleDesktopSessions.length,
-      autoStartKey,
-      lastAutoStartKey: autoStartedWorkspaceRef.current,
-    })) {
-      return;
-    }
+  const handleSubmitWorkspaceStartPrompt = useCallback(async (prompt, options = {}) => {
+    return startWorkspacePrompt(prompt, options, { customAiProviders, createStructuredSession,
+      rememberProject: (cwd, session) => persistSidebarProject(addSidebarProject, cwd, session), addSessionToDesktop, sendToSession });
+  }, [addSessionToDesktop, addSidebarProject, createStructuredSession, customAiProviders, sendToSession]);
 
-    autoStartedWorkspaceRef.current = autoStartKey;
-    handleRequestNewSession(startupWorkspacePath).catch(() => {
-      // createSession already logs the failure; allow retry if the workspace remains empty.
-      autoStartedWorkspaceRef.current = '';
-    });
-  }, [activeDesktopId, handleRequestNewSession, loadingSessions, startupWorkspacePath, visibleDesktopSessions.length]);
+  const handleOpenWorkspaceImageConversation = useCallback(async (prompt, options = {}) => {
+    return openWorkspaceImageConversation(prompt, options, { customAiProviders, createStructuredSession,
+      rememberProject: (cwd, session) => persistSidebarProject(addSidebarProject, cwd, session), addSessionToDesktop,
+      desktopId: imageStartDesktop.desktopId, isDesktopCurrent: () => imageStartDesktopRef.current === imageStartDesktop,
+      onSelected: () => setShowWorkspaceStart(false) });
+  }, [addSessionToDesktop, addSidebarProject, createStructuredSession, customAiProviders, imageStartDesktop]);
 
-  const handleSubmitWorkspaceStartPrompt = useCallback(async (prompt) => {
-    const initialCommand = typeof prompt === 'string' ? prompt.trim() : '';
-    if (!initialCommand) return;
-
-    try {
-      const cwd = startupWorkspacePath || undefined;
-      const session = await createSession({ cwd, initialCommand });
-      if (session?.id) {
-        if (cwd) {
-          persistSidebarProject(addSidebarProject, cwd, session);
-        }
-        addSessionToDesktop(session.id);
-      }
-    } catch {
-      // createSession already logs
-    }
-  }, [addSessionToDesktop, addSidebarProject, createSession, startupWorkspacePath]);
+  // Starts a fresh thread in the same folder with the same agent and model, seeded with a first message.
+  const handleStartThreadWithPrompt = useCallback((prompt, session) => {
+    if (!session?.cwd) return;
+    handleSubmitWorkspaceStartPrompt(prompt, { path: session.cwd, agentId: session.runtime === 'codex' ? 'codex' : session.aiType,
+      selection: session.model ? { model: session.model, reasoning: session.reasoning || '' } : undefined })
+      .catch(error => console.error('Failed to start the new thread', error));
+  }, [handleSubmitWorkspaceStartPrompt]);
 
   const handleCloseNewSessionModal = useCallback(() => {
     setShowNewSessionModal(false);
@@ -1119,20 +1404,12 @@ function AppContent() {
     const newTabAiOptions = getNewTabAiOptions(customAiProviders);
     const selectedAi = newTabAiOptions.find((option) => option.id === aiOptionId) || newTabAiOptions[0];
     const title = tabName || selectedAi.title || undefined;
-    const useStructuredCreation = aiOptionId !== 'cli'
-      && shouldCreateStructuredSession(aiOptionId, customAiProviders);
-    const request = { cwd: path };
-    if (aiOptionId !== 'cli') request.initialCommand = await resolveAgentLaunchCommand(aiOptionId, agentSelection, customAiProviders);
-    request.title = title;
-
     try {
-      const session = useStructuredCreation
-        ? await createStructuredSession({
-            cwd: path,
-            provider: aiOptionId,
-            title
-          })
-        : await createSession(request);
+      const launch = aiOptionId === 'cli' ? { kind: 'terminal' }
+        : await resolveAgentSessionLaunch(aiOptionId, agentSelection, customAiProviders);
+      const session = launch.kind === 'structured'
+        ? await createStructuredSession({ cwd: path, provider: launch.provider, model: launch.model, reasoning: launch.reasoning, serviceTier: launch.serviceTier, title })
+        : await createSession({ cwd: path, title, ...(launch.initialCommand ? { initialCommand: launch.initialCommand } : {}) });
 
       if (session?.id) {
         persistSidebarProject(addSidebarProject, path, session);
@@ -1179,13 +1456,19 @@ function AppContent() {
   }, [customAiProviders]);
 
   // Keyboard shortcuts (desktop only)
+  const keyboardPane = () => {
+    const focusedId = document.activeElement?.closest?.('[data-pane-host]')?.getAttribute('data-pane-host');
+    return legacyLayout.panes.find(pane => pane.id === (focusedId || fullscreenPaneId || legacyLayout.activePaneId));
+  };
   useKeyboardShortcuts({
+    onCommandPalette: () => setCommandPaletteOpen(open => !open),
+    onFindInThread: () => setFindInThreadOpen(true),
     onToggleSidebar: toggleSidebar,
-    onTogglePreview: togglePreview,
+    onTogglePreview: toggleWorkspacePreview,
     onToggleFullScreen: () => {
-      const activePaneId = legacyLayout.activePaneId;
-      if (activePaneId) {
-        toggleFullscreen(activePaneId);
+      const pane = keyboardPane();
+      if (pane) {
+        handlePaneFullscreen(pane.id);
       }
     },
     onFocusPane: (index) => {
@@ -1193,17 +1476,36 @@ function AppContent() {
         handlePaneFocus(legacyLayout.panes[index].id);
       }
     },
-    onNewTerminal: handleRequestNewSession,
+    onNewTerminal: openNewTerminal,
     onCloseTerminal: () => {
-      if (activeSessionId) {
-        closeSession(activeSessionId);
-      }
+      if (showWorkspaceStart) return;
+      const pane = keyboardPane();
+      const sessionId = pane ? pane.sessionId : fullscreenPaneId ? null : activeSessionId;
+      if (sessionId) closeSession(sessionId);
     },
     onExitFullScreen: exitFullscreen,
     isFullScreen: !!fullscreenPaneId,
     paneCount: legacyLayout.panes.length,
-    enabled: !isMobile
+    enabled: !isMobile && !showSystemResources
   });
+
+  const paletteCommands = useMemo(() => [
+    { id: 'new-thread', label: 'New thread', run: () => { cancelHistoryNavigation(); setShowWorkspaceStart(true); } },
+    { id: 'new-terminal', label: 'New terminal', hint: formatBinding(loadBindings().newTerminal), run: openNewTerminal },
+    { id: 'find', label: 'Find in thread', hint: formatBinding(loadBindings().findInThread), run: () => setFindInThreadOpen(true) },
+    { id: 'files', label: 'Open Files', run: () => setShowFileManager(true) },
+    { id: 'preview', label: 'Toggle preview', hint: formatBinding(loadBindings().togglePreview), run: toggleWorkspacePreview },
+    { id: 'notes', label: 'Open Notes', run: () => setShowNotes(true) },
+    { id: 'bookmarks', label: 'Open Bookmarks', run: () => setShowBookmarks(true) },
+    { id: 'screenshots', label: 'Open Screenshots', run: () => setShowScreenshots(true) },
+    { id: 'sidebar', label: 'Toggle sidebar', hint: formatBinding(loadBindings().toggleSidebar), run: toggleSidebar },
+    { id: 'theme', label: 'Switch light or dark theme', run: toggleTheme },
+    { id: 'settings', label: 'Open Settings', run: () => setShowSettings(true) },
+  ], [cancelHistoryNavigation, openNewTerminal, setShowBookmarks, setShowFileManager, setShowNotes, setShowSettings, toggleSidebar, toggleTheme, toggleWorkspacePreview]);
+  const paletteThreads = useMemo(() => sessions
+    .filter(session => !session.thread?.archived && !isCompanionSession(session))
+    .map(session => ({ id: session.id, title: session.thread?.topic || session.title || 'Untitled', project: projectNameFromPath(session.thread?.projectPath || session.cwd || '') })),
+  [sessions]);
 
   const handleStartProject = useCallback(async (command) => {
     if (!activeSessionId || !command) return;
@@ -1227,6 +1529,7 @@ function AppContent() {
       await sendToSession(activeSessionId, text);
     } catch (error) {
       console.error('Failed to send to terminal', error);
+      if (error.name !== 'AbortError') window.alert(error.message || 'The message could not be sent. Try again from the conversation.');
     }
   }, [activeSessionId, sendToSession]);
 
@@ -1249,6 +1552,7 @@ function AppContent() {
       }
     } catch (error) {
       console.error('Failed to send to Claude Code', error);
+      if (error.name !== 'AbortError') window.alert(error.message || 'The message could not be sent. Try again from the conversation.');
     }
   }, [activeClaudeSession?.id, activeSessionId, activeSessions, handleMobileViewChange, isMobile, selectSession, sendToSession]);
 
@@ -1256,17 +1560,12 @@ function AppContent() {
     if (!activeSessionId || !path) return;
 
     try {
-      // Send cd command to terminal
-      const cdCommand = `cd "${path}"\r`;
-      await apiFetch(`/api/terminal/${activeSessionId}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cdCommand })
-      });
+      await navigateSession(activeSessionId, path);
     } catch (error) {
       console.error('Failed to navigate to path', error);
+      window.alert(error.message || 'Unable to change directory.');
     }
-  }, [activeSessionId]);
+  }, [activeSessionId, navigateSession]);
 
   // Handle mobile terminal carousel index change - sync with activeSessionId
   const handleMobileTerminalIndexChange = useCallback((newIndex) => {
@@ -1287,8 +1586,12 @@ function AppContent() {
   }, [activeSessionId, activeSessions, mobileTerminalIndex]);
 
   // Split handle drag handlers
-  const handleSplitMouseDown = useCallback((e) => {
+  const handleSplitPointerDown = useCallback((e) => {
+    if (e.button !== 0 || e.isPrimary === false) return;
     e.preventDefault();
+    e.currentTarget.focus({ preventScroll: true });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    previewDragRef.current = { pointerId: e.pointerId, target: e.currentTarget };
     startDragging(e);
   }, [startDragging]);
 
@@ -1303,32 +1606,50 @@ function AppContent() {
 
   useEffect(() => {
     if (!isDragging) return;
+    if (!previewDragRef.current || !showPreview || fullscreenPaneId || mainTerminalMinimized || showSystemResources) {
+      stopDragging();
+      return;
+    }
 
-    const handleMouseMove = (e) => {
+    const handlePointerMove = (e) => {
+      if (!previewDragRef.current || previewDragRef.current.pointerId !== e.pointerId) return;
       if (!mainContentRef.current) return;
       const rect = mainContentRef.current.getBoundingClientRect();
+      if (!rect.width) return;
+      e.preventDefault();
       const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
       updateSplitPosition(newPosition);
       requestMainTerminalFit();
     };
 
-    const handleMouseUp = () => {
+    const handlePointerEnd = (e) => {
+      const drag = previewDragRef.current;
+      if (!drag || (e?.pointerId != null && e.pointerId !== drag.pointerId)) return;
+      previewDragRef.current = null;
+      if (drag.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
       stopDragging();
       requestMainTerminalFit();
     };
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('pointermove', handlePointerMove, { passive: false });
+    document.addEventListener('pointerup', handlePointerEnd);
+    document.addEventListener('pointercancel', handlePointerEnd);
+    window.addEventListener('blur', handlePointerEnd);
 
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerEnd);
+      document.removeEventListener('pointercancel', handlePointerEnd);
+      window.removeEventListener('blur', handlePointerEnd);
+      const drag = previewDragRef.current;
+      previewDragRef.current = null;
+      if (drag?.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
-  }, [isDragging, requestMainTerminalFit, updateSplitPosition, stopDragging]);
+  }, [isDragging, requestMainTerminalFit, updateSplitPosition, stopDragging, showPreview, fullscreenPaneId, mainTerminalMinimized, showSystemResources, activeDesktopId]);
 
   useEffect(() => {
     requestMainTerminalFit();
-  }, [requestMainTerminalFit, paneLayout?.root, fullscreenPaneId, showPreview, mainTerminalMinimized]);
+  }, [requestMainTerminalFit, paneLayout?.root, fullscreenPaneId, showPreview, mainTerminalMinimized, showSystemResources]);
 
   useEffect(() => () => {
     if (mainTerminalFitRafRef.current) {
@@ -1354,10 +1675,6 @@ function AppContent() {
     setShowFileManager((prev) => !prev);
   }, [setShowFileManager]);
 
-  const toggleSystemResources = useCallback(() => {
-    setShowSystemResources((prev) => !prev);
-  }, [setShowSystemResources]);
-
   const openAddScanFolderModal = useCallback(() => {
     setAddScanFolderError('');
     setShowAddScanFolderModal(true);
@@ -1382,7 +1699,15 @@ function AppContent() {
     setShowAddProjectModal(true);
   }, []);
 
+  // Opens the new-task composer only; the current conversation stays untouched in the sidebar.
+  const handleStartProjectChat = useCallback((folderPath) => {
+    if (typeof folderPath === 'string' && folderPath) setWorkspaceDraftPath(folderPath);
+    setShowWorkspaceStart(true);
+    if (!folderPath) setShowAddProjectModal(true);
+  }, []);
+
   const handleAddProjectSelect = useCallback((folderPath) => {
+    setWorkspaceDraftPath(folderPath);
     addSidebarProject(folderPath);
     addRecentFolder(folderPath);
     setShowAddProjectModal(false);
@@ -1408,10 +1733,10 @@ function AppContent() {
       return false;
     }
   }, []);
-  const layoutStyle = isMobile
+  const layoutStyle = isMobile || touchDesktopViewport
     ? {
-        '--mobile-viewport-height': viewportHeight
-          ? `${Math.round(viewportHeight)}px`
+        '--mobile-viewport-height': measuredViewportHeight
+          ? `${Math.round(measuredViewportHeight)}px`
           : '100dvh',
         '--mobile-viewport-width': viewportWidth
           ? `${Math.round(viewportWidth)}px`
@@ -1421,7 +1746,8 @@ function AppContent() {
           : '0px',
         '--mobile-viewport-offset-left': viewportOffsetLeft
           ? `${Math.round(viewportOffsetLeft)}px`
-          : '0px'
+          : '0px',
+        ...(touchDesktopViewport ? { '--environment-bar-height': `${viewportChromeHeight}px` } : {})
       }
     : undefined;
 
@@ -1432,25 +1758,57 @@ function AppContent() {
     activeSessions
   }), [activeSessions, archivedSessions, pinnedSessions, sessionsGroupedByProject]);
 
-  // Grouped props for Header
-  const headerSessionProps = {
-    activeSessions, inactiveSessions, activeSessionId,
-    orderedSessions: desktopOrderedSessions,
-    onSelectSession: handleSelectSession, onRestoreSession: handleRestoreSession,
-    onCreateSession: handleRequestNewSession, onCloseSession: closeSession, onRenameSession: renameSession,
-    onReorderSessions: handleReorderSessions,
-    loadingSessions, sessionLoadError, onRetryLoad: retryLoadSessions,
-    sessionActivity, sessionsGroupedByProject: scopedSidebarData.sessionsGroupedByProject, showTabStatusLabels,
-    sessionAiTypes, onSetSessionAiType: handleSetSessionAiType, customAiProviders,
+  const navigationSession = showWorkspaceStart ? null : activeSessions.find(session => session.id === activeSessionId);
+  const navigationWorkspacePath = showWorkspaceStart || !navigationSession
+    ? workspaceDraftPath || startupWorkspacePath
+    : isStructuredSessionId(navigationSession.id)
+      ? navigationSession.thread?.projectPath || navigationSession.cwd || currentWorkspacePath
+      : currentWorkspacePath || navigationSession.cwd;
+  const fileTargetIsCurrent = Boolean(filePaneTarget && !isMobile && !showWorkspaceStart
+    && filePaneTarget.desktopId === activeDesktopId && filePaneTarget.paneId === activeFilePaneId
+    && filePaneTarget.sessionId === activeSessionId && filePaneTarget.sessionId === filePaneScope.current.pane?.sessionId);
+  const filesInitialPath = fileTargetIsCurrent ? filePaneTarget.path : navigationWorkspacePath || (navigationSession ? null : '~');
+  const filesWorkspaceKey = fileTargetIsCurrent ? `pane-files:${filePaneTarget.request}` : navigationWorkspacePath || (navigationSession ? `pending:${navigationSession.id}` : 'home');
+  useEffect(() => {
+    if (filePaneTarget && (!showFileManager || !fileTargetIsCurrent)) setFilePaneTarget(null);
+  }, [filePaneTarget, fileTargetIsCurrent, showFileManager]);
+  const handleOpenPaneFiles = (path) => {
+    const { desktopId, pane } = filePaneScope.current;
+    if (typeof path !== 'string' || !path || !pane?.sessionId) return;
+    setFilePaneTarget({ desktopId, paneId: pane.id, sessionId: pane.sessionId, path, request: ++filePaneRequest.current });
+    setShowFileManager(true);
   };
-
-  const headerModalProps = {
-    setShowApiSettings, onOpenSettings: handleOpenSettings,
-    setShowBookmarks, setShowNotes, setShowProcessManager,
-  };
+  const navigationDraftId = navigationSession?.id || 'workspace-start';
+  const readNavigationResponse = () => workspaceResponses.get(navigationSession?.id) || '';
+  const navigationCanInsert = environmentAllows(getActiveEnvironment(), isStructuredSessionId(navigationSession?.id) || !navigationSession ? 'agentExecute' : 'terminalInput');
+  const insertNavigationPrompt = navigationCanInsert ? prompt => {
+    getComposerDraftStore(navigationDraftId).setText(value => value.trim() ? `${value}\n\n${prompt}` : prompt);
+  } : undefined;
+  const insertNavigationContext = navigationCanInsert ? context => {
+    getComposerDraftStore(navigationDraftId).setText(value => context + (value.trim() ? `\n\nTask:\n${value}` : ''));
+  } : undefined;
+  const projectNavigationActions = <>
+    <WorkspaceToolsButton label="Project tools" workspacePath={navigationWorkspacePath} currentSessionId={navigationSession?.id}
+      readLatestAssistantText={readNavigationResponse}
+      onStartTask={handleRequestNewSession} onSelectSession={handleSelectHistorySession} onInsertPrompt={insertNavigationPrompt} />
+    <WorkspaceProfileButton workspacePath={navigationWorkspacePath} aiOptions={getNewTabAiOptions(customAiProviders)} onInsertContext={insertNavigationContext} />
+  </>;
 
   return (
-    <div className={`layout${isMobile ? ' mobile' : ''}${effectiveNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
+    <div className={`layout${isMobile ? ' mobile' : ''}${touchDesktopViewport ? ' touch-viewport' : ''}${effectiveNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
+      <OwnerCleanupRecovery key={user?.id} onResolved={retryLoadSessions} />
+      <RawInputRecovery sessions={sessions} />
+      <RawInputPending sessions={sessions} />
+      {sessionLoadError && !loadingSessions && <section className="session-load-notice" aria-label="Session loading problem">
+        <p role="alert">Could not load your sessions.</p>
+        <p>Check your connection and try again. Your existing sessions may be unavailable until loading succeeds.</p>
+        <OwnershipRecovery onResolved={retryLoadSessions} />
+        <button type="button" onClick={retryLoadSessions}>Retry loading sessions</button>
+      </section>}
+      <CommandPalette open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} commands={paletteCommands} threads={paletteThreads} onSelectThread={handleSelectSession} />
+      <FindInThread open={findInThreadOpen} focusRequest={findFocusRequest} onClose={() => { setFindInThreadOpen(false); setFindFocusRequest(null); }} />
+      <ScreenshotGallery open={showScreenshots} onClose={() => setShowScreenshots(false)} />
+      {!browserVisible && browserRequests.length > 0 && <button className="browser-request-notice" type="button" onClick={toggleBrowser}>Review browser request ({browserRequests.length})</button>}
       {isMobile && mobileKeyboardDebugEnabled && (
         <MobileKeyboardDebugOverlay
           viewportHeight={viewportHeight}
@@ -1463,62 +1821,86 @@ function AppContent() {
       )}
       <ErrorBoundary name="modals">
         <Suspense fallback={null}>
-          <SettingsModal
-            isOpen={showSettings}
-            onClose={() => setShowSettings(false)}
-            sessionId={activeSessionId}
-            sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
-            currentCwd={projectInfo?.cwd}
-            recentFolders={recentFolders}
-            onSave={navigateSession}
-            onAddRecentFolder={addRecentFolder}
-            terminalFontSize={terminalFontSize}
-            onFontSizeChange={updateTerminalFontSize}
-            terminalWebglEnabled={terminalWebglEnabled}
-            onWebglChange={updateTerminalWebglEnabled}
-            desktopAllowTerminalInput={desktopAllowTerminalInput}
-            onDesktopTerminalInputChange={updateDesktopAllowTerminalInput}
-            onOpenApiSettings={() => {
-              setShowSettings(false);
-              setShowApiSettings(true);
-            }}
-            onOpenProcessManager={() => {
-              setShowSettings(false);
-              setShowProcessManager(true);
-            }}
-            showTabStatusLabels={showTabStatusLabels}
-            onTabStatusLabelsChange={updateShowTabStatusLabels}
-          />
-          <BookmarkModal
-            isOpen={showBookmarks}
-            onClose={() => setShowBookmarks(false)}
-            bookmarks={bookmarks}
-            onAdd={addBookmark}
-            onUpdate={updateBookmark}
-            onDelete={deleteBookmark}
-            onExecute={executeBookmark}
-          />
-          <NotesModal
-            isOpen={showNotes}
-            onClose={() => setShowNotes(false)}
-            notes={notes}
-            onAdd={addNote}
-            onUpdate={updateNote}
-            onDelete={deleteNote}
-          />
-          <ApiSettingsModal
-            isOpen={showApiSettings}
-            onClose={() => setShowApiSettings(false)}
-          />
-          <BrowserSettingsModal
-            isOpen={showBrowserSettings}
-            onClose={() => setShowBrowserSettings(false)}
-          />
-          <ProcessManagerModal
-            isOpen={showProcessManager}
-            onClose={() => setShowProcessManager(false)}
-            projects={projects}
-          />
+          <MountOnFirstOpen isOpen={showSettings}>
+            <SettingsModal
+              isOpen={showSettings}
+              onClose={() => setShowSettings(false)}
+              sessionId={activeSessionId}
+              sessionTitle={activeSessions.find(s => s.id === activeSessionId)?.title}
+              currentCwd={projectInfo?.cwd}
+              recentFolders={recentFolders}
+              onSave={navigateSession}
+              onAddRecentFolder={addRecentFolder}
+              terminalFontSize={terminalFontSize}
+              onFontSizeChange={updateTerminalFontSize}
+              terminalWebglEnabled={terminalWebglEnabled}
+              onWebglChange={updateTerminalWebglEnabled}
+              desktopAllowTerminalInput={desktopAllowTerminalInput}
+              onDesktopTerminalInputChange={updateDesktopAllowTerminalInput}
+              onOpenApiSettings={() => {
+                setShowSettings(false);
+                setShowApiSettings(true);
+              }}
+              onOpenProcessManager={() => {
+                setShowSettings(false);
+                setShowProcessManager(true);
+              }}
+              onOpenSystemResources={() => {
+                setShowSettings(false);
+                setShowSystemResources(true);
+              }}
+              showTabStatusLabels={showTabStatusLabels}
+              onTabStatusLabelsChange={updateShowTabStatusLabels}
+            />
+          </MountOnFirstOpen>
+          <MountOnFirstOpen isOpen={showBookmarks}>
+            <BookmarkModal
+              isOpen={showBookmarks}
+              onClose={() => setShowBookmarks(false)}
+              bookmarks={bookmarks}
+              loadStatus={bookmarksLoadStatus}
+              loadError={bookmarksLoadError}
+              onRetryLoad={reloadBookmarks}
+              scopeKey={bookmarksScopeKey}
+              onAdd={addBookmark}
+              onUpdate={updateBookmark}
+              onDelete={deleteBookmark}
+              onExecute={executeBookmark}
+            />
+          </MountOnFirstOpen>
+          <MountOnFirstOpen isOpen={showNotes}>
+            <NotesModal
+              isOpen={showNotes}
+              onClose={() => setShowNotes(false)}
+              notes={notes}
+              loadStatus={notesLoadStatus}
+              loadError={notesLoadError}
+              onRetryLoad={reloadNotes}
+              scopeKey={notesScopeKey}
+              onAdd={addNote}
+              onUpdate={updateNote}
+              onDelete={deleteNote}
+            />
+          </MountOnFirstOpen>
+          <MountOnFirstOpen isOpen={showApiSettings}>
+            <ApiSettingsModal
+              isOpen={showApiSettings}
+              onClose={() => setShowApiSettings(false)}
+            />
+          </MountOnFirstOpen>
+          <MountOnFirstOpen isOpen={showBrowserSettings}>
+            <BrowserSettingsModal
+              isOpen={showBrowserSettings}
+              onClose={() => setShowBrowserSettings(false)}
+            />
+          </MountOnFirstOpen>
+          <MountOnFirstOpen isOpen={showProcessManager}>
+            <ProcessManagerModal
+              isOpen={showProcessManager}
+              onClose={() => setShowProcessManager(false)}
+              projects={projects}
+            />
+          </MountOnFirstOpen>
         </Suspense>
       </ErrorBoundary>
 
@@ -1531,6 +1913,7 @@ function AppContent() {
         showAiSelector={true}
         aiOptions={getNewTabAiOptions(customAiProviders)}
         defaultAiOptionId="codex"
+        launchMode={newSessionLaunchMode}
       />
       <AddScanFolderModal
         isOpen={showAddScanFolderModal}
@@ -1550,10 +1933,21 @@ function AppContent() {
       {/* Desktop layout with sidebar */}
       {!isMobile && (
         <>
+          <WorkspacePanel kind="navigation" collapsed={sidebarCollapsed} reserveSpace={showBrowser && !browserExpanded && !fullscreenPaneId && (viewportWidth || window.innerWidth) > 980 ? 720 : 640} onResize={requestMainTerminalFit}>
           <ThreadsSidebar
-            onOpenWorkspaceStart={() => setShowWorkspaceStart(true)}
-            workspacePath={startupWorkspacePath}
+            sessionLoadError={Boolean(sessionLoadError)}
+            onOpenWorkspaceStart={() => { cancelHistoryNavigation(); setShowWorkspaceStart(true); }}
+            serverControl={serverControl}
+            workspacePath={navigationWorkspacePath}
+            onInsertPrompt={insertNavigationPrompt}
+            onInsertContext={insertNavigationContext}
+            readLatestAssistantText={readNavigationResponse}
+            aiOptions={getNewTabAiOptions(customAiProviders)}
+            currentSessionId={navigationSession?.id || null}
+            onCreateTerminal={openNewTerminal}
             onSelectHistorySession={handleSelectHistorySession}
+            onSelectHistoryResult={handleSelectHistoryResult}
+            historyNavigationNotice={historyNavigationNotice}
             isCollapsed={sidebarCollapsed}
             onToggle={toggleSidebar}
             sessionsGroupedByProject={scopedSidebarData.sessionsGroupedByProject}
@@ -1566,63 +1960,37 @@ function AppContent() {
             onUnpinSession={unpinSession}
             onArchiveSession={archiveSession}
             onUnarchiveSession={unarchiveSession}
+            onMarkUnread={markSessionUnread}
             onUpdateThreadMetadata={updateThreadMetadata}
             onTopicChange={updateSessionTopic}
             onRenameSession={handleRenameThread}
             onCloseSession={closeSession}
-            onCreateSession={handleRequestNewSession}
+            onCreateSession={path => { cancelHistoryNavigation(); if (typeof path === 'string') setWorkspaceDraftPath(path); setShowWorkspaceStart(true); }}
             onCloseProject={handleCloseProject}
             projects={sidebarProjects}
             onAddProject={openAddProjectModal}
             onOpenSettings={handleOpenSettings}
             onOpenBookmarks={() => setShowBookmarks(true)}
+            onOpenScreenshots={() => setShowScreenshots(true)}
             onOpenNotes={() => setShowNotes(true)}
             showPreview={showPreview}
-            onTogglePreview={togglePreview}
+            onTogglePreview={toggleWorkspacePreview}
+            showBrowser={showBrowser}
+            onToggleBrowser={toggleBrowser}
             showFileManager={showFileManager}
             onToggleFileManager={toggleFileManager}
             logout={logout}
           />
+          </WorkspacePanel>
           <div className="main-container">
-            <Header
-              isMobile={false}
-              sessionProps={headerSessionProps}
-              modalProps={headerModalProps}
-              projectInfo={projectInfo}
-              isSidebarCollapsed={sidebarCollapsed}
-              onToggleSidebar={toggleSidebar}
-              showPreview={showPreview}
-              onTogglePreview={togglePreview}
-              showFileManager={showFileManager}
-              onToggleFileManager={toggleFileManager}
-              desktopOnOpenSettings={handleOpenSettings}
-              showSystemResources={showSystemResources}
-              onToggleSystemResources={toggleSystemResources}
-              user={user}
-              logout={logout}
-              desktopSwitcherProps={{
-                desktops,
-                activeDesktopId,
-                sessions: activeSessions,
-                onSwitch: switchDesktop,
-                onCreate: createDesktop,
-                onDelete: deleteDesktop,
-                onRename: renameDesktop,
-                onMoveSession: moveSessionToDesktop,
-              }}
-            />
-
+          <div className="app-workspace-surface">
           <main
             ref={mainContentRef}
-            className={`main-content${showPreview && !showSystemResources ? ' with-preview' : ''}${isDragging ? ' dragging' : ''}`}
+            className={`main-content${showPreview ? ' with-preview' : ''}${showBrowser && !fullscreenPaneId ? ' with-browser' : ''}${showBrowser && browserExpanded && !fullscreenPaneId ? ' browser-expanded' : ''}${isDragging ? ' dragging' : ''}${showSystemResources ? ' app-workspace-covered' : ''}`}
+            inert={showSystemResources ? '' : undefined}
+            aria-hidden={showSystemResources || undefined}
+            onFocusCapture={rememberWorkspaceFocus}
           >
-            {/* System Resources View - full width when active */}
-            {showSystemResources ? (
-              <Suspense fallback={<div className="empty-state"><p>Loading System Resources...</p></div>}>
-                <SystemResourcesView />
-              </Suspense>
-            ) : (
-              <>
                 <div
                   className={`terminal-pane${mainTerminalMinimized && showPreview ? ' minimized' : ''}`}
                   style={showPreview && !fullscreenPaneId && !mainTerminalMinimized ? { flex: `0 0 ${splitPosition}%` } : undefined}
@@ -1635,26 +2003,41 @@ function AppContent() {
                     <WorkspaceStartView
                       onSelectHistorySession={handleSelectHistorySession}
                       onSelectSession={handleSelectSession}
-                      currentPath={startupWorkspacePath}
-                      onCreateSession={path => handleRequestNewSession(typeof path === 'string' ? path : startupWorkspacePath)}
+                      currentPath={workspaceDraftPath || startupWorkspacePath}
+                      projects={sidebarProjects}
+                      recentFolders={recentFolders}
+                      onSelectWorkspace={setWorkspaceDraftPath}
+                      onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
                       onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
+                      onOpenImageConversation={handleOpenWorkspaceImageConversation}
+                      onReviewImageConversation={handleSelectHistorySession}
                       onAddWorkspace={openAddProjectModal}
                     />
                   ) : (
                     <ErrorBoundary name="terminal" resetKey={activeSessionId}>
                       <SplitPaneContainer
+                        onOpenFiles={handleOpenPaneFiles}
+                        onFindInThread={handlePaneFind}
+                        onStartThreadWithPrompt={handleStartThreadWithPrompt}
+                        onWorkspaceResponseChange={handleWorkspaceResponseChange}
                         onSelectHistorySession={handleSelectHistorySession}
                         onStartWorkspaceTask={handleRequestNewSession}
+                        onStartProjectChat={handleStartProjectChat}
+                        projects={sidebarProjects}
+                        recentFolders={recentFolders}
                         layout={legacyLayout}
                         paneLayout={paneLayout}
                         sessions={visibleDesktopSessions}
                         onPaneSessionSelect={handlePaneSessionSelect}
                         onPaneSplit={splitPane}
+                        onPaneResize={resizeSplit}
                         onPaneClose={closePane}
                         onPaneFocus={handlePaneFocus}
-                        onPaneFullscreen={toggleFullscreen}
+                        onPaneFullscreen={handlePaneFullscreen}
                         fullscreenPaneId={fullscreenPaneId}
                         showPreview={showPreview && !fullscreenPaneId}
+                        showBrowser={showBrowser && !fullscreenPaneId}
+                        onToggleBrowser={toggleBrowser}
                         onMinimizeMainTerminal={handleToggleMainTerminal}
                         keybarOpen={keybarOpen}
                         viewportHeight={viewportHeight}
@@ -1676,13 +2059,43 @@ function AppContent() {
                   )}
                 </div>
 
+                {showBrowser && !fullscreenPaneId && <WorkspacePanel kind="tools" expanded={browserExpanded} covered={showSystemResources} onClose={closeBrowser} onResize={requestMainTerminalFit}>
+                  <ErrorBoundary name="browser"><Suspense fallback={<p>Loading browser…</p>}>
+                    <WorkspaceBrowser onClose={closeBrowser} isExpanded={browserExpanded} onToggleExpanded={() => setBrowserExpanded(value => !value)} />
+                  </Suspense></ErrorBoundary>
+                </WorkspacePanel>}
+
                 {/* Preview pane - hidden during fullscreen */}
                 {showPreview && !fullscreenPaneId && (
                   <>
                     {!mainTerminalMinimized && (
                       <div
-                        className={`split-handle${isDragging ? ' active' : ''}`}
-                        onMouseDown={handleSplitMouseDown}
+                        className={`split-handle workspace-preview-resizer${isDragging ? ' active' : ''}`}
+                        data-pane-resize-handle=""
+                        role="separator"
+                        aria-label="Resize terminal and Preview"
+                        aria-orientation="vertical"
+                        aria-valuemin={20}
+                        aria-valuemax={80}
+                        aria-valuenow={Math.round(splitPosition)}
+                        aria-valuetext={`${Math.round(splitPosition)}% terminal width`}
+                        tabIndex={0}
+                        onPointerDown={handleSplitPointerDown}
+                        onLostPointerCapture={event => {
+                          if (!previewDragRef.current || previewDragRef.current.pointerId !== event.pointerId) return;
+                          previewDragRef.current = null;
+                          stopDragging();
+                          requestMainTerminalFit();
+                        }}
+                        onKeyDown={event => {
+                          const step = event.shiftKey ? 10 : 5;
+                          const position = { ArrowLeft: splitPosition - step, ArrowRight: splitPosition + step, Home: 20, End: 80, Enter: 50 }[event.key];
+                          if (position === undefined) return;
+                          event.preventDefault();
+                          event.stopPropagation();
+                          updateSplitPosition(position);
+                          requestMainTerminalFit();
+                        }}
                       />
                     )}
                     <ErrorBoundary name="preview" resetKey={previewUrl}>
@@ -1691,13 +2104,14 @@ function AppContent() {
                           url={previewUrl}
                           onClose={handlePreviewClose}
                           onUrlChange={handlePreviewUrlChange}
-                          projectInfo={projectInfo}
+                          projectInfo={projectInfo || (!activeSessionId ? { cwd: currentWorkspacePath, projectType: 'unknown' } : null)}
                           onStartProject={handleStartProject}
+                          onOpenTerminal={handlePreviewOpenTerminal}
                           onSendToTerminal={handleSendToTerminal}
                           onSendToClaudeCode={handleSendToClaudeCode}
 
-                          activeSessions={activeSessions}
-                          activeSessionId={activeSessionId}
+                          activeSessions={previewTerminalSessions}
+                          activeSessionId={previewTerminalSessionId}
                           sessionActivity={sessionActivity}
                           onSessionBusyChange={handleSessionBusyChange}
                           fontSize={terminalFontSize}
@@ -1711,14 +2125,21 @@ function AppContent() {
                     </ErrorBoundary>
                   </>
                 )}
-              </>
-            )}
           </main>
+          {showSystemResources && <section className="app-resources-surface" aria-label="System Resources" tabIndex={-1} ref={resourcesSurfaceRef}>
+            <Suspense fallback={<div className="empty-state"><p>Loading System Resources...</p></div>}>
+              <SystemResourcesView onClose={closeSystemResources} />
+            </Suspense>
+          </section>}
+          </div>
 
           {/* File Manager Sidebar */}
           {showFileManager && (
             <Suspense fallback={null}>
               <FileManager
+                key={filesWorkspaceKey}
+                initialPath={filesInitialPath}
+                sessionId={navigationSession?.id || null}
                 isOpen={showFileManager}
                 onClose={() => setShowFileManager(false)}
                 onNavigateTerminal={handleNavigateToPath}
@@ -1733,24 +2154,51 @@ function AppContent() {
       {isMobile && (
         <div className="main-pane">
             <MobileHeader
+            sessionLoadError={Boolean(sessionLoadError)}
+            serverControl={serverControl}
+            workspaceActions={projectNavigationActions}
+            onFindInThread={() => setFindInThreadOpen(true)}
+            onCreateTerminal={openNewTerminal}
+            threadTerminalOpen={mobileThreadTerminal?.sessionId === activeSessionId && mobileThreadTerminal.open}
+            onToggleThreadTerminal={() => {
+              if (!activeSessionId) return;
+              const shouldOpen = mobileView === 'preview' || mobileThreadTerminal?.sessionId !== activeSessionId || !mobileThreadTerminal.open;
+              setMobileThreadTerminal({ sessionId: activeSessionId, open: shouldOpen });
+              if (mobileView === 'preview') handleMobileViewChange('terminal');
+            }}
+            isWorkspaceStart={showWorkspaceStart || !navigationSession}
+            gitControl={<WorkspaceToolsButton label="Git" ariaLabel="Git" iconOnly initialTool="git" workspacePath={navigationWorkspacePath}
+              readLatestAssistantText={readNavigationResponse}
+              currentSessionId={navigationSession?.id} onStartTask={handleRequestNewSession} onSelectSession={handleSelectHistorySession} onInsertPrompt={insertNavigationPrompt}
+              icon={<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="6" cy="4" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="6" cy="20" r="2" /><path d="M6 6v12m12-10a8 8 0 0 1-8 8H6" /></svg>} />}
+            newSessionLabel="New thread"
             activeSessions={activeSessions}
             activeSessionId={activeSessionId}
             onSelectSession={handleSelectSession}
-            onCreateSession={handleRequestNewSession}
+            onSelectHistoryResult={handleSelectHistoryResult}
+            onCreateSession={() => setShowWorkspaceStart(true)}
             onRenameSession={handleRenameThread}
+            onPinSession={pinSession}
+            onUnpinSession={unpinSession}
+            archivedSessions={scopedSidebarData.archivedSessions}
+            onArchiveSession={archiveSession}
+            onUnarchiveSession={unarchiveSession}
+            onUpdateThreadMetadata={updateThreadMetadata}
             onCloseSession={closeSession}
             onOpenSettings={handleOpenSettings}
             onOpenApiSettings={() => setShowApiSettings(true)}
             onOpenBrowserSettings={() => setShowBrowserSettings(true)}
+            onOpenWorkspaceBrowser={toggleBrowser}
             onOpenBookmarks={() => setShowBookmarks(true)}
             onOpenNotes={() => setShowNotes(true)}
             onOpenProcessManager={() => setShowProcessManager(true)}
+            onLogout={logout}
             keybarOpen={keybarOpen}
             onToggleKeybar={handleToggleKeybar}
             projects={projects}
             projectsLoading={projectsLoading}
             onFolderSelect={handleSidebarFolderSelect}
-            currentPath={projectInfo?.cwd || ''}
+            currentPath={navigationWorkspacePath || ''}
             onAddScanFolder={openAddScanFolderModal}
             mobileView={mobileView}
             onViewChange={handleMobileViewChange}
@@ -1764,28 +2212,38 @@ function AppContent() {
             onSetSessionAiType={handleSetSessionAiType}
               chatMode={chatMode}
               onToggleChatMode={() => setChatMode((value) => !value)}
-              showPreviewNavigation={Boolean(previewUrl)}
+              showPreviewNavigation={true}
               showConversationToggle={false}
-              showDrawerViewTabs={false}
+              showDrawerViewTabs={true}
               singleRow={true}
             />
+            <div className="app-workspace-surface">
             <main
-              className="terminal-main"
+              ref={mobileHistoryContentRef}
+              className={`terminal-main${showSystemResources ? ' app-workspace-covered' : ''}`}
               style={{ '--mobile-keybar-offset': `${mobileKeybarOffset}px` }}
+              inert={showSystemResources ? '' : undefined}
+              aria-hidden={showSystemResources || undefined}
+              onFocusCapture={rememberWorkspaceFocus}
             >
-              {mobileView === 'preview' && previewUrl ? (
+              {historyNavigationNotice && <div role="status" className="threads-history-navigation-notice">{historyNavigationNotice}</div>}
+              {showBrowser && <WorkspacePanel kind="tools" forceSheet covered={showSystemResources} onClose={closeBrowser}><ErrorBoundary name="browser"><Suspense fallback={<p>Loading browser…</p>}><WorkspaceBrowser onClose={closeBrowser} /></Suspense></ErrorBoundary></WorkspacePanel>}
+              <div className="mobile-workspace-body">
+              <MountOnFirstOpen isOpen={mobileView === 'preview'}>
+                <div className="mobile-workspace-surface" inert={mobileView !== 'preview' ? '' : undefined} aria-hidden={mobileView !== 'preview' || undefined}>
                 <ErrorBoundary name="mobile-preview" resetKey={previewUrl}>
                   <Suspense fallback={<div className="empty-state"><p>Loading preview...</p></div>}>
                     <PreviewPanel
                       url={previewUrl}
-                      onClose={handlePreviewClose}
+                      onClose={closeMobilePreview}
                       onUrlChange={handlePreviewUrlChange}
-                      projectInfo={projectInfo}
+                      projectInfo={projectInfo || (!activeSessionId ? { cwd: currentWorkspacePath, projectType: 'unknown' } : null)}
                       onStartProject={handleStartProject}
+                      onOpenTerminal={handlePreviewOpenTerminal}
                       onSendToTerminal={handleSendToTerminal}
                       onSendToClaudeCode={handleSendToClaudeCode}
-                      activeSessions={activeSessions}
-                      activeSessionId={activeSessionId}
+                      activeSessions={previewTerminalSessions}
+                      activeSessionId={previewTerminalSessionId}
                       sessionActivity={sessionActivity}
                       onSessionBusyChange={handleSessionBusyChange}
                       fontSize={terminalFontSize}
@@ -1797,16 +2255,29 @@ function AppContent() {
                     />
                   </Suspense>
                 </ErrorBoundary>
-              ) : (
+                </div>
+              </MountOnFirstOpen>
+              <div className="mobile-workspace-surface" inert={mobileView === 'preview' ? '' : undefined} aria-hidden={mobileView === 'preview' || undefined}>
                 <MobileShell
+                  visible={mobileView !== 'preview' && !showSystemResources}
+                  onWorkspaceResponseChange={handleWorkspaceResponseChange}
+                  showWorkspaceStart={showWorkspaceStart}
                   onSelectHistorySession={handleSelectHistorySession}
                   sessions={activeSessions}
-                  activeSessionId={activeSessionId}
+                  terminalSessions={sessions}
+                  threadTerminalOpen={mobileThreadTerminal?.sessionId === activeSessionId && mobileThreadTerminal.open}
+                  activeSessionId={showWorkspaceStart ? null : activeSessionId}
                   onSelectSession={selectSession}
-                  onCreateSession={path => handleRequestNewSession(typeof path === 'string' ? path : startupWorkspacePath)}
+                  onCreateSession={path => typeof path === 'string' && path ? handleRequestNewSession(path) : openNewTerminal()}
                   onSubmitPrompt={handleSubmitWorkspaceStartPrompt}
+                  onOpenImageConversation={handleOpenWorkspaceImageConversation}
+                  onReviewImageConversation={handleSelectHistorySession}
+                  startWorkspacePath={workspaceDraftPath || startupWorkspacePath}
+                  startProjects={sidebarProjects}
+                  recentFolders={recentFolders}
+                  onSelectWorkspace={setWorkspaceDraftPath}
                   onAddWorkspace={openAddProjectModal}
-                  projectInfo={projectInfo ? { ...projectInfo, cwd: projectInfo.cwd || startupWorkspacePath } : { cwd: startupWorkspacePath }}
+                  projectInfo={projectInfo || (!activeSessionId ? { cwd: startupWorkspacePath, projectType: 'unknown' } : null)}
                   sessionActivity={sessionActivity}
                   onSessionBusyChange={handleSessionBusyChange}
                   fontSize={terminalFontSize}
@@ -1822,8 +2293,15 @@ function AppContent() {
                   onAddCustomAiProvider={handleAddCustomAiProvider}
                   showSessionStrip={false}
                 />
-              )}
+              </div>
+              </div>
             </main>
+            {showSystemResources && <section className="app-resources-surface" aria-label="System Resources" tabIndex={-1} ref={resourcesSurfaceRef}>
+              <Suspense fallback={<div className="empty-state"><p>Loading System Resources...</p></div>}>
+                <SystemResourcesView onClose={closeSystemResources} />
+              </Suspense>
+            </section>}
+            </div>
           </div>
         )}
 
@@ -1845,6 +2323,9 @@ function AppContent() {
           />
           <Suspense fallback={null}>
             <FileManager
+              key={filesWorkspaceKey}
+              initialPath={filesInitialPath}
+              sessionId={navigationSession?.id || null}
               isOpen={showFileManager}
               onClose={() => setShowFileManager(false)}
               onNavigateTerminal={handleNavigateToPath}
@@ -1870,13 +2351,15 @@ function AuthenticatedApp() {
   const { user, isAuthenticated, loading } = useAuth();
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   const [directoryRevision,setDirectoryRevision]=useState(0);
+  const isMobile = useMobileDetect();
   useEffect(() => { if (!loading && !isAuthenticated) setEnvironmentIdentity(null); }, [loading, isAuthenticated]);
 
   if (loading) {
     return (
-      <div className="auth-loading">
-        <div className="auth-loading-spinner" />
-      </div>
+      <main className="auth-loading" role="status" aria-live="polite">
+        <div className="auth-loading-spinner" aria-hidden="true" />
+        <p>Opening workspace…</p>
+      </main>
     );
   }
 
@@ -1886,8 +2369,7 @@ function AuthenticatedApp() {
 
   return (
     <EnvironmentIdentityGate userId={user.id}>
-    <div className="environment-shell">
-    <RemoteEnvironmentSwitcher key={directoryRevision}><DeviceRelayPanel onPaired={saved=>{setActiveEnvironment(saved);setDirectoryRevision(value=>value+1);}} /><RemoteDesktopPanel /><RemoteTunnelsPanel /><RemoteHostPanel /></RemoteEnvironmentSwitcher>
+    <div className={`environment-shell${isMobile ? ' mobile-chrome' : ''}`}>
     <div className="environment-workspace" key={environment?.id || "home"}>
     <ThemeProvider>
       <AutocorrectProvider>
@@ -1897,7 +2379,7 @@ function AuthenticatedApp() {
             <BookmarkProvider>
               <PaneLayoutProvider>
                 <PreviewProvider>
-                  <AppContent />
+                  <AppContent serverControl={<RemoteEnvironmentSwitcher compact key={directoryRevision}><DeviceRelayPanel onPaired={saved=>{setActiveEnvironment(saved);setDirectoryRevision(value=>value+1);}} /><RemoteDesktopPanel /><RemoteTunnelsPanel /><RemoteHostPanel /></RemoteEnvironmentSwitcher>} />
                 </PreviewProvider>
               </PaneLayoutProvider>
             </BookmarkProvider>

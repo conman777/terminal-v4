@@ -1,3 +1,4 @@
+import './SystemResourcesView.css';
 import { resolveWebSocketUrl } from '../utils/apiBase';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { apiGet } from '../utils/api';
@@ -20,24 +21,11 @@ function formatMB(bytes) {
   return `${mb.toFixed(0)} MB`;
 }
 
-// Format disk I/O rates to human-readable format
-function formatIORate(mbps) {
-  if (mbps >= 1000) {
-    return `${(mbps / 1024).toFixed(1)} GB/s`;
-  } else if (mbps >= 1) {
-    return `${mbps.toFixed(1)} MB/s`;
-  } else if (mbps >= 0.01) {
-    return `${(mbps * 1024).toFixed(0)} KB/s`;
-  } else {
-    return `${(mbps * 1024 * 1024).toFixed(0)} B/s`;
-  }
-}
-
 // Mini sparkline chart
 function Sparkline({ data, color, height = 40, width = 100 }) {
   if (!data || data.length < 2) {
     return (
-      <div style={{ width, height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '10px' }}>
+      <div style={{ width, height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
         No data
       </div>
     );
@@ -55,17 +43,10 @@ function Sparkline({ data, color, height = 40, width = 100 }) {
 
   const pathD = `M ${points.join(' L ')}`;
   const areaD = `M 0,${height} L ${points.join(' L ')} L ${width},${height} Z`;
-  const gradientId = `gradient-${color.replace(/[^a-z0-9]/gi, '')}`;
 
   return (
-    <svg width={width} height={height} style={{ display: 'block', color }}>
-      <defs>
-        <linearGradient id={gradientId} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" style={{ stopColor: 'currentColor', stopOpacity: 0.4 }} />
-          <stop offset="100%" style={{ stopColor: 'currentColor', stopOpacity: 0.05 }} />
-        </linearGradient>
-      </defs>
-      <path d={areaD} fill={`url(#${gradientId})`} />
+    <svg aria-hidden="true" viewBox={`0 0 ${width} ${height}`} width={width} height={height} style={{ maxWidth: '100%', display: 'block', color }}>
+      <path d={areaD} fill="currentColor" opacity="0.08" />
       <path d={pathD} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
@@ -78,7 +59,7 @@ function CircularProgress({ value, size = 80, strokeWidth = 8, color }) {
   const offset = circumference - (value / 100) * circumference;
 
   return (
-    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)', color }}>
+    <svg aria-hidden="true" width={size} height={size} style={{ transform: 'rotate(-90deg)', color }}>
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -122,7 +103,7 @@ function MetricCard({ title, value, subtitle, icon, color, trend, trendData, chi
   );
 }
 
-export function SystemResourcesView() {
+export function SystemResourcesView({ onClose } = {}) {
   const [windowActive, setWindowActive] = useState(() => isWindowActive());
   const systemStats = useSystemStatsPolling(windowActive);
   const [statsHistory, setStatsHistory] = useState(null);
@@ -244,17 +225,30 @@ export function SystemResourcesView() {
     }
 
     let lastTime = performance.now();
+    let lastReport = lastTime;
+    let frameTime = 0;
+    let frameCount = 0;
     let running = true;
 
     const measure = () => {
       if (!running) return;
       const now = performance.now();
-      const delta = Math.round(now - lastTime);
+      const delta = now - lastTime;
       lastTime = now;
 
-      if (delta < 1000) {
-        setClientFrameMs(delta);
-        setClientFrameHistory(prev => [...prev.slice(-29), delta]);
+      if (delta > 0 && delta < 1000) {
+        frameTime += delta;
+        frameCount += 1;
+      }
+      if (now - lastReport >= 1000) {
+        if (frameCount > 0) {
+          const average = Math.round(frameTime / frameCount);
+          setClientFrameMs(average);
+          setClientFrameHistory(prev => [...prev.slice(-29), average]);
+        }
+        lastReport = now;
+        frameTime = 0;
+        frameCount = 0;
       }
 
       frameRef.current = requestAnimationFrame(measure);
@@ -271,8 +265,8 @@ export function SystemResourcesView() {
   const getStatus = (pct) => pct >= 85 ? 'critical' : pct >= 70 ? 'warning' : 'healthy';
   const getColor = (status) => status === 'critical' ? 'var(--error)' : status === 'warning' ? 'var(--warning)' : 'var(--success)';
 
-  const memPct = systemStats?.memory?.percentage ?? 0;
-  const cpuPct = systemStats?.cpu?.percentage ?? 0;
+  const memPct = systemStats?.memoryPercent ?? 0;
+  const cpuPct = systemStats?.cpuPercent ?? 0;
   const memStatus = getStatus(memPct);
   const cpuStatus = getStatus(cpuPct);
   const overallStatus = memStatus === 'critical' || cpuStatus === 'critical' ? 'critical' :
@@ -287,7 +281,8 @@ export function SystemResourcesView() {
           <span className={`sr-status-badge ${overallStatus}`}>{statusLabel}</span>
         </div>
         <div className="sr-time-range">
-          <select value={historyRange} onChange={(e) => setHistoryRange(e.target.value)}>
+          {onClose && <button type="button" className="btn-secondary btn-small" onClick={onClose}>Back to workspace</button>}
+          <select aria-label="History range" value={historyRange} onChange={(e) => setHistoryRange(e.target.value)}>
             <option value="1h">Last Hour</option>
             <option value="6h">Last 6 Hours</option>
             <option value="24h">Last 24 Hours</option>
@@ -296,6 +291,14 @@ export function SystemResourcesView() {
           </select>
         </div>
       </div>
+
+      {statsHistory?.historyError && (
+        <div className="sr-alert warning" role="status">
+          {statsHistory.historyPersistenceEnabled === false
+            ? 'History is temporary and will be lost when this server restarts. Current metrics remain available.'
+            : 'Saved history was recovered. Earlier data was preserved for recovery.'}
+        </div>
+      )}
 
       {overallStatus !== 'healthy' && (
         <div className={`sr-alert ${overallStatus}`}>
@@ -322,30 +325,30 @@ export function SystemResourcesView() {
             <div className="sr-circular-container">
               <CircularProgress value={memPct} size={100} strokeWidth={10} color={getColor(memStatus)} />
               <div className="sr-circular-label">
-                <span className="sr-circular-value" style={{ color: getColor(memStatus) }}>{memPct}%</span>
+                <span className="sr-circular-value" style={{ color: getColor(memStatus) }}>{Math.round(memPct)}%</span>
                 <span className="sr-circular-unit">used</span>
               </div>
             </div>
             <div className="sr-stats-list">
               <div className="sr-stat-row">
                 <span className="sr-stat-label">Used</span>
-                <span className="sr-stat-value">{systemStats ? formatBytes(systemStats.memory.used) : '—'}</span>
+                <span className="sr-stat-value">{systemStats ? formatBytes(systemStats.memoryUsed) : '—'}</span>
               </div>
               <div className="sr-stat-row">
                 <span className="sr-stat-label">Free</span>
-                <span className="sr-stat-value" style={{ color: getColor(memStatus) }}>{systemStats ? formatBytes(systemStats.memory.free) : '—'}</span>
+                <span className="sr-stat-value" style={{ color: getColor(memStatus) }}>{systemStats ? formatBytes(Math.max(0, systemStats.memoryTotal - systemStats.memoryUsed)) : '—'}</span>
               </div>
               <div className="sr-stat-row">
                 <span className="sr-stat-label">Total</span>
-                <span className="sr-stat-value">{systemStats ? formatBytes(systemStats.memory.total) : '—'}</span>
+                <span className="sr-stat-value">{systemStats ? formatBytes(systemStats.memoryTotal) : '—'}</span>
               </div>
             </div>
           </div>
           {statsHistory?.history?.length > 1 && (
             <div className="sr-card-chart">
-              <Sparkline data={statsHistory.history.map(p => p.memory)} color="var(--accent-primary-light)" height={50} width={280} />
+              <Sparkline data={statsHistory.history.map(p => p.memoryPercent)} color="var(--accent-primary-light)" height={50} width={280} />
               <div className="sr-chart-legend">
-                Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.memory, 0) / statsHistory.history.length)}% · Max: {Math.max(...statsHistory.history.map(p => p.memory))}%
+                Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.memoryPercent, 0) / statsHistory.history.length)}% · Max: {Math.round(Math.max(...statsHistory.history.map(p => p.memoryPercent)))}%
               </div>
             </div>
           )}
@@ -375,26 +378,26 @@ export function SystemResourcesView() {
             <div className="sr-circular-container">
               <CircularProgress value={cpuPct} size={100} strokeWidth={10} color={getColor(cpuStatus)} />
               <div className="sr-circular-label">
-                <span className="sr-circular-value" style={{ color: getColor(cpuStatus) }}>{cpuPct}%</span>
+                <span className="sr-circular-value" style={{ color: getColor(cpuStatus) }}>{Math.round(cpuPct)}%</span>
                 <span className="sr-circular-unit">used</span>
               </div>
             </div>
             <div className="sr-stats-list">
               <div className="sr-stat-row">
                 <span className="sr-stat-label">Used</span>
-                <span className="sr-stat-value">{cpuPct}%</span>
+                <span className="sr-stat-value">{Math.round(cpuPct)}%</span>
               </div>
               <div className="sr-stat-row">
                 <span className="sr-stat-label">Available</span>
-                <span className="sr-stat-value" style={{ color: getColor(cpuStatus) }}>{100 - cpuPct}%</span>
+                <span className="sr-stat-value" style={{ color: getColor(cpuStatus) }}>{Math.round(100 - cpuPct)}%</span>
               </div>
             </div>
           </div>
           {statsHistory?.history?.length > 1 && (
             <div className="sr-card-chart">
-              <Sparkline data={statsHistory.history.map(p => p.cpu)} color="var(--success)" height={50} width={280} />
+              <Sparkline data={statsHistory.history.map(p => p.cpuPercent)} color="var(--success)" height={50} width={280} />
               <div className="sr-chart-legend">
-                Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.cpu, 0) / statsHistory.history.length)}% · Max: {Math.max(...statsHistory.history.map(p => p.cpu))}%
+                Avg: {Math.round(statsHistory.history.reduce((a, p) => a + p.cpuPercent, 0) / statsHistory.history.length)}% · Max: {Math.round(Math.max(...statsHistory.history.map(p => p.cpuPercent)))}%
               </div>
             </div>
           )}
@@ -402,7 +405,7 @@ export function SystemResourcesView() {
       </div>
 
       <div className="sr-grid secondary">
-        {/* Disk I/O */}
+        {/* Disk storage */}
         <div className="sr-card">
           <div className="sr-card-header">
             <span className="sr-card-icon">
@@ -412,7 +415,7 @@ export function SystemResourcesView() {
                 <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
               </svg>
             </span>
-            <span className="sr-card-title">Disk I/O</span>
+            <span className="sr-card-title">Disk storage</span>
           </div>
           <div className="sr-card-body io">
             <div className="sr-io-row">
@@ -421,9 +424,9 @@ export function SystemResourcesView() {
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <polyline points="19 12 12 19 5 12" />
                 </svg>
-                Read
+                Used
               </span>
-              <span className="sr-io-value">{systemStats?.disk ? formatIORate(systemStats.disk.readMBps) : '—'}</span>
+              <span className="sr-io-value">{systemStats ? formatBytes(systemStats.diskUsed) : '—'}</span>
             </div>
             <div className="sr-io-row">
               <span className="sr-io-direction write">
@@ -431,23 +434,15 @@ export function SystemResourcesView() {
                   <line x1="12" y1="19" x2="12" y2="5" />
                   <polyline points="5 12 12 5 19 12" />
                 </svg>
-                Write
+                Total
               </span>
-              <span className="sr-io-value">{systemStats?.disk ? formatIORate(systemStats.disk.writeMBps) : '—'}</span>
+              <span className="sr-io-value">{systemStats ? formatBytes(systemStats.diskTotal) : '—'}</span>
             </div>
           </div>
           {statsHistory?.history?.length > 1 && (
             <div className="sr-card-chart small">
-              <div className="sr-dual-chart">
-                <div>
-                  <Sparkline data={statsHistory.history.map(p => p.diskRead || 0)} color="var(--accent-info)" height={30} width={100} />
-                  <span className="sr-mini-label">Read</span>
-                </div>
-                <div>
-                  <Sparkline data={statsHistory.history.map(p => p.diskWrite || 0)} color="var(--accent-primary)" height={30} width={100} />
-                  <span className="sr-mini-label">Write</span>
-                </div>
-              </div>
+              <Sparkline data={statsHistory.history.map(p => p.diskPercent)} color="var(--accent-info)" height={30} width={100} />
+              <span className="sr-mini-label">Storage used (%)</span>
             </div>
           )}
         </div>
@@ -501,13 +496,6 @@ export function SystemResourcesView() {
                 <Sparkline data={clientFrameHistory} color="var(--accent-primary)" height={24} width={60} />
               )}
             </div>
-            <div className="sr-latency-row">
-              <span className="sr-latency-label">Server Loop</span>
-              <span className="sr-latency-value">
-                {systemStats?.eventLoop?.meanMs != null ? `${systemStats.eventLoop.meanMs}ms` : '—'}
-                {systemStats?.eventLoop?.maxMs != null && <span className="sr-latency-max"> (max {systemStats.eventLoop.maxMs})</span>}
-              </span>
-            </div>
           </div>
         </div>
       </div>
@@ -519,16 +507,12 @@ export function SystemResourcesView() {
           <div className="sr-processes-table">
             <div className="sr-process-header">
               <span className="sr-process-name">Process</span>
-              <span className="sr-process-ports">Ports</span>
               <span className="sr-process-cpu">CPU</span>
               <span className="sr-process-mem">Memory</span>
             </div>
             {systemStats.processes.map((proc) => (
               <div key={proc.pid} className="sr-process-row">
                 <span className="sr-process-name" title={proc.name}>{proc.name}</span>
-                <span className="sr-process-ports" title={proc.ports?.join(', ')}>
-                  {proc.ports?.length ? proc.ports.join(', ') : '—'}
-                </span>
                 <span className={`sr-process-cpu ${proc.cpu > 50 ? 'critical' : proc.cpu > 20 ? 'warning' : ''}`}>
                   {proc.cpu.toFixed(1)}%
                 </span>
@@ -539,426 +523,13 @@ export function SystemResourcesView() {
         </div>
       )}
 
-      {statsHistory?.count > 0 && (
+      {statsHistory?.history?.length > 0 && (
         <div className="sr-footer">
-          {statsHistory.count} data points collected
+          {statsHistory.history.length} data points collected
         </div>
       )}
 
-      <style>{`
-        .system-resources-view {
-          height: 100%;
-          overflow-y: auto;
-          background: var(--bg-primary, #0a0a0c);
-          padding: 24px;
-          scrollbar-width: thin;
-          scrollbar-color: var(--border-default) transparent;
-        }
 
-        .sr-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 20px;
-        }
-
-        .sr-title-section {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-        }
-
-        .sr-title-section h1 {
-          margin: 0;
-          font-size: 16px;
-          font-weight: 700;
-          color: var(--accent-primary);
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-        }
-
-        .sr-status-badge {
-          font-size: 11px;
-          font-weight: 600;
-          padding: 3px 10px;
-          border-radius: 20px;
-        }
-
-        .sr-status-badge.healthy {
-          background: color-mix(in srgb, var(--success) 12%, transparent);
-          color: var(--success);
-        }
-
-        .sr-status-badge.warning {
-          background: color-mix(in srgb, var(--warning) 12%, transparent);
-          color: var(--warning);
-        }
-
-        .sr-status-badge.critical {
-          background: color-mix(in srgb, var(--error) 12%, transparent);
-          color: var(--error);
-        }
-
-        .sr-time-range select {
-          background: rgba(255, 255, 255, 0.03);
-          border: 1px solid rgba(255, 255, 255, 0.06);
-          border-radius: 6px;
-          padding: 6px 12px;
-          color: var(--text-primary);
-          font-size: 12px;
-          cursor: pointer;
-          transition: border-color 0.15s ease;
-        }
-
-        .sr-time-range select:hover {
-          border-color: color-mix(in srgb, var(--accent-primary) 36%, transparent);
-        }
-
-        .sr-alert {
-          padding: 12px 16px;
-          border-radius: 8px;
-          font-size: 13px;
-          margin-bottom: 20px;
-        }
-
-        .sr-alert.warning {
-          background: color-mix(in srgb, var(--warning) 8%, transparent);
-          border: 1px solid color-mix(in srgb, var(--warning) 24%, transparent);
-          color: var(--warning);
-        }
-
-        .sr-alert.critical {
-          background: color-mix(in srgb, var(--error) 8%, transparent);
-          border: 1px solid color-mix(in srgb, var(--error) 24%, transparent);
-          color: var(--error);
-        }
-
-        .sr-grid {
-          display: grid;
-          gap: 14px;
-          margin-bottom: 14px;
-        }
-
-        .sr-grid.primary {
-          grid-template-columns: repeat(2, 1fr);
-        }
-
-        .sr-grid.secondary {
-          grid-template-columns: repeat(3, 1fr);
-        }
-
-        @media (max-width: 1200px) {
-          .sr-grid.primary {
-            grid-template-columns: 1fr;
-          }
-          .sr-grid.secondary {
-            grid-template-columns: repeat(2, 1fr);
-          }
-        }
-
-        @media (max-width: 800px) {
-          .sr-grid.secondary {
-            grid-template-columns: 1fr;
-          }
-        }
-
-        .sr-card {
-          background: rgba(255, 255, 255, 0.02);
-          border: 1px solid rgba(255, 255, 255, 0.04);
-          border-radius: 10px;
-          padding: 16px;
-          transition: border-color 0.15s ease;
-        }
-
-        .sr-card:hover {
-          border-color: rgba(255, 255, 255, 0.08);
-        }
-
-        .sr-card.large {
-          padding: 20px;
-        }
-
-        .sr-card-header {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 16px;
-        }
-
-        .sr-card-icon {
-          color: var(--text-muted);
-          opacity: 0.6;
-        }
-
-        .sr-card-title {
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 1px;
-        }
-
-        .sr-card-badge {
-          margin-left: auto;
-          font-size: 10px;
-          color: var(--text-muted);
-          background: rgba(255, 255, 255, 0.04);
-          padding: 2px 8px;
-          border-radius: 10px;
-        }
-
-        .sr-card-body {
-          display: flex;
-          gap: 24px;
-          align-items: center;
-        }
-
-        .sr-card-body.io {
-          flex-direction: column;
-          gap: 8px;
-          align-items: stretch;
-        }
-
-        .sr-card-body.latency {
-          flex-direction: column;
-          gap: 10px;
-          align-items: stretch;
-        }
-
-        .sr-circular-container {
-          position: relative;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .sr-circular-label {
-          position: absolute;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          text-align: center;
-        }
-
-        .sr-circular-value {
-          font-size: 22px;
-          font-weight: 700;
-          line-height: 1;
-        }
-
-        .sr-circular-unit {
-          font-size: 10px;
-          color: var(--text-muted);
-          margin-top: 2px;
-        }
-
-        .sr-stats-list {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
-
-        .sr-stat-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-
-        .sr-stat-label {
-          font-size: 12px;
-          color: var(--text-muted);
-        }
-
-        .sr-stat-value {
-          font-size: 13px;
-          font-weight: 500;
-          color: var(--text-primary);
-          font-family: var(--font-mono);
-        }
-
-        .sr-card-chart {
-          margin-top: 16px;
-          padding-top: 16px;
-          box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
-        }
-
-        .sr-card-chart.small {
-          margin-top: 12px;
-          padding-top: 12px;
-        }
-
-        .sr-chart-legend {
-          font-size: 10px;
-          color: var(--text-muted);
-          margin-top: 6px;
-          text-align: center;
-        }
-
-        .sr-dual-chart {
-          display: flex;
-          gap: 16px;
-          justify-content: center;
-        }
-
-        .sr-dual-chart > div {
-          text-align: center;
-        }
-
-        .sr-mini-label {
-          font-size: 10px;
-          color: var(--text-muted);
-          display: block;
-          margin-top: 4px;
-        }
-
-        .sr-io-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 8px 12px;
-          background: rgba(255, 255, 255, 0.02);
-          border-radius: 8px;
-        }
-
-        .sr-io-direction {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 12px;
-          font-weight: 500;
-          min-width: 60px;
-        }
-
-        .sr-io-direction.read {
-          color: var(--accent-info);
-        }
-
-        .sr-io-direction.write {
-          color: var(--accent-primary);
-        }
-
-        .sr-io-value {
-          margin-left: auto;
-          font-size: 13px;
-          font-weight: 600;
-          color: var(--text-primary);
-          font-family: var(--font-mono);
-        }
-
-        .sr-latency-row {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 6px 0;
-        }
-
-        .sr-latency-label {
-          font-size: 11px;
-          color: var(--text-muted);
-          min-width: 80px;
-        }
-
-        .sr-latency-value {
-          font-size: 13px;
-          font-weight: 500;
-          color: var(--text-primary);
-          font-family: var(--font-mono);
-          min-width: 60px;
-        }
-
-        .sr-latency-max {
-          font-size: 10px;
-          color: var(--text-muted);
-          font-weight: 400;
-        }
-
-        .sr-processes-section {
-          margin-top: 20px;
-        }
-
-        .sr-processes-section h2 {
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          letter-spacing: 1px;
-          margin: 0 0 10px 0;
-        }
-
-        .sr-processes-table {
-          background: rgba(255, 255, 255, 0.02);
-          border: 1px solid rgba(255, 255, 255, 0.04);
-          border-radius: 10px;
-          overflow: hidden;
-        }
-
-        .sr-process-header,
-        .sr-process-row {
-          display: grid;
-          grid-template-columns: 1fr 100px 70px 80px;
-          gap: 12px;
-          padding: 10px 16px;
-          font-family: var(--font-mono);
-          font-size: 12px;
-        }
-
-        .sr-process-header {
-          background: rgba(255, 255, 255, 0.02);
-          font-weight: 600;
-          color: var(--text-muted);
-          text-transform: uppercase;
-          font-size: 10px;
-          letter-spacing: 0.5px;
-        }
-
-        .sr-process-row {
-          box-shadow: 0 -1px 0 rgba(255, 255, 255, 0.03);
-          color: var(--text-primary);
-          transition: background 0.1s ease;
-        }
-
-        .sr-process-row:hover {
-          background: rgba(255, 255, 255, 0.03);
-        }
-
-        .sr-process-name {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .sr-process-ports {
-          color: var(--accent-info);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .sr-process-cpu {
-          text-align: right;
-        }
-
-        .sr-process-cpu.critical {
-          color: var(--error);
-        }
-
-        .sr-process-cpu.warning {
-          color: var(--warning);
-        }
-
-        .sr-process-mem {
-          text-align: right;
-        }
-
-        .sr-footer {
-          margin-top: 16px;
-          text-align: center;
-          font-size: 10px;
-          color: var(--text-muted);
-          opacity: 0.6;
-        }
-      `}</style>
     </div>
   );
 }

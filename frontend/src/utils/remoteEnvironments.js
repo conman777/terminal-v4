@@ -21,7 +21,7 @@ export function restoreActiveEnvironment(devices) {
   let id;
   try { id = identityScope ? localStorage.getItem(selectionKey()) : null; } catch { return null; }
   const selected = Array.isArray(devices)
-    ? devices.find(device => device.id === id && !device.revoked && !device.revokedAt) : null;
+    ? devices.find(device => device.id === id && !device.revoked && !device.revokedAt && (device.expiresAt == null || Number(device.expiresAt) > Date.now() / 1000)) : null;
   setActiveEnvironment(selected || null);
   return selected || null;
 }
@@ -68,4 +68,8 @@ export function getEnvironmentStorage() {
     setItem: (key, value) => localStorage.setItem(prefix + key, value),
     removeItem: key => localStorage.removeItem(prefix + key),
   };
+}
+
+export function getEnvironmentCacheScope() {
+  return { identity: identityScope, environment: activeEnvironment?.id || 'home' };
 }

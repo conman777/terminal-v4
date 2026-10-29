@@ -20,14 +20,21 @@ function GuestTerminalOutput({ output }) {
     let cancelled = false;
     let observer;
     let fit;
+    let themeObserver;
+    const theme = () => {
+      const styles = getComputedStyle(document.documentElement);
+      return { background: styles.getPropertyValue('--bg-base').trim() || undefined, foreground: styles.getPropertyValue('--text-primary').trim() || undefined };
+    };
     const resize = () => {
       if (cancelled || !container.current?.clientWidth || !container.current?.clientHeight) return;
       try { fit?.fit(); } catch { /* A detached terminal has no drawable size. */ }
     };
     Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit'), import('@xterm/xterm/css/xterm.css')]).then(([{ Terminal }, { FitAddon }]) => {
       if (cancelled) return;
-      const instance = new Terminal({ disableStdin: true, screenReaderMode: true, cols: 100, rows: 24, scrollback: 5000, fontSize: 14, convertEol: true, theme: { background: '#111318', foreground: '#eceef3' } });
+      const instance = new Terminal({ disableStdin: true, screenReaderMode: true, cols: 100, rows: 24, scrollback: 5000, fontSize: 14, convertEol: true, theme: theme() });
       terminal.current = instance;
+      themeObserver = new MutationObserver(() => { instance.options.theme = theme(); });
+      themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
       fit = new FitAddon(); instance.loadAddon(fit); instance.open(container.current);
       if (instance.textarea) { instance.textarea.readOnly = true; instance.textarea.tabIndex = -1; instance.textarea.setAttribute('aria-label', 'Read-only shared terminal output'); }
       resize();
@@ -35,7 +42,7 @@ function GuestTerminalOutput({ output }) {
       window.addEventListener('resize', resize);
       setReady(true);
     }).catch(() => { if (!cancelled) setFailed(true); });
-    return () => { cancelled = true; version.current += 1; observer?.disconnect(); window.removeEventListener('resize', resize); terminal.current?.dispose(); terminal.current = null; };
+    return () => { cancelled = true; version.current += 1; observer?.disconnect(); themeObserver?.disconnect(); window.removeEventListener('resize', resize); terminal.current?.dispose(); terminal.current = null; };
   }, []);
   useEffect(() => {
     if (!ready) return;
@@ -93,9 +100,9 @@ export function GuestWorkspace() {
   }
   return <main className="guest-workspace">
     <header><h1>Shared terminal</h1><p>Guest access is limited to one terminal. The host can revoke it at any time.</p></header>
-    {!access && <form onSubmit={join}><label>Your name<input maxLength={80} value={name} onChange={event => setName(event.target.value)} /></label><button disabled={!invite || busy}>Join terminal</button>{!invite && <p>Invitation link is incomplete.</p>}</form>}
-    {status && <p role="status">{status}</p>}
-    {access && <><p>{access.role === 'controller' ? 'Controller · terminal input enabled' : 'Observer · output only'} · expires {new Date(access.expiresAt * 1000).toLocaleString()}</p><GuestTerminalOutput output={output} />
+    {!access && <form onSubmit={join}><label>Your name<input maxLength={80} value={name} onChange={event => setName(event.target.value)} /></label><button disabled={!invite || busy}>Join terminal</button>{!invite && <p role="alert">Invitation link is incomplete.</p>}</form>}
+    {status && <p className="guest-connection-status" role="status">{status}</p>}
+    {access && <><p className="guest-access-summary">{access.role === 'controller' ? 'Controller · terminal input enabled' : 'Observer · output only'} · expires {new Date(access.expiresAt * 1000).toLocaleString()}</p><GuestTerminalOutput output={output} />
       {access.role === 'controller' && <form onSubmit={event => { event.preventDefault(); if (connected && socket.current?.readyState === WebSocket.OPEN && input) { socket.current.send(JSON.stringify({ type: 'input', text: input + '\r' })); setInput(''); } }}><label>Terminal input<input disabled={!connected} value={input} maxLength={65536} onChange={event => setInput(event.target.value)} /></label><button disabled={!connected || socket.current?.readyState !== WebSocket.OPEN || !input}>Send input</button></form>}
       <button type="button" onClick={() => { setConnected(false); socket.current?.close(); setAccess(null); setStatus('Left shared terminal. Ask the host for another invitation to rejoin.'); }}>Leave terminal</button></>}
   </main>;

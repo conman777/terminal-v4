@@ -51,3 +51,37 @@ describe('WorkspaceProposalsPanel', () => {
     await waitFor(() => expect(apiFetch.mock.calls.some(([, options]) => options?.body?.title === 'New knowledge')).toBe(true));
   });
 });
+
+it('shows file additions, edits, and removals before accepting a skill update', async () => {
+  apiFetch.mockReset();
+  const packageProposal = { ...proposal, title: 'Review package', operations: [{ kind: 'skillUpdate', id: proposal.id, beforeName: 'Review', beforeInstructions: 'Review.', name: 'Review', instructions: 'Review.', beforeSupportFiles: { 'references/old.md': 'Old', 'references/shared.md': 'Before' }, supportFiles: { 'references/new.md': 'Added', 'references/shared.md': 'After' } }] };
+  apiFetch.mockImplementation(async url => response(url.includes('/profile') ? profile : { proposals: [packageProposal] }));
+  render(<WorkspaceProposalsPanel workspacePath={workspacePath} />);
+  expect(await screen.findByText('references/new.md · Add file')).toBeInTheDocument();
+  expect(screen.getByText('references/shared.md · Update file')).toBeInTheDocument();
+  expect(screen.getByText('references/old.md · Remove file')).toBeInTheDocument();
+  expect(screen.getByText('Before', { selector: 'pre' })).toBeInTheDocument();
+  expect(apiFetch.mock.calls.filter(([, options]) => options?.method === 'POST')).toEqual([]);
+});
+
+it('allows retrying an initial learning load without losing workspace scope', async () => {
+  let first = true;
+  apiFetch.mockReset().mockImplementation(async url => {
+    if (url.includes('/profile') && first) { first = false; throw new Error('Knowledge offline'); }
+    return response(url.includes('/profile') ? profile : { proposals: [] });
+  });
+  render(<WorkspaceProposalsPanel workspacePath={workspacePath} />);
+  await screen.findByText('Knowledge offline');
+  fireEvent.click(screen.getByRole('button', { name: 'Retry learning' }));
+  expect(await screen.findByText('No pending suggestions.')).toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('shows proposed activation changes alongside supporting files before review', async () => {
+  apiFetch.mockReset();
+  const change = { ...proposal, title: 'Change usage', operations: [{ kind: 'skillUpdate', id: proposal.id, beforeName: 'Review', beforeInstructions: 'Review.', beforeActivation: 'onDemand', name: 'Review', instructions: 'Review.', activation: 'alwaysOn', beforeSupportFiles: { 'references/guide.md': 'Keep' } }] };
+  apiFetch.mockImplementation(async url => response(url.includes('/profile') ? profile : { proposals: [change] }));
+  render(<WorkspaceProposalsPanel workspacePath={workspacePath} />);
+  expect(await screen.findByText('onDemand → alwaysOn')).toBeInTheDocument();
+  expect(screen.getByText('Supporting files are preserved.')).toBeInTheDocument();
+});

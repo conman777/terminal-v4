@@ -220,33 +220,90 @@ fn terminal_event(event: TerminalStreamEvent) -> Result<ReplayEvent, String> {
         text: event.text,
     })
 }
-fn structured_event(event: &StructuredSessionEvent) -> Result<ReplayEvent, String> {
-    let value = serde_json::to_value(event).map_err(|e| e.to_string())?;
-    let kind = value["type"].as_str().unwrap_or("");
-    let text = if value["role"] == "user" || kind == "raw_provider_event" || kind == "tool_started"
-    {
-        String::new()
-    } else if ["message_delta", "tool_output", "tool_completed", "error"].contains(&kind) {
-        ["content", "output", "result", "message"]
-            .iter()
-            .find_map(|key| value[*key].as_str())
-            .unwrap_or("")
-            .to_string()
-    } else {
-        String::new()
-    };
-    Ok(ReplayEvent {
-        source_seq: value["seq"]
+#[derive(Default)]
+struct StructuredReplay {
+    last_seq: i64,
+    messages: HashMap<String, String>,
+}
+impl StructuredReplay {
+    fn event(&mut self, event: &StructuredSessionEvent) -> Result<ReplayEvent, String> {
+        let value = serde_json::to_value(event).map_err(|e| e.to_string())?;
+        let kind = value["type"].as_str().unwrap_or("");
+        let mut text =
+            if value["role"] == "user" || kind == "raw_provider_event" || kind == "tool_started" {
+                String::new()
+            } else if ["message_delta", "tool_output", "tool_completed", "error"].contains(&kind) {
+                ["content", "output", "result", "message"]
+                    .iter()
+                    .find_map(|key| value[*key].as_str())
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            };
+        let seq = value["seq"]
             .as_i64()
-            .ok_or("Agent output is missing a sequence number")?,
-        ts: value["ts"].as_i64().unwrap_or_else(now),
-        kind: "agent".into(),
-        text,
-    })
+            .ok_or("Agent output is missing a sequence number")?;
+        if seq <= self.last_seq {
+            text.clear();
+        } else {
+            self.last_seq = seq;
+            if value["role"] == "assistant" {
+                let key = value["messageId"]
+                    .as_str()
+                    .map(|id| format!("message:{id}"))
+                    .or_else(|| value["turnId"].as_str().map(|id| format!("turn:{id}")))
+                    .unwrap_or_else(|| "legacy".into());
+                if kind == "message_started" {
+                    self.messages.remove(&key);
+                } else if kind == "message_delta" || kind == "message_completed" {
+                    let previous = self.messages.get(&key).map(String::as_str).unwrap_or("");
+                    let content = value["content"].as_str().unwrap_or("");
+                    text = if kind == "message_completed" && content.is_empty() {
+                        String::new()
+                    } else if kind == "message_completed" {
+                        content.strip_prefix(previous).ok_or("Completed agent text differs from captured deltas; recording stopped")?.to_string()
+                    } else {
+                        content.to_string()
+                    };
+                    if self.messages.len() >= MAX_EVENTS
+                        || self
+                            .messages
+                            .iter()
+                            .map(|(k, v)| k.len() + v.len())
+                            .sum::<usize>()
+                            + key.len()
+                            + text.len()
+                            > MAX_BYTES
+                    {
+                        return Err("Recording message reconciliation limit reached".into());
+                    }
+                    self.messages
+                        .entry(key.clone())
+                        .or_default()
+                        .push_str(&text);
+                    if kind == "message_completed" && key == "legacy" {
+                        self.messages.remove(&key);
+                    }
+                }
+            }
+        }
+        Ok(ReplayEvent {
+            source_seq: value["seq"]
+                .as_i64()
+                .ok_or("Agent output is missing a sequence number")?,
+            ts: value["ts"].as_i64().unwrap_or_else(now),
+            kind: "agent".into(),
+            text,
+        })
+    }
 }
 enum Source {
     Terminal(broadcast::Receiver<TerminalSubscriptionEvent>),
-    Structured(broadcast::Receiver<StructuredSessionEvent>),
+    Structured(
+        broadcast::Receiver<StructuredSessionEvent>,
+        StructuredReplay,
+    ),
 }
 impl Source {
     fn try_next(&mut self) -> Result<Option<ReplayEvent>, String> {
@@ -260,11 +317,11 @@ impl Source {
                     "Capture fell behind live output; recording stopped with a sequence gap".into(),
                 ),
             },
-            Self::Structured(receiver) => match receiver.try_recv() {
+            Self::Structured(receiver, replay) => match receiver.try_recv() {
                 Ok(StructuredSessionEvent::SessionEnded { .. })
                 | Err(broadcast::error::TryRecvError::Empty)
                 | Err(broadcast::error::TryRecvError::Closed) => Ok(None),
-                Ok(event) => structured_event(&event).map(Some),
+                Ok(event) => replay.event(&event).map(Some),
                 Err(broadcast::error::TryRecvError::Lagged(_)) => Err(
                     "Capture fell behind agent events; recording stopped with a sequence gap"
                         .into(),
@@ -282,9 +339,9 @@ impl Source {
                     "Capture fell behind live output; recording stopped with a sequence gap".into(),
                 ),
             },
-            Self::Structured(receiver) => match receiver.recv().await {
+            Self::Structured(receiver, replay) => match receiver.recv().await {
                 Ok(StructuredSessionEvent::SessionEnded { .. }) => Ok(None),
-                Ok(event) => structured_event(&event).map(Some),
+                Ok(event) => replay.event(&event).map(Some),
                 Err(broadcast::error::RecvError::Closed) => Ok(None),
                 Err(broadcast::error::RecvError::Lagged(_)) => Err(
                     "Capture fell behind agent events; recording stopped with a sequence gap"
@@ -356,15 +413,14 @@ async fn start(
                 "Session belongs to another workspace",
             ));
         }
-        (
-            Source::Structured(receiver),
-            snapshot
-                .events
-                .iter()
-                .map(structured_event)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(ApiError::bad_request)?,
-        )
+        let mut replay = StructuredReplay::default();
+        let initial = snapshot
+            .events
+            .iter()
+            .map(|event| replay.event(event))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ApiError::bad_request)?;
+        (Source::Structured(receiver, replay), initial)
     };
     let mut record = Recording {
         format: FORMAT.into(),
@@ -620,6 +676,28 @@ mod tests {
         .is_err());
     }
     #[test]
+    fn structured_reconciliation_dedupes_overlap_and_interleaved_message_ids() {
+        let mut replay = StructuredReplay::default();
+        let event = |seq, kind, id, content| {
+            serde_json::from_value::<StructuredSessionEvent>(json!({"type":kind,"messageId":id,"role":"assistant","content":content,"seq":seq,"ts":seq})).unwrap()
+        };
+        let mut output = Vec::new();
+        for (seq, kind, id, content) in [
+            (1, "message_delta", "a", "hel"),
+            (2, "message_delta", "b", "world"),
+            (2, "message_delta", "b", "world"),
+            (3, "message_completed", "a", "hello"),
+            (4, "message_completed", "b", "world"),
+            (5, "message_completed", "a", ""),
+        ] {
+            output.push(replay.event(&event(seq, kind, id, content)).unwrap().text);
+        }
+        assert_eq!(output, vec!["hel", "world", "", "lo", "", ""]);
+        assert!(replay
+            .event(&event(6, "message_completed", "a", "replacement"))
+            .is_err());
+    }
+    #[test]
     fn bounded_events_and_structured_inputs_are_not_stored() {
         let mut events = Vec::new();
         let mut seq = 0;
@@ -635,12 +713,14 @@ mod tests {
         )
         .is_err());
         let event = StructuredSessionEvent::MessageCompleted {
+            message_id: None,
+            turn_id: None,
             ts: 1,
             seq: 1,
             role: "user".into(),
             content: "secret typed by user".into(),
         };
-        assert_eq!(structured_event(&event).unwrap().text, "");
+        assert_eq!(StructuredReplay::default().event(&event).unwrap().text, "");
     }
     #[test]
     fn interrupted_receipts_persist_and_owners_have_separate_stores() {
@@ -843,24 +923,27 @@ mod tests {
         };
         let folder = config
             .data_dir
-            .join("users")
-            .join("owner")
-            .join("structured");
+            .join("structured-sessions")
+            .join(hex::encode(Sha256::digest(b"owner")));
         std::fs::create_dir_all(&folder).unwrap();
-        let snapshot = json!({"id":"ss-fixture","title":"Fixture","cwd":root.path(),"provider":"claude",
+        let snapshot = json!({"id":"ss-11111111111141118111111111111111","title":"Fixture","cwd":root.path(),"provider":"claude",
             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z",
             "events":[{"type":"message_completed","role":"user","content":"private typed prompt","ts":1,"seq":1},
                 {"type":"message_delta","role":"assistant","content":"Build complete\nAPI_KEY=secret-example\n","ts":2,"seq":2},
                 {"type":"tool_completed","toolName":"compile","result":"compile ok","isError":false,"ts":3,"seq":3},
                 {"type":"raw_provider_event","provider":"claude","data":{"token":"raw-private-value"},"ts":4,"seq":4}]});
-        std::fs::write(folder.join("ss-fixture.json"), snapshot.to_string()).unwrap();
+        std::fs::write(
+            folder.join("ss-11111111111141118111111111111111.json"),
+            json!({"version":1,"ownerId":"owner","snapshot":snapshot}).to_string(),
+        )
+        .unwrap();
         let state = AppState::new(config).unwrap();
         let (status, started) = http(
             &state,
             "owner",
             "POST",
             "/api/recordings",
-            json!({"sessionId":"ss-fixture","kind":"structured","workspacePath":root.path()}),
+            json!({"sessionId":"ss-11111111111141118111111111111111","kind":"structured","workspacePath":root.path()}),
         )
         .await;
         assert_eq!(status, axum::http::StatusCode::OK, "{started}");
@@ -895,6 +978,68 @@ mod tests {
         assert_eq!(exported["events"].as_array().unwrap().len(), 4);
     }
     #[tokio::test]
+    async fn structured_completed_only_and_partial_streams_replay_once_with_canonical_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: root.path().join("app"),
+            ..Default::default()
+        };
+        let folder = config
+            .data_dir
+            .join("structured-sessions")
+            .join(hex::encode(Sha256::digest(b"owner")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let session_id = "ss-22222222222242228222222222222222";
+        let events = json!([
+            {"type":"message_completed","messageId":"final","role":"assistant","content":"final only|","ts":1,"seq":1},
+            {"type":"message_delta","messageId":"stream","role":"assistant","content":"streamed|","ts":2,"seq":2},
+            {"type":"message_completed","messageId":"stream","role":"assistant","content":"streamed|","ts":3,"seq":3},
+            {"type":"message_delta","messageId":"partial","role":"assistant","content":"part","ts":4,"seq":4},
+            {"type":"message_completed","messageId":"partial","role":"assistant","content":"partial|","ts":5,"seq":5},
+            {"type":"message_completed","messageId":"private","role":"user","content":"private prompt","ts":6,"seq":6}
+        ]);
+        let snapshot = json!({"id":session_id,"title":"Fixture","cwd":root.path(),"provider":"claude","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z","events":events});
+        std::fs::write(
+            folder.join(format!("{session_id}.json")),
+            json!({"version":1,"ownerId":"owner","snapshot":snapshot}).to_string(),
+        )
+        .unwrap();
+        let state = AppState::new(config).unwrap();
+        let (status, started) = http(
+            &state,
+            "owner",
+            "POST",
+            "/api/recordings",
+            json!({"sessionId":session_id,"kind":"structured","workspacePath":root.path()}),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{started}");
+        let id = started["id"].as_str().unwrap();
+        http(
+            &state,
+            "owner",
+            "POST",
+            &format!("/api/recordings/{id}/stop"),
+            Value::Null,
+        )
+        .await;
+        let (_, saved) = http(
+            &state,
+            "owner",
+            "GET",
+            &format!("/api/recordings/{id}"),
+            Value::Null,
+        )
+        .await;
+        let text: String = saved["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(text, "final only|streamed|partial|");
+    }
+    #[tokio::test]
     async fn backpressure_is_an_explicit_incomplete_receipt() {
         let root = tempfile::tempdir().unwrap();
         let id = Uuid::new_v4();
@@ -916,6 +1061,8 @@ mod tests {
         for seq in 1..=3 {
             sender
                 .send(StructuredSessionEvent::MessageDelta {
+                    message_id: None,
+                    turn_id: None,
                     ts: seq,
                     seq,
                     role: "assistant".into(),
@@ -928,7 +1075,7 @@ mod tests {
         capture(
             path.clone(),
             record,
-            Source::Structured(receiver),
+            Source::Structured(receiver, StructuredReplay::default()),
             0,
             stop,
             done,

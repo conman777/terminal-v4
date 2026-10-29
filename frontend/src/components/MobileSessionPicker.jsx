@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 import { getCompactSessionSubtitle, getSessionDisplayInfo } from '../utils/sessionDisplay';
+import './MobileUI.css';
 
 const SWIPE_CLOSE_THRESHOLD = 64;
 const SWIPE_AXIS_BIAS = 16;
@@ -40,8 +41,8 @@ function SessionStateIndicator({ isBusy, showReady }) {
     >
       {isBusy ? (
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <circle cx="8" cy="8" r="6" stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-          <path d="M14 8a6 6 0 0 0-6-6" stroke="var(--accent-primary-light)" strokeWidth="2" strokeLinecap="round" />
+          <circle cx="8" cy="8" r="6" stroke="var(--border-default)" strokeWidth="2" />
+          <path d="M14 8a6 6 0 0 0-6-6" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" />
         </svg>
       ) : (
         <span className="mobile-session-state-dot" aria-hidden="true" />
@@ -61,6 +62,8 @@ export function MobileSessionPicker({
 }) {
   const [query, setQuery] = useState('');
   const touchStartRef = useRef(null);
+  const sheetRef = useRef(null);
+  const closeRef = useRef(null);
 
   useBodyScrollLock(isOpen);
 
@@ -73,9 +76,32 @@ export function MobileSessionPicker({
   useEffect(() => {
     if (!isOpen || typeof document === 'undefined') return undefined;
 
+    const opener = document.activeElement;
+    closeRef.current?.focus();
+    return () => {
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || typeof document === 'undefined') return undefined;
+
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         onClose?.();
+      } else if (event.key === 'Tab') {
+        const controls = sheetRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled)');
+        if (!controls?.length) return;
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (!sheetRef.current.contains(document.activeElement) || (!event.shiftKey && document.activeElement === last)) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        }
       }
     };
 
@@ -99,6 +125,8 @@ export function MobileSessionPicker({
   }, [query, selectableSessions]);
 
   const handleTouchStart = (event) => {
+    touchStartRef.current = null;
+    if (!(event.target instanceof Element) || !event.target.closest('.mobile-session-picker-header, .mobile-session-picker-handle') || event.target.closest('button, input')) return;
     const touch = event.touches?.[0];
     if (!touch) return;
     touchStartRef.current = { x: touch.clientX, y: touch.clientY };
@@ -136,12 +164,13 @@ export function MobileSessionPicker({
   return (
     <>
       <div
-        className="mobile-session-picker-overlay open"
+        className="mobile-session-picker-overlay mobile-ui open"
         aria-hidden="true"
         onClick={() => onClose?.()}
       />
       <div
-        className="mobile-session-picker-sheet open"
+        ref={sheetRef}
+        className="mobile-session-picker-sheet mobile-ui open"
         role="dialog"
         aria-modal="true"
         aria-label="Session picker"
@@ -153,6 +182,7 @@ export function MobileSessionPicker({
         <div className="mobile-session-picker-header">
           <h2>Jump to session</h2>
           <button
+            ref={closeRef}
             type="button"
             className="mobile-session-picker-close"
             onClick={() => onClose?.()}
@@ -204,6 +234,7 @@ export function MobileSessionPicker({
                   key={session.id}
                   type="button"
                   className={`mobile-session-picker-item${isActive ? ' active' : ''}`}
+                  aria-current={isActive ? 'true' : undefined}
                   onClick={() => handleSelectSession(session.id)}
                 >
                   <div className="mobile-session-picker-item-main">

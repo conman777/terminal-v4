@@ -1,15 +1,31 @@
-.session-history-search { display: grid; gap: 14px; min-width: 0; }
-.session-history-search h3 { margin: 0 0 6px; font-size: 17px; }
-.session-history-search p { margin: 0; color: var(--text-secondary, #a8abb4); font-size: 13px; }
+.session-history-search { min-width: 0; color: var(--text-primary); font: 14px/1.5 var(--font-ui); }
+.session-history-search :is(h3, h4) { color: var(--text-primary); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.session-history-search p { color: var(--text-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.session-history-search :is(small, time) { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.session-history-search label { color: var(--text-secondary); font-size: 12px; }
+.session-history-search :is(button, select, input:not([type=checkbox]):not([type=range]), textarea) { box-sizing: border-box; max-width: 100%; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font: 13px/1.5 var(--font-ui); }
+.session-history-search button { width: fit-content; background: var(--bg-elevated); cursor: pointer; }
+.session-history-search button:hover:not(:disabled) { background: var(--bg-hover); }
+.session-history-search button:disabled { opacity: .5; cursor: default; }
+.session-history-search :is(input, textarea)::placeholder { color: var(--text-muted); }
+.session-history-search :is(button, select, input, textarea, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.session-history-search input[type=checkbox] { accent-color: var(--accent-primary); width: 16px; height: 16px; flex-shrink: 0; margin: 0; }
+.session-history-search summary { min-height: 32px; padding: 6px 0; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.session-history-search [role=alert] { color: var(--error); }
+.session-history-search { display: grid; gap: 12px; }
+.session-history-search :is(h3, p) { margin: 0; }
+.session-history-search header { display: grid; gap: 6px; }
 .session-history-search form { display: flex; align-items: end; gap: 8px; }
-.session-history-search label { display: grid; gap: 7px; flex: 1; min-width: 0; font-size: 12px; }
-.session-history-search input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; color: var(--text-primary, #eee); background: var(--bg-primary, #181a20); border: 1px solid var(--border-color, #343743); border-radius: 7px; }
-.session-history-search button { border: 1px solid var(--border-color, #343743); border-radius: 7px; background: var(--bg-secondary, #22252c); color: var(--text-primary, #eee); padding: 10px 12px; cursor: pointer; }
-.session-history-search button:disabled { cursor: default; opacity: .65; }
-.session-history-search [role="alert"] { color: var(--error-color, #ef9a9a); display: grid; gap: 8px; }
+.session-history-search label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.session-history-search input { width: 100%; min-width: 0; }
+.session-history-search [role=alert] { display: grid; gap: 8px; }
 .session-history-results { display: grid; gap: 8px; max-height: 46vh; overflow-y: auto; }
-.session-history-search .session-history-result { display: grid; gap: 8px; text-align: left; font-size: 13px; overflow-wrap: anywhere; }
+.session-history-search .session-history-result { display: grid; gap: 6px; width: 100%; padding: 12px; text-align: left; background: transparent; overflow-wrap: anywhere; }
 .session-history-result-heading { display: flex; justify-content: space-between; gap: 12px; }
-.session-history-result-heading > span, .session-history-result time { color: var(--text-secondary, #a8abb4); font-size: 11px; }
-@media (max-width: 480px) { .session-history-search form { align-items: stretch; flex-direction: column; } .session-history-search button { min-height: 42px; } }
-
+.session-history-result-heading > span { color: var(--text-secondary); font-size: 12px; }
+@media (max-width: 600px) { .session-history-search form { align-items: stretch; flex-direction: column; } }
+@media (pointer: coarse), (max-width: 768px) {
+  .session-history-search :is(button, select, input:not([type=checkbox]):not([type=range]), summary) { min-height: 44px; }
+  .session-history-search :is(select, input:not([type=checkbox]):not([type=range]), textarea) { font-size: 16px; }
+  .session-history-search label:has(input[type=checkbox]) { min-height: 44px; align-items: center; }
+}

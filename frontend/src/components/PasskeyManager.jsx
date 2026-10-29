@@ -1,61 +1,85 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useId } from 'react';
+import './AccountAccess.css';
 import { registerPasskey, listPasskeys, deletePasskey } from '../utils/passkey';
 
 export default function PasskeyManager() {
+  const nameId = useId();
+  const helpId = useId();
   const [passkeys, setPasskeys] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [listError, setListError] = useState(null);
   const [newKeyName, setNewKeyName] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const mounted = useRef(false);
+  const lifecycle = useRef(0);
+  const listRequest = useRef(0);
 
   useEffect(() => {
+    mounted.current = true;
     loadPasskeys();
+    return () => {
+      mounted.current = false;
+      lifecycle.current += 1;
+      listRequest.current += 1;
+    };
   }, []);
 
   async function loadPasskeys() {
+    if (!mounted.current) return;
+    const request = ++listRequest.current;
+    const current = () => mounted.current && request === listRequest.current;
     setIsLoading(true);
+    setListError(null);
     try {
       const keys = await listPasskeys();
-      setPasskeys(keys);
+      if (current()) setPasskeys(keys);
     } catch (err) {
-      // silently fail — section just shows empty
+      if (current()) setListError(err?.message || 'Failed to load passkeys');
     } finally {
-      setIsLoading(false);
+      if (current()) setIsLoading(false);
     }
   }
 
   async function handleRegister() {
     if (isRegistering) return;
+    const scope = lifecycle.current;
+    const current = () => mounted.current && scope === lifecycle.current;
     setError(null);
     setSuccess(null);
     setIsRegistering(true);
     try {
       await registerPasskey(newKeyName.trim() || undefined);
+      if (!current()) return;
       setNewKeyName('');
       setSuccess('Passkey registered successfully');
       await loadPasskeys();
     } catch (err) {
+      if (!current()) return;
       if (err.name === 'NotAllowedError') {
         setError('Registration was cancelled or timed out');
       } else {
         setError(err.message || 'Registration failed');
       }
     } finally {
-      setIsRegistering(false);
+      if (current()) setIsRegistering(false);
     }
   }
 
   async function handleDelete(id, name) {
     if (!confirm(`Remove passkey "${name || 'Unnamed'}"?`)) return;
+    const scope = lifecycle.current;
+    const current = () => mounted.current && scope === lifecycle.current;
     setError(null);
     setSuccess(null);
     try {
       await deletePasskey(id);
+      if (!current()) return;
       setSuccess('Passkey removed');
       await loadPasskeys();
     } catch (err) {
-      setError(err.message || 'Failed to remove passkey');
+      if (current()) setError(err.message || 'Failed to remove passkey');
     }
   }
 
@@ -65,71 +89,63 @@ export default function PasskeyManager() {
   }
 
   return (
-    <div className="form-group">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <label style={{ margin: 0 }}>Security Keys (Passkeys)</label>
-      </div>
+    <section className="form-group passkey-manager" aria-label="Security Keys (Passkeys)">
+      <h3>Security Keys (Passkeys)</h3>
       <p className="form-help">
         Sign in with Face ID, Touch ID, or a hardware key instead of your password.
       </p>
 
-      {isLoading ? (
-        <p className="form-help" style={{ fontStyle: 'italic' }}>Loading...</p>
-      ) : (
-        <>
-          {passkeys.length === 0 && (
-            <p className="form-help" style={{ fontStyle: 'italic' }}>No passkeys registered yet.</p>
-          )}
-
-          {passkeys.map((key) => (
-            <div
-              key={key.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '8px 10px',
-                background: 'var(--bg-surface, #1c1814)',
-                border: '1px solid var(--border-subtle, #2a241c)',
-                borderRadius: 'var(--radius-sm, 6px)',
-                marginBottom: '4px',
-                fontSize: '13px'
-              }}
-            >
-              <div style={{ minWidth: 0, overflow: 'hidden' }}>
-                <strong style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {key.name || 'Unnamed passkey'}
-                </strong>
-                <span style={{ color: 'var(--text-muted, #8c8172)', fontSize: '11px' }}>
-                  Added {formatDate(key.createdAt)}
-                  {key.lastUsedAt ? ` · Last used ${formatDate(key.lastUsedAt)}` : ''}
-                </span>
-              </div>
-              <button
-                className="btn-danger"
-                style={{ fontSize: '11px', padding: '2px 8px', flexShrink: 0, marginLeft: '8px' }}
-                onClick={() => handleDelete(key.id, key.name)}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </>
+      {isLoading && (
+        <p className="form-help" role="status">Loading...</p>
+      )}
+      {listError && (
+        <div className="form-error" role="alert">
+          {listError}{' '}
+          <button className="btn-secondary" onClick={loadPasskeys} disabled={isLoading}>Retry</button>
+        </div>
+      )}
+      {!isLoading && !listError && passkeys.length === 0 && (
+        <p className="form-help">No passkeys registered yet.</p>
       )}
 
-      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+      {passkeys.map((key) => (
+        <div
+          key={key.id}
+          className="passkey-entry"
+        >
+          <div className="passkey-entry-details">
+            <strong>
+              {key.name || 'Unnamed passkey'}
+            </strong>
+            <span>
+              Added {formatDate(key.createdAt)}
+              {key.lastUsedAt ? ` · Last used ${formatDate(key.lastUsedAt)}` : ''}
+            </span>
+          </div>
+          <button
+            className="btn-danger"
+            onClick={() => handleDelete(key.id, key.name)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+
+      <label htmlFor={nameId}>Passkey name (optional)</label>
+      <p className="form-help" id={helpId}>Choose a name to recognize this device later.</p>
+      <div className="passkey-registration">
         <input
+          id={nameId}
+          aria-describedby={helpId}
           type="text"
           placeholder='Name (e.g. "iPhone Face ID")'
           value={newKeyName}
           onChange={(e) => setNewKeyName(e.target.value)}
-          style={{ flex: 1 }}
           autoComplete="off"
           disabled={isRegistering}
         />
         <button
           className="btn-primary"
-          style={{ fontSize: '12px', padding: '4px 12px', whiteSpace: 'nowrap' }}
           onClick={handleRegister}
           disabled={isRegistering}
         >
@@ -137,8 +153,8 @@ export default function PasskeyManager() {
         </button>
       </div>
 
-      {error && <div className="form-error" style={{ marginTop: '6px' }}>{error}</div>}
-      {success && <div className="form-success" style={{ marginTop: '6px' }}>{success}</div>}
-    </div>
+      {error && <div className="form-error" role="alert">{error}</div>}
+      {success && <div className="form-success" role="status">{success}</div>}
+    </section>
   );
 }

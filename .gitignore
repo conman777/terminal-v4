@@ -27,6 +27,7 @@ data/
 .claude/
 
 # Build outputs
+/.runtime/
 dist/
 build/
 *.tsbuildinfo

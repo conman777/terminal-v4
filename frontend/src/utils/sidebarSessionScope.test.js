@@ -53,4 +53,17 @@ describe('scopeThreadsSidebarData', () => {
 
     expect(scoped.sessionsGroupedByProject).toEqual([]);
   });
+
+  it('hides drawer terminals that belong to a conversation', () => {
+    const conversation = buildSession('ss-chat', 'Chat');
+    const drawer = { ...buildSession('pty-drawer', 'Terminal'), thread: { companionOf: 'ss-chat' } };
+    const scoped = scopeThreadsSidebarData({
+      activeSessions: [conversation, drawer],
+      sessionsGroupedByProject: [{ projectName: 'repo', projectPath: '/repo', sessions: [conversation, drawer] }],
+      pinnedSessions: [drawer],
+      archivedSessions: [drawer],
+    });
+    expect(scoped).toEqual({ sessionsGroupedByProject: [{ projectName: 'repo', projectPath: '/repo', sessions: [conversation] }], pinnedSessions: [], archivedSessions: [] });
+  });
 });
+

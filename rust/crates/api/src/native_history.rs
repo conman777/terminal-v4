@@ -190,14 +190,15 @@ fn retain(
 fn parse_jsonl(provider: &str, body: &str, expected: &Path) -> Option<NativeTranscript> {
     let mut id = String::new();
     let mut matching = false;
-    let mut messages = Vec::new();
+    let mut messages: Vec<NativeMessage> = Vec::new();
     let mut used = 0;
     let mut truncated = false;
     let mut event_users: Vec<usize> = Vec::new();
-    for line in body.lines() {
-        let Ok(record) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+    let records: Vec<Value> = body
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    for record in &records {
         let kind = record["type"].as_str().unwrap_or("");
         if provider == "claude" {
             if record["isSidechain"] == true
@@ -217,15 +218,6 @@ fn parse_jsonl(provider: &str, body: &str, expected: &Path) -> Option<NativeTran
                     return None;
                 }
                 id = session.into();
-            }
-            if matches!(kind, "user" | "assistant") {
-                retain(
-                    &mut messages,
-                    kind,
-                    &visible_text(&record["message"]["content"]),
-                    &mut used,
-                    &mut truncated,
-                );
             }
         } else if provider == "codex" {
             let payload = &record["payload"];
@@ -280,6 +272,45 @@ fn parse_jsonl(provider: &str, body: &str, expected: &Path) -> Option<NativeTran
                     }
                 }
             }
+        }
+    }
+    if provider == "claude" {
+        let visible = |record: &&Value| {
+            matches!(record["type"].as_str(), Some("user" | "assistant"))
+                && record["isSidechain"] != true
+                && record["isMeta"] != true
+                && record["isCompactSummary"] != true
+        };
+        let mut active: Vec<_> = records.iter().filter(visible).collect();
+        if active.iter().any(|record| {
+            record["parentUuid"].is_string()
+                || (record["uuid"].is_string() && record.get("parentUuid").is_some())
+        }) {
+            let linked: std::collections::HashMap<_, _> = records
+                .iter()
+                .filter_map(|record| record["uuid"].as_str().map(|id| (id, record)))
+                .collect();
+            let mut head = Some(active.last()?["uuid"].as_str()?);
+            let mut seen = std::collections::HashSet::new();
+            active.clear();
+            while let Some(id) = head {
+                if !seen.insert(id) {
+                    return None;
+                }
+                let record = *linked.get(id)?;
+                active.push(record);
+                head = record["parentUuid"].as_str();
+            }
+            active.reverse();
+        }
+        for record in active.into_iter().filter(visible) {
+            retain(
+                &mut messages,
+                record["type"].as_str().unwrap(),
+                &visible_text(&record["message"]["content"]),
+                &mut used,
+                &mut truncated,
+            );
         }
     }
     if !matching || id.is_empty() || id.len() > 200 || messages.is_empty() {
@@ -474,14 +505,52 @@ fn read_import(directory: &Path, id: &str) -> Result<NativeTranscript, ApiError>
     serde_json::from_slice(&body)
         .map_err(|_| ApiError::internal("Imported conversation is invalid"))
 }
+fn v4_transcripts(data: &Path, owner: &str, path: &Path) -> Vec<NativeTranscript> {
+    crate::v4_agent::sessions(data, owner, path)
+        .into_iter()
+        .filter(|s| !s.messages.is_empty())
+        .map(|session| {
+            let mut messages = Vec::new();
+            let mut used = 0;
+            let mut truncated = false;
+            for message in &session.messages {
+                retain(
+                    &mut messages,
+                    &message.role,
+                    &message.text,
+                    &mut used,
+                    &mut truncated,
+                );
+            }
+            NativeTranscript {
+                source_id: source_id("v4", &session.id, path),
+                provider: session.provider,
+                title: messages
+                    .first()
+                    .map(|m| m.text.chars().take(100).collect())
+                    .unwrap_or_default(),
+                workspace_path: path.to_string_lossy().into_owned(),
+                messages,
+                truncated,
+            }
+        })
+        .collect()
+}
 async fn sources(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Extension(roots): Extension<NativeRoots>,
     Query(query): Query<WorkspaceQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let path = workspace(&query.path)?;
-    let (rows, warnings) = tokio::task::spawn_blocking(move || scan(&roots, &path))
-        .await
-        .map_err(|_| ApiError::internal("Unable to scan native history"))?;
+    let data = state.config().data_dir.clone();
+    let (rows, warnings) = tokio::task::spawn_blocking(move || {
+        let (mut rows, warnings) = scan(&roots, &path);
+        rows.extend(v4_transcripts(&data, &user.user_id, &path));
+        (rows, warnings)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Unable to scan native history"))?;
     Ok(Json(
         serde_json::json!({"sources":rows.iter().map(Summary::from).collect::<Vec<_>>(),"warnings":warnings}),
     ))
@@ -497,7 +566,8 @@ async fn import(
     let path = workspace(&query.path)?;
     let data = state.config().data_dir.clone();
     tokio::task::spawn_blocking(move || {
-        let (rows, _) = scan(&roots, &path);
+        let (mut rows, _) = scan(&roots, &path);
+        rows.extend(v4_transcripts(&data, &user.user_id, &path));
         let record = rows
             .into_iter()
             .find(|row| row.source_id == request.source_id)
@@ -618,6 +688,95 @@ mod unit_tests {
         );
         assert!(parse_jsonl("claude", &body, &workspace.join("other")).is_none());
     }
+    #[test]
+    fn claude_import_follows_active_branch_through_hidden_records() {
+        let workspace = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        let row = |id: &str, parent: Option<&str>, role: &str, text: &str| serde_json::json!({"type":role,"uuid":id,"parentUuid":parent,"sessionId":"branch-fixture","cwd":workspace,"message":{"content":text}});
+        let mut summary = row("summary", Some("a1"), "user", "Hidden compaction summary");
+        summary["isCompactSummary"] = true.into();
+        let mut meta = row("meta", Some("summary"), "user", "Hidden metadata");
+        meta["isMeta"] = true.into();
+        let mut side = row("side", Some("a2"), "assistant", "Sidechain answer");
+        side["isSidechain"] = true.into();
+        let records = [
+            row("u1", None, "user", "Original question"),
+            row("a1", Some("u1"), "assistant", "Original answer"),
+            row("discard-u", Some("a1"), "user", "Abandoned question"),
+            row(
+                "discard-a",
+                Some("discard-u"),
+                "assistant",
+                "Abandoned answer",
+            ),
+            summary,
+            meta,
+            row("u2", Some("meta"), "user", "Active question"),
+            row("a2", Some("u2"), "assistant", "Active answer"),
+            side,
+        ];
+        let body = records
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed = parse_jsonl("claude", &body, &workspace).unwrap();
+        assert_eq!(
+            parsed
+                .messages
+                .iter()
+                .map(|message| (message.role.as_str(), message.text.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("user", "Original question"),
+                ("assistant", "Original answer"),
+                ("user", "Active question"),
+                ("assistant", "Active answer")
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_import_preserves_legacy_transcripts_without_links() {
+        let workspace = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        for format in ["no-links", "null-without-uuid", "uuid-without-parent"] {
+            let mut records = vec![
+                serde_json::json!({"type":"user","sessionId":"legacy-fixture","cwd":workspace,"message":{"content":"Legacy question"}}),
+                serde_json::json!({"type":"assistant","sessionId":"legacy-fixture","cwd":workspace,"message":{"content":"Legacy answer"}}),
+            ];
+            for (index, record) in records.iter_mut().enumerate() {
+                if format == "null-without-uuid" {
+                    record["parentUuid"] = Value::Null;
+                }
+                if format == "uuid-without-parent" {
+                    record["uuid"] = format!("legacy-{index}").into();
+                }
+            }
+            let body = records
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                parse_jsonl("claude", &body, &workspace)
+                    .unwrap()
+                    .messages
+                    .iter()
+                    .map(|message| message.text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["Legacy question", "Legacy answer"]
+            );
+        }
+    }
+
+    #[test]
+    fn claude_import_rejects_broken_or_cyclic_active_links() {
+        let workspace = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
+        for parent in ["missing", "head"] {
+            let body = serde_json::json!({"type":"user","uuid":"head","parentUuid":parent,"cwd":workspace,"sessionId":"broken-fixture","message":{"content":"Question"}}).to_string();
+            assert!(parse_jsonl("claude", &body, &workspace).is_none());
+        }
+    }
+
     #[test]
     fn codex_deduplicates_response_user_and_event_without_importing_tools() {
         let workspace = std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap();
@@ -743,6 +902,28 @@ mod persisted_io_tests {
         std::fs::create_dir(&project).unwrap();
         let project = std::fs::canonicalize(&project).unwrap();
         let roots = fixtures(directory.path(), &project);
+        let row = |uuid: &str, parent: Option<&str>, role: &str, text: &str| serde_json::json!({"type":role,"uuid":uuid,"parentUuid":parent,"sessionId":"native-id","cwd":project,"message":{"content":text}});
+        let body = [
+            row(
+                "first",
+                None,
+                "user",
+                "Build fix\nOPENAI_API_KEY=sk-mustnotpersist",
+            ),
+            row("abandoned-user", Some("first"), "user", "Discarded request"),
+            row(
+                "abandoned-answer",
+                Some("abandoned-user"),
+                "assistant",
+                "Discarded answer",
+            ),
+            row("active-answer", Some("first"), "assistant", "Kept answer"),
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        std::fs::write(roots.claude.join("native.jsonl"), body).unwrap();
         let config = terminal_v4_core::AppConfig {
             data_dir: directory.path().join("app-data"),
             ..Default::default()
@@ -784,7 +965,13 @@ mod persisted_io_tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(imported["messages"][0]["text"], "Build fix\n[redacted]");
+        assert_eq!(
+            imported["messages"],
+            serde_json::json!([
+                {"role":"user","text":"Build fix\n[redacted]"},
+                {"role":"assistant","text":"Kept answer"},
+            ])
+        );
         let open = format!("/api/workspace/native-history/imports/{source}?{query}");
         assert_eq!(
             call(router.clone(), "GET", &open, Some(&other), Value::Null)

@@ -7,15 +7,44 @@ vi.mock('../utils/api', () => ({ apiFetch: vi.fn() }));
 const remote = { id: 'host-a', label: 'Build host', url: 'https://build.example.test', expiresAt: '2030-01-01T00:00:00Z' };
 const reply = data => ({ ok: true, json: async () => data });
 beforeEach(() => {
+  apiFetch.mockReset();
   setActiveEnvironment(null);
   apiFetch.mockImplementation(async url => reply(url.endsWith('/status') ? { connected: true } : url.endsWith('/pairing-code') ? { code: 'one-time-code', expiresAt: Math.floor(Date.now() / 1000) + 120 } : { environments: [remote], grants: [{ id: 'grant-a', label: 'Laptop' }] }));
 });
+describe('compact server selector', () => {
+  it('opens the same chooser inside a header without a separate server bar', async () => {
+    render(<RemoteEnvironmentSwitcher compact />);
+    expect(screen.queryByRole('region', { name: 'Active environment' })).not.toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: 'Switch server, This server' });
+    fireEvent.click(trigger);
+    expect(await screen.findByRole('dialog', { name: 'Switch server' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close server chooser' }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+});
 describe('RemoteEnvironmentsPanel', () => {
+  it('announces a pending device directory without showing a false empty state', async () => {
+    let resolveDirectory;
+    apiFetch.mockReturnValueOnce(new Promise(resolve => { resolveDirectory = resolve; }));
+    render(<RemoteEnvironmentsPanel />);
+    expect(screen.getByRole('status')).toHaveTextContent('Checking devices…');
+    expect(screen.queryByText('No paired devices yet.')).not.toBeInTheDocument();
+    resolveDirectory(reply({ environments: [], grants: [] }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No paired devices yet.'));
+  });
+
+  it('reports a directory failure without presenting an unverified empty list', async () => {
+    apiFetch.mockRejectedValueOnce(new Error('Synthetic directory unavailable'));
+    render(<RemoteEnvironmentsPanel />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic directory unavailable');
+    expect(screen.queryByText('No paired devices yet.')).not.toBeInTheDocument();
+  });
+
   it('switches the actual active environment and returns to the home server', async () => {
     render(<RemoteEnvironmentsPanel />);
     fireEvent.click(await screen.findByRole('button', { name: 'Use Build host' }));
     expect(getActiveEnvironment()).toEqual(remote);
-    fireEvent.click(screen.getByRole('button', { name: 'Use home server' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use this server' }));
     expect(getActiveEnvironment()).toBeNull();
   });
   it('creates an expiring pairing code and revokes incoming access', async () => {
@@ -117,12 +146,63 @@ describe('device address book', () => {
 describe('environment extension accessibility', () => {
   it('includes an extension details summary in its dialog focus trap', async () => {
     render(<RemoteEnvironmentSwitcher><details><summary>Host startup commands</summary><p>Command details</p></details></RemoteEnvironmentSwitcher>);
-    fireEvent.click(screen.getByRole('button', { name: /Environments:/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Switch server, This server' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage servers' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Additional remote tools' }));
     const summary = await screen.findByText('Host startup commands');
     summary.focus();
     fireEvent.keyDown(summary, { key: 'Tab' });
-    expect(screen.getByRole('button', { name: 'Close environments' })).toHaveFocus();
-    fireEvent.keyDown(screen.getByRole('button', { name: 'Close environments' }), { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: 'Back to servers' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Back to servers' }), { key: 'Tab', shiftKey: true });
     expect(summary).toHaveFocus();
+  });
+});
+
+
+describe('server chooser', () => {
+  it('opens a focused chooser without pairing, permissions or advanced tools', async () => {
+    render(<RemoteEnvironmentSwitcher><p>Advanced fixture tools</p></RemoteEnvironmentSwitcher>);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch server, This server' }));
+    expect(screen.getByRole('heading', { name: 'Switch server' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Use Build host' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use this server' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: 'Create pairing code' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Remote server URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('Advanced fixture tools')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Use Build host' }));
+    expect(getActiveEnvironment()).toEqual(remote);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch server, Build host' })).toHaveFocus();
+  });
+
+  it('keeps management separate and returns to the chooser with Escape', async () => {
+    render(<RemoteEnvironmentSwitcher><p>Advanced fixture tools</p></RemoteEnvironmentSwitcher>);
+    const trigger = screen.getByRole('button', { name: 'Switch server, This server' });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Manage servers' }));
+    expect(screen.getByRole('heading', { name: 'Manage servers' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create pairing code' })).toBeInTheDocument();
+    expect(screen.queryByText('Advanced fixture tools')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Additional remote tools'));
+    expect(screen.getByText('Advanced fixture tools')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.getByRole('heading', { name: 'Switch server' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manage servers' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(getActiveEnvironment()).toBeNull();
+    expect(apiFetch.mock.calls.every(([, options]) => !options?.method || options.method === 'GET')).toBe(true);
+  });
+
+  it('keeps this server usable when the directory fails and allows a read-only retry', async () => {
+    apiFetch.mockRejectedValueOnce(new Error('Directory unavailable'));
+    render(<RemoteEnvironmentSwitcher />);
+    fireEvent.click(screen.getByRole('button', { name: 'Switch server, This server' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Directory unavailable');
+    expect(screen.queryByText('No other servers connected.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use this server' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry server list' }));
+    expect(await screen.findByRole('button', { name: 'Use Build host' })).toBeInTheDocument();
   });
 });

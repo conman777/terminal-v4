@@ -1,0 +1,75 @@
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { setActiveEnvironment, setEnvironmentIdentity } from '../utils/remoteEnvironments';
+import { useComposerDraft } from './useComposerDraft';
+beforeEach(() => { setEnvironmentIdentity('draft-fixture-owner', 'https://draft-home.example'); setActiveEnvironment(null); localStorage.clear(); });
+afterEach(() => { vi.restoreAllMocks(); setActiveEnvironment(null); setEnvironmentIdentity(null); localStorage.clear(); });
+it('shares a text draft across mounted composers and fences an older acknowledgement after edit-and-restore', () => {
+  const first = renderHook(() => useComposerDraft('ss-shared-draft'));
+  const second = renderHook(() => useComposerDraft('ss-shared-draft'));
+  act(() => first.result.current.setValue('Original text'));
+  const submitted = first.result.current.revision;
+  expect(second.result.current.value).toBe('Original text');
+  act(() => { second.result.current.setValue('Newer edit'); second.result.current.setValue('Original text'); });
+  act(() => first.result.current.clearIfUnchanged(submitted, 'Original text'));
+  expect(first.result.current.value).toBe('Original text');
+  expect(first.result.current.revision).not.toBe(submitted);
+  act(() => first.result.current.clearIfUnchanged(first.result.current.revision, 'Original text'));
+  expect(second.result.current.value).toBe('');
+});
+it('restores the scoped persisted text on returning to an owner/home/environment without exposing another draft', () => {
+  const home = renderHook(() => useComposerDraft('ss-same-id'));
+  act(() => home.result.current.setValue('Home owner text')); home.unmount();
+  setActiveEnvironment({ id: 'synthetic-remote' });
+  const remote = renderHook(() => useComposerDraft('ss-same-id'));
+  expect(remote.result.current.value).toBe('');
+  act(() => remote.result.current.setValue('Remote text')); remote.unmount();
+  setEnvironmentIdentity('other-owner', 'https://draft-home.example');
+  const other = renderHook(() => useComposerDraft('ss-same-id'));
+  expect(other.result.current.value).toBe(''); other.unmount();
+  setEnvironmentIdentity('draft-fixture-owner', 'https://different-home.example');
+  const differentHome = renderHook(() => useComposerDraft('ss-same-id'));
+  expect(differentHome.result.current.value).toBe(''); differentHome.unmount();
+  setEnvironmentIdentity('draft-fixture-owner', 'https://draft-home.example');
+  const restored = renderHook(() => useComposerDraft('ss-same-id'));
+  expect(restored.result.current.value).toBe('Home owner text');
+});
+
+it('recovers a transient storage read failure without discarding dirty text, revision or a saved pending identity', () => {
+  const first = renderHook(() => useComposerDraft('ss-read-recovery'));
+  let original;
+  act(() => { first.result.current.setValue('Saved original text'); original = first.result.current.store.prepareIntent('Saved original text'); });
+  first.unmount();
+  setEnvironmentIdentity('intermediate-owner', 'https://draft-home.example');
+  setEnvironmentIdentity('draft-fixture-owner', 'https://draft-home.example');
+  let unavailable = true;
+  const getItem = Storage.prototype.getItem;
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (key) { if (unavailable && key.includes('composerDraft:')) throw new Error('Synthetic temporary read failure'); return getItem.call(this, key); });
+  const restored = renderHook(() => useComposerDraft('ss-read-recovery'));
+  act(() => restored.result.current.setValue('Saved original text'));
+  const dirtyRevision = restored.result.current.revision;
+  unavailable = false;
+  let recovered;
+  act(() => { recovered = restored.result.current.store.prepareIntent('Saved original text'); });
+  expect(recovered.requestId).toBe(original.requestId);
+  expect(restored.result.current.value).toBe('Saved original text');
+  expect(restored.result.current.revision).toBe(dirtyRevision);
+  expect(restored.result.current.error).toBe('');
+});
+
+it('keeps a malformed saved record untouched and blocks sending while retaining visible edits', () => {
+  const first = renderHook(() => useComposerDraft('ss-malformed-draft'));
+  act(() => first.result.current.setValue('Previously saved text')); first.unmount();
+  const key = Object.keys(localStorage).find(value => value.includes('composerDraft:') && value.endsWith('ss-malformed-draft'));
+  const malformed = '{synthetic malformed draft';
+  localStorage.setItem(key, malformed);
+  setEnvironmentIdentity('intermediate-owner', 'https://draft-home.example');
+  setEnvironmentIdentity('draft-fixture-owner', 'https://draft-home.example');
+  const restored = renderHook(() => useComposerDraft('ss-malformed-draft'));
+  act(() => restored.result.current.setValue('Visible unsaved edit'));
+  const revision = restored.result.current.revision;
+  expect(() => restored.result.current.store.prepareIntent('Visible unsaved edit')).toThrow('Saved draft could not be read');
+  expect(restored.result.current.value).toBe('Visible unsaved edit');
+  expect(restored.result.current.revision).toBe(revision);
+  expect(localStorage.getItem(key)).toBe(malformed);
+});

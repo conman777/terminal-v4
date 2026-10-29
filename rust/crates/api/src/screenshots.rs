@@ -1,14 +1,15 @@
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::LazyLock;
 use tokio::fs;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-fn screenshots_dir() -> PathBuf {
+fn screenshots_dir(owner: &str) -> PathBuf {
     let dir = std::env::var("SCREENSHOT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -17,11 +18,14 @@ fn screenshots_dir() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".terminal-v4-screenshots"))
                 .unwrap_or_else(|_| PathBuf::from(".terminal-v4-screenshots"))
         });
+    let dir = dir
+        .join("owners")
+        .join(hex::encode(Sha256::digest(owner.as_bytes())));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
-fn recordings_dir() -> PathBuf {
+fn recordings_dir(owner: &str) -> PathBuf {
     let dir = std::env::var("RECORDING_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -30,21 +34,26 @@ fn recordings_dir() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".terminal-v4-recordings"))
                 .unwrap_or_else(|_| PathBuf::from(".terminal-v4-recordings"))
         });
+    let dir = dir
+        .join("owners")
+        .join(hex::encode(Sha256::digest(owner.as_bytes())));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
 
-static ACTIVE_RECORDINGS: LazyLock<Mutex<HashMap<String, RecordingSession>>> =
+static ACTIVE_RECORDINGS: LazyLock<Mutex<HashMap<(String, String), RecordingSession>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 struct RecordingSession {
+    tree: crate::process_tree::ProcessTree,
     child: tokio::process::Child,
     output_dir: PathBuf,
     started_at: i64,
 }
 
-/// Take a screenshot of a preview URL using Playwright CLI.
+/// Take a screenshot of a preview URL using the Playwright browser API.
 pub async fn take_screenshot(
+    owner: &str,
     url: &str,
     selector: Option<&str>,
     full_page: bool,
@@ -52,34 +61,31 @@ pub async fn take_screenshot(
     height: Option<u32>,
 ) -> Result<ScreenshotResult, String> {
     let filename = format!("{}.png", Uuid::new_v4());
-    let output_path = screenshots_dir().join(&filename);
+    let output_path = screenshots_dir(owner).join(&filename);
     let viewport_width = width.unwrap_or(1280);
     let viewport_height = height.unwrap_or(720);
 
     validate_viewport(viewport_width, viewport_height)?;
 
-    // Use Playwright CLI to take screenshot
-    let mut args = vec![
-        "screenshot".to_string(),
-        url.to_string(),
-        output_path.to_string_lossy().to_string(),
-        format!("--viewport-size={viewport_width},{viewport_height}"),
-    ];
-
-    if full_page {
-        args.push("--full-page".to_string());
-    }
-
-    if let Some(sel) = selector {
-        args.push(format!("--selector={sel}"));
-    }
-
-    let output = Command::new("npx")
-        .args(["playwright", "--"])
-        .args(&args)
-        .output()
+    let mut command = Command::new(recording_node_binary());
+    command
+        .arg("-e")
+        .arg(include_str!("preview/screenshot.js"))
+        .env("TERMINAL_V4_SCREENSHOT_URL", url)
+        .env("TERMINAL_V4_SCREENSHOT_OUTPUT", &output_path)
+        .env("TERMINAL_V4_SCREENSHOT_SELECTOR", selector.unwrap_or(""))
+        .env("TERMINAL_V4_SCREENSHOT_FULL_PAGE", full_page.to_string())
+        .env("TERMINAL_V4_SCREENSHOT_WIDTH", viewport_width.to_string())
+        .env("TERMINAL_V4_SCREENSHOT_HEIGHT", viewport_height.to_string())
+        .current_dir(playwright_workdir())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, tree) = spawn_capture_helper(&mut command)?;
+    let output = child
+        .wait_with_output()
         .await
         .map_err(|e| format!("Failed to run playwright: {e}"))?;
+    drop(tree);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -93,16 +99,34 @@ pub async fn take_screenshot(
 }
 
 pub async fn start_recording(
+    owner: &str,
     url: &str,
     width: Option<u32>,
     height: Option<u32>,
+) -> Result<RecordingStartResult, String> {
+    start_recording_with_timeout(
+        owner,
+        url,
+        width,
+        height,
+        std::time::Duration::from_secs(35),
+    )
+    .await
+}
+
+async fn start_recording_with_timeout(
+    owner: &str,
+    url: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    ready_timeout: std::time::Duration,
 ) -> Result<RecordingStartResult, String> {
     let viewport_width = width.unwrap_or(1280);
     let viewport_height = height.unwrap_or(720);
     validate_viewport(viewport_width, viewport_height)?;
 
-    let recording_id = format!("recording-{}", now_millis());
-    let output_dir = recordings_dir().join(&recording_id);
+    let recording_id = format!("recording-{}", Uuid::new_v4());
+    let output_dir = recordings_dir(owner).join(&recording_id);
     fs::create_dir_all(&output_dir)
         .await
         .map_err(|e| format!("Failed to create recording directory: {e}"))?;
@@ -119,13 +143,12 @@ pub async fn start_recording(
         .env("TERMINAL_V4_RECORDING_WIDTH", viewport_width.to_string())
         .env("TERMINAL_V4_RECORDING_HEIGHT", viewport_height.to_string())
         .current_dir(playwright_workdir())
-        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Failed to start recording helper: {e}"))?;
+    let (mut child, tree) = spawn_capture_helper(&mut command)?;
 
     let stdout = child
         .stdout
@@ -133,14 +156,23 @@ pub async fn start_recording(
         .ok_or_else(|| "Recording helper stdout unavailable".to_string())?;
     let mut ready_reader = BufReader::new(stdout).lines();
 
-    let ready = tokio::time::timeout(std::time::Duration::from_secs(35), ready_reader.next_line())
-        .await
-        .map_err(|_| "Recording helper timed out before becoming ready".to_string())?
-        .map_err(|e| format!("Failed to read recording helper output: {e}"))?;
+    let ready = match tokio::time::timeout(ready_timeout, ready_reader.next_line()).await {
+        Ok(Ok(line)) => line,
+        result => {
+            let _ = tree.stop(std::time::Duration::from_millis(150)).await;
+            let _ = tree.wait(&mut child).await;
+            return Err(match result {
+                Err(_) => "Recording helper timed out before becoming ready".to_string(),
+                Ok(Err(error)) => format!("Failed to read recording helper output: {error}"),
+                _ => unreachable!(),
+            });
+        }
+    };
 
     if ready.as_deref() != Some("READY") {
-        let status = child
-            .wait()
+        let _ = tree.stop(std::time::Duration::from_millis(150)).await;
+        let status = tree
+            .wait(&mut child)
             .await
             .map_err(|e| format!("Recording helper exited unexpectedly: {e}"))?;
         let stderr = read_child_stderr(&mut child).await;
@@ -154,8 +186,9 @@ pub async fn start_recording(
 
     let started = now_millis();
     ACTIVE_RECORDINGS.lock().await.insert(
-        recording_id.clone(),
+        (owner.into(), recording_id.clone()),
         RecordingSession {
+            tree,
             child,
             output_dir,
             started_at: started,
@@ -168,27 +201,45 @@ pub async fn start_recording(
     })
 }
 
-pub async fn stop_recording(recording_id: &str) -> Result<Option<RecordingStopResult>, String> {
-    let Some(mut session) = ACTIVE_RECORDINGS.lock().await.remove(recording_id) else {
+pub async fn stop_recording(
+    owner: &str,
+    recording_id: &str,
+) -> Result<Option<RecordingStopResult>, String> {
+    let Some(mut session) = ACTIVE_RECORDINGS
+        .lock()
+        .await
+        .remove(&(owner.into(), recording_id.into()))
+    else {
         return Ok(None);
     };
-
-    if cfg!(windows) {
-        let _ = session.child.start_kill();
-    } else if let Some(child_id) = session.child.id() {
-        let _ = Command::new("kill")
-            .args(["-TERM", &child_id.to_string()])
-            .output()
-            .await;
-    } else {
-        let _ = session.child.start_kill();
-    }
-
-    let status = session
+    let mut stdin = session
         .child
-        .wait()
+        .stdin
+        .take()
+        .ok_or("Recording helper control pipe unavailable")?;
+    stdin
+        .write_all(b"STOP\n")
         .await
-        .map_err(|e| format!("Failed to stop recording helper: {e}"))?;
+        .map_err(|error| format!("Failed to request recording shutdown: {error}"))?;
+    drop(stdin);
+    let status = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        session.tree.wait(&mut session.child),
+    )
+    .await
+    {
+        Ok(status) => {
+            status.map_err(|error| format!("Failed to stop recording helper: {error}"))?
+        }
+        Err(_) => {
+            let _ = session
+                .tree
+                .stop(std::time::Duration::from_millis(150))
+                .await;
+            let _ = session.tree.wait(&mut session.child).await;
+            return Err("Recording helper timed out during shutdown".into());
+        }
+    };
     if !status.success() {
         let stderr = read_child_stderr(&mut session.child).await;
         return Err(format!(
@@ -212,8 +263,8 @@ pub async fn stop_recording(recording_id: &str) -> Result<Option<RecordingStopRe
 }
 
 /// List all saved screenshots.
-pub async fn list_screenshots() -> Result<Vec<ScreenshotInfo>, String> {
-    let dir = screenshots_dir();
+pub async fn list_screenshots(owner: &str) -> Result<Vec<ScreenshotInfo>, String> {
+    let dir = screenshots_dir(owner);
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -247,32 +298,18 @@ pub async fn list_screenshots() -> Result<Vec<ScreenshotInfo>, String> {
 }
 
 /// Get a screenshot file's bytes.
-pub async fn get_screenshot(filename: &str) -> Result<Vec<u8>, String> {
-    let sanitized = Path::new(filename)
-        .file_name()
-        .ok_or("Invalid filename")?
-        .to_string_lossy()
-        .to_string();
-
-    if sanitized.contains("..") {
-        return Err("Invalid filename".to_string());
-    }
-
-    let path = screenshots_dir().join(&sanitized);
+pub async fn get_screenshot(owner: &str, filename: &str) -> Result<Vec<u8>, String> {
+    validate_capture_filename(filename)?;
+    let path = screenshots_dir(owner).join(filename);
     fs::read(&path)
         .await
         .map_err(|e| format!("Screenshot not found: {e}"))
 }
 
 /// Delete a screenshot.
-pub async fn delete_screenshot(filename: &str) -> Result<bool, String> {
-    let sanitized = Path::new(filename)
-        .file_name()
-        .ok_or("Invalid filename")?
-        .to_string_lossy()
-        .to_string();
-
-    let path = screenshots_dir().join(&sanitized);
+pub async fn delete_screenshot(owner: &str, filename: &str) -> Result<bool, String> {
+    validate_capture_filename(filename)?;
+    let path = screenshots_dir(owner).join(filename);
     if !path.exists() {
         return Ok(false);
     }
@@ -280,6 +317,36 @@ pub async fn delete_screenshot(filename: &str) -> Result<bool, String> {
         .await
         .map_err(|e| format!("Failed to delete: {e}"))?;
     Ok(true)
+}
+
+fn spawn_capture_helper(
+    command: &mut Command,
+) -> Result<(tokio::process::Child, crate::process_tree::ProcessTree), String> {
+    command.kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Failed to start capture helper: {error}"))?;
+    #[cfg(unix)]
+    let tree = crate::process_tree::ProcessTree::attach_new_process_group(&child);
+    #[cfg(not(unix))]
+    let tree = crate::process_tree::ProcessTree::attach(&child);
+    Ok((
+        child,
+        tree.map_err(|error| format!("Failed to track capture helper: {error}"))?,
+    ))
+}
+
+fn validate_capture_filename(filename: &str) -> Result<(), String> {
+    if filename.is_empty()
+        || filename.contains(['/', '\\'])
+        || !filename.ends_with(".png")
+        || filename == ".png"
+    {
+        return Err("Invalid screenshot filename".into());
+    }
+    Ok(())
 }
 
 fn validate_viewport(width: u32, height: u32) -> Result<(), String> {
@@ -297,18 +364,41 @@ fn recording_node_binary() -> String {
 }
 
 fn playwright_workdir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("api crate should be nested under rust/crates/api")
-        .join("backend")
+    let root = std::env::var_os("TERMINAL_V4_RUNTIME_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(3)
+                .expect("api crate should be nested under rust/crates/api")
+                .to_path_buf()
+        });
+    playwright_workdir_from_root(&root)
+}
+
+fn playwright_workdir_from_root(root: &Path) -> PathBuf {
+    if root.join("node_modules/playwright/package.json").is_file() {
+        root.to_path_buf()
+    } else if root
+        .join("backend/node_modules/playwright/package.json")
+        .is_file()
+    {
+        root.join("backend")
+    } else {
+        root.to_path_buf()
+    }
 }
 
 fn recording_node_script() -> &'static str {
     r#"
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
+let chromium;
+try {
+  ({ chromium } = require('playwright'));
+} catch (_) {
+  throw new Error('Playwright runtime unavailable. Run npm install in the Terminal V4 runtime directory.');
+}
 
 async function main() {
   const url = process.env.TERMINAL_V4_RECORDING_URL;
@@ -324,6 +414,7 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: true,
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } : {}),
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
   const context = await browser.newContext({
@@ -353,6 +444,9 @@ async function main() {
     process.exit(0);
   };
 
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { if (chunk.includes('STOP')) shutdown(); });
+  process.stdin.on('end', shutdown);
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
   process.on('SIGHUP', shutdown);
@@ -364,6 +458,7 @@ async function main() {
 
 main().catch((error) => {
   console.error(error && error.stack ? error.stack : String(error));
+  if (String(error).includes("Executable doesn't exist")) console.error('Install Chromium with npx playwright install chromium, or set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to an installed Chromium browser.');
   process.exit(1);
 });
 "#
@@ -446,6 +541,22 @@ mod tests {
 
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
+    #[test]
+    fn playwright_runtime_uses_packaged_root_or_legacy_backend_without_source_checkout() {
+        let runtime = tempdir().unwrap();
+        let backend = runtime.path().join("backend");
+        std::fs::create_dir_all(backend.join("node_modules/playwright")).unwrap();
+        std::fs::write(backend.join("node_modules/playwright/package.json"), "{}").unwrap();
+        assert_eq!(playwright_workdir_from_root(runtime.path()), backend);
+        std::fs::create_dir_all(runtime.path().join("node_modules/playwright")).unwrap();
+        std::fs::write(
+            runtime.path().join("node_modules/playwright/package.json"),
+            "{}",
+        )
+        .unwrap();
+        assert_eq!(playwright_workdir_from_root(runtime.path()), runtime.path());
+    }
+
     #[tokio::test]
     async fn start_and_stop_recording_uses_configured_node_binary() {
         let _env_guard = ENV_LOCK.lock().expect("env lock should acquire");
@@ -457,11 +568,10 @@ mod tests {
             &bin_path,
             r#"#!/bin/sh
 mkdir -p "$TERMINAL_V4_RECORDING_OUTPUT_DIR"
-trap 'touch "$TERMINAL_V4_RECORDING_OUTPUT_DIR/fake.webm"; exit 0' TERM INT HUP
 echo READY
-while true; do
-  sleep 1
-done
+read command
+touch "$TERMINAL_V4_RECORDING_OUTPUT_DIR/fake.webm"
+exit 0
 "#,
         )
         .expect("fake node script should write");
@@ -479,12 +589,16 @@ done
             std::env::set_var("RECORDING_DIR", &recordings_path);
         }
 
-        let recording = start_recording("http://localhost:5173", Some(800), Some(600))
+        let recording = start_recording("owner-a", "http://localhost:5173", Some(800), Some(600))
             .await
             .expect("recording should start");
         assert!(recording.recording_id.starts_with("recording-"));
 
-        let stopped = stop_recording(&recording.recording_id)
+        assert!(stop_recording("owner-b", &recording.recording_id)
+            .await
+            .unwrap()
+            .is_none());
+        let stopped = stop_recording("owner-a", &recording.recording_id)
             .await
             .expect("recording should stop")
             .expect("recording should exist");
@@ -500,5 +614,124 @@ done
             Some(value) => unsafe { std::env::set_var("RECORDING_DIR", value) },
             None => unsafe { std::env::remove_var("RECORDING_DIR") },
         }
+    }
+
+    #[tokio::test]
+    async fn captures_are_scoped_and_filename_is_exact() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let previous = std::env::var_os("SCREENSHOT_DIR");
+        unsafe {
+            std::env::set_var("SCREENSHOT_DIR", temp.path());
+        }
+        let file = "capture.png";
+        std::fs::write(screenshots_dir("a").join(file), b"synthetic-image").unwrap();
+        let owner_list = list_screenshots("a").await.unwrap();
+        let other_list = list_screenshots("b").await.unwrap();
+        let other_read = get_screenshot("b", file).await;
+        let other_delete = delete_screenshot("b", file).await.unwrap();
+        let owner_read = get_screenshot("a", file).await.unwrap();
+        let alias = get_screenshot("a", "folder/capture.png").await;
+        let owner_delete = delete_screenshot("a", file).await.unwrap();
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("SCREENSHOT_DIR", value),
+                None => std::env::remove_var("SCREENSHOT_DIR"),
+            }
+        }
+        assert_eq!(
+            owner_list
+                .iter()
+                .map(|entry| entry.filename.as_str())
+                .collect::<Vec<_>>(),
+            vec![file]
+        );
+        assert!(other_list.is_empty() && other_read.is_err() && !other_delete);
+        assert_eq!(owner_read, b"synthetic-image");
+        assert!(alias.is_err() && owner_delete);
+    }
+
+    #[tokio::test]
+    async fn startup_timeout_and_cancellation_reap_helper() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempdir().unwrap();
+        let helper = temp.path().join("never-ready");
+        let pid_file = temp.path().join("helper.pid");
+        std::fs::write(&helper,format!("#!/usr/bin/env python3\nimport os,sys,time,subprocess,pathlib\nchild=subprocess.Popen([sys.executable,'-c','import time; time.sleep(90)'])\npidfile=pathlib.Path({:?})\ntmp=pidfile.with_suffix('.tmp')\ntmp.write_text(str(os.getpid())+' '+str(child.pid))\ntmp.replace(pidfile)\ntime.sleep(90)\n",pid_file.to_str().unwrap())).unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let previous_node = std::env::var_os("PLAYWRIGHT_NODE_BIN");
+        let previous_recordings = std::env::var_os("RECORDING_DIR");
+        unsafe {
+            std::env::set_var("PLAYWRIGHT_NODE_BIN", helper);
+            std::env::set_var("RECORDING_DIR", temp.path().join("recordings"));
+        }
+        let result = start_recording_with_timeout(
+            "a",
+            "http://127.0.0.1:1",
+            None,
+            None,
+            std::time::Duration::from_secs(3),
+        )
+        .await;
+        let timeout_pids: Vec<i32> = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .split_whitespace()
+            .map(|pid| pid.parse().unwrap())
+            .collect();
+        for _ in 0..100 {
+            if timeout_pids
+                .iter()
+                .all(|pid| unsafe { libc::kill(*pid, 0) } != 0)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let timed_out_dead = timeout_pids
+            .iter()
+            .all(|pid| unsafe { libc::kill(*pid, 0) } != 0);
+        std::fs::remove_file(&pid_file).unwrap();
+        let task =
+            tokio::spawn(async { start_recording("a", "http://127.0.0.1:1", None, None).await });
+        for _ in 0..100 {
+            if pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let cancelled_pids: Vec<i32> = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .split_whitespace()
+            .map(|pid| pid.parse().unwrap())
+            .collect();
+        task.abort();
+        let _ = task.await;
+        for _ in 0..100 {
+            if cancelled_pids
+                .iter()
+                .all(|pid| unsafe { libc::kill(*pid, 0) } != 0)
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let cancelled_dead = cancelled_pids
+            .iter()
+            .all(|pid| unsafe { libc::kill(*pid, 0) } != 0);
+        unsafe {
+            match previous_node {
+                Some(value) => std::env::set_var("PLAYWRIGHT_NODE_BIN", value),
+                None => std::env::remove_var("PLAYWRIGHT_NODE_BIN"),
+            }
+            match previous_recordings {
+                Some(value) => std::env::set_var("RECORDING_DIR", value),
+                None => std::env::remove_var("RECORDING_DIR"),
+            }
+        }
+        assert!(result.unwrap_err().contains("timed out"));
+        assert!(
+            timed_out_dead && cancelled_dead,
+            "helper must exit after timeout and cancellation"
+        );
     }
 }

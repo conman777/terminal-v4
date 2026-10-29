@@ -4,9 +4,9 @@ export function persistSidebarProject(addSidebarProject, explicitPath, session) 
   }
 
   const projectPath = (
-    explicitPath
-    || session?.thread?.projectPath
+    session?.thread?.projectPath
     || session?.cwd
+    || explicitPath
     || ''
   ).trim();
 

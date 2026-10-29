@@ -1,3 +1,5 @@
+import { savedConnectionBinding } from './savedConnectionAgents';
+
 const DEFAULT_AI_CAPABILITIES = {
   prefersStructuredUi: false,
   supportsStructuredEvents: false,
@@ -5,21 +7,6 @@ const DEFAULT_AI_CAPABILITIES = {
 };
 
 const KNOWN_AI_PROVIDERS = [
-  {
-    id: 'hermes',
-    label: 'Hermes',
-    title: 'Hermes Agent',
-    launchCommand: 'hermes',
-    initialCommand: 'hermes',
-    color: '#d6a84b',
-    slashCommands: [
-      { cmd: '/model', desc: 'Change AI model' },
-      { cmd: '/skills', desc: 'Manage Hermes skills' },
-      { cmd: '/memory', desc: 'Review Hermes memory' },
-      { cmd: '/help', desc: 'Show available commands' },
-    ],
-    capabilities: { prefersStructuredUi: false, supportsStructuredEvents: false, supportsPromptEvents: false }
-  },
   {
     id: 'claude',
     label: 'Claude Code',
@@ -230,6 +217,7 @@ function humanizeAiType(aiType) {
 
 export function normalizeAiType(aiType) {
   if (typeof aiType !== 'string') return null;
+  if (savedConnectionBinding(aiType.trim())) return aiType.trim();
   const normalized = aiType.trim().toLowerCase();
   if (!normalized || !AI_TYPE_ID_RE.test(normalized)) return null;
   return normalized;
@@ -252,6 +240,7 @@ function createCustomOption(provider) {
 
 export function buildCustomAiProvider({ id, label, initialCommand, color, slashCommands, capabilities }) {
   const normalizedId = normalizeAiType(id);
+  if (savedConnectionBinding(normalizedId)) return null;
   const trimmedLabel = typeof label === 'string' ? label.trim() : '';
   const trimmedCommand = typeof initialCommand === 'string' ? initialCommand.trim() : '';
   if (!normalizedId || !trimmedLabel || !trimmedCommand) return null;
@@ -309,6 +298,11 @@ export function createCustomAiProvider(label, initialCommand, existingProviders 
 export function getAiProvider(aiType, customProviders = []) {
   const normalized = normalizeAiType(aiType);
   if (!normalized || normalized === 'cli') return null;
+  const binding = savedConnectionBinding(normalized);
+  if (binding) {
+    const label = `Saved connection ${binding.profileId.slice(-8)}`;
+    return { id: normalized, label, title: label, launchCommand: '', initialCommand: '', color: '#64748b', slashCommands: [], capabilities: { prefersStructuredUi: true, supportsStructuredEvents: true, supportsPromptEvents: true } };
+  }
 
   const knownProvider = KNOWN_PROVIDER_MAP.get(normalized);
   if (knownProvider) return knownProvider;
@@ -342,7 +336,6 @@ export function getAiInitialCommand(aiType, customProviders = []) {
 }
 
 const AGENT_REASONING_LEVELS = {
-  hermes: new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']),
   codex: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
   claude: new Set(['low', 'medium', 'high', 'xhigh', 'max']),
 };
@@ -367,17 +360,18 @@ const API_AGENT_IDS = new Set([
   'upstage', 'kilocode', 'ai-gateway', 'opencode-zen', 'opencode-go',
   'ollama-cloud', 'lmstudio', 'tencent-tokenhub', 'bedrock', 'vertex', 'azure-foundry',
 ]);
-const NATIVE_AGENT_COMMANDS = { codex: 'codex', claude: 'claude', gemini: 'gemini', hermes: 'hermes', 'copilot-acp': 'copilot' };
+const NATIVE_AGENT_COMMANDS = { codex: 'codex', claude: 'claude', gemini: 'gemini', 'copilot-acp': 'copilot' };
 
 export function buildAgentLaunchCommand({ agent, model = '', reasoning = '', launchCommand = '', hostShell = 'posix', available }) {
   if (available === false) throw new Error('Agent runtime is unavailable on this host');
   const quote = (value, label) => quoteAgentArgument(value, label, hostShell);
   const normalizedAgent = normalizeAiType(agent);
+  if (savedConnectionBinding(normalizedAgent)) throw new Error('Saved connections start V4 conversations; a terminal launcher is unavailable');
   if (normalizedAgent === 'copilot-acp') return launchCommand || NATIVE_AGENT_COMMANDS['copilot-acp'];
   if (API_AGENT_IDS.has(normalizedAgent)) {
     const runner = typeof launchCommand === 'string' && launchCommand.trim() && !/[\x00-\x1f\x7f]/.test(launchCommand) && (hostShell !== 'cmd' || !/[%!^&|<>]/.test(launchCommand))
       ? launchCommand.trim()
-      : 'node backend/dist/api-agent-runner.js';
+      : 'terminal-v4-api agent';
     const parts = [runner, '--provider', quote(normalizedAgent, 'provider'), '--model', quote(model, 'model')];
     if (reasoning && normalizedAgent !== 'copilot') parts.push('--reasoning', quote(reasoning, 'reasoning level'));
     return parts.join(' ');
@@ -395,8 +389,7 @@ export function buildAgentLaunchCommand({ agent, model = '', reasoning = '', lau
     }
     if (normalizedAgent === 'codex') {
       parts.push('--config', quote(hostShell === 'cmd' ? "model_reasoning_effort='" + normalizedReasoning + "'" : `model_reasoning_effort=\"${normalizedReasoning}\"`, 'reasoning level'));
-    } else if (normalizedAgent === 'hermes') {
-      parts.push('--reasoning', quote(normalizedReasoning, 'reasoning level'));
+
     } else if (normalizedAgent === 'claude') {
       parts.push('--effort', quote(normalizedReasoning, 'reasoning level'));
     }
@@ -417,6 +410,11 @@ export function resolveSlashAgentCommand(text) {
   const providerId = AGENT_SLASH_ALIASES.get(requestedAgent) ?? requestedAgent;
   const provider = KNOWN_PROVIDER_MAP.get(providerId);
   if (!provider) return null;
+  if (provider.launchCommand === 'terminal-v4-api') {
+    throw Object.assign(new Error(`/${requestedAgent} cannot launch an API agent from terminal input. Use the agent picker to select the provider and model.`), {
+      code: 'unsupported_api_alias', definitelyRejected: true,
+    });
+  }
 
   const args = match[2]?.trim();
   if (!args) {
@@ -479,6 +477,9 @@ export function inferSessionAiType(session, explicitAiType = null) {
   const explicit = normalizeAiType(explicitAiType);
   if (explicit) return explicit;
   if (!session || typeof session !== 'object') return null;
+  if (session.runtime === 'v4') {
+    return normalizeAiType(session.aiType) || normalizeAiType(session.shell);
+  }
 
   return (
     inferAiTypeFromText(session.aiType)
@@ -515,6 +516,15 @@ export function getAiTypeOptions(customProviders = []) {
 }
 
 export const AI_TYPE_OPTIONS = getAiTypeOptions();
+
+export function filterReadyAiOptions(options, catalogAgents, selectedId) {
+  if (!Array.isArray(catalogAgents)) return options;
+  const availability = new Map(catalogAgents.map(agent => [agent.id, agent.available === true]));
+  return options.filter(option => option.id == null
+    || option.id === selectedId
+    || !availability.has(option.id)
+    || availability.get(option.id));
+}
 
 export function getNewTabAiOptions(customProviders = []) {
   return [

@@ -16,6 +16,28 @@ beforeEach(() => {
  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ credential: 'guest-only', sessionId: 'terminal-a', role: 'observer', expiresAt: 2000000000 }) })));
 });
 describe('GuestWorkspace', () => {
+ it('announces an incomplete invitation without exchanging credentials', () => {
+  history.replaceState(null, '', '/#invite=incomplete');
+  render(<GuestWorkspace />);
+  expect(screen.getByRole('alert')).toHaveTextContent('Invitation link is incomplete.');
+  expect(screen.getByRole('button', { name: 'Join terminal' })).toBeDisabled();
+  expect(fetch).not.toHaveBeenCalled();
+ });
+ it('uses semantic terminal colors and updates the existing renderer when the theme changes', async () => {
+  document.documentElement.style.setProperty('--bg-base', '#fafafa');
+  document.documentElement.style.setProperty('--text-primary', '#151515');
+  const view = render(<GuestWorkspace />);
+  fireEvent.click(screen.getByRole('button', { name: 'Join terminal' }));
+  await waitFor(() => expect(terminals).toHaveLength(1));
+  const terminal = terminals[0];
+  expect(terminal.options.theme).toEqual({ background: '#fafafa', foreground: '#151515' });
+  document.documentElement.style.setProperty('--bg-base', '#202020');
+  await waitFor(() => expect(terminal.options.theme).toEqual({ background: '#202020', foreground: '#151515' }));
+  expect(terminals).toHaveLength(1);
+  expect(terminal.dispose).not.toHaveBeenCalled();
+  view.unmount();
+  document.documentElement.removeAttribute('style');
+ });
  it('exchanges the fragment secret without owner auth, clears the URL and offers observers no input', async () => {
   expect(hasGuestInvitation()).toBe(true);
   render(<GuestWorkspace />);

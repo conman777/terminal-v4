@@ -490,11 +490,18 @@ This guide covers common issues and their solutions for Terminal v4.
 ### Recommended Browsers
 - Chrome/Chromium 90+ (best performance)
 - Firefox 88+
-- Safari 14+ (limited WebSocket support)
+- Safari: a current release is recommended (some WebSocket reconnection issues)
 - Edge 90+
 
 ### Known Issues
 - Safari: Some WebSocket reconnection issues
+- Older Safari: the app supplies fallbacks for `AbortSignal.any`, `timeout`,
+  abort reasons and `throwIfAborted`, but those fallbacks alone do not establish
+  compatibility with Safari 14. Other APIs, including `Object.hasOwn` in image
+  drafts, also need support, and older Safari has not been verified end to end.
+  Where `WeakRef` or `FinalizationRegistry` is unavailable, listeners for an
+  abandoned combined abort signal remain attached until one of its source
+  signals aborts. Without `WeakRef`, they can also retain the combined signal.
 - Firefox: WebGL rendering may have artifacts
 - Mobile browsers: Keyboard handling varies by platform
 

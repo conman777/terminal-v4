@@ -29,6 +29,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
 use uuid::Uuid;
 
+const HALF_CLOSE_HEADER: &str = "x-terminal-v4-tcp-half-close";
 const FRAME: usize = 64 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_LIFETIME: Duration = Duration::from_secs(8 * 3600);
@@ -117,12 +118,7 @@ fn direct_owner(
     user: &AuthenticatedUser,
 ) -> Result<String, ApiError> {
     let token = bearer(headers)?;
-    let actual = auth::authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        &token,
-    )
-    .map_err(|_| ApiError {
+    let actual = crate::auth::authenticate_local_token(&state, &token).map_err(|_| ApiError {
         status: StatusCode::FORBIDDEN,
         message: "Manage tunnels from the home server with a direct login".into(),
     })?;
@@ -285,7 +281,7 @@ async fn run_listener(
         _=&mut deadline=>break,
         _=receiver.changed()=>break,
         _=heartbeat.tick()=>{
-         let valid=auth::authenticate_token(&state.config().jwt_secret,state.config().allowed_username.as_deref(),&token).is_ok() && crate::paired_environments::tunnel_destination(&state,&user,&view.environment_id.to_string()).is_ok_and(|(url,key)|url==origin&&key==credential);
+         let valid=crate::auth::authenticate_local_token(&state,&token).is_ok() && crate::paired_environments::tunnel_destination(&state,&user,&view.environment_id.to_string()).is_ok_and(|(url,key)|url==origin&&key==credential);
          if !valid || !remote_live(&origin,&credential).await {break;}
         },
         accepted=listener.accept()=>{let Ok((stream,_))=accepted else{break;};let Ok(permit)=slots.clone().try_acquire_owned() else{drop(stream);continue;};let url=origin.clone();let key=credential.clone();let rx=receiver.clone();let port=view.target_port;tokio::spawn(async move{let _permit=permit;forward(stream,&url,&key,port,rx).await;});}
@@ -320,16 +316,28 @@ async fn forward(
         return;
     };
     request.headers_mut().insert("authorization", header);
+    request
+        .headers_mut()
+        .insert(HALF_CLOSE_HEADER, "1".parse().unwrap());
     let connected = tokio::select! {_=stop.changed()=>return,result=tokio::time::timeout(Duration::from_secs(5),tokio_tungstenite::connect_async(request))=>result};
-    let Ok(Ok((mut socket, _))) = connected else {
+    let Ok(Ok((mut socket, response))) = connected else {
         return;
     };
+    let half_close = response
+        .headers()
+        .get(HALF_CLOSE_HEADER)
+        .is_some_and(|v| v == "1");
+    let mut reading = true;
+    let mut writing = true;
     let mut bytes = vec![0; FRAME];
-    loop {
+    while reading || writing {
         tokio::select! {
         _=stop.changed()=>break,
-        read=stream.read(&mut bytes)=>match read {Ok(0)|Err(_)=>break,Ok(size)=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(tungstenite::Message::Binary(bytes[..size].to_vec().into()))).await,Ok(Ok(()))){break;}}},
-        incoming=socket.next()=>match incoming {Some(Ok(tungstenite::Message::Binary(body))) if body.len()<=FRAME=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.write_all(&body)).await,Ok(Ok(()))){break;}},Some(Ok(tungstenite::Message::Ping(body)))=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(tungstenite::Message::Pong(body))).await,Ok(Ok(()))){break;}},Some(Ok(tungstenite::Message::Pong(_)))=>{},_=>break}
+        read=stream.read(&mut bytes), if reading=>match read {
+            Ok(0) if half_close=>{reading=false;if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(tungstenite::Message::Binary(Vec::new().into()))).await,Ok(Ok(()))){break;}},
+            Ok(0)|Err(_)=>break,Ok(size)=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(tungstenite::Message::Binary(bytes[..size].to_vec().into()))).await,Ok(Ok(()))){break;}}},
+        incoming=socket.next()=>match incoming {Some(Ok(tungstenite::Message::Binary(body))) if half_close && body.is_empty() && writing=>{writing=false;if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.shutdown()).await,Ok(Ok(()))){break;}},
+        Some(Ok(tungstenite::Message::Binary(body))) if writing && body.len()<=FRAME=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.write_all(&body)).await,Ok(Ok(()))){break;}},Some(Ok(tungstenite::Message::Ping(body)))=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(tungstenite::Message::Pong(body))).await,Ok(Ok(()))){break;}},Some(Ok(tungstenite::Message::Pong(_)))=>{},_=>break}
         }
     }
     let _ = stream.shutdown().await;
@@ -364,13 +372,20 @@ async fn connect(
     .map_err(|_| ApiError::bad_request("Remote service timed out"))?
     .map_err(|_| ApiError::bad_request("Remote service is unavailable"))?;
     let stop = target_stop(&state)?;
-    Ok(upgrade
+    let half_close = headers.get(HALF_CLOSE_HEADER).is_some_and(|v| v == "1");
+    let mut response = upgrade
         .max_frame_size(FRAME)
         .max_message_size(FRAME)
         .on_upgrade(move |socket| async move {
             let _permit = permit;
-            serve_stream(state, token, socket, stream, stop).await;
-        }))
+            serve_stream(state, token, socket, stream, stop, half_close).await;
+        });
+    if half_close {
+        response
+            .headers_mut()
+            .insert(HALF_CLOSE_HEADER, "1".parse().unwrap());
+    }
+    Ok(response)
 }
 async fn serve_stream(
     state: AppState,
@@ -378,18 +393,24 @@ async fn serve_stream(
     mut socket: WebSocket,
     mut stream: TcpStream,
     mut stop: watch::Receiver<bool>,
+    half_close: bool,
 ) {
+    let mut reading = true;
+    let mut writing = true;
     let mut bytes = vec![0; FRAME];
     let mut heartbeat = tokio::time::interval(IO_TIMEOUT);
     let deadline = tokio::time::sleep(MAX_LIFETIME);
     tokio::pin!(deadline);
-    loop {
+    while reading || writing {
         tokio::select! {
         _=&mut deadline=>break,
         _=stop.changed()=>break,
         _=heartbeat.tick()=>if auth::authenticate_runtime_request(&state,&token,"GET","/api/tunnels/connect").is_err(){break;},
-        read=stream.read(&mut bytes)=>match read{Ok(0)|Err(_)=>break,Ok(size)=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(Message::Binary(bytes[..size].to_vec().into()))).await,Ok(Ok(()))){break;}}},
-        incoming=socket.next()=>match incoming{Some(Ok(Message::Binary(body))) if body.len()<=FRAME=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.write_all(&body)).await,Ok(Ok(()))){break;}},Some(Ok(Message::Ping(body)))=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(Message::Pong(body))).await,Ok(Ok(()))){break;}},Some(Ok(Message::Pong(_)))=>{},_=>break}
+        read=stream.read(&mut bytes), if reading=>match read{
+            Ok(0) if half_close=>{reading=false;if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(Message::Binary(Vec::new().into()))).await,Ok(Ok(()))){break;}},
+            Ok(0)|Err(_)=>break,Ok(size)=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(Message::Binary(bytes[..size].to_vec().into()))).await,Ok(Ok(()))){break;}}},
+        incoming=socket.next()=>match incoming{Some(Ok(Message::Binary(body))) if half_close && body.is_empty() && writing=>{writing=false;if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.shutdown()).await,Ok(Ok(()))){break;}},
+        Some(Ok(Message::Binary(body))) if writing && body.len()<=FRAME=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,stream.write_all(&body)).await,Ok(Ok(()))){break;}},Some(Ok(Message::Ping(body)))=>{if !matches!(tokio::time::timeout(IO_TIMEOUT,socket.send(Message::Pong(body))).await,Ok(Ok(()))){break;}},Some(Ok(Message::Pong(_)))=>{},_=>break}
         }
     }
     let _ = stream.shutdown().await;
@@ -481,6 +502,48 @@ mod transport_tests {
                 .unwrap(),
         )
         .await
+    }
+    #[tokio::test]
+    async fn tcp_half_close_preserves_eof_delimited_response() {
+        let home = server().await;
+        let target = server().await;
+        let client = reqwest::Client::new();
+        let environment = pair(&client, &home, &target, true).await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = listener.local_addr().unwrap().port();
+        let service = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            stream.read_to_end(&mut request).await.unwrap();
+            assert_eq!(request, b"request until EOF");
+            stream.write_all(b"response after EOF").await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        let tunnel = value(
+            client
+                .post(format!("{}/api/tunnels", home.url))
+                .bearer_auth(token(&home, "owner"))
+                .json(&json!({"environmentId":environment["id"],"targetPort":target_port}))
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+        let mut stream = TcpStream::connect((
+            std::net::Ipv4Addr::LOCALHOST,
+            tunnel["localPort"].as_u64().unwrap() as u16,
+        ))
+        .await
+        .unwrap();
+        stream.write_all(b"request until EOF").await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        service.await.unwrap();
+        assert_eq!(response, b"response after EOF");
     }
     #[tokio::test]
     async fn tcp_binary_forward_is_owner_scoped_and_revocation_closes_streams_and_listener() {

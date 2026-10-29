@@ -52,6 +52,7 @@ impl Capabilities {
                 read
             }
             ["api", "agent", "catalog" | "auth"] => read,
+            ["api", "structured", "input-capabilities"] => read,
             ["api", "system", "stats"] | ["api", "system", "stats", "history"] => read,
             ["api", "terminal"] => read || (method == "POST" && self.terminal_input),
             ["api", "terminal", _] => matches!(method, "PATCH" | "DELETE") && self.terminal_input,
@@ -67,6 +68,22 @@ impl Capabilities {
                 }
                 _ => false,
             },
+            ["api", "structured", "sessions", _, "attachments", ..] => false,
+            ["api", "structured", "sessions", _, "input-operation" | "supervised-input"] => false,
+            ["api", "structured", "start-requests"] => self.agent_execute && method == "POST",
+            ["api", "structured", "start-requests", _] => self.agent_execute && read,
+            ["api", "structured", "sessions", _, "context"]
+            | ["api", "structured", "sessions", _, "approval-capability"]
+            | ["api", "structured", "sessions", _, "requests", _]
+            | ["api", "structured", "sessions", _, "queue", "operations", _] => {
+                read && self.agent_execute
+            }
+            ["api", "structured", "sessions", _, "approval-claims", _, "review" | "reserve"] => {
+                self.agent_execute && method == "POST"
+            }
+            ["api", "structured", "sessions", _, "queue"] => {
+                self.agent_execute && (read || method == "POST")
+            }
             ["api", "structured", "sessions", tail @ ..] => {
                 if read {
                     tail.len() <= 1 || (tail.len() == 2 && matches!(tail[1], "thread" | "ws"))
@@ -78,6 +95,9 @@ impl Capabilities {
             }
             ["api", "fs", "list"] | ["api", "files", "list"] => read,
             ["api", "files", "download"] | ["api", "fs", "download"] => read && self.transfer,
+            ["api", "workspace", "files", "search-content" | "read-content"] => {
+                read && self.transfer
+            }
             ["api", "files", "upload" | "screenshot"] => {
                 method == "POST" && self.transfer && self.file_write
             }
@@ -91,7 +111,10 @@ impl Capabilities {
                     matches!(
                         tail,
                         ["profile" | "history" | "skills" | "proposals" | "rewind" | "tasks"]
-                            | ["git", "status" | "diff" | "worktrees" | "checkpoints"]
+                            | [
+                                "git",
+                                "status" | "diff" | "branches" | "worktrees" | "checkpoints"
+                            ]
                             | ["native-history", "sources" | "imports"]
                             | ["native-history", "imports", _]
                     )
@@ -113,7 +136,7 @@ impl Capabilities {
             {
                 self.agent_execute
             }
-            ["api", "preview", _, "evaluate" | "storage" | "screenshot"] => {
+            ["api", "preview", _, "evaluate" | "storage" | "screenshot" | "client-operation"] => {
                 self.agent_execute && method == "POST"
             }
             ["api", "preview", _, "logs" | "performance"] => read || method == "POST",
@@ -163,6 +186,126 @@ impl Capabilities {
 mod tests {
     use super::*;
     #[test]
+    fn paired_input_capability_probe_is_read_only_and_supervised_routes_are_not_delegated() {
+        for capability in [Capabilities::observer(), Capabilities::operator()] {
+            assert!(capability.allows_http("GET", "/api/structured/input-capabilities"));
+            assert!(capability.allows_http("HEAD", "/api/structured/input-capabilities"));
+            for (method, path) in [
+                ("POST", "/api/structured/input-capabilities"),
+                ("GET", "/api/structured/input-capabilities/extra"),
+                ("POST", "/api/structured/sessions/session/input-operation"),
+                ("POST", "/api/structured/sessions/session/supervised-input"),
+                ("GET", "/api/structured/input-watermark"),
+                ("GET", "/api/structured/input-receipts"),
+                (
+                    "POST",
+                    "/api/structured/input-receipts/session/request/review",
+                ),
+            ] {
+                assert!(!capability.allows_http(method, path), "{method} {path}");
+            }
+        }
+        assert!(
+            Capabilities::operator().allows_http("POST", "/api/structured/sessions/session/input")
+        );
+        assert!(
+            !Capabilities::observer().allows_http("POST", "/api/structured/sessions/session/input")
+        );
+    }
+    #[test]
+    fn ownership_reconciliation_is_not_available_via_remote_environment_proxy() {
+        for capability in [Capabilities::observer(), Capabilities::operator()] {
+            for (method, path) in [
+                ("GET", "/api/structured/ownership"),
+                ("POST", "/api/structured/ownership/reconcile"),
+                ("GET", "/api/structured/owner-cleanup"),
+                ("POST", "/api/structured/owner-cleanup/retry"),
+                ("POST", "/api/structured/owner-cleanup/background-review"),
+                ("GET", "/api/structured/owner-cleanup/delegation-children"),
+                ("POST", "/api/structured/owner-cleanup/delegation-review"),
+                (
+                    "GET",
+                    "/api/structured/owner-cleanup/delegation-review/operation",
+                ),
+            ] {
+                assert!(!capability.allows_http(method, path), "{method} {path}");
+            }
+        }
+    }
+    #[test]
+    fn start_request_routes_require_agent_execution_and_exact_methods() {
+        let grant = Capabilities {
+            agent_execute: true,
+            ..Capabilities::observer()
+        };
+        let observer = Capabilities::observer();
+        assert!(grant.allows_http("POST", "/api/structured/start-requests"));
+        assert!(grant.allows_http("GET", "/api/structured/start-requests/id"));
+        for (method, path) in [
+            ("POST", "/api/structured/start-requests"),
+            ("GET", "/api/structured/start-requests/id"),
+        ] {
+            assert!(!observer.allows_http(method, path));
+        }
+        for (method, path) in [
+            ("GET", "/api/structured/start-requests"),
+            ("POST", "/api/structured/start-requests/id"),
+            ("DELETE", "/api/structured/start-requests/id"),
+            ("GET", "/api/structured/start-requests/id/extra"),
+        ] {
+            assert!(!grant.allows_http(method, path));
+        }
+    }
+
+    #[test]
+    fn structured_recovery_reads_require_agent_execution_and_exact_routes() {
+        let allowed = [
+            "/api/structured/sessions/session/context",
+            "/api/structured/sessions/session/queue",
+            "/api/structured/sessions/session/requests/request",
+            "/api/structured/sessions/session/queue/operations/operation",
+        ];
+        let grant = Capabilities {
+            agent_execute: true,
+            ..Capabilities::observer()
+        };
+        for path in allowed {
+            for method in ["GET", "HEAD"] {
+                assert!(Capabilities::operator().allows_http(method, path));
+                assert!(grant.allows_http(method, path));
+                assert!(!Capabilities::observer().allows_http(method, path));
+                assert!(!Capabilities {
+                    file_write: true,
+                    transfer: true,
+                    ..Capabilities::observer()
+                }
+                .allows_http(method, path));
+            }
+        }
+        for path in [
+            "/api/structured/sessions/session/requests/request",
+            "/api/structured/sessions/session/context",
+            "/api/structured/sessions/session/queue/operations/operation",
+        ] {
+            for method in ["POST", "PATCH", "PUT", "DELETE"] {
+                assert!(!grant.allows_http(method, path));
+            }
+        }
+        assert!(grant.allows_http("POST", "/api/structured/sessions/session/queue"));
+        for path in [
+            "/api/structured/sessions/session/requests/request/extra",
+            "/api/structured/sessions/session/context/extra",
+            "/api/structured/sessions/session/queue/operations/operation/extra",
+            "/api/agent/connections",
+            "/api/environments",
+            "/api/vault",
+        ] {
+            assert!(!grant.allows_http("GET", path), "{path}");
+        }
+        assert!(grant.allows_http("POST", "/api/preview/4173/client-operation"));
+        assert!(!Capabilities::observer().allows_http("POST", "/api/preview/4173/client-operation"));
+    }
+    #[test]
     fn preview_grants_cannot_mint_credentials_and_downloads_allow_cleanup() {
         for caps in [Capabilities::observer(), Capabilities::operator()] {
             assert!(!caps.allows_http("POST", "/api/preview/session"));
@@ -200,6 +343,14 @@ mod tests {
         }
     }
     #[test]
+    fn branch_discovery_is_read_only_and_exact() {
+        let observer = Capabilities::observer();
+        assert!(observer.allows_http("GET", "/api/workspace/git/branches"));
+        assert!(observer.allows_http("HEAD", "/api/workspace/git/branches"));
+        assert!(!observer.allows_http("POST", "/api/workspace/git/branches"));
+        assert!(!observer.allows_http("GET", "/api/workspace/git/branches/extra"));
+    }
+    #[test]
     fn observer_can_read_history_but_cannot_execute_or_modify() {
         let observer = Capabilities::default();
         for path in [
@@ -220,6 +371,8 @@ mod tests {
             ("POST", "/api/workspace/rewind/test/apply"),
             ("GET", "/api/vault"),
             ("GET", "/api/files/download"),
+            ("GET", "/api/workspace/files/search-content"),
+            ("GET", "/api/workspace/files/read-content"),
             ("GET", "/api/future-execute"),
         ] {
             assert!(!observer.allows_http(method, path), "{method} {path}");
@@ -257,6 +410,10 @@ mod tests {
             ..Capabilities::default()
         };
         assert!(transfer.allows_http("GET", "/api/files/download"));
+        assert!(transfer.allows_http("GET", "/api/workspace/files/search-content"));
+        assert!(!transfer.allows_http("POST", "/api/workspace/files/search-content"));
+        assert!(transfer.allows_http("GET", "/api/workspace/files/read-content"));
+        assert!(!transfer.allows_http("POST", "/api/workspace/files/read-content"));
         assert!(!transfer.allows_http("POST", "/api/files/upload"));
         let files = Capabilities {
             file_write: true,

@@ -1,0 +1,13 @@
+.ui-utility-dialog.notes-v2 .notes-v2-editor-header { display: grid; grid-template-columns: minmax(0, 1fr); flex: none; align-items: stretch; gap: 8px; }
+.ui-utility-dialog.notes-v2 .notes-v2-title-input { flex: none; }
+.ui-utility-dialog.notes-v2 .notes-v2-editor-actions { justify-content: flex-start; }
+@media (max-width: 768px) {
+  .ui-utility-dialog.notes-v2.has-selection .notes-v2-sidebar { display: none; }
+  .ui-utility-dialog.notes-v2:not(.has-selection) .notes-v2-main { display: none; }
+}
+
+.notes-load-health { flex-shrink: 0; }
+.notes-load-health:empty { display: none; }
+.notes-load-health > p, .notes-load-health > [role=alert] { margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 13px; }
+.notes-load-health [role=alert] p { margin: 0 0 8px; color: var(--error); }
+.notes-load-health button { min-height: 32px; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font: 13px/1.5 var(--font-ui); cursor: pointer; }

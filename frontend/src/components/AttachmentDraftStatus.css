@@ -1,0 +1,7 @@
+.attachment-draft-status p { margin: 0 0 6px; }
+.attachment-draft-status button { min-height: 44px; }
+.attachment-draft-review { margin-top: 8px; }
+.attachment-draft-review-list { max-height: min(25vh, 14rem); overflow: auto; margin-bottom: 8px; }
+.attachment-draft-review ul { margin: 0 0 8px; padding-left: 20px; }
+.attachment-draft-review li span { overflow-wrap: anywhere; }
+.attachment-draft-review-actions { display: flex; flex-wrap: wrap; gap: 8px; }

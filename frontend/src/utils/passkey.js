@@ -25,7 +25,7 @@ export async function registerPasskey(name) {
   const options = await beginResponse.json();
 
   // Trigger the browser's passkey UI (must be called from a user gesture)
-  const credential = await startRegistration({ optionsJSON: options });
+  const credential = await startRegistration({ optionsJSON: options.publicKey });
 
   // Complete registration
   const completeResponse = await apiFetch('/api/auth/passkey/register/complete', {
@@ -45,7 +45,7 @@ export async function authenticateWithPasskey(username) {
   const options = await publicPost('/api/auth/passkey/authenticate/begin', { username });
 
   // Trigger Face ID / passkey prompt (must be called from a user gesture)
-  const credential = await startAuthentication({ optionsJSON: options });
+  const credential = await startAuthentication({ optionsJSON: options.publicKey });
 
   // Complete authentication - returns AuthResult { user, tokens }
   return publicPost('/api/auth/passkey/authenticate/complete', { username, credential });
@@ -67,5 +67,6 @@ export async function deletePasskey(id) {
     const err = await response.json().catch(() => ({ error: 'Failed to delete passkey' }));
     throw new Error(err.error || 'Failed to delete passkey');
   }
+  if (response.status === 204) return;
   return response.json();
 }

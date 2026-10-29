@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import './MobileUI.css';
 
 const STORAGE_KEY = 'gestureHintsSeen';
 
@@ -16,13 +17,15 @@ const GESTURE_HINTS = [
   },
   {
     glyph: '\u22ef',
-    title: 'Long-press a session tab',
-    description: 'Rename, change AI, or close.'
+    title: 'Open More actions',
+    description: 'Rename or close the current session.'
   }
 ];
 
 export function MobileGestureHints() {
   const [isVisible, setIsVisible] = useState(false);
+  const sheetRef = useRef(null);
+  const closeRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -46,12 +49,42 @@ export function MobileGestureHints() {
 
   useBodyScrollLock(isVisible);
 
+  useEffect(() => {
+    if (!isVisible) return;
+    const opener = document.activeElement;
+    closeRef.current?.focus();
+    const onKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        dismiss();
+      } else if (event.key === 'Tab') {
+        const controls = sheetRef.current?.querySelectorAll('button');
+        const first = controls?.[0];
+        const last = controls?.[controls.length - 1];
+        if (!first || !last) return;
+        if (!sheetRef.current.contains(document.activeElement) || (!event.shiftKey && document.activeElement === last)) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
+  }, [dismiss, isVisible]);
+
   if (!isVisible) return null;
 
   return (
-    <div className="mobile-gesture-hints-overlay" role="dialog" aria-modal="true" aria-label="Mobile gesture tips">
-      <div className="mobile-gesture-hints-sheet">
+    <div className="mobile-gesture-hints-overlay mobile-ui" role="dialog" aria-modal="true" aria-label="Mobile gesture tips">
+      <div ref={sheetRef} className="mobile-gesture-hints-sheet">
         <button
+          ref={closeRef}
           type="button"
           className="mobile-gesture-hints-close"
           onClick={dismiss}

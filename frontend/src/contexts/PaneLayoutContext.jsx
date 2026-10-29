@@ -1,6 +1,8 @@
 import { getEnvironmentStorage } from '../utils/remoteEnvironments';
-import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useContext, useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { reconcilePaneSessionIds } from '../utils/paneSessionAssignments';
+import { getSplitSizes, resizePaneTree } from '../utils/paneTree';
+import { workspaceKeyboardBlocked } from '../utils/workspaceKeyboardScope';
 
 const PaneLayoutContext = createContext(null);
 
@@ -51,6 +53,22 @@ function cloneNode(node) {
   };
 }
 
+function nextPaneId(root) {
+  const base = `pane-${Date.now()}`;
+  let id = base;
+  let suffix = 1;
+  while (findPaneInTree(root, id)) id = `${base}-${suffix++}`;
+  return id;
+}
+
+function insertPaneAfter(split, index, pane) {
+  const sizes = getSplitSizes(split);
+  const share = sizes[index] / 2;
+  split.children.splice(index + 1, 0, pane);
+  sizes.splice(index, 1, share, share);
+  split.sizes = sizes;
+}
+
 // Helper: Simplify tree (remove single-child splits)
 function simplifyTree(node) {
   if (!node || node.type === 'pane') return node;
@@ -65,14 +83,19 @@ function simplifyTree(node) {
 
   // Flatten nested splits with same direction
   const newChildren = [];
-  for (const child of node.children) {
+  const newSizes = [];
+  const sizes = getSplitSizes(node);
+  for (const [index, child] of node.children.entries()) {
     if (child.type === 'split' && child.direction === node.direction) {
       newChildren.push(...child.children);
+      newSizes.push(...getSplitSizes(child).map(size => size * sizes[index]));
     } else {
       newChildren.push(child);
+      newSizes.push(sizes[index]);
     }
   }
   node.children = newChildren;
+  node.sizes = newSizes;
 
   return node;
 }
@@ -84,13 +107,15 @@ function removePaneFromTree(root, paneId) {
     return root.id === paneId ? null : root;
   }
 
-  const newChildren = root.children
-    .map(child => removePaneFromTree(child, paneId))
-    .filter(Boolean);
+  const sizes = getSplitSizes(root);
+  const remaining = root.children
+    .map((child, index) => ({ child: removePaneFromTree(child, paneId), size: sizes[index] }))
+    .filter(({ child }) => child);
+  const newChildren = remaining.map(({ child }) => child);
 
   if (newChildren.length === 0) return null;
 
-  return simplifyTree({ ...root, children: newChildren });
+  return simplifyTree({ ...root, children: newChildren, sizes: remaining.map(({ size }) => size) });
 }
 
 // Migrate old flat layout to tree structure
@@ -289,7 +314,7 @@ export function PaneLayoutProvider({ children }) {
   const [desktopsState, setDesktopsState] = useState(() => loadDesktopsFromStorage(storage));
 
   // Fullscreen pane state (not persisted - temporary)
-  const [fullscreenPaneId, setFullscreenPaneId] = useState(null);
+  const [fullscreenTargetId, setFullscreenPaneId] = useState(null);
 
   // Split handle dragging state
   const [splitPosition, setSplitPosition] = useState(50);
@@ -299,6 +324,11 @@ export function PaneLayoutProvider({ children }) {
   const activeDesktop = desktopsState.desktops.find(d => d.id === desktopsState.activeDesktopId)
     || desktopsState.desktops[0];
   const paneLayout = activeDesktop.paneLayout;
+  const currentPaneLayoutRef = useRef(paneLayout);
+  useLayoutEffect(() => {
+    currentPaneLayoutRef.current = paneLayout;
+  }, [paneLayout]);
+  const fullscreenPaneId = findPaneInTree(paneLayout.root, fullscreenTargetId) ? fullscreenTargetId : null;
 
   // Save desktops state to localStorage on every change
   useEffect(() => {
@@ -313,14 +343,14 @@ export function PaneLayoutProvider({ children }) {
   }, []);
 
   // Add a session to the active desktop's owned list (without pane assignment)
-  const addSessionToDesktop = useCallback((sessionId) => {
+  const addSessionToDesktop = useCallback((sessionId, desktopId) => {
     if (!sessionId) return;
     setDesktopsState(prev => {
       const { activeDesktopId, desktops } = prev;
       return {
         ...prev,
         desktops: desktops.map(d => {
-          if (d.id !== activeDesktopId) return d;
+          if (d.id !== (desktopId || activeDesktopId)) return d;
           const owned = d.ownedSessionIds || [];
           if (owned.includes(sessionId)) return d;
           return { ...d, ownedSessionIds: [...owned, sessionId] };
@@ -374,7 +404,7 @@ export function PaneLayoutProvider({ children }) {
   // Handle pane focus
   const focusPane = useCallback((paneId) => {
     setDesktopsState(prev => updateActiveDesktopLayout(prev, (layout) => {
-      if (layout.activePaneId === paneId) {
+      if (layout.activePaneId === paneId || !findPaneInTree(layout.root, paneId)) {
         return layout;
       }
 
@@ -383,10 +413,8 @@ export function PaneLayoutProvider({ children }) {
         activePaneId: paneId
       };
     }));
-    const panes = getAllPanes(paneLayout.root);
-    const pane = panes.find(p => p.id === paneId);
-    return pane?.sessionId || null;
-  }, [paneLayout.root]);
+    return findPaneInTree(currentPaneLayoutRef.current.root, paneId)?.node.sessionId || null;
+  }, []);
 
   // Handle pane split
   const splitPane = useCallback((paneId, direction) => {
@@ -398,7 +426,7 @@ export function PaneLayoutProvider({ children }) {
       const found = findPaneInTree(newRoot, paneId);
       if (!found) return layout;
 
-      const newPaneId = `pane-${Date.now()}`;
+      const newPaneId = nextPaneId(newRoot);
       const newPane = { type: 'pane', id: newPaneId, sessionId: null };
 
       if (!found.parent) {
@@ -407,17 +435,19 @@ export function PaneLayoutProvider({ children }) {
           root: {
             type: 'split',
             direction,
+            sizes: [0.5, 0.5],
             children: [found.node, newPane]
           }
         };
       }
 
       if (found.parent.direction === direction) {
-        found.parent.children.splice(found.index + 1, 0, newPane);
+        insertPaneAfter(found.parent, found.index, newPane);
       } else {
         found.parent.children[found.index] = {
           type: 'split',
           direction,
+          sizes: [0.5, 0.5],
           children: [found.node, newPane]
         };
       }
@@ -451,7 +481,9 @@ export function PaneLayoutProvider({ children }) {
 
   // Handle pane fullscreen toggle
   const toggleFullscreen = useCallback((paneId) => {
-    setFullscreenPaneId(prev => prev === paneId ? null : paneId);
+    setFullscreenPaneId(prev => findPaneInTree(currentPaneLayoutRef.current.root, paneId)
+      ? (prev === paneId ? null : paneId)
+      : prev);
   }, []);
 
   // Exit fullscreen
@@ -464,6 +496,7 @@ export function PaneLayoutProvider({ children }) {
     if (!fullscreenPaneId) return;
 
     const handleKeyDown = (e) => {
+      if (e.defaultPrevented || e.isComposing || workspaceKeyboardBlocked(e.target)) return;
       if (e.key === 'Escape') {
         setFullscreenPaneId(null);
       }
@@ -482,6 +515,13 @@ export function PaneLayoutProvider({ children }) {
   // Handle drag position update (called from parent with container ref)
   const updateSplitPosition = useCallback((newPosition) => {
     setSplitPosition(Math.min(80, Math.max(20, newPosition)));
+  }, []);
+
+  const resizeSplit = useCallback((path, sizes, expectedPaneIds) => {
+    setDesktopsState(previous => updateActiveDesktopLayout(previous, layout => {
+      const root = resizePaneTree(layout.root, path, sizes, expectedPaneIds);
+      return root === layout.root ? layout : { ...layout, root };
+    }));
   }, []);
 
   // Stop dragging
@@ -582,9 +622,10 @@ export function PaneLayoutProvider({ children }) {
           return { ...d, paneLayout: { ...layout, root: newRoot }, ownedSessionIds: newOwned };
         }
         // Otherwise split the active pane
+        if (panes.length >= MAX_PANES) return { ...d, ownedSessionIds: newOwned };
         const activePaneInTarget = panes.find(p => p.id === layout.activePaneId) || panes[0];
         if (!activePaneInTarget) return { ...d, ownedSessionIds: newOwned };
-        const newPaneId = `pane-${Date.now()}`;
+        const newPaneId = nextPaneId(layout.root);
         const newPane = { type: 'pane', id: newPaneId, sessionId };
         const newRoot = cloneNode(layout.root);
         const found = findPaneInTree(newRoot, activePaneInTarget.id);
@@ -593,13 +634,13 @@ export function PaneLayoutProvider({ children }) {
           return {
             ...d,
             paneLayout: {
-              root: { type: 'split', direction: 'horizontal', children: [found.node, newPane] },
+              root: { type: 'split', direction: 'horizontal', sizes: [0.5, 0.5], children: [found.node, newPane] },
               activePaneId: newPaneId
             },
             ownedSessionIds: newOwned
           };
         }
-        found.parent.children.splice(found.index + 1, 0, newPane);
+        insertPaneAfter(found.parent, found.index, newPane);
         return { ...d, paneLayout: { root: simplifyTree(newRoot), activePaneId: newPaneId }, ownedSessionIds: newOwned };
       });
 
@@ -638,6 +679,7 @@ export function PaneLayoutProvider({ children }) {
     // Split handle actions
     startDragging,
     updateSplitPosition,
+    resizeSplit,
     stopDragging,
     setIsDragging,
 

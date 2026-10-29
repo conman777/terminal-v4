@@ -1,42 +1,163 @@
-# Hermes and T3 inspired workspace
+# V4 workspace
 
-Terminal v4 combines its terminal and preview tools with a real Hermes runtime,
-native coding agents, Git review, isolated workspaces, durable tasks, searchable
-history, and reviewed project knowledge.
+Terminal V4 combines its own Rust agent runtime with terminal and preview tools,
+Git review, managed workspaces, durable tasks, searchable history and reviewed
+project knowledge. Hermes Agent and T3 Code inform feature design. V4 implements
+its runtime and interface independently. See [V4 runtime](V4_RUNTIME.md).
+
+## Workspace interface
+
+Phones use one 52px thread header for navigation, the current thread and project,
+terminal, Files, Git and thread actions. For a structured conversation, the
+terminal action opens a companion terminal in the thread's workspace; closing
+the panel preserves the conversation draft and reopening it restores the
+thread's terminal. The server chooser, thread search, global preferences and
+process/browser settings live in the navigation drawer. Desktop keeps project
+and thread navigation in the sidebar, including saved conversation search.
+On phones, use the thread's More menu to pin or unpin it; pinned threads appear
+first within their project in the drawer. The same menu can archive or restore
+the open thread. Archived active threads can also be restored from the drawer;
+older inactive threads are available through saved-history reopening.
+Unpinned structured background threads with known state that are working appear
+in an always-visible **Working** section. The open thread and threads whose
+pending state is unknown stay in the main list. Working rows remain visible
+because background approval state is refreshed by polling; an approval indicator
+may still take until the next successful refresh to appear. After more than
+30 seconds of inactivity, the next visible-window touch, pointer, wheel or
+keyboard activity requests a fresh inventory; this is not a push notification.
+Structured threads
+use their server lifecycle status, so quiet running work is not marked
+idle solely because it has not produced recent output. Conversations requiring
+cleanup or reconciliation stay in the main list with an attention indicator.
+On a compatible server, structured threads can be snoozed for one hour from
+their desktop action menu or mobile More menu. Snoozing does not stop a running
+agent or discard its draft; the thread remains visible in the Snoozed section.
+The server records the deadline and event sequence and projects the thread back
+to the main list when the deadline passes, a structured approval or question
+arrives, a native browser approval is registered, or a new failure occurs. An approval or recovery already pending blocks
+snoozing. The inventory refreshes while the workspace is visible, so an event
+may appear at the next refresh rather than instantly. Other separately tracked
+requests are not yet included in automatic wake. Native browser approvals are
+tracked in the local server process, rather than a cross-process receipt.
+Terminal-backed threads cannot be snoozed with this control.
+
+On compatible Unix servers, an idle V4 conversation can be moved to the visible
+**Settled** section from the desktop thread menu or mobile More menu. Settling
+does not delete the conversation or its draft, and removes its pin. It requires
+the server to confirm there is no active turn, pending approval or question,
+queued work, or unresolved delegated child. If that state cannot be checked,
+the control is unavailable. New user input, changed queue items, a request or a
+failure brings the thread back to the main list; **Un-settle thread** does so
+explicitly. A queue restart hold without changed items does not wake it.
+Settlement is currently manual and V4-only: native Claude/Codex queues are
+browser-local and cannot yet be checked across devices. Automatic settlement,
+pull-request rules and thread terminal cleanup are not implemented. Inventory
+checks the owner's retained delegation records for each V4 thread; the outbox
+is bounded to 1,024 records, but large thread and task histories may make that
+check slower. If its storage is busy or unavailable, the thread remains in the
+main list and settlement cannot be confirmed. Background command tools are not
+enabled yet; their eventual admission must add process activity to this check.
+
+The new frontend requires the server's lifecycle capability and a confirmed
+response before showing the change. Legacy sessions load without snooze metadata.
+Older servers do not preserve that metadata when rewriting a thread, so stop old
+workers before upgrading and avoid downgrade or mixed-version operation on the
+same data directory. Cooperating current Unix runtime servers hold an exclusive
+owner lease; unfenced construction, older servers and non-Unix platforms do not
+have the same verified cross-process guarantee.
+Project tools, Knowledge and New terminal live in navigation on both layouts.
+Tools can add reviewed context or saved prompts to the active editable draft;
+opening or closing navigation does not send it.
+
+The composer contains message input, attachments, model settings and Send/Stop.
+On phones, the writing area starts compact and expands on focus, and a divider
+separates it from model and action controls. Message and terminal
+command placeholders identify what will be sent. Tapping the composer padding
+focuses its text field; tapping a control keeps that control's behavior. Return
+adds a line on mobile; Send (or Cmd/Ctrl+Return with a keyboard) submits. Desktop
+Enter behavior is unchanged.
+Session-specific queue and conversation controls remain close to message input.
+Directory, runtime and branch information open from **Session context**, including
+branch switching where available, instead of occupying a persistent footer. On
+phones this action is in **More composer actions**.
+The start screen retains project and agent/model choices required to launch a task.
+
+The interface follows the layout hierarchy inspected in T3 Code's installed
+desktop app and its [official mobile screens](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824): project/thread navigation,
+a quiet conversation timeline, compact activity details and an expandable
+composer with nearby agent controls. V4 uses its own terminal branding,
+theme colors, selection markers and workspace tools.
+
+Mobile Codex conversations expose model, reasoning and speed in the composer.
+The model trigger opens an anchored, searchable list with selection checkmarks.
+Reasoning and speed controls switch the contents of that same popup; Back or
+Escape returns to the model list. Long catalogs scroll inside the popup, and
+its position follows viewport changes while keeping touch targets at least 44px.
+Selection changes apply to the next turn through the existing structured-session
+API and preserve the draft. Controls are disabled during generation, pending
+sends, cancellation, recovery and model updates. Catalog loading starts only
+when model settings are opened. Ready conversations keep the title in the
+navigation bar; active responses retain visible status, approval and Stop controls.
+
+Desktop composers, the start screen, new-thread setup and project defaults use
+the same searchable model popup as mobile. Provider choices retain explicit
+custom model IDs and catalog capability limits. Nested pickers keep their parent
+dialog open and restore focus when dismissed.
+
+Conversation Markdown supports inline `$...$` and block `$$` math using bounded
+KaTeX rendering. Mermaid fences render a limited flowchart subset (`graph` or
+`flowchart` with `TD`, `TB` or `LR`, simple and decision nodes, and arrows with
+optional labels) as accessible
+SVG. Unsupported syntax, cyclic graphs and unfinished fences remain selectable
+code. Flowchart labels are text, not executable markup, and no user-supplied
+diagram URL is loaded. This is not full Mermaid syntax support.
+Bounded `sequenceDiagram` fences also render participants and aliases, solid or
+dashed messages, and self-messages. Loops, notes and other unsupported sequence
+constructs remain selectable source.
+
+Workspace Tools groups its nine tools under Code & history, Plan & improve, and
+Share & move. Desktop shows vertical navigation beside the selected tool. Phones
+start with the grouped index and open one tool at a time; All tools or Escape
+returns to the index without clearing that tool's current input. A second Escape
+closes the dialog and restores its opener. Tool lists and content scroll within
+the visible viewport.
+Auto-follow scrolls only the message pane, keeping the conversation header and
+Stop action on screen. Phone inputs use 16px text, and composer menus limit their
+height to the space above their trigger and below the navigation header.
 
 ## Start a session
 
-Install and configure the desired native runtime on the backend host. Hermes
-installation, executable overrides, configuration, and verified Windows setup are
-documented in [Hermes runtime](HERMES_RUNTIME.md). A provider catalog distinguishes
-installation, credential configuration, and runtime capabilities. Native
-authentication remains unknown until the native program checks it.
+Configure a provider API key in Settings, then choose that provider and a model
+in the new-thread picker. Project defaults apply to the selected directory; an
+explicit choice overrides them. Saved profiles contain model and reasoning
+choices. Capabilities come from the exact selected model's metadata; unknown
+custom models do not gain assumed image or reasoning support.
 
-Select Hermes, Claude, Codex, or another supported agent in the new-session
-picker. Project defaults apply to the selected directory; an explicit choice
-overrides them. The live host supplies executable paths and shell conventions.
-Saved profiles contain model and reasoning choices, never executable commands.
-Hermes can use its configured model or an explicitly entered model identifier.
+Owned V4 conversations run in the authenticated API's structured engine with
+streamed events, durable acceptance receipts, approvals and cancellation. Native
+Claude Code and Codex can also start from the start screen as conversation
+threads (Claude Code runs one `claude -p` turn per message and resumes the same
+native session). Gemini and other CLIs open in a terminal. A terminal's agent
+picker lists only agents this host can run. Installation and authentication
+state belongs to those programs.
 
-## API providers through Hermes
+## API providers through the V4 runtime
 
-The host also maps 25 verified API-key providers to Hermes's actual tool engine.
-Supported providers use the current app account's encrypted vault entry, looked
-up again when starting the child. The key is injected into the appropriate child
-environment variable; it is never included in launcher arguments or catalog
-responses. Missing credentials prevent launch.
+V4 implements Anthropic Messages, OpenAI Responses and compatible Chat
+Completions adapters. Interactive structured threads, the optional
+`terminal-v4-api agent` CLI and supported unattended tasks use V4's own provider
+loop, tools and conversation storage.
 
-These runs use separate account/provider homes under
-hermes-profiles/profiles/<hashed-account-and-provider>. HOME, USERPROFILE,
-APPDATA and LOCALAPPDATA are scoped as applicable; inherited API keys/endpoints
-are removed. Operator custom configuration is ignored. Existing inline
-credentials in the isolated profile are rejected rather than overriding the
-vault. Native Hermes sessions continue to use their explicit operator profile.
+Each run resolves the current app account's encrypted provider credential from
+the local vault. Keys are excluded from launcher arguments, transcripts and
+workspace tool-process environments. Provider metadata controls compatible
+models and transports. Configured host endpoint overrides require HTTPS, with
+loopback HTTP allowed for local services; redirects are disabled.
 
-Unsupported OAuth/cloud/custom endpoint adapters remain unavailable in the
-catalog. Provider-key configuration is not proof of successful authentication;
-the actual runtime checks the provider when work starts. Both interactive
-sessions and durable tasks use this bridge.
+OAuth-only, Bedrock, Vertex, Azure-specific and virtual ensemble transports need
+separate adapters and remain unavailable. A configured key or catalog entry does
+not establish successful provider execution. See [V4 runtime](V4_RUNTIME.md) and
+[Anthropic gateway configuration](ANTHROPIC_GATEWAY.md) for the current boundaries.
 
 ## Workspace knowledge and learning
 
@@ -50,10 +171,6 @@ Replacement/removal operations carry previous values; stale updates return a
 conflict. Accepting persists the profile and its receipt atomically. Manual saves
 preserve proposal metadata. These operations synchronize within one API process.
 
-Hermes also has its own runtime-managed memory and learning features. Those are
-separate from Terminal v4's reviewed workspace profile. The native Hermes entry
-uses the configured operator profile; deployments must account for that ownership.
-
 **Installed skills** discovers bounded SKILL.md text from fixed project and host
 provider roots and inserts selected instructions into the draft. Supporting
 scripts are not executed by this picker. Provider-native enablement settings and
@@ -65,6 +182,15 @@ all supporting-file behavior are not reproduced by text import.
 checkpoint changes. Text is escaped; binary changes and truncated previews are
 identified. Create a managed worktree from a selected Git ref, then start a
 terminal there. Each checkout gets a separate codex/ branch.
+
+Worktree creation retains a request identity across an uncertain response. A
+retry of that request will not run Git again; an unresolved checkout is shown
+as unconfirmed and unavailable for manual review. Starting a different request
+is explicit. These records count toward the 64-worktree limit and are not
+automatically removed. The protection assumes a stable, private local data
+directory and does not cover older clients or mixed server versions. Creation
+is currently unavailable on non-Unix hosts. The following agent-session launch
+has a separate retry boundary and can still have an uncertain outcome.
 
 File checkpoints use private indexes and hidden refs without changing the live
 staging area. They include tracked and new non-ignored files. Restore is limited
@@ -92,15 +218,56 @@ accounts. Use managed worktrees for parallel changes. Native provider permission
 behavior remains enforced; the queue does not add permission-bypass flags.
 
 Cancellation terminates the process tree. Graceful server shutdown records
-interrupted work. On restart, interrupted runs are not silently retried. Durable
-completion receipts recover a result if replacing the owner store temporarily
-fails. A persistence outage stops the affected task and reports an actionable
-server error.
+interrupted work. On restart, runs without a durable result are not silently
+retried: they are marked interrupted, with a warning that the actual outcome is
+unknown and may have completed. Durable completion receipts recover a result if
+replacing the owner store temporarily fails. The worker retains its lease while
+retrying failed result writes, but if both the owner store and receipt remain
+unwritable and its process exits, the actual outcome can be lost. Review
+workspace changes before retrying. An already-started checkpoint or blocked
+storage operation can delay shutdown.
 
-Recurring interval schedules start disabled unless explicitly enabled. They run
-while the server runs, coalesce missed intervals, and avoid overlapping runs of
-the same schedule. Pause, enable, run now, and remove are explicit actions.
-These are Terminal v4 application schedules, separate from Hermes's scheduler.
+The task store can retain a delegated child's session identity in every task
+state. Such records use a versioned task-ID marker that older readers expecting
+a plain UUID reject, rather than treating the child as an ordinary task. Early
+unmarked delegated records are migrated when read by the current server; they
+are not protected before migration. This storage support does not itself enable
+background delegation or parent wakeup, and it does not make mixed-version
+servers safe. A delegated completion receipt must match the saved child and
+task scope; a mismatch leaves the stored data untouched and blocks recovery.
+
+Schedules start disabled unless explicitly enabled and run while the server runs.
+They support recurring intervals, selected weekdays in an IANA time zone, and
+one-time runs. Existing fixed-offset calendars retain their original meaning.
+Named-zone calendars skip nonexistent local times and use the earlier occurrence
+of a repeated time. Recurring runs coalesce missed intervals and avoid overlaps;
+a due one-time run stays due until it can be queued. Pause, enable, run now, and
+remove are explicit actions. Enabling a paused one-time schedule whose time has
+passed is rejected; use Run now to trigger it explicitly or create a new future
+schedule. These are Terminal V4 application schedules.
+
+On supported local filesystems, cooperating server versions take an OS-backed
+worker lease per data directory and serialize task-store transactions across
+processes. A second server can serve task requests; its worker waits for the
+lease and retries after the first server stops. Do not run older versions alongside the current server: they do
+not honor these locks. Network filesystems with unreliable file locking are not
+supported for shared task storage.
+
+The panel checks the authenticated, no-store scheduling capability endpoint and
+rechecks immediately before creating a one-time or named-zone calendar schedule.
+Without protocol version 1, it disables those creations; interval schedules remain
+available. Both requests must reach the same compatible backend: a rolling upgrade,
+downgrade, or load balancer that switches backends between the check and submission
+can still expose an older server to an advanced payload. Agent-reviewed scheduling
+executes on the new server directly and does not use this frontend handshake.
+
+Advanced schedules use a storage marker that makes the previous version reject
+the entire owner store instead of treating them as intervals. This is not a
+general downgrade guarantee: early advanced records written before the marker
+are migrated only when the current server reads each owner store, and unreadable
+stores cannot be migrated. Stop all servers and remove or otherwise safely
+migrate advanced schedules before downgrading; do not start the older worker on
+unverified data. The old version will not display tasks from a marked store.
 
 ## History and context handoff
 
@@ -151,8 +318,9 @@ Terminal v4 code adapted to the existing Rust API and React UI.
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent/tree/79651b71bd56efd76d06f3de1df64dde09b58ff3) | 79651b71bd56efd76d06f3de1df64dde09b58ff3 | tools/memory_tool_store.py, agent/memory_manager.py, agent/skill_commands.py | Bounded durable knowledge, explicit skill loading, context snapshots |
 | [T3 Code](https://github.com/pingdotgg/t3code/tree/7ac952c630ef8a60d14ca8f6a0c7adce33db4bae) | 7ac952c630ef8a60d14ca8f6a0c7adce33db4bae | packages/shared/src/projectSettings.ts, packages/shared/src/t3ProjectFile.ts, packages/shared/src/composerContextReferences.ts | Project-specific defaults, live provider selection, reviewable task context |
 
-Both upstream projects use the MIT license. Their source copies retain their
-license files. No upstream runtime or UI source files were incorporated verbatim.
+Reference sources are comparison material and must remain outside application
+packages. Implementation changes use V4-owned modules. Source comparison is
+bounded evidence; it is not a guarantee about authorship or complete feature parity.
 
 ## Verification and boundaries
 
@@ -169,16 +337,55 @@ Browser checks use an isolated localhost API and temporary test identity. No
 model request or real provider login is needed for these checks.
 
 This integration does not reproduce every upstream interface or deployment.
-Optional Hermes browser/computer tools, messaging gateways, and remote execution
-backends require their own setup. Paired environment management and coordinated native conversation/files rewind
-are documented in [Paired environments and rewind](PAIRED_ENVIRONMENTS_AND_REWIND.md).
-Automatic parent-agent wakeup is not implemented. API-provider support depends on a verified runtime adapter;
-catalog presence alone does not mean a provider can execute tools.
+Messaging gateways and additional remote execution backends remain separate
+feature work. Paired environment management and coordinated conversation/files
+rewind are documented in [Paired environments and rewind](PAIRED_ENVIRONMENTS_AND_REWIND.md).
+Approved V4 background investigations can deliver their results to the parent
+through its follow-up queue and wake it when that queue is running. A manually
+created workspace task does not automatically wake a parent. Supported API
+providers use the owned V4 adapters; catalog presence alone does not establish
+end-to-end parity.
 
 ## Terminal v4 workspace interface
 
-The workspace uses T3-inspired project/thread hierarchy with Terminal v4’s Carbon & Amber palette, terminal wordmark and existing typography. A continuous shell replaces detached rounded panels and decorative window controls. The compact sidebar exposes workspace tools even while a session is active; files and previews retain their own controls.
+The workspace follows T3 Code's layout and palette: near-black canvas (#0a0a0a), black sidebar, #101010 cards, hairline white borders and an indigo accent fill (#3a4bbd; #1b4ed8 in light mode). Tokens live in `WorkspaceUI.css`; components read them rather than defining private palettes.
 
-On desktop, New thread and the Terminal v4 home button open a composer without starting a shell. Selecting an existing thread returns to its running session; New terminal explicitly starts terminal work. Existing native PTYs retain their terminal surface, and structured agents retain their conversation surface. Tool and device dialogs share input, focus and button styling. Mobile keeps its dedicated terminal controls with a continuous shell and touch-sized dialog actions.
+- **Sidebar:** a flat list of thread cards sorted by activity, each with a project badge (`ProjectBadge`), relative time, title and Git branch (`POST /api/workspace/git/branches`). The toolbar holds search, the project filter, Add project, New terminal and New thread; the footer holds Settings, tools, profile and the Workspace apps menu.
+- **Conversation:** each finished turn folds its tool activity into one "Worked for …" group (`groupTurnWork`). A turn that changed files is followed by a "N changed files" card with per-file diffs (`TurnChangesCard`).
+- **Composer:** a single rounded card with the agent/model picker on the left and attach, mic, info and a round indigo send button on the right. Claude chats can switch model and effort between turns.
+- **Thread details:** a floating card (1280px and wider) shows the machine, Open in Files, Open in <editor>, the branch, uncommitted Changes and Commit, push & PR. The header also toggles a per-thread terminal drawer (a companion PTY hidden from the sidebar) and the browser panel.
+- **Mobile** keeps its own layout and picks up the same theme tokens.
 
-Verification covers the home/new-thread callbacks, workspace composer and sidebar controls, the full frontend suite and production build, plus real desktop/mobile browser checks including light mode, sidebar collapse and tool dialogs. Native desktop-control and internet deployment limitations are described in REMOTE_WORKSPACE.md.
+### Agent control
+
+- **Access modes** (composer → Access, Claude Code and Codex): *Supervised* asks before edits and commands; *Auto-edit* (default) edits files in the thread's folder without asking; *Full access* runs anything. Claude maps these to `--permission-mode manual` with `--permission-prompt-tool mcp__terminal_v4_browser__permission_prompt`, `acceptEdits`, or `--dangerously-skip-permissions`; Codex maps them to `untrusted`/`on-request`/`never` approval with `workspace-write` or `danger-full-access`. Changes apply from the next turn.
+- **Approvals** show in the conversation with Approve, Reject and *Allow for this session* (Codex `acceptForSession`; for Claude the tool name is remembered for that chat). Codex questions (`item/tool/requestUserInput`) become question cards with options or free text.
+- **Plan mode** (composer → Plan; on phones, **More composer actions → Plan mode**) sends `[Plan] …`; the turn runs read-only (Claude `--permission-mode plan`, Codex `read-only` sandbox with planning instructions). The finished plan offers *Implement plan* and *Implement in a new thread* when the conversation is available for execution.
+- **While a Claude or Codex reply runs**, sending queues the message; *Send now* stops the reply first. The queue is saved in the current browser tab and survives a page reload, but not reliably closing that tab or moving to another device. After a reload, pending entries wait for review; an in-flight send is marked unconfirmed and must be checked in the conversation before removal. Restored pending entries should also be checked before resuming in case another tab sent them. Queued messages wait until the conversation is connected, cleanup is complete, and the environment allows agent execution. Drafts can be stashed and restored (composer → Stash).
+- **Messages** offer *Edit as new message*, *Fork from here* (a new thread seeded with the conversation so far), *Read aloud* and Copy. On phones, editing copies the earlier message into the composer after any existing draft so the current text is preserved. Forking and plan execution are available for supported Codex and Claude conversations when execution is permitted.
+- **Notifications** (Settings → Interface) notify when a thread that worked for at least 5 seconds finishes, or needs approval, while the window is not in front.
+
+### Composer and navigation
+
+- Installed skills appear as `/skill-name` slash commands; choosing one inserts an instruction to follow that skill's file. `@` lists matching project files (`GET /api/workspace/files`).
+- The Files panel can search text within the selected thread's project. On Unix, searches skip symlinks, binary files, dependency directories and files over 256 KiB, returning up to 100 matches under a 32 MiB, 20,000-entry and two-second soft budget. Results can be truncated, and cancellation takes effect between filesystem operations. Selecting a result preserves the search snapshot; **Open current file at line** reads and highlights up to 15 current lines in a bounded preview. If the workspace or file changes, the preview can fail and the snapshot remains available. This is a read-only preview, not an editor, and files can change again after it loads. Changing accounts or servers clears the panel; reopen Files to load the new workspace. Paired environments require file-transfer permission. Non-Unix hosts currently report that search and preview are unavailable.
+- Any file can be attached in Claude and Codex chats (`POST /api/files/attachment`); attachments reach every agent as an "Attached files" list of paths.
+- Unsent file selections are saved on this device by account, environment and thread, and return after a reload. Only names and paths are saved in the browser; the files remain on the server and can be changed or removed, so check restored files before sending. If device storage cannot save the selection, the composer reports the problem and blocks sending until saving succeeds. Concurrent edits in separate tabs are detected on a best-effort basis, not as an atomic cross-tab transaction; review the other tab when a conflict is reported.
+- A context meter shows how full the context window is, from the usage Claude and Codex report. Settings → Usage totals tokens and cost per thread.
+- ⌘K opens the command palette; ⌘F finds within the current thread; both are rebindable in Settings → Keyboard shortcuts. On phones, use More → Find in thread. Search can open collapsed completed work to show matching messages, reasoning, plans and visible tool output. In-progress tool output, rendered edit diffs and images are not indexed.
+- New threads can start *In a new worktree* from the start screen. The base branch or commit defaults to `HEAD` and resets when the project changes. The branch picker lists up to 200 local and remote refs when supported by the server; a manual ref remains available.
+
+### Thread details and tools
+
+- The details card docks beside the conversation at 1280px and wider; on narrower windows its toggle opens it over the content. With split panes only the active pane shows it.
+- Rows: machine, Open in Files, Open in <editor>, project scripts (run in their own terminal), branch, Changes, Commit/push/PR, and the branch's pull request with check counts and review.
+- Diffs (turn changes and Git review) show line numbers, stacked or side-by-side layouts, and *+* line comments that are added to the draft as notes for the agent.
+- The terminal drawer can hold several terminals per thread.
+- Schedules can run on an interval or at a time on chosen weekdays.
+- After a few turns, a thread offers *Review what to remember*, which opens the Learning tool; nothing is saved without review.
+- Settings → Messaging connects a Telegram bot. Pair one chat with `/pair CODE`; then `/threads`, `/use N`, and messages go to that thread with replies sent back.
+- Settings → Setup check (and a start-screen card when something is missing) lists required and optional tools with fixes.
+
+Turn changes are recorded by snapshotting the working tree into a private Git index when a turn is accepted (Claude: when the user message is sent) and again when it completes (Claude: when the CLI run ends). Trees are diffed with `git diff --numstat`, and summaries are kept per session under `structured-turn-changes/` in the data directory (last 200 turns). Turns outside a Git repository, without changes, or over the checkpoint size limits (5000 files, 100 MB) record nothing.
+
+Commit and push run Git with repository hooks enabled and terminal prompts disabled. Pull requests use the GitHub CLI (`gh pr create`) and report when it is missing.

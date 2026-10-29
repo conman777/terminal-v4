@@ -1,4 +1,7 @@
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from './auth';
+import { getEnvironmentCacheScope, getEnvironmentSignal } from './remoteEnvironments';
 import { apiFetch } from './api';
+import { sha256Hex } from './sha256';
 export const TRANSFER_CHUNK_BYTES = 262144;
 export async function transferRequest(path, options = {}) {
  const response = await apiFetch('/api/transfers' + path, options);
@@ -8,7 +11,7 @@ export async function transferRequest(path, options = {}) {
 }
 export function bytesToHex(bytes) { return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join(''); }
 export function hexToBytes(hex) { if (!/^(?:[0-9a-f]{2})*$/i.test(hex)) throw new Error('Invalid transfer bytes'); return Uint8Array.from(hex.match(/../g) || [], value => parseInt(value, 16)); }
-export async function checksum(bytes) { return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))); }
+export async function checksum(bytes) { return sha256Hex(ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes)); }
 export async function uploadChunks(transfer, file, { signal, onProgress = () => {} } = {}) {
  let current = await transferRequest('/' + transfer.id, { signal });
  if (file.size !== current.size) throw new Error('Select the original file with the same size');
@@ -31,45 +34,87 @@ export async function uploadChunks(transfer, file, { signal, onProgress = () => 
  signal?.throwIfAborted();
  return transferRequest('/' + transfer.id + '/complete', { method: 'POST', signal });
 }
-function cacheRequest(transferId, mode, offset, chunk) {
- if (!globalThis.indexedDB) return Promise.resolve(undefined);
+export function captureDownloadScope() {
+ return { auth: captureAuthScope(), ...getEnvironmentCacheScope(), signal: getEnvironmentSignal() };
+}
+function assertDownloadScope(scope, signal) {
+ signal?.throwIfAborted();
+ scope.signal.throwIfAborted();
+ if (!isAuthScopeCurrent(scope.auth) || captureAuthScope().userId !== scope.auth.userId || scope.identity !== getEnvironmentCacheScope().identity) throw new DOMException('Download identity changed', 'AbortError');
+}
+function cacheRequest(scope, transferId, mode, offset, chunk) {
+ if (!globalThis.indexedDB || (!scope.auth.userId && mode !== 'retire')) return Promise.resolve(undefined);
  return new Promise((resolve, reject) => {
-  const opening = indexedDB.open('terminal-v4-transfers', 1);
-  opening.onupgradeneeded = () => opening.result.createObjectStore('chunks');
+  const opening = indexedDB.open('terminal-v4-transfers', 2);
+  opening.onupgradeneeded = () => {
+   const db = opening.result;
+   if (db.objectStoreNames.contains('chunks')) db.deleteObjectStore('chunks');
+   db.createObjectStore('chunks');
+  };
   opening.onerror = () => reject(opening.error);
   opening.onsuccess = () => {
    const db = opening.result;
-   const tx = db.transaction('chunks', mode === 'put' || mode === 'delete' ? 'readwrite' : 'readonly');
-   const store = tx.objectStore('chunks');const key = transferId + ':' + offset;
-   const request = mode === 'put' ? store.put(chunk, key) : mode === 'delete' ? store.delete(key) : store.get(key);
+   const tx = db.transaction('chunks', mode === 'get' ? 'readonly' : 'readwrite');
+   const store = tx.objectStore('chunks');
    let result;
-   request.onsuccess = () => { result = request.result; };
    tx.oncomplete = () => { db.close();resolve(result); };
-   tx.onerror = () => { db.close();reject(tx.error); };
+   tx.onerror = tx.onabort = () => { db.close();reject(tx.error || new Error('Download cache transaction aborted')); };
+   const auth = scope.auth;
+   if (mode === 'retire') {
+    if (!isAuthScopeCurrent(scope.auth) || captureAuthScope().userId !== scope.auth.userId) { tx.abort();return; }
+    const request = store.openCursor();
+    request.onsuccess = () => {
+     const cursor = request.result;
+     if (!cursor) return;
+     let key;try { key = JSON.parse(cursor.key); } catch { key = null; }
+     if (!Array.isArray(key) || (key[1] !== auth.userId || key[2] !== auth.session)) cursor.delete();
+     cursor.continue();
+    };
+    return;
+   }
+   if (mode !== 'delete') {
+    try { assertDownloadScope(scope); } catch { tx.abort();return; }
+   }
+   const key = JSON.stringify([auth.home, auth.userId, auth.session, scope.identity, scope.environment, transferId, offset]);
+   const request = mode === 'put' ? store.put(chunk, key) : mode === 'delete' ? store.delete(key) : store.get(key);
+   request.onsuccess = () => { result = request.result; };
   };
  });
 }
-export async function clearDownloadCache(transfer) {
- for (let offset = 0; offset < transfer.size; offset += TRANSFER_CHUNK_BYTES) await cacheRequest(transfer.id, 'delete', offset).catch(() => {});
+// Transactions from retired views use their captured key, never the current identity.
+cacheRequest(captureDownloadScope(), '', 'retire').catch(() => {});
+subscribeAuth(() => {
+ const scope = captureDownloadScope();
+ cacheRequest(scope, '', 'retire').catch(() => {});
+});
+export async function clearDownloadCache(transfer, scope = captureDownloadScope()) {
+ for (let offset = 0; offset < transfer.size; offset += TRANSFER_CHUNK_BYTES) await cacheRequest(scope, transfer.id, 'delete', offset).catch(() => {});
 }
 export async function downloadChunks(transfer, { signal, onProgress = () => {} } = {}) {
+ const scope = captureDownloadScope();
+ assertDownloadScope(scope, signal);
+ await cacheRequest(scope, '', 'retire').catch(() => {});
  let offset = 0;
  const parts = [];
  while (offset < transfer.size) {
-  signal?.throwIfAborted();
-  const cached = await cacheRequest(transfer.id, 'get', offset).catch(() => undefined);
+  assertDownloadScope(scope, signal);
+  const cached = await cacheRequest(scope, transfer.id, 'get', offset).catch(() => undefined);
   const chunk = cached || await transferRequest('/' + transfer.id + '/chunk?' + new URLSearchParams({ offset, length: TRANSFER_CHUNK_BYTES }), { signal });
   const bytes = hexToBytes(chunk.data);
   if (chunk.offset !== offset || !bytes.length || bytes.length > TRANSFER_CHUNK_BYTES || offset + bytes.length > transfer.size) throw new Error('Invalid download progress');
   if (await checksum(bytes) !== chunk.sha256) throw new Error('Download checksum mismatch');
-  if (!cached) await cacheRequest(transfer.id, 'put', offset, chunk).catch(() => {});
+  assertDownloadScope(scope, signal);
+  if (!cached) await cacheRequest(scope, transfer.id, 'put', offset, chunk).catch(() => {});
   parts.push(bytes);
   offset += bytes.length;onProgress({ ...transfer, offset });
  }
  const blob = new Blob(parts);
  const sha256 = await checksum(await blob.arrayBuffer());
  if (transfer.sha256 && sha256 !== transfer.sha256) throw new Error('File checksum mismatch');
+ assertDownloadScope(scope, signal);
  await transferRequest('/' + transfer.id + '/download-complete', { method: 'POST', signal, body: { sha256 } });
- await clearDownloadCache(transfer);
+ assertDownloadScope(scope, signal);
+ await clearDownloadCache(transfer, scope);
+ assertDownloadScope(scope, signal);
  return blob;
 }

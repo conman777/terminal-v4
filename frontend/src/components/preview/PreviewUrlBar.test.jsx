@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PreviewUrlBar } from './PreviewUrlBar';
 
@@ -52,10 +52,44 @@ function buildProps(overrides = {}) {
 }
 
 describe('PreviewUrlBar', () => {
+  it('dismisses the port picker with Escape and returns focus to its trigger', () => {
+    const props = buildProps({ showPortDropdown: true, activePorts: [{ port: 4173, process: 'vite' }] });
+    render(<PreviewUrlBar {...props} />);
+    const search = screen.getByRole('textbox', { name: 'Filter active ports' });
+    search.focus();
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(props.onTogglePortDropdown).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Select active port' })).toHaveFocus();
+  });
+
+  it('distinguishes a filtered empty result from no detected ports', () => {
+    render(<PreviewUrlBar {...buildProps({ showPortDropdown: true, activePorts: [{ port: 4173, process: 'vite' }] })} />);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Filter active ports' }), { target: { value: 'missing-app' } });
+    expect(screen.getByRole('status')).toHaveTextContent('No ports match “missing-app”');
+  });
+
+  it.each([
+    [{ supported: true, reason: null }, false],
+    [{ supported: false, reason: 'Unsupported browser' }, true],
+  ])('uses the support contract to enable WebContainer selection', (support, disabled) => {
+    const props = buildProps({ showToolsMenu: true, webContainerSupported: support });
+    render(<PreviewUrlBar {...props} />);
+    const button = screen.getByRole('button', { name: 'Open WebContainer window' });
+    if (disabled) {
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute('title', support.reason);
+    } else {
+      expect(button).toBeEnabled();
+      fireEvent.click(button);
+      expect(props.onToggleWebContainer).toHaveBeenCalledOnce();
+    }
+  });
+
   it('shows the active app badge when scope metadata is available', () => {
     render(
       <PreviewUrlBar
         {...buildProps({
+          previewLoaded: true,
           activePreviewScope: {
             appLabel: 'terminal v4',
             sessionLabel: 'Terminal 1',
@@ -68,5 +102,15 @@ describe('PreviewUrlBar', () => {
     expect(screen.getByLabelText('Active app: terminal v4')).toBeInTheDocument();
     expect(screen.getByText('Active app')).toBeInTheDocument();
     expect(screen.getByText('terminal v4')).toBeInTheDocument();
+  });
+
+  it('labels an unloaded target as Project and disables an unavailable terminal split', () => {
+    const props = buildProps({ activePreviewScope: { appLabel: 'unstarted-project' }, previewLoaded: false, hasTerminalSessions: false });
+    render(<PreviewUrlBar {...props} />);
+    expect(screen.getByLabelText('Project: unstarted-project')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Active app: unstarted-project')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Split', exact: true })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Split', exact: true }));
+    expect(props.onSetDesktopLayout).not.toHaveBeenCalled();
   });
 });

@@ -1,10 +1,10 @@
 import { getActiveEnvironment } from '../utils/remoteEnvironments';
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect } from 'react';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { apiFetch } from '../utils/api';
 import { AudioWaveform } from './AudioWaveform';
 
-export function TerminalMicButton({ sessionId, disabled, inline = false, onRecordingChange, onStateChange, onTranscript, provider }) {
+export function TerminalMicButton({ sessionId, disabled, available = true, inline = false, showLabel = false, onRecordingChange, onStateChange, onTranscript, provider, disclosureOpen }) {
   const handleTranscript = useCallback(async (text) => {
     if (!text) return;
 
@@ -25,29 +25,37 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
     }
   }, [onTranscript, sessionId]);
 
-  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording } = useVoiceInput(handleTranscript, { provider });
+  const { isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, toggleRecording, stopRecording, cancelRecording } = useVoiceInput(handleTranscript, { provider, scopeKey: sessionId, available });
+
+  useEffect(() => {
+    if (disclosureOpen === false) stopRecording();
+  }, [disclosureOpen, stopRecording]);
 
   useEffect(() => {
     onRecordingChange?.(isRecording && !!audioStream);
   }, [isRecording, audioStream, onRecordingChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onStateChange?.({
+      sessionId,
       isRecording,
       isChecking,
       isRequesting,
       isTranscribing,
       error: error || null,
-      hasAudioStream: Boolean(audioStream)
+      hasAudioStream: Boolean(audioStream),
+      cancelRecording
     });
-  }, [isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, onStateChange]);
+  }, [sessionId, isRecording, isChecking, isRequesting, isTranscribing, error, audioStream, cancelRecording, onStateChange]);
 
   // Icon size based on inline mode
   const iconSize = inline ? 16 : 20;
 
   // Determine tooltip/aria label based on provider and state
   const providerLabel = provider === 'local' ? 'Voice input (local Whisper)' : provider === 'groq' ? 'Voice input (Groq cloud)' : 'Start voice input';
-  const ariaLabel = isChecking
+  const ariaLabel = isTranscribing
+    ? 'Transcribing voice input'
+    : isChecking
     ? 'Checking API...'
     : isRequesting
       ? 'Requesting microphone access'
@@ -59,7 +67,7 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
   if (isRecording && audioStream) {
     return (
       <div className={inline ? "terminal-mic-inline-container recording-active" : "terminal-mic-container recording-active"}>
-        {error && <div className="terminal-mic-error">{error}</div>}
+        {error && <div className="terminal-mic-error" role={disclosureOpen === false ? undefined : 'alert'}>{error}</div>}
         <div className="audio-waveform-container">
           <AudioWaveform
             audioStream={audioStream}
@@ -95,7 +103,7 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
     <button
       type="button"
       onClick={toggleRecording}
-      disabled={Boolean(getActiveEnvironment()) || disabled || isTranscribing || isRequesting || isChecking}
+      disabled={Boolean(getActiveEnvironment()) || !available || disabled || isTranscribing || isRequesting || isChecking}
       className={buttonClasses}
       aria-label={ariaLabel}
       title={getActiveEnvironment() ? 'Voice transcription is available on the owning server directly' : ariaLabel}
@@ -148,13 +156,14 @@ export function TerminalMicButton({ sessionId, disabled, inline = false, onRecor
           <line x1="8" y1="23" x2="16" y2="23"/>
         </svg>
       )}
+      {showLabel && <span>{isTranscribing ? 'Transcribing…' : ariaLabel}</span>}
     </button>
   );
 
   // Always show error tooltip, even in inline mode
   return (
     <div className={inline ? "terminal-mic-inline-container" : "terminal-mic-container"}>
-      {error && <div className="terminal-mic-error">{error}</div>}
+      {error && <div className="terminal-mic-error" role={disclosureOpen === false ? undefined : 'alert'}>{error}</div>}
       {buttonElement}
     </div>
   );

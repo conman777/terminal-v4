@@ -1,0 +1,12 @@
+.webcontainer-window { max-width: 1440px; margin: 0 auto; padding: 24px; color: var(--text-primary, #e8e8ed); background: var(--bg-primary, #17191f); min-height: 100dvh; box-sizing: border-box; }
+.webcontainer-window-header, .webcontainer-window-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.webcontainer-window-header { justify-content: space-between; }
+.webcontainer-window a { color: var(--accent-primary, #a8b7ff); }
+.webcontainer-window [role="alert"] { padding: 12px; border: 1px solid var(--error-color, #e66d7d); border-radius: 6px; }
+.webcontainer-project-identity { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; }
+.webcontainer-project-identity dd { margin: 0; overflow-wrap: anywhere; }
+.webcontainer-window button { padding: 8px 16px; border: 1px solid var(--border-color, #555); border-radius: 6px; background: var(--bg-secondary, #292d37); color: inherit; cursor: pointer; }
+.webcontainer-window button:disabled { opacity: .5; cursor: default; }
+.webcontainer-window .webcontainer-iframe { width: 100%; height: 60dvh; border: 1px solid var(--border-color, #555); background: #fff; }
+.webcontainer-window-logs pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.webcontainer-omissions { padding: 12px; border: 1px solid var(--border-color, #555); border-radius: 6px; }

@@ -1,0 +1,6 @@
+@media (pointer: coarse) {
+  .devtools-filter-bar .devtools-filter-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

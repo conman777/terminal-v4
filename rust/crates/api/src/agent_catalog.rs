@@ -43,7 +43,7 @@ fn credentials(
     state: &AppState,
     user: &AuthenticatedUser,
 ) -> Result<HashMap<String, String>, ApiError> {
-    let encryption_key = crate::vault_encryption_key();
+    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
     Ok(state
         .list_vault_keys(user)
         .map_err(ApiError::internal)?
@@ -53,7 +53,8 @@ fn credentials(
                 .key_name
                 .strip_prefix("terminal-v4:provider:")
                 .and_then(|id| {
-                    vault::decrypt_secret(&entry.key_value, &encryption_key)
+                    cipher
+                        .decrypt(&entry.key_value)
                         .ok()
                         .map(|secret| (id.to_owned(), secret))
                 })
@@ -94,7 +95,8 @@ async fn save_key(
             "API key must be 8-10000 characters without control characters",
         ));
     }
-    let encrypted = vault::encrypt_secret(secret, &crate::vault_encryption_key())
+    let encrypted = vault::VaultCipher::load(&state.config().data_dir)
+        .and_then(|cipher| cipher.encrypt(secret))
         .map_err(|_| ApiError::internal("Could not encrypt credential"))?;
     let name = provider_name(&provider);
     let mut database = state.lock_db().map_err(ApiError::internal)?;
@@ -148,20 +150,31 @@ fn read_bounded(path: PathBuf, limit: u64) -> Option<String> {
 }
 fn models(provider: &str) -> Value {
     if provider == "codex" {
-        if let Some(home) = home() {
-            if let Some(cache) = read_bounded(home.join(".codex/models_cache.json"), 2_000_000)
+        if let Some(codex_home) = std::env::var_os("CODEX_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home().map(|home| home.join(".codex")))
+        {
+            if let Some(cache) = read_bounded(codex_home.join("models_cache.json"), 2_000_000)
                 .and_then(|text| serde_json::from_str::<Value>(&text).ok())
             {
                 if let Some(models) = cache["models"].as_array() {
                     let selected =
-                        read_bounded(home.join(".codex/config.toml"), 100_000).and_then(|config| {
+                        read_bounded(codex_home.join("config.toml"), 100_000).and_then(|config| {
                             config.lines().find_map(|line| {
                                 line.trim()
                                     .strip_prefix("model =")
                                     .map(|value| value.trim().trim_matches(['\"', '\'']).to_owned())
                             })
                         });
-                    let visible:Vec<_>=models.iter().filter(|model|model["visibility"]!="hide").filter_map(|model|model["slug"].as_str().filter(|slug|slug.len()<=200).map(|slug|json!({"id":slug,"label":model["display_name"].as_str().unwrap_or(slug),"default":selected.as_deref()==Some(slug)}))).take(100).collect();
+                    let visible:Vec<_>=models.iter().filter(|model|model["visibility"]!="hide").filter_map(|model|model["slug"].as_str().filter(|slug|slug.len()<=200).map(|slug|{
+                        let mut entry = json!({"id":slug,"label":model["display_name"].as_str().unwrap_or(slug),"default":selected.as_deref()==Some(slug)});
+                        if let Some(levels) = model["supported_reasoning_levels"].as_array() {
+                            entry["reasoningLevels"] = json!(levels.iter().filter_map(|level| level["effort"].as_str()).filter(|level| matches!(*level, "low" | "medium" | "high" | "xhigh" | "max" | "ultra")).collect::<Vec<_>>());
+                        }
+                        if let Some(default) = model["default_reasoning_level"].as_str() { entry["defaultReasoning"] = json!(default); }
+                        entry
+                    })).take(100).collect();
                     if !visible.is_empty() {
                         return Value::Array(visible);
                     }
@@ -178,12 +191,13 @@ fn models(provider: &str) -> Value {
     }
     json!([])
 }
+
 async fn native_state(provider: &str, label: &str) -> Value {
     let command = native_command(provider);
     let launch = command.as_ref().and_then(native_launch_command);
     let available = command.is_some() && launch.is_some();
     let authenticated: Option<bool> = None;
-    json!({"id":provider,"label":label,"command":provider,"launchCommand":launch,"hostShell":if cfg!(windows){"cmd"}else{"posix"},"available":available,"authenticated":authenticated,"status":if available{"ready"}else{"not-installed"},"models":models(provider),"reasoningLevels":if ["codex","claude"].contains(&provider){json!(["low","medium","high","xhigh","max"])}else{json!([])},"capabilities":{"tools":true,"nativeRuntime":true,"structured":provider=="claude","durableTasks":(["codex","claude","hermes"].contains(&provider)),"learning":provider=="hermes","authenticationStatus":"unknown"}})
+    json!({"id":provider,"label":label,"command":provider,"launchCommand":launch,"hostShell":if cfg!(windows){"cmd"}else{"posix"},"available":available,"authenticated":authenticated,"status":if available{"ready"}else{"not-installed"},"models":models(provider),"reasoningLevels":if ["codex","claude"].contains(&provider){json!(["low","medium","high","xhigh","max"])}else{json!([])},"runtime":if provider=="codex"{Some("codex")}else{None},"help":if provider=="codex"{Some("Uses local Codex. If sign-in is needed, run codex login in a terminal on this computer.")}else{None},"capabilities":{"tools":true,"nativeRuntime":true,"structured":(["claude","codex"].contains(&provider)),"durableTasks":(["codex","claude"].contains(&provider)),"learning":false,"authenticationStatus":"unknown"}})
 }
 async fn catalog(
     State(state): State<AppState>,
@@ -195,15 +209,18 @@ async fn catalog(
         ("codex", "Codex"),
         ("claude", "Claude Code"),
         ("gemini", "Gemini CLI"),
-        ("hermes", "Hermes Agent"),
     ] {
         agents.push(native_state(provider, label).await);
     }
     for definition in definitions() {
         let id = definition["id"].as_str().unwrap_or_default();
         let configured = credentials.contains_key(id);
-        let compatible = crate::hermes_provider_bridge::provider_mapping(id).is_some();
-        let runtime_available = compatible && native_command("hermes").is_some();
+        let compatible = crate::v4_agent::supports(id);
+        // Providers without a V4 adapter can never start here, so they are not offered at all.
+        if !compatible {
+            continue;
+        }
+        let runtime_available = compatible;
         let launch = std::env::current_exe().ok().and_then(|executable| {
             let mut command = tokio::process::Command::new(executable);
             command.args([
@@ -214,7 +231,65 @@ async fn catalog(
             native_launch_command(&command)
         });
         let available = runtime_available && configured && launch.is_some();
-        agents.push(json!({"id":id,"label":definition["label"],"command":"terminal-v4-api","launchCommand":if compatible{launch}else{None},"hostShell":if cfg!(windows){"cmd"}else{"posix"},"runtime":if compatible{"hermes"}else{"unavailable"},"available":available,"runtimeAvailable":runtime_available,"authenticated":null,"configured":configured,"status":if !compatible{"unsupported"}else if !runtime_available{"not-installed"}else if !configured{"not-configured"}else{"ready"},"models":definition["models"],"reasoningLevels":definition["reasoningLevels"],"capabilities":{"tools":compatible,"nativeRuntime":compatible,"structured":false,"durableTasks":compatible,"learning":compatible,"authenticationStatus":"unknown"},"help":if compatible{"Runs through the installed Hermes tool engine using this account's encrypted API key. Provider credentials are checked when a session starts."}else{"This provider needs an adapter or additional account configuration; it cannot launch from this host yet."}}));
+        agents.push(json!({"id":id,"label":definition["label"],"command":"terminal-v4-api","launchCommand":if compatible{launch}else{None},"hostShell":if cfg!(windows){"cmd"}else{"posix"},"runtime":if compatible{"v4"}else{"unavailable"},"available":available,"runtimeAvailable":runtime_available,"authenticated":null,"configured":configured,"status":if !compatible{"unsupported"}else if !runtime_available{"not-installed"}else if !configured{"not-configured"}else{"ready"},"models":crate::v4_agent::catalog_models(id),"reasoningLevels":crate::v4_agent::reasoning_levels(id),"capabilities":{"tools":compatible,"nativeRuntime":compatible,"structured":compatible,"durableTasks":crate::v4_agent::supports_tasks(id),"learning":compatible,"authenticationStatus":"unknown"},"help":if compatible{"Runs in V4’s own tool runtime using this account’s encrypted API key. Workspace files are available; each shell command requires approval."}else{"This provider needs an adapter or additional account configuration; it cannot launch from this host yet."}}));
+    }
+    #[cfg(unix)]
+    {
+        use crate::v4_agent::profile::Binding;
+        use terminal_v4_provider_connections::Transport;
+        let profiles = state
+            .provider_connections()
+            .public_profiles_with_published_inventory(&user)
+            .await
+            .map_err(|_| ApiError::internal("Saved provider connections are unavailable"))?;
+        for profile in profiles["profiles"]
+            .as_array()
+            .ok_or_else(|| ApiError::internal("Saved provider metadata is unavailable"))?
+        {
+            let profile_id = profile["profileId"]
+                .as_str()
+                .ok_or_else(|| ApiError::internal("Saved connection ID is unavailable"))?;
+            let revision = profile["revision"]
+                .as_str()
+                .ok_or_else(|| ApiError::internal("Saved connection revision is unavailable"))?;
+            let transport = match profile["transport"].as_str() {
+                Some("openai-chat") => Transport::OpenAiChat,
+                Some("openai-responses") => Transport::OpenAiResponses,
+                _ => {
+                    return Err(ApiError::internal(
+                        "Saved connection protocol is unavailable",
+                    ))
+                }
+            };
+            let id = Binding::provider_id(profile_id, revision, transport);
+            if Binding::parse(&id).is_none() {
+                return Err(ApiError::internal("Saved connection identity is invalid"));
+            }
+            let ready = profile["activation"] == "ready"
+                && matches!(
+                    profile["credentialState"].as_str(),
+                    Some("configured" | "not-required")
+                );
+            let name = match (profile["provider"].as_str(), profile["mode"].as_str()) {
+                (Some("lmstudio"), _) => "LM Studio local",
+                (Some("actual"), Some("relay")) => "Actual relay",
+                _ => "Actual local",
+            };
+            let inventory = &profile["modelInventory"];
+            let models = inventory["models"]
+                .as_array()
+                .map(|models| {
+                    models
+                        .iter()
+                        .map(|model| {
+                            json!({"id":model["id"],"label":model["label"],"imageInput":false,
+                    "reasoningLevels":[],"discoveryMetadata":model})
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            agents.push(json!({"id":id,"label":format!("{name} · {}",&profile_id[profile_id.len().saturating_sub(8)..]),"runtime":"v4","available":ready,"runtimeAvailable":true,"configured":ready,"status":if ready{"ready"}else{"cleanup-pending"},"launchCommand":null,"models":models,"modelInventory":inventory,"reasoningLevels":[],"connectionProfile":{"profileId":profile_id,"revision":revision,"transport":profile["transport"]},"capabilities":{"tools":true,"nativeRuntime":true,"structured":true,"durableTasks":false,"cli":false,"imageInput":false,"learning":true},"help":"Choose a model supported by this saved connection. Runs in a V4 conversation."}));
+        }
     }
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
@@ -230,7 +305,6 @@ async fn authentication(
         json!({"id":"codex","label":"Codex","methods":["oauth"],"command":"codex login","help":"Sign in using the native Codex CLI.","configured":null}),
         json!({"id":"claude","label":"Claude Code","methods":["oauth"],"command":"claude auth login","help":"Sign in using the native Claude CLI.","configured":null}),
         json!({"id":"gemini","label":"Gemini CLI","methods":["oauth"],"command":"gemini","configured":null}),
-        json!({"id":"hermes","label":"Hermes Agent","methods":["cli"],"command":"hermes setup","help":"Configure a model provider using Hermes setup.","configured":null}),
     ];
     for definition in definitions() {
         let id = definition["id"].as_str().unwrap_or_default();
@@ -267,6 +341,289 @@ mod tests {
         })
         .unwrap()
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn saved_profile_catalog_is_owner_scoped_revision_bound_and_structured_only() {
+        use crate::v4_agent::profile::Binding;
+        use terminal_v4_provider_connections::Transport;
+        let state = state();
+        let user = AuthenticatedUser {
+            user_id: "owner".into(),
+            username: "owner".into(),
+        };
+        let profile = "10000000-0000-4000-8000-000000000001";
+        let connection_routes = crate::provider_connections::routes()
+            .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
+            .with_state(state.clone());
+        let body = serde_json::json!({"operationId":"60000000-0000-4000-8000-000000000001","expectedRevision":null,"provider":"lmstudio","mode":"local","baseUrl":"http://127.0.0.1:9/v1","auth":{"type":"bearer","credentialAction":"replace","secret":"synthetic-catalog-profile-secret"}});
+        let saved = connection_routes
+            .oneshot(request(
+                "PUT",
+                &format!("/api/agent/connections/{profile}"),
+                Some(&user.user_id),
+                &body.to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        let saved = json(saved).await;
+        let id = Binding::provider_id(
+            profile,
+            saved["savedRevision"].as_str().unwrap(),
+            Transport::OpenAiChat,
+        );
+        let owner = json(
+            router(state.clone())
+                .oneshot(request("GET", "/api/agent/catalog", Some("owner"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let other = json(
+            router(state.clone())
+                .oneshot(request("GET", "/api/agent/catalog", Some("other"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let agent = owner["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["id"] == id)
+            .expect("saved profile missing from model catalog");
+        assert_eq!(agent["runtime"], "v4");
+        assert_eq!(agent["available"], true);
+        assert_eq!(agent["capabilities"]["structured"], true);
+        assert_eq!(agent["capabilities"]["durableTasks"], false);
+        assert_eq!(agent["launchCommand"], Value::Null);
+        assert_eq!(agent["models"], serde_json::json!([]));
+        assert_eq!(agent["reasoningLevels"], serde_json::json!([]));
+        assert!(!other["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["id"] == id));
+        assert!(!owner
+            .to_string()
+            .contains("synthetic-catalog-profile-secret"));
+        assert!(state.provider_connections().shutdown().await);
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn saved_profile_catalog_projects_published_inventory_without_discovery_dispatch() {
+        use crate::v4_agent::profile::Binding;
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        use terminal_v4_provider_connections::Transport;
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let fixture = Router::new().route(
+            "/v1/models",
+            axum::routing::get(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async { Json(serde_json::json!({"data":[{"id":"own-discovered-selection"}]})) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/v1", listener.local_addr().unwrap());
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let fixture = tokio::spawn(async move {
+            axum::serve(listener, fixture)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap();
+        });
+        let state = state();
+        let connections = crate::provider_connections::routes()
+            .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
+            .with_state(state.clone());
+        let profile = "10000000-0000-4000-8000-000000000001";
+        let discovery = "50000000-0000-4000-8000-000000000001";
+        let input = serde_json::json!({"operationId":"60000000-0000-4000-8000-000000000001","expectedRevision":null,"provider":"actual","mode":"local","baseUrl":base,"auth":{"type":"none"}});
+        let saved = connections
+            .clone()
+            .oneshot(request(
+                "PUT",
+                &format!("/api/agent/connections/{profile}"),
+                Some("owner"),
+                &input.to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), StatusCode::OK);
+        let saved = json(saved).await;
+        let id = Binding::provider_id(
+            profile,
+            saved["savedRevision"].as_str().unwrap(),
+            Transport::OpenAiResponses,
+        );
+        for route in ["/api/agent/catalog", "/api/agent/catalog?refresh=true"] {
+            let response = router(state.clone())
+                .oneshot(request("GET", route, Some("owner"), ""))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = json(response).await;
+            let agent = body["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|a| a["id"] == id)
+                .unwrap();
+            assert_eq!(agent["models"], serde_json::json!([]));
+            assert_eq!(agent["modelInventory"], Value::Null);
+        }
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        let response = connections
+            .clone()
+            .oneshot(request(
+                "POST",
+                &format!("/api/agent/connections/{profile}/discoveries"),
+                Some("owner"),
+                &serde_json::json!({"requestId":discovery}).to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(4);
+        loop {
+            let response = connections
+                .clone()
+                .oneshot(request(
+                    "GET",
+                    &format!("/api/agent/connection-discoveries/{discovery}"),
+                    Some("owner"),
+                    "",
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let job = json(response).await;
+            if job["status"] == "succeeded" && job["cleanupPending"] == false {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "discovery did not settle: {job}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let response = router(state.clone())
+            .oneshot(request(
+                "GET",
+                "/api/agent/catalog?refresh=true",
+                Some("owner"),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json(response).await;
+        let agent = body["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .unwrap();
+        assert_eq!(agent["models"][0]["id"], "own-discovered-selection");
+        assert_eq!(agent["models"][0]["imageInput"], false);
+        assert_eq!(
+            agent["models"][0]["discoveryMetadata"]["imageInput"],
+            Value::Null
+        );
+        assert_eq!(agent["modelInventory"]["source"], "published-discovery");
+        assert_eq!(
+            agent["modelInventory"]["receipt"]["inferenceVerified"],
+            false
+        );
+        assert_eq!(agent["capabilities"]["imageInput"], false);
+        assert_eq!(agent["capabilities"]["cli"], false);
+        assert_eq!(agent["capabilities"]["durableTasks"], false);
+        assert_eq!(agent["reasoningLevels"], serde_json::json!([]));
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        let other = json(
+            router(state.clone())
+                .oneshot(request(
+                    "GET",
+                    "/api/agent/catalog?refresh=true",
+                    Some("other"),
+                    "",
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(!other["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["id"] == id));
+        let profiles = json(
+            connections
+                .clone()
+                .oneshot(request("GET", "/api/agent/connections", Some("owner"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(profiles["profiles"][0].get("modelInventory").is_none());
+        let mut changed = input;
+        changed["operationId"] = serde_json::json!("60000000-0000-4000-8000-000000000002");
+        changed["expectedRevision"] = saved["savedRevision"].clone();
+        let response = connections
+            .clone()
+            .oneshot(request(
+                "PUT",
+                &format!("/api/agent/connections/{profile}"),
+                Some("owner"),
+                &changed.to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let changed = json(response).await;
+        let next_id = Binding::provider_id(
+            profile,
+            changed["savedRevision"].as_str().unwrap(),
+            Transport::OpenAiResponses,
+        );
+        assert_ne!(next_id, id);
+        let current = json(
+            router(state.clone())
+                .oneshot(request(
+                    "GET",
+                    "/api/agent/catalog?refresh=true",
+                    Some("owner"),
+                    "",
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(!current["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["id"] == id));
+        let next = current["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|agent| agent["id"] == next_id)
+            .unwrap();
+        assert_eq!(next["models"], serde_json::json!([]));
+        assert_eq!(next["modelInventory"], Value::Null);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert!(state.provider_connections().shutdown().await);
+        stop.send(()).unwrap();
+        fixture.await.unwrap();
+    }
+
     fn router(state: AppState) -> Router {
         routes()
             .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))
@@ -316,6 +673,56 @@ mod tests {
             );
         }
     }
+    #[tokio::test]
+    async fn utility_provider_key_save_survives_restart_with_private_install_key() {
+        let data = tempfile::tempdir().unwrap();
+        let config = terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            jwt_secret: "catalog-test".into(),
+            ..Default::default()
+        };
+        let state = AppState::new(config.clone()).unwrap();
+        let response = router(state.clone())
+            .oneshot(request(
+                "PUT",
+                "/api/agent/auth/deepseek/api-key",
+                Some("owner"),
+                r#"{"apiKey":"synthetic-provider-secret"}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let user = AuthenticatedUser {
+            user_id: "owner".into(),
+            username: "owner".into(),
+        };
+        let ciphertext = state.list_vault_keys(&user).unwrap().remove(0).key_value;
+        assert!(vault::decrypt_secret(&ciphertext, "dev-vault-key-change-in-production").is_err());
+        drop(state);
+        let restarted = AppState::new(config).unwrap();
+        assert_eq!(
+            credentials(&restarted, &user)
+                .unwrap()
+                .get("deepseek")
+                .map(String::as_str),
+            Some("synthetic-provider-secret")
+        );
+        let response = router(restarted)
+            .oneshot(request("GET", "/api/agent/auth", Some("owner"), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload = json(response).await;
+        assert!(!payload.to_string().contains("synthetic-provider-secret"));
+        let provider = payload["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| provider["id"] == "deepseek")
+            .unwrap();
+        assert_eq!(provider["configured"], true);
+    }
+
     #[tokio::test]
     async fn api_keys_are_encrypted_owner_scoped_and_masked() {
         let state = state();
@@ -376,7 +783,9 @@ mod tests {
         let stored = state.list_vault_keys(&user).unwrap();
         assert_ne!(stored[0].key_value, secret);
         assert_eq!(
-            crate::vault::decrypt_secret(&stored[0].key_value, &crate::vault_encryption_key())
+            crate::vault::VaultCipher::load(&state.config().data_dir)
+                .unwrap()
+                .decrypt(&stored[0].key_value)
                 .unwrap(),
             secret
         );
@@ -425,7 +834,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn catalog_retains_hermes_and_api_entries_with_honest_capabilities() {
+    async fn catalog_uses_v4_runtime_without_a_hermes_installation() {
         let response = router(state())
             .oneshot(request("GET", "/api/agent/catalog", Some("owner"), ""))
             .await
@@ -433,15 +842,36 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let catalog = json(response).await;
         let agents = catalog["agents"].as_array().unwrap();
-        let hermes = agents.iter().find(|entry| entry["id"] == "hermes").unwrap();
-        assert_eq!(hermes["capabilities"]["tools"], true);
+        assert!(!agents.iter().any(|entry| entry["id"] == "hermes"));
         let api = agents
             .iter()
             .find(|entry| entry["id"] == "deepseek")
             .unwrap();
         assert_eq!(api["capabilities"]["tools"], true);
-        assert_eq!(api["runtime"], "hermes");
+        assert_eq!(api["runtime"], "v4");
+        assert_eq!(api["runtimeAvailable"], true);
         assert_eq!(api["configured"], false);
         assert_eq!(api["available"], false);
+    }
+    #[tokio::test]
+    async fn catalog_leaves_out_providers_this_host_cannot_launch() {
+        let catalog = json(
+            router(state())
+                .oneshot(request("GET", "/api/agent/catalog", Some("owner"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let agents = catalog["agents"].as_array().unwrap();
+        assert!(!agents.iter().any(|agent| agent["status"] == "unsupported"
+            || [
+                "bedrock",
+                "vertex",
+                "azure-foundry",
+                "copilot",
+                "copilot-acp",
+                "moa"
+            ]
+            .contains(&agent["id"].as_str().unwrap_or_default())));
     }
 }

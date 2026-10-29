@@ -7,94 +7,87 @@
 
 ## Project Architecture
 
-This is a browser-based terminal emulator that wraps Claude Code CLI. It consists of:
+A browser-based workspace for coding agents (Claude Code, Codex and Terminal v4's own V4 runtime) with terminals, preview, browser and Git tools:
 
-- **Backend** (`/backend`): Fastify server (TypeScript) on port 3020
-- **Frontend** (`/frontend`): React + Vite SPA
+- **Backend** (`rust/crates/api`, shared types in `rust/crates/core`): Rust Axum server. Default port 3020; set `PORT` to change it.
+- **Frontend** (`frontend`): React + Vite SPA, tested with vitest (`*.browser.test.*` files run in real Chromium from `.runtime/browser`).
+- **Legacy** (`backend`): the old Fastify server. It is no longer used at runtime; do not add features there.
 
-### Deployment Setup
+### Serving
 
-The Fastify backend serves **both** the API and the static frontend files:
+The Rust server serves both the API (`/api/*`) and the built frontend. It reads the frontend from `TERMINAL_V4_FRONTEND_DIR` (default `frontend/dist`) and falls back to `index.html` for client-side routes. Data lives in `TERMINAL_DATA_DIR`.
 
-- API routes: `/api/*` (terminal, auth, bookmarks, settings, etc.)
-- Static files: Served from `frontend/dist/` via `@fastify/static`
-- SPA fallback: Non-API 404s return `index.html` for client-side routing
-
-**Cloudflare Tunnel** routes all traffic to `localhost:3020`. There is no separate frontend server in production.
-
-### Build & Deploy Commands
+### Build & Run Commands
 
 ```bash
-# Build frontend
-cd frontend && npm run build
+# Development (two servers with hot reload)
+npm run api:dev        # Rust API on 3020
+npm run frontend:dev   # Vite on 5173, proxies /api to the API
 
-# Build backend
-cd backend && npm run build
+# Tests and checks
+npm run frontend:test
+npm run rust:test
+npm run rust:fmt:check
 
-# Start production server (serves both API + frontend)
-cd backend && npm start
-
-# Development (separate servers with hot reload)
-cd frontend && npm run dev   # Port 5173, proxies /api to 3020
-cd backend && npm run dev    # Port 3020
+# Production build (browser runtime, frontend, API binary)
+npm run app:build
 ```
+
+Release builds: `cargo build --release -p terminal-v4-api --manifest-path rust/Cargo.toml`, binary at `rust/target/release/terminal-v4-api`.
 
 ### Restarting the Server
 
-```bash
-# Use the restart script (recommended)
-~/terminal-v4/restart.sh
-
-# Or manually:
-cd ~/terminal-v4/backend && npm run build && pkill -f "node.*dist/index.js"; nohup npm start > /tmp/backend.log 2>&1 &
-```
-
-Logs are written to `/tmp/backend.log`.
+- **macOS (this machine):** the V4 Mac app (`~/Developer/V4.app`, built from `desktop/tauri`) hosts everything, like T3 Code's desktop app. It runs the server on 3030 with the shared data folder (`~/Library/Application Support/terminal-v4`) and username sign-in, restarts it if it exits, keeps running when its window is closed (quit with ⌘Q), and starts the Tailscale phone gateway (3040, served at `http://conors-macbook-pro.tail98a634.ts.net:8080`).
+  - Frontend change: `npm --prefix frontend run build`, then reload the page (the app serves the checkout's `frontend/dist`).
+  - Backend change: `cargo build --release -p terminal-v4-api --manifest-path rust/Cargo.toml` (add `CARGO_PROFILE_RELEASE_STRIP=false` on this Mac), then stop the server process on 3030; the app restarts it with the new binary within seconds.
+  - Mac app change (`desktop/tauri`): `npm --prefix desktop/tauri run tauri build -- --bundles app`, copy `target/release/bundle/macos/V4.app` to `~/Developer/`, quit and reopen V4.
+- **Linux host:** `restart.sh` restarts the systemd service.
 
 ### Key Files
 
-- `backend/src/index.ts` - Server entry, registers all routes + static serving
-- `backend/src/routes/register-core-routes.ts` - Terminal & filesystem API routes
-- `frontend/src/` - React components
-- `frontend/dist/` - Built frontend (served by backend)
+- `rust/crates/api/src/lib.rs` - Router: registers every API route and static serving
+- `rust/crates/api/src/structured.rs` (+ `structured/`) - Agent conversations (Claude, Codex), approvals, access modes, turn changes
+- `rust/crates/api/src/v4_agent/` - Terminal v4's own agent runtime
+- `rust/crates/api/src/terminal.rs` - Terminal (PTY) sessions
+- `rust/crates/api/src/workspace_git.rs` - Git status, diffs, commit/push/PR, worktrees, checkpoints
+- `frontend/src/App.jsx` - App shell; `frontend/src/components/TerminalPane.jsx` - one thread/terminal pane
 
 ### Preview System
 
 The preview panel displays local apps via an iframe using a **subdomain-based proxy** for LAN access.
 
 **How it works:**
-- User enters `localhost:8787` in preview panel
-- Frontend converts to `http://preview-8787.{LAN_IP}.nip.io:3020/`
+- User enters `localhost:8787` in the preview panel
+- Frontend converts it to `http://preview-8787.{LAN_IP}.nip.io:{port}/`
 - nip.io provides wildcard DNS (resolves to the LAN IP)
-- Backend intercepts requests with `preview-{port}.*` Host header
-- Backend proxies to `localhost:{port}` and streams response
+- The Rust server recognises `preview-{port}.*` Host headers (`extract_port_from_host` in `preview/mod.rs`) and proxies to `localhost:{port}` (`preview/proxy.rs`)
 
 **Key files:**
 - `frontend/src/utils/previewUrl.js` - URL transformation (must be idempotent!)
 - `frontend/src/contexts/PreviewContext.jsx` - Preview state management
-- `backend/src/routes/preview-proxy-routes.ts` - Subdomain proxy handler
+- `rust/crates/api/src/preview/` - Proxy, cookie jar, rewriting, WebSocket relay, logs
 
 **Critical implementation details:**
-- `toPreviewUrl()` must be idempotent - returns unchanged URL if already a preview subdomain
-- The `onRequest` hook must set `reply.sent = true` and return `reply` to stop Fastify's chain
+- `toPreviewUrl()` must be idempotent - returns the URL unchanged if it is already a preview subdomain
 - Iframe-blocking headers are stripped by the proxy
-- **Auth bypass**: Preview subdomain requests skip Terminal V4 auth (in `auth-hook.ts`) so proxied app requests aren't blocked
-- **Cookie handling**: Set-Cookie headers are rewritten to remove Domain attribute so cookies work on preview subdomain
+- **Auth**: preview subdomain requests are authorised with preview tokens/cookies (`authenticate_preview_token` in `auth.rs`), not the app login, so proxied app requests aren't blocked
+- **Cookie handling**: Set-Cookie headers are rewritten to remove the Domain attribute so cookies work on the preview subdomain
+- A port with nothing running returns a readable "Preview unavailable" page (502)
 
 **Common issues:**
-- **App login not working**: Check if Terminal V4 auth is blocking the request (returns "Unauthorized"). The auth hook must skip requests where Host matches `preview-{port}.*`
-- **Cookies not persisting**: Access Terminal V4 via nip.io URL (e.g., `192.168.1.199.nip.io:3020`) so preview iframe is same-site
-- **App API calls failing**: If app calls a different port (e.g., port 3002 for backend), that port also needs to go through the preview proxy
+- **App login not working**: check whether Terminal V4 auth is blocking the request ("Unauthorized")
+- **Cookies not persisting**: open Terminal V4 via its nip.io URL so the preview iframe is same-site
+- **App API calls failing**: if the app calls another port (e.g. 3002), that port also needs to go through the preview proxy
 
 See `docs/PREVIEW_SETUP.md` for full documentation.
 
 > **DO NOT MODIFY** the preview system files without explicit permission from the user. This includes:
 > - `frontend/src/utils/previewUrl.js`
-> - `backend/src/routes/preview-proxy-routes.ts`
 > - `frontend/src/contexts/PreviewContext.jsx`
-> - `backend/src/auth/auth-hook.ts` (preview auth bypass)
+> - `rust/crates/api/src/preview/` (proxy, host detection, cookie handling)
+> - Preview token handling in `rust/crates/api/src/auth.rs`
 >
-> The preview system has subtle requirements (idempotency, hook ordering, auth bypass) that are easy to break.
+> The preview system has subtle requirements (idempotency, host routing, auth) that are easy to break.
 
 ---
 

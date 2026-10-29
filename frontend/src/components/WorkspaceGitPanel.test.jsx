@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceGitPanel } from './WorkspaceGitPanel';
+import { setUser } from '../utils/auth';
 const apiFetch = vi.fn();
 vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetch(...args) }));
 const path = '/projects/example';
@@ -8,6 +9,7 @@ const tree = { id: 'tree', name: 'Fix example', path: '/tasks/example', branch: 
 const reply = data => ({ ok: true, json: async () => data });
 describe('WorkspaceGitPanel', () => {
   beforeEach(() => {
+    localStorage.clear(); setUser({ id: 'fixture-user' });
     apiFetch.mockReset(); apiFetch.mockImplementation(async url => {
       if (url.includes('/worktrees') || url.includes('/checkpoints')) return reply([]);
       if (url.includes('/diff')) return reply({ patch: '+<script>unsafe()</script>', binary: false, truncated: false });
@@ -17,7 +19,7 @@ describe('WorkspaceGitPanel', () => {
   it('reviews escaped diff text and staged changes', async () => {
     render(<WorkspaceGitPanel workspacePath={path} />);
     fireEvent.click(await screen.findByRole('button',{name:/src\/example.js/}));
-    expect(await screen.findByText('+<script>unsafe()</script>')).toBeInTheDocument();
+    expect(await screen.findByText('<script>unsafe()</script>')).toHaveClass('diff-added');
     expect(document.querySelector('script')).toBeNull();
     fireEvent.change(screen.getByLabelText('Review changes'),{target:{value:'staged'}});
     await waitFor(()=>expect(apiFetch.mock.calls.some(([url])=>url.includes('mode=staged'))).toBe(true));
@@ -30,8 +32,32 @@ describe('WorkspaceGitPanel', () => {
     fireEvent.click(screen.getByRole('button',{name:'Create isolated task'}));
     fireEvent.click(await screen.findByRole('button',{name:'Start Fix example'}));
     expect(onStartTask).toHaveBeenCalledWith(tree.path);
-    expect(apiFetch.mock.calls.find(([,options])=>options?.method==='POST')).toEqual(['/api/workspace/git/worktrees',{method:'POST',body:{path,name:'Fix example',baseRef:'HEAD'}}]);
+    expect(apiFetch.mock.calls.find(([,options])=>options?.method==='POST')).toEqual(['/api/workspace/git/worktrees',{method:'POST',signal:expect.any(AbortSignal),body:{path,name:'Fix example',baseRef:'HEAD',operationId:expect.any(String)}}]);
   });
+  it('retains the same operation after an ambiguous creation error', async () => {
+    const requests = [];
+    apiFetch.mockImplementation(async (url, options) => {
+      if (options?.method === 'POST') { requests.push(options.body); if (requests.length === 1) throw new Error('Connection lost'); return reply(tree); }
+      return reply(url.includes('/status') ? { branch: 'main', files: [] } : []);
+    });
+    render(<WorkspaceGitPanel workspacePath={path} />);
+    await screen.findByText('No changed files in this view.');
+    fireEvent.change(screen.getByLabelText('Task name'), { target: { value: 'Fix example' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create isolated task' }));
+    await screen.findByText('Connection lost');
+    fireEvent.click(screen.getByRole('button', { name: 'Create isolated task' }));
+    await screen.findByRole('button', { name: 'Start Fix example' });
+    expect(requests.map(request => request.operationId)).toEqual([expect.any(String), requests[0].operationId]);
+  });
+
+  it('shows unconfirmed checkouts without allowing them to start or archive', async () => {
+    apiFetch.mockImplementation(async url => reply(url.includes('/worktrees') ? [{ ...tree, available: false, creationStatus: 'unconfirmed' }] : url.includes('/status') ? { branch: 'main', files: [] } : []));
+    render(<WorkspaceGitPanel workspacePath={path} onStartTask={vi.fn()} />);
+    expect(await screen.findByText('Creation unconfirmed · inspect the checkout before retrying')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Start Fix example' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Archive Fix example' })).toBeDisabled();
+  });
+
   it('shows binary and truncation limitations', async () => {
     apiFetch.mockImplementation(async url=>url.includes('/worktrees')||url.includes('/checkpoints')?reply([]):url.includes('/diff')?reply({patch:'',binary:true,truncated:true}):reply({branch:'main',files:[{path:'binary.bin'}]}));
     render(<WorkspaceGitPanel workspacePath={path} />);fireEvent.click(await screen.findByRole('button',{name:/binary.bin/}));
@@ -75,4 +101,20 @@ describe('WorkspaceGitPanel', () => {
     fireEvent.change(screen.getByLabelText('Task name'),{target:{value:'Fix'}});fireEvent.click(screen.getByRole('button',{name:'Create isolated task'}));
     expect(await screen.findByRole('alert')).toHaveTextContent('Base does not exist');
   });
+});
+
+it('ends failed diff loading and allows retrying the selected file', async () => {
+  let failDiff = true;
+  apiFetch.mockImplementation(async url => {
+    if (url.includes('/diff')) return failDiff ? { ok: false, json: async () => ({ error: 'Diff unavailable' }) } : reply({ patch: '+ recovered' });
+    if (url.includes('/worktrees') || url.includes('/checkpoints')) return reply([]);
+    return reply({ branch: 'fixture', files: [{ path: 'fixture.txt', status: 'M' }] });
+  });
+  render(<WorkspaceGitPanel workspacePath={path} />);
+  fireEvent.click(await screen.findByRole('button', { name: /fixture.txt/ }));
+  await screen.findByText('Diff unavailable');
+  expect(screen.queryByText('Loading diff…')).not.toBeInTheDocument();
+  failDiff = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Retry diff' }));
+  expect(await screen.findByText('recovered')).toHaveClass('diff-added');
 });

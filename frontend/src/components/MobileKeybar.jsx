@@ -7,6 +7,7 @@ import {
   shouldPreferImageOverText
 } from '../utils/clipboardImage';
 import { quoteTerminalPath } from '../utils/mobileTerminalInput';
+import './MobileUI.css';
 
 export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   const keybarRef = useRef(null);
@@ -22,7 +23,9 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
       return;
     }
 
+    let disposed = false;
     const updateHeight = () => {
+      if (disposed) return;
       if (!keybarRef.current) {
         onHeightChange(0);
         return;
@@ -41,11 +44,13 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
     }
 
     return () => {
+      disposed = true;
       window.removeEventListener('resize', updateHeight);
       if (viewport) {
         viewport.removeEventListener('resize', updateHeight, { passive: true });
         viewport.removeEventListener('scroll', updateHeight, { passive: true });
       }
+      onHeightChange(0);
     };
   }, [isOpen, onHeightChange]);
 
@@ -133,7 +138,7 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
   };
 
   return (
-    <div ref={keybarRef} className={`mobile-keybar${isOpen ? ' open' : ''}`}>
+    <div ref={keybarRef} className={`mobile-keybar mobile-ui${isOpen ? ' open' : ''}`} role="group" aria-label="Terminal keyboard shortcuts" aria-hidden={!isOpen} inert={!isOpen ? '' : undefined}>
       <div className="mobile-keybar-handle">
         <div className="mobile-keybar-drag-indicator"></div>
       </div>
@@ -144,6 +149,8 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
             className="mobile-key"
             onClick={() => handleButtonPress(keyData)}
             title={keyData.title}
+            aria-label={keyData.title}
+            onPointerDown={event => event.preventDefault()}
             type="button"
           >
             {keyData.label}
@@ -157,6 +164,8 @@ export function MobileKeybar({ sessionId, isOpen, onHeightChange }) {
             className={`mobile-key${keyData.special ? ' mobile-key-special' : ''}`}
             onClick={() => handleButtonPress(keyData)}
             title={keyData.title}
+            aria-label={keyData.title}
+            onPointerDown={event => event.preventDefault()}
             type="button"
           >
             {keyData.label}

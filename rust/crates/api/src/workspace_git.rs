@@ -19,6 +19,11 @@ const PATCH_LIMIT: usize = 200_000;
 const LIST_LIMIT: usize = 2_000_000;
 static MUTATIONS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[cfg(test)]
+pub(crate) async fn lock_mutations_for_test() -> tokio::sync::MutexGuard<'static, ()> {
+    MUTATIONS.lock().await
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ManagedWorktree {
@@ -32,6 +37,23 @@ pub(crate) struct ManagedWorktree {
     pub archived: bool,
     #[serde(default)]
     pub archive_checkpoint_id: Option<Uuid>,
+    #[serde(default)]
+    creation_status: WorktreeCreationStatus,
+}
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum WorktreeCreationStatus {
+    #[default]
+    Ready,
+    Unconfirmed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeCreationIntent {
+    tree: ManagedWorktree,
+    commit: String,
+    workspace: PathBuf,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -59,6 +81,8 @@ struct GitQuery {
     base: String,
     file: Option<String>,
     checkpoint_id: Option<Uuid>,
+    from: Option<String>,
+    to: Option<String>,
 }
 fn unstaged_mode() -> String {
     "unstaged".into()
@@ -73,6 +97,7 @@ struct WorktreeInput {
     name: String,
     #[serde(default = "head_ref")]
     base_ref: String,
+    operation_id: Option<Uuid>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +125,19 @@ pub fn routes() -> Router<AppState> {
             axum::routing::get(status_route),
         )
         .route("/api/workspace/git/diff", axum::routing::get(diff_route))
+        .route(
+            "/api/workspace/git/branches",
+            axum::routing::post(branches_route).get(base_refs_route),
+        )
+        .route(
+            "/api/workspace/git/commit",
+            axum::routing::post(commit_route),
+        )
+        .route("/api/workspace/git/push", axum::routing::post(push_route))
+        .route(
+            "/api/workspace/git/pull-request",
+            axum::routing::post(pull_request_route).get(pull_request_status_route),
+        )
         .route(
             "/api/workspace/git/worktrees",
             axum::routing::get(worktrees_route).post(create_worktree_route),
@@ -320,6 +358,41 @@ fn write_record<T: Serialize>(path: &Path, value: &T) -> Result<(), ApiError> {
         .map_err(|_| ApiError::internal("Unable to save workspace record"))?;
     Ok(())
 }
+fn sync_record(data_dir: &Path, path: &Path) -> Result<(), ApiError> {
+    std::fs::File::open(path)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| ApiError::internal("Unable to synchronize workspace record"))?;
+    #[cfg(unix)]
+    {
+        let mut current = path.parent();
+        while let Some(directory) = current {
+            std::fs::File::open(directory)
+                .and_then(|file| file.sync_all())
+                .map_err(|_| ApiError::internal("Unable to synchronize workspace directory"))?;
+            if directory == data_dir {
+                break;
+            }
+            current = directory.parent();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = data_dir;
+        return Err(ApiError::internal(
+            "Durable worktree creation is unavailable on this platform",
+        ));
+    }
+    #[allow(unreachable_code)]
+    Ok(())
+}
+fn write_durable_record<T: Serialize>(
+    data_dir: &Path,
+    path: &Path,
+    value: &T,
+) -> Result<(), ApiError> {
+    write_record(path, value)?;
+    sync_record(data_dir, path)
+}
 fn record_files(directory: &Path, limit: usize) -> Result<Vec<PathBuf>, ApiError> {
     if !directory.exists() {
         return Ok(vec![]);
@@ -470,6 +543,336 @@ async fn review_status(path: &str, mode: &str, base: &str) -> Result<Value, ApiE
     let branch = git_text(&repo, &["branch", "--show-current"], None).await?;
     Ok(json!({"branch":branch,"files":files,"truncated":truncated}))
 }
+const BRANCH_LOOKUP_LIMIT: usize = 64;
+/// Current branch per workspace path; null for non-repositories, invalid paths and detached HEADs.
+async fn current_branches(paths: &[String]) -> Result<serde_json::Map<String, Value>, ApiError> {
+    if paths.len() > BRANCH_LOOKUP_LIMIT {
+        return Err(ApiError::bad_request("Too many workspace paths"));
+    }
+    let mut branches = serde_json::Map::new();
+    for path in paths {
+        let branch = match repository(path).await {
+            Ok(repo) => git_text(&repo, &["branch", "--show-current"], None)
+                .await
+                .ok()
+                .filter(|branch| !branch.is_empty()),
+            Err(_) => None,
+        };
+        branches.insert(path.clone(), branch.map_or(Value::Null, Value::String));
+    }
+    Ok(branches)
+}
+const BASE_REF_LIMIT: usize = 200;
+async fn base_refs(path: &str) -> Result<Value, ApiError> {
+    let repo = repository(path).await?;
+    let output = git_text(
+        &repo,
+        &[
+            "for-each-ref",
+            "--count=201",
+            "--format=%(refname)%09%(symref)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        None,
+    )
+    .await?;
+    let lines: Vec<_> = output.lines().collect();
+    let truncated = lines.len() > BASE_REF_LIMIT;
+    let branches: Vec<_> = lines
+        .into_iter()
+        .take(BASE_REF_LIMIT)
+        .filter_map(|line| {
+            let (reference, symbolic_target) = line.split_once('\t').unwrap_or((line, ""));
+            (symbolic_target.is_empty() && validate_ref(reference).is_ok()).then_some(reference)
+        })
+        .collect();
+    Ok(json!({ "branches": branches, "truncated": truncated }))
+}
+async fn base_refs_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<GitQuery>,
+) -> Result<
+    (
+        [(axum::http::header::HeaderName, &'static str); 1],
+        Json<Value>,
+    ),
+    ApiError,
+> {
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(base_refs(&query.path).await?),
+    ))
+}
+#[derive(Deserialize)]
+struct BranchesInput {
+    paths: Vec<String>,
+}
+async fn branches_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<BranchesInput>,
+) -> Result<
+    (
+        [(axum::http::header::HeaderName, &'static str); 1],
+        Json<Value>,
+    ),
+    ApiError,
+> {
+    let branches = current_branches(&input.paths).await?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "private, no-store")],
+        Json(json!({ "branches": branches })),
+    ))
+}
+/// Git run for user-initiated history changes: repository hooks stay enabled, prompts are disabled.
+async fn git_user(repo: &Path, args: &[&str]) -> Result<String, ApiError> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        tokio::process::Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("Git operation timed out"))?
+    .map_err(|_| ApiError::internal("Git is unavailable on this host"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::bad_request(format!(
+            "Git operation failed: {}",
+            detail.trim().chars().take(600).collect::<String>()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+async fn current_branch(repo: &Path) -> Result<String, ApiError> {
+    let branch = git_user(repo, &["branch", "--show-current"]).await?;
+    if branch.is_empty() {
+        return Err(ApiError::bad_request(
+            "Check out a branch before committing or pushing",
+        ));
+    }
+    Ok(branch)
+}
+/// Stages every change (including new files) and commits it, returning the new commit and branch.
+async fn commit_all(path: &str, message: &str) -> Result<(String, String), ApiError> {
+    if message.trim().is_empty() || message.len() > 2000 || message.contains('\0') {
+        return Err(ApiError::bad_request(
+            "A commit message of up to 2000 characters is required",
+        ));
+    }
+    let _guard = MUTATIONS.lock().await;
+    let repo = repository(path).await?;
+    let branch = current_branch(&repo).await?;
+    git_user(&repo, &["add", "-A"]).await?;
+    if git_user(&repo, &["diff", "--cached", "--quiet"])
+        .await
+        .is_ok()
+    {
+        return Err(ApiError::bad_request("Nothing to commit"));
+    }
+    git_user(&repo, &["commit", "-m", message.trim()]).await?;
+    Ok((git_user(&repo, &["rev-parse", "HEAD"]).await?, branch))
+}
+/// Pushes the current branch, setting its upstream on the first push.
+async fn push_branch(path: &str) -> Result<String, ApiError> {
+    let _guard = MUTATIONS.lock().await;
+    let repo = repository(path).await?;
+    let branch = current_branch(&repo).await?;
+    if git_user(
+        &repo,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await
+    .is_ok()
+    {
+        git_user(&repo, &["push"]).await?;
+        return Ok(branch);
+    }
+    let remotes = git_user(&repo, &["remote"]).await?;
+    let remote = remotes
+        .lines()
+        .find(|name| *name == "origin")
+        .or_else(|| remotes.lines().next())
+        .ok_or_else(|| ApiError::bad_request("This repository has no remote to push to"))?
+        .to_string();
+    git_user(&repo, &["push", "-u", &remote, &branch]).await?;
+    Ok(branch)
+}
+async fn create_pull_request_with(
+    program: &str,
+    path: &str,
+    title: &str,
+    body: &str,
+) -> Result<String, ApiError> {
+    if title.trim().is_empty() || title.len() > 256 || body.len() > 20_000 {
+        return Err(ApiError::bad_request(
+            "A pull request title of up to 256 characters is required",
+        ));
+    }
+    let repo = repository(path).await?;
+    let branch = current_branch(&repo).await?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(program)
+            .current_dir(&repo)
+            .args([
+                "pr",
+                "create",
+                "--head",
+                &branch,
+                "--title",
+                title.trim(),
+                "--body",
+                body,
+            ])
+            .env("GH_PROMPT_DISABLED", "1")
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("Creating the pull request timed out"))?
+    .map_err(|_| {
+        ApiError::bad_request("Install the GitHub CLI (gh) and sign in to create pull requests")
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(ApiError::bad_request(format!(
+            "GitHub CLI could not create the pull request: {}",
+            detail.trim().chars().take(600).collect::<String>()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("https://"))
+        .unwrap_or("")
+        .to_string())
+}
+/// Summarises `gh pr view --json` output: state, review decision and how the checks went.
+pub(crate) fn summarize_pull_request(view: &Value) -> Value {
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut pending = 0;
+    for check in view["statusCheckRollup"].as_array().into_iter().flatten() {
+        let outcome = check["conclusion"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .or_else(|| check["state"].as_str())
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        match outcome.as_str() {
+            "SUCCESS" | "NEUTRAL" | "SKIPPED" => passed += 1,
+            "FAILURE" | "ERROR" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED"
+            | "STARTUP_FAILURE" => failed += 1,
+            _ => pending += 1,
+        }
+    }
+    json!({
+        "number": view["number"], "url": view["url"], "title": view["title"], "state": view["state"],
+        "review": view["reviewDecision"].as_str().filter(|value| !value.is_empty()),
+        "checks": { "passed": passed, "failed": failed, "pending": pending },
+    })
+}
+
+async fn pull_request_status(path: &str) -> Result<Value, ApiError> {
+    let repo = repository(path).await?;
+    let branch = current_branch(&repo).await?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::process::Command::new("gh")
+            .current_dir(&repo)
+            .args([
+                "pr",
+                "view",
+                &branch,
+                "--json",
+                "number,url,title,state,reviewDecision,statusCheckRollup",
+            ])
+            .env("GH_PROMPT_DISABLED", "1")
+            .stdin(Stdio::null())
+            .output(),
+    )
+    .await
+    .map_err(|_| ApiError::bad_request("GitHub CLI timed out"))?;
+    let Ok(output) = output else {
+        return Ok(
+            json!({ "pullRequest": null, "reason": "Install the GitHub CLI (gh) to see pull request checks" }),
+        );
+    };
+    if !output.status.success() {
+        return Ok(json!({ "pullRequest": null, "reason": "No pull request for this branch yet" }));
+    }
+    let view: Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| ApiError::internal("GitHub CLI returned unexpected output"))?;
+    Ok(json!({ "pullRequest": summarize_pull_request(&view) }))
+}
+
+#[derive(Deserialize)]
+struct PullRequestQuery {
+    path: String,
+}
+
+async fn pull_request_status_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Query(query): Query<PullRequestQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(pull_request_status(&query.path).await?))
+}
+
+#[derive(Deserialize)]
+struct CommitInput {
+    path: String,
+    message: String,
+    #[serde(default)]
+    push: bool,
+}
+async fn commit_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<CommitInput>,
+) -> Result<Json<Value>, ApiError> {
+    let (commit, branch) = commit_all(&input.path, &input.message).await?;
+    let pushed = if input.push {
+        Some(push_branch(&input.path).await?)
+    } else {
+        None
+    };
+    Ok(Json(
+        json!({ "commit": commit, "branch": branch, "pushed": pushed.is_some() }),
+    ))
+}
+#[derive(Deserialize)]
+struct PushInput {
+    path: String,
+}
+async fn push_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<PushInput>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({ "branch": push_branch(&input.path).await?, "pushed": true }),
+    ))
+}
+#[derive(Deserialize)]
+struct PullRequestInput {
+    path: String,
+    title: String,
+    #[serde(default)]
+    body: String,
+}
+async fn pull_request_route(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Json(input): Json<PullRequestInput>,
+) -> Result<Json<Value>, ApiError> {
+    push_branch(&input.path).await?;
+    let url = create_pull_request_with("gh", &input.path, &input.title, &input.body).await?;
+    Ok(Json(json!({ "url": url })))
+}
 async fn file_patch(
     repo: &Path,
     args: &[String],
@@ -536,6 +939,7 @@ async fn review_diff(path: &str, mode: &str, base: &str, file: &str) -> Result<V
     file_patch(&repo, &args, file, entry["status"] == "?").await
 }
 
+#[cfg(test)]
 pub(crate) async fn create_managed_worktree(
     data_dir: &Path,
     user_id: &str,
@@ -543,6 +947,21 @@ pub(crate) async fn create_managed_worktree(
     name: &str,
     base_ref: &str,
 ) -> Result<ManagedWorktree, ApiError> {
+    create_managed_worktree_with_id(data_dir, user_id, path, name, base_ref, Uuid::new_v4()).await
+}
+async fn create_managed_worktree_with_id(
+    data_dir: &Path,
+    user_id: &str,
+    path: &str,
+    name: &str,
+    base_ref: &str,
+    id: Uuid,
+) -> Result<ManagedWorktree, ApiError> {
+    if !cfg!(unix) {
+        return Err(ApiError::internal(
+            "Durable worktree creation is unavailable on this platform",
+        ));
+    }
     let _guard = MUTATIONS.lock().await;
     if name.trim().is_empty()
         || name.chars().count() > 80
@@ -554,15 +973,81 @@ pub(crate) async fn create_managed_worktree(
             "Task name requires letters, digits, spaces, hyphens or underscores",
         ));
     }
+    validate_ref(base_ref)?;
     let repo = repository(path).await?;
-    let commit = resolve_ref(&repo, base_ref).await?;
+    let workspace = std::fs::canonicalize(path)
+        .map_err(|_| ApiError::bad_request("Workspace directory is unavailable"))?;
     let root = storage_root(data_dir, user_id, &repo).await?;
-    if record_files(&root.join("worktrees"), 64)?.len() >= 64 {
+    std::fs::create_dir_all(&root)
+        .map_err(|_| ApiError::internal("Unable to create workspace storage"))?;
+    // Serialization assumes a stable private data directory; older servers do not acquire this lock.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(root.join("worktree-creation.lock"))
+        .map_err(|_| ApiError::internal("Unable to open worktree creation lock"))?;
+    lock.try_lock().map_err(|_| {
+        ApiError::bad_request("Another worktree creation is in progress. Try again shortly.")
+    })?;
+    let operation_file = root.join("worktree-operations").join(format!("{id}.json"));
+    let record_file = root.join("worktrees").join(format!("{id}.json"));
+    if operation_file.exists() {
+        let intent: WorktreeCreationIntent = read_record(&operation_file)?;
+        if intent.tree.id != id
+            || intent.workspace != workspace
+            || intent.tree.name != name.trim()
+            || intent.tree.base_ref != base_ref
+        {
+            return Err(ApiError { status: axum::http::StatusCode::CONFLICT, message: "This worktree request belongs to different inputs. Review the earlier attempt before starting a different worktree.".into() });
+        }
+        if record_file.exists() {
+            let result: ManagedWorktree = read_record(&record_file)?;
+            if result.id != id
+                || result.path != intent.tree.path
+                || result.branch != intent.tree.branch
+                || result.name != intent.tree.name
+                || result.base_ref != intent.tree.base_ref
+                || result.archived
+                || result.creation_status != WorktreeCreationStatus::Ready
+            {
+                return Err(ApiError::internal("Worktree creation record needs review"));
+            }
+            sync_record(data_dir, &record_file)?;
+            let current = list_managed_worktrees(data_dir, user_id, path)
+                .await?
+                .into_iter()
+                .find(|tree| tree.id == id)
+                .ok_or_else(|| ApiError::internal("Worktree creation record needs review"))?;
+            if !current.available || current.creation_status != WorktreeCreationStatus::Ready {
+                return Err(ApiError::bad_request("The earlier worktree checkout is unavailable. Review it in Git & worktrees before continuing."));
+            }
+            return Ok(current);
+        }
+        return Err(ApiError { status: axum::http::StatusCode::CONFLICT, message: format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", intent.tree.path) });
+    }
+    if record_file.exists() {
+        return Err(ApiError::bad_request(
+            "Worktree request identity already exists",
+        ));
+    }
+    let records = record_files(&root.join("worktrees"), 64)?;
+    let operations = record_files(&root.join("worktree-operations"), 64)?;
+    let pending = operations
+        .iter()
+        .filter(|file| {
+            !root
+                .join("worktrees")
+                .join(file.file_name().unwrap_or_default())
+                .exists()
+        })
+        .count();
+    if records.len() + pending >= 64 {
         return Err(ApiError::bad_request("Managed worktree limit reached"));
     }
+    let commit = resolve_ref(&repo, base_ref).await?;
     std::fs::create_dir_all(root.join("checkouts"))
         .map_err(|_| ApiError::internal("Unable to create checkout storage"))?;
-    let id = Uuid::new_v4();
     let slug: String = name
         .to_lowercase()
         .chars()
@@ -579,36 +1064,60 @@ pub(crate) async fn create_managed_worktree(
         .strip_prefix(r"\\?\")
         .unwrap_or(&target_text)
         .to_string();
-    git_text(
+    let mut result = ManagedWorktree {
+        id,
+        name: name.trim().into(),
+        path: target_text,
+        branch,
+        base_ref: base_ref.into(),
+        available: false,
+        archived: false,
+        archive_checkpoint_id: None,
+        creation_status: WorktreeCreationStatus::Unconfirmed,
+    };
+    let intent = WorktreeCreationIntent {
+        tree: result.clone(),
+        commit: commit.clone(),
+        workspace,
+    };
+    write_durable_record(data_dir, &operation_file, &intent)?;
+    if git_text(
         &repo,
         &[
             "worktree",
             "add",
             "--no-track",
             "-b",
-            &branch,
-            &target_text,
+            &result.branch,
+            &result.path,
             &commit,
         ],
         None,
     )
-    .await?;
-    let result = ManagedWorktree {
-        id,
-        name: name.trim().into(),
-        path: target_text,
-        branch,
-        base_ref: base_ref.into(),
-        available: true,
-        archived: false,
-        archive_checkpoint_id: None,
-    };
-    write_record(&root.join("worktrees").join(format!("{id}.json")), &result).map_err(|_| {
-        ApiError::internal(format!(
-            "Checkout created at {} but its task record could not be saved",
-            result.path
-        ))
-    })?;
+    .await
+    .is_err()
+    {
+        return Err(ApiError::internal(format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", result.path)));
+    }
+    #[cfg(test)]
+    if std::env::var("V4_TEST_WORKTREE_CRASH_AFTER_GIT")
+        .ok()
+        .as_deref()
+        == Some(&id.to_string())
+    {
+        std::process::exit(89);
+    }
+    #[cfg(test)]
+    if std::env::var("V4_TEST_WORKTREE_BLOCK_RECORD")
+        .ok()
+        .as_deref()
+        == Some(&id.to_string())
+    {
+        std::fs::write(root.join("worktrees"), b"blocked").unwrap();
+    }
+    result.available = true;
+    result.creation_status = WorktreeCreationStatus::Ready;
+    write_durable_record(data_dir, &record_file, &result).map_err(|_| ApiError::internal(format!("Worktree creation is unconfirmed. Check Git & worktrees and inspect {} before trying a new request.", result.path)))?;
     Ok(result)
 }
 async fn list_managed_worktrees(
@@ -622,6 +1131,29 @@ async fn list_managed_worktrees(
     let mut trees = Vec::new();
     for file in record_files(&root.join("worktrees"), 64)? {
         let mut tree: ManagedWorktree = read_record(&file)?;
+        if tree.creation_status != WorktreeCreationStatus::Ready {
+            tree.available = false;
+            trees.push(tree);
+            continue;
+        }
+        let operation_file = root
+            .join("worktree-operations")
+            .join(format!("{}.json", tree.id));
+        if operation_file.exists() {
+            let intent: WorktreeCreationIntent = read_record(&operation_file)?;
+            if intent.tree.id != tree.id
+                || intent.tree.path != tree.path
+                || intent.tree.branch != tree.branch
+                || intent.tree.name != tree.name
+                || intent.tree.base_ref != tree.base_ref
+                || sync_record(data_dir, &file).is_err()
+            {
+                tree.available = false;
+                tree.creation_status = WorktreeCreationStatus::Unconfirmed;
+                trees.push(tree);
+                continue;
+            }
+        }
         tree.available = match (&expected, std::fs::canonicalize(&tree.path)) {
             (Some(parent), Ok(target))
                 if target.parent() == Some(parent.as_path())
@@ -637,6 +1169,15 @@ async fn list_managed_worktrees(
             _ => false,
         };
         trees.push(tree);
+    }
+    for file in record_files(&root.join("worktree-operations"), 64)? {
+        let intent: WorktreeCreationIntent = read_record(&file)?;
+        if !trees.iter().any(|tree| tree.id == intent.tree.id) {
+            let mut tree = intent.tree;
+            tree.available = false;
+            tree.creation_status = WorktreeCreationStatus::Unconfirmed;
+            trees.push(tree);
+        }
     }
     trees.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(trees)
@@ -883,6 +1424,34 @@ pub(crate) async fn capture_checkpoint(
     let repo = repository(workspace_path).await?;
     capture_inner(data_dir, user_id, &repo, label).await
 }
+pub(crate) async fn capture_checkpoint_before_shutdown(
+    data_dir: &Path,
+    user_id: &str,
+    workspace_path: &str,
+    label: &str,
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+) -> Option<Result<WorkspaceCheckpoint, ApiError>> {
+    let guard = tokio::select! {
+        biased;
+        _ = async {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+        } => return None,
+        guard = MUTATIONS.lock() => guard,
+    };
+    if *shutdown.borrow() {
+        return None;
+    }
+    let result = match repository(workspace_path).await {
+        Ok(repo) => capture_inner(data_dir, user_id, &repo, label).await,
+        Err(error) => Err(error),
+    };
+    drop(guard);
+    Some(result)
+}
 pub(crate) async fn restore_checkpoint(
     data_dir: &Path,
     user_id: &str,
@@ -993,6 +1562,58 @@ pub(crate) async fn restore_checkpoint(
     })?;
     Ok(())
 }
+/// The full working tree (tracked and new non-ignored files) as a Git tree, without touching the user's index.
+pub(crate) async fn working_tree(path: &str) -> Result<(PathBuf, String), ApiError> {
+    let repo = repository(path).await?;
+    let tree = snapshot(&repo).await?.tree;
+    Ok((repo, tree))
+}
+fn tree_id(value: Option<&str>) -> Result<&str, ApiError> {
+    value
+        .filter(|id| {
+            matches!(id.len(), 40 | 64)
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+        .ok_or_else(|| ApiError::bad_request("Turn snapshot trees are required"))
+}
+fn tree_review_args(from: &str, to: &str) -> Vec<String> {
+    [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        from,
+        to,
+    ]
+    .map(String::from)
+    .to_vec()
+}
+/// Files changed between two working-tree snapshots, as reported by the status route.
+pub(crate) async fn tree_changed_files(
+    repo: &Path,
+    from: &str,
+    to: &str,
+) -> Result<(Vec<Value>, bool), ApiError> {
+    changed_files(repo, &tree_review_args(from, to), false).await
+}
+async fn turn_review_args(
+    path: &str,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(PathBuf, Vec<String>), ApiError> {
+    let (from, to) = (tree_id(from)?, tree_id(to)?);
+    let repo = repository(path).await?;
+    for tree in [from, to] {
+        if git_text(&repo, &["cat-file", "-t", tree], None).await? != "tree" {
+            return Err(ApiError::bad_request(
+                "Turn snapshot is no longer available",
+            ));
+        }
+    }
+    Ok((repo, tree_review_args(from, to)))
+}
 async fn checkpoint_review_args(
     data_dir: &Path,
     user_id: &str,
@@ -1029,7 +1650,12 @@ async fn status_route(
     ),
     ApiError,
 > {
-    let mut value = if query.mode == "checkpoint" {
+    let mut value = if query.mode == "turn" {
+        let (repo, args) =
+            turn_review_args(&query.path, query.from.as_deref(), query.to.as_deref()).await?;
+        let (files, truncated) = changed_files(&repo, &args, false).await?;
+        json!({"branch":git_text(&repo,&["branch","--show-current"],None).await?,"files":files,"truncated":truncated})
+    } else if query.mode == "checkpoint" {
         let id = query
             .checkpoint_id
             .ok_or_else(|| ApiError::bad_request("Checkpoint ID is required"))?;
@@ -1062,7 +1688,18 @@ async fn diff_route(
     let file = query
         .file
         .ok_or_else(|| ApiError::bad_request("Changed file is required"))?;
-    let value = if query.mode == "checkpoint" {
+    let value = if query.mode == "turn" {
+        let (repo, args) =
+            turn_review_args(&query.path, query.from.as_deref(), query.to.as_deref()).await?;
+        let (files, _) = changed_files(&repo, &args, false).await?;
+        if !files
+            .iter()
+            .any(|entry| entry["path"].as_str() == Some(&file))
+        {
+            return Err(ApiError::bad_request("File is not changed in this turn"));
+        }
+        file_patch(&repo, &args, &file, false).await?
+    } else if query.mode == "checkpoint" {
         let id = query
             .checkpoint_id
             .ok_or_else(|| ApiError::bad_request("Checkpoint ID is required"))?;
@@ -1104,12 +1741,13 @@ async fn create_worktree_route(
     let _activity =
         crate::workspace_activity::enter(Path::new(&input.path)).map_err(ApiError::bad_request)?;
     Ok(Json(
-        create_managed_worktree(
+        create_managed_worktree_with_id(
             &state.config().data_dir,
             &user.user_id,
             &input.path,
             &input.name,
             &input.base_ref,
+            input.operation_id.unwrap_or_else(Uuid::new_v4),
         )
         .await?,
     ))
@@ -1200,6 +1838,34 @@ async fn restore_route(
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    #[tokio::test]
+    async fn checkpoint_waiting_for_mutation_lock_stops_on_shutdown() {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let lock = MUTATIONS.lock().await;
+        let (stop, mut shutdown) = tokio::sync::watch::channel(false);
+        let data_path = data.path().to_owned();
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let mut capture = tokio::spawn(async move {
+            capture_checkpoint_before_shutdown(
+                &data_path,
+                "owner",
+                &workspace_path,
+                "Before task",
+                &mut shutdown,
+            )
+            .await
+        });
+        stop.send(true).unwrap();
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(300), &mut capture).await;
+        drop(lock);
+        if result.is_err() {
+            let _ = capture.await;
+        }
+        assert!(matches!(result, Ok(Ok(None))));
+        assert!(!data.path().join("workspace-git").exists());
+    }
     pub(super) fn git(dir: &Path, args: &[&str]) -> String {
         let output = std::process::Command::new("git")
             .current_dir(dir)
@@ -1226,6 +1892,181 @@ mod integration_tests {
         git(dir.path(), &["add", "note.txt"]);
         git(dir.path(), &["commit", "-m", "initial"]);
         dir
+    }
+    #[tokio::test]
+    async fn working_tree_snapshots_report_what_changed_between_them() {
+        let folder = repository();
+        let path = folder.path().to_str().unwrap();
+        let (repo, before) = working_tree(path).await.unwrap();
+        std::fs::write(folder.path().join("note.txt"), "initial\nmore\n").unwrap();
+        std::fs::write(folder.path().join("new.txt"), "fresh\n").unwrap();
+        let (_, after) = working_tree(path).await.unwrap();
+        let (files, _) = tree_changed_files(&repo, &before, &after).await.unwrap();
+        let summary: Vec<_> = files
+            .iter()
+            .map(|file| {
+                (
+                    file["path"].as_str().unwrap(),
+                    file["status"].as_str().unwrap(),
+                    file["added"].as_u64(),
+                    file["removed"].as_u64(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("new.txt", "A", Some(1), Some(0)),
+                ("note.txt", "M", Some(1), Some(0))
+            ]
+        );
+        assert_eq!(
+            git(folder.path(), &["status", "--porcelain"])
+                .lines()
+                .count(),
+            2,
+            "the user's index is untouched"
+        );
+    }
+
+    #[test]
+    fn pull_request_summary_counts_checks_and_review() {
+        let view = json!({"number": 7, "url": "https://github.com/acme/app/pull/7", "title": "Fix", "state": "OPEN", "reviewDecision": "APPROVED",
+            "statusCheckRollup": [{"conclusion": "SUCCESS"}, {"conclusion": "FAILURE"}, {"conclusion": "", "state": "PENDING"}, {"state": "SUCCESS"}]});
+        assert_eq!(
+            summarize_pull_request(&view),
+            json!({"number": 7, "url": "https://github.com/acme/app/pull/7", "title": "Fix", "state": "OPEN", "review": "APPROVED",
+                "checks": {"passed": 2, "failed": 1, "pending": 1}})
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_all_records_every_change_and_refuses_an_empty_commit() {
+        let repo = repository();
+        std::fs::write(repo.path().join("note.txt"), "changed\n").unwrap();
+        std::fs::write(repo.path().join("new.txt"), "new\n").unwrap();
+        let path = repo.path().to_str().unwrap();
+        let (sha, branch) = commit_all(path, "Update notes").await.unwrap();
+        let empty = commit_all(path, "Nothing").await;
+        assert_eq!(
+            (
+                git(repo.path(), &["log", "-1", "--format=%H %s"]),
+                branch,
+                git(repo.path(), &["status", "--porcelain"]),
+                empty.unwrap_err().message,
+            ),
+            (
+                format!("{sha} Update notes"),
+                "main".to_string(),
+                String::new(),
+                "Nothing to commit".to_string()
+            )
+        );
+    }
+    #[tokio::test]
+    async fn push_branch_publishes_to_the_remote_and_requires_one() {
+        let repo = repository();
+        let lonely = push_branch(repo.path().to_str().unwrap()).await;
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare", "-b", "main"]);
+        git(
+            repo.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        let pushed = push_branch(repo.path().to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            (
+                lonely.unwrap_err().message,
+                pushed,
+                git(remote.path(), &["rev-parse", "main"])
+                    == git(repo.path(), &["rev-parse", "HEAD"])
+            ),
+            (
+                "This repository has no remote to push to".to_string(),
+                "main".to_string(),
+                true
+            )
+        );
+    }
+    #[tokio::test]
+    async fn pull_request_explains_when_the_github_cli_is_missing() {
+        let repo = repository();
+        let result = create_pull_request_with(
+            "gh-not-installed-for-test",
+            repo.path().to_str().unwrap(),
+            "Title",
+            "Body",
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().message,
+            "Install the GitHub CLI (gh) and sign in to create pull requests"
+        );
+    }
+    #[tokio::test]
+    async fn current_branches_reports_each_workspace_and_skips_non_repositories() {
+        let repo = repository();
+        git(repo.path(), &["checkout", "-b", "feature/sidebar"]);
+        let plain = tempfile::tempdir().unwrap();
+        let paths = vec![
+            repo.path().to_str().unwrap().to_string(),
+            plain.path().to_str().unwrap().to_string(),
+            "relative/path".to_string(),
+        ];
+        let branches = current_branches(&paths).await.unwrap();
+        assert_eq!(
+            Value::Object(branches),
+            json!({
+                paths[0].clone(): "feature/sidebar",
+                paths[1].clone(): null,
+                paths[2].clone(): null,
+            })
+        );
+    }
+    #[tokio::test]
+    async fn base_refs_lists_bounded_local_and_remote_branches() {
+        let repo = repository();
+        git(repo.path(), &["branch", "feature/review"]);
+        git(
+            repo.path(),
+            &["update-ref", "refs/remotes/origin/stable", "HEAD"],
+        );
+        git(
+            repo.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/stable",
+            ],
+        );
+        let result = base_refs(repo.path().to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            result,
+            json!({"branches": ["refs/heads/feature/review", "refs/heads/main", "refs/remotes/origin/stable"], "truncated": false})
+        );
+        assert!(base_refs("relative/path").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn base_refs_reports_when_list_is_capped() {
+        let repo = repository();
+        for i in 0..205 {
+            git(repo.path(), &["branch", &format!("test/{i:03}")]);
+        }
+        let result = base_refs(repo.path().to_str().unwrap()).await.unwrap();
+        assert_eq!(
+            (
+                result["branches"].as_array().unwrap().len(),
+                result["truncated"].as_bool()
+            ),
+            (200, Some(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn current_branches_rejects_oversized_requests() {
+        let paths = vec!["/tmp".to_string(); 65];
+        assert!(current_branches(&paths).await.is_err());
     }
     #[tokio::test]
     async fn review_separates_staged_unstaged_and_branch_changes_and_binary_files() {
@@ -1301,6 +2142,391 @@ mod integration_tests {
                 .await
                 .is_err()
         );
+    }
+    #[tokio::test]
+    async fn worktree_creation_retry_returns_same_checkout_and_rejects_changed_input() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let operation = Uuid::new_v4();
+        let first = create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Review task",
+            "HEAD",
+            operation,
+        )
+        .await
+        .unwrap();
+        let again = create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Review task",
+            "HEAD",
+            operation,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first, again);
+        assert!(create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Other task",
+            "HEAD",
+            operation
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            list_managed_worktrees(data.path(), "owner", path)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(list_managed_worktrees(data.path(), "other", path)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn unconfirmed_final_record_never_becomes_available() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let id = Uuid::new_v4();
+        let mut tree =
+            create_managed_worktree_with_id(data.path(), "owner", path, "Unconfirmed", "HEAD", id)
+                .await
+                .unwrap();
+        tree.creation_status = WorktreeCreationStatus::Unconfirmed;
+        let root = storage_root(data.path(), "owner", repo.path())
+            .await
+            .unwrap();
+        write_record(&root.join("worktrees").join(format!("{id}.json")), &tree).unwrap();
+        let listed = list_managed_worktrees(data.path(), "owner", path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (listed[0].creation_status, listed[0].available),
+            (WorktreeCreationStatus::Unconfirmed, false)
+        );
+    }
+
+    #[tokio::test]
+    async fn same_operation_cannot_be_reused_from_another_checkout() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let id = Uuid::new_v4();
+        let first =
+            create_managed_worktree_with_id(data.path(), "owner", path, "Same name", "HEAD", id)
+                .await
+                .unwrap();
+        assert!(create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            &first.path,
+            "Same name",
+            "HEAD",
+            id
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn retry_does_not_report_a_removed_checkout_as_available() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let id = Uuid::new_v4();
+        let tree =
+            create_managed_worktree_with_id(data.path(), "owner", path, "Removed", "HEAD", id)
+                .await
+                .unwrap();
+        git(repo.path(), &["worktree", "remove", &tree.path]);
+        assert!(
+            create_managed_worktree_with_id(data.path(), "owner", path, "Removed", "HEAD", id)
+                .await
+                .is_err()
+        );
+        assert!(
+            !list_managed_worktrees(data.path(), "owner", path)
+                .await
+                .unwrap()[0]
+                .available
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_creation_stays_visible_and_cannot_be_replayed() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let path = repo.path().to_str().unwrap();
+        let operation = Uuid::new_v4();
+        let root = storage_root(data.path(), "owner", repo.path())
+            .await
+            .unwrap();
+        std::fs::create_dir_all(root.join("checkouts")).unwrap();
+        let target = std::fs::canonicalize(root.join("checkouts"))
+            .unwrap()
+            .join(operation.to_string());
+        let branch = format!("codex/interrupted-{}", operation.simple());
+        let tree = ManagedWorktree {
+            id: operation,
+            name: "Interrupted".into(),
+            path: target.to_string_lossy().into(),
+            branch: branch.clone(),
+            base_ref: "HEAD".into(),
+            available: false,
+            archived: false,
+            archive_checkpoint_id: None,
+            creation_status: WorktreeCreationStatus::Unconfirmed,
+        };
+        let intent = WorktreeCreationIntent {
+            tree,
+            commit: git(repo.path(), &["rev-parse", "HEAD"]),
+            workspace: std::fs::canonicalize(path).unwrap(),
+        };
+        write_durable_record(
+            data.path(),
+            &root
+                .join("worktree-operations")
+                .join(format!("{operation}.json")),
+            &intent,
+        )
+        .unwrap();
+        git(
+            repo.path(),
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                target.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        let before = git(repo.path(), &["worktree", "list", "--porcelain"]);
+        assert!(create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Interrupted",
+            "HEAD",
+            operation
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            git(repo.path(), &["worktree", "list", "--porcelain"]),
+            before
+        );
+        let listed = list_managed_worktrees(data.path(), "owner", path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (listed.len(), listed[0].available, listed[0].creation_status),
+            (1, false, WorktreeCreationStatus::Unconfirmed)
+        );
+        assert!(list_managed_worktrees(data.path(), "other", path)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(target.join("note.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn worktree_creation_crash_fixture() {
+        let Some(id) = std::env::var("V4_TEST_WORKTREE_CRASH_AFTER_GIT").ok() else {
+            return;
+        };
+        let data = std::env::var("V4_TEST_WORKTREE_DATA").unwrap();
+        let repo = std::env::var("V4_TEST_WORKTREE_REPO").unwrap();
+        let _ = create_managed_worktree_with_id(
+            Path::new(&data),
+            "owner",
+            &repo,
+            "Crash test",
+            "HEAD",
+            Uuid::parse_str(&id).unwrap(),
+        )
+        .await;
+        panic!("worktree fixture did not crash after Git returned");
+    }
+
+    #[tokio::test]
+    async fn worktree_process_crash_keeps_checkout_unconfirmed_across_restart() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace_git::integration_tests::worktree_creation_crash_fixture",
+                "--nocapture",
+            ])
+            .env("V4_TEST_WORKTREE_CRASH_AFTER_GIT", id.to_string())
+            .env("V4_TEST_WORKTREE_DATA", data.path())
+            .env("V4_TEST_WORKTREE_REPO", repo.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            result.status.code(),
+            Some(89),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let path = repo.path().to_str().unwrap();
+        let trees = list_managed_worktrees(data.path(), "owner", path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                trees.len(),
+                trees[0].id,
+                trees[0].creation_status,
+                trees[0].available
+            ),
+            (1, id, WorktreeCreationStatus::Unconfirmed, false)
+        );
+        assert!(Path::new(&trees[0].path).join("note.txt").exists());
+        let before = git(repo.path(), &["worktree", "list", "--porcelain"]);
+        assert!(create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Crash test",
+            "HEAD",
+            id
+        )
+        .await
+        .is_err());
+        assert_eq!(
+            git(repo.path(), &["worktree", "list", "--porcelain"]),
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_creation_record_failure_stays_unconfirmed() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace_git::integration_tests::worktree_creation_record_failure_fixture",
+                "--nocapture",
+            ])
+            .env("V4_TEST_WORKTREE_BLOCK_RECORD", id.to_string())
+            .env("V4_TEST_WORKTREE_DATA", data.path())
+            .env("V4_TEST_WORKTREE_REPO", repo.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let path = repo.path().to_str().unwrap();
+        let root = storage_root(data.path(), "owner", repo.path())
+            .await
+            .unwrap();
+        std::fs::remove_file(root.join("worktrees")).unwrap();
+        let trees = list_managed_worktrees(data.path(), "owner", path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                trees.len(),
+                trees[0].id,
+                trees[0].creation_status,
+                trees[0].available
+            ),
+            (1, id, WorktreeCreationStatus::Unconfirmed, false)
+        );
+        assert!(Path::new(&trees[0].path).join("note.txt").exists());
+        assert!(create_managed_worktree_with_id(
+            data.path(),
+            "owner",
+            path,
+            "Failure test",
+            "HEAD",
+            id
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn worktree_creation_record_failure_fixture() {
+        let Some(id) = std::env::var("V4_TEST_WORKTREE_BLOCK_RECORD").ok() else {
+            return;
+        };
+        let data = std::env::var("V4_TEST_WORKTREE_DATA").unwrap();
+        let repo = std::env::var("V4_TEST_WORKTREE_REPO").unwrap();
+        let result = create_managed_worktree_with_id(
+            Path::new(&data),
+            "owner",
+            &repo,
+            "Failure test",
+            "HEAD",
+            Uuid::parse_str(&id).unwrap(),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_worktree_uses_the_requested_base_branch() {
+        let repo = repository();
+        let data = tempfile::tempdir().unwrap();
+        git(repo.path(), &["branch", "release/stable"]);
+        std::fs::write(repo.path().join("note.txt"), "newer main\n").unwrap();
+        git(repo.path(), &["add", "note.txt"]);
+        git(repo.path(), &["commit", "-m", "newer main"]);
+        let tree = create_managed_worktree(
+            data.path(),
+            "owner",
+            repo.path().to_str().unwrap(),
+            "Release review",
+            "release/stable",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&tree.path).join("note.txt")).unwrap(),
+            "initial\n"
+        );
+        assert_eq!(tree.base_ref, "release/stable");
+        git(
+            repo.path(),
+            &[
+                "update-ref",
+                "refs/remotes/origin/release",
+                "refs/heads/release/stable",
+            ],
+        );
+        let remote_tree = create_managed_worktree(
+            data.path(),
+            "owner",
+            repo.path().to_str().unwrap(),
+            "Remote review",
+            "refs/remotes/origin/release",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&remote_tree.path).join("note.txt")).unwrap(),
+            "initial\n"
+        );
+        assert_eq!(remote_tree.base_ref, "refs/remotes/origin/release");
     }
     #[tokio::test]
     async fn checkpoints_restore_isolated_files_and_reject_user_drift_and_shared_roots() {
@@ -1405,7 +2631,55 @@ mod route_tests {
             ),
             (StatusCode::OK, "private, no-store")
         );
-        let body = json!({"path":path,"name":"API task","baseRef":"HEAD"});
+        let branches_uri = format!("/api/workspace/git/branches?path={query}");
+        assert_eq!(
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&branches_uri)
+                        .body(Body::empty())
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let branches_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(branches_uri)
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                branches_response.status(),
+                branches_response.headers()["cache-control"]
+                    .to_str()
+                    .unwrap()
+            ),
+            (StatusCode::OK, "private, no-store")
+        );
+        let branches: Value = serde_json::from_slice(
+            &branches_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            branches,
+            json!({"branches": ["refs/heads/main"], "truncated": false})
+        );
+        let body =
+            json!({"path":path,"name":"API task","baseRef":"HEAD","operationId":Uuid::new_v4()});
         let created = app
             .clone()
             .oneshot(
@@ -1424,6 +2698,40 @@ mod route_tests {
             serde_json::from_slice(&created.into_body().collect().await.unwrap().to_bytes())
                 .unwrap();
         assert!(Path::new(&tree.path).join("note.txt").is_file());
+        let replay = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workspace/git/worktrees")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        let repeated: ManagedWorktree =
+            serde_json::from_slice(&replay.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(repeated, tree);
+        let mut changed = body.clone();
+        changed["name"] = json!("Different task");
+        let conflict = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/workspace/git/worktrees")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(changed.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
         let other = crate::auth::issue_access_token("git-route-secret", "another", "another");
         let response = app
             .oneshot(

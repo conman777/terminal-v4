@@ -4,17 +4,18 @@
   "version": "0.1.0",
   "identifier": "com.conor.terminalv4",
   "build": {
-    "frontendDist": "../../frontend/dist",
-    "devUrl": "http://127.0.0.1:3020",
-    "beforeBuildCommand": "cargo build --release -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
-    "beforeDevCommand": "cargo build -p terminal-v4-api --manifest-path ../../rust/Cargo.toml"
+    "frontendDist": "../../../frontend/dist",
+    "devUrl": "http://localhost:3030",
+    "beforeBuildCommand": "node ../../scripts/prepare-browser-runtime.cjs && cargo build --release -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
+    "beforeDevCommand": "node ../../scripts/prepare-browser-runtime.cjs && cargo build -p terminal-v4-api --manifest-path ../../rust/Cargo.toml",
+    "beforeBundleCommand": "node ../../scripts/prepare-browser-runtime.cjs"
   },
   "app": {
     "windows": [
       {
         "label": "main",
         "title": "V4",
-        "url": "http://127.0.0.1:3020",
+        "url": "http://localhost:3030",
         "width": 1400,
         "height": 900,
         "minWidth": 1024,
@@ -27,6 +28,12 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "resources": {
+      "../../../frontend/dist/": "frontend/dist/",
+      "../../../scripts/provider-rewind-claude.mjs": "scripts/provider-rewind-claude.mjs",
+      "../../../node_modules/": "node_modules/",
+      "../../../.runtime/browser/": "browser-runtime/"
+    }
   }
 }

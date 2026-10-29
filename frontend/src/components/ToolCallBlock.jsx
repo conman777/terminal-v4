@@ -1,35 +1,7 @@
-import { useState, useEffect, useMemo, memo } from 'react';
+import { useState, useEffect, useMemo, useId, memo } from 'react';
 import { LightweightMarkdown } from './LightweightMarkdown';
-
-// Tool icons (emoji-based for simplicity, could use SVG icons)
-const TOOL_ICONS = {
-  bash: '⚡',
-  read: '📄',
-  write: '✏️',
-  edit: '✏️',
-  glob: '🔍',
-  grep: '🔍',
-  task: '🤖',
-  todowrite: '📋',
-  webfetch: '🌐',
-  websearch: '🔎',
-  default: '⚙️'
-};
-
-// Tool type to color mapping (canonical tokens)
-const TOOL_COLORS = {
-  bash: 'var(--success)',
-  read: 'var(--accent-info)',
-  write: 'var(--accent-primary)',
-  edit: 'var(--accent-primary)',
-  glob: 'var(--accent-secondary)',
-  grep: 'var(--accent-secondary)',
-  task: 'var(--accent-primary-light)',
-  todowrite: 'var(--warning)',
-  webfetch: 'var(--accent-info)',
-  websearch: 'var(--accent-info)',
-  default: 'var(--text-muted)'
-};
+import { getBrowserToolDisplayInfo } from '../utils/browserToolPresentation';
+import './ToolCallBlock.css';
 
 // Regex to match file:line patterns
 const FILE_LINE_REGEX = /([\/\w\-\.]+\.[a-zA-Z0-9]+):(\d+)/g;
@@ -42,7 +14,7 @@ const FileLink = memo(function FileLink({ path, line, onClick }) {
   };
 
   return (
-    <button className="file-link" onClick={handleClick} title={`${path} at line ${line}`}>
+    <button type="button" className="file-link" onClick={handleClick} title={`${path} at line ${line}`}>
       {path}:{line}
     </button>
   );
@@ -81,28 +53,34 @@ function parseFileLinks(text, onClick) {
 }
 
 // Copy button component
-const CopyButton = memo(function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
+const CopyButton = memo(function CopyButton({ text, label = 'Copy code' }) {
+  const [feedback, setFeedback] = useState(null);
+  const state = feedback?.text === text ? feedback.state : 'idle';
 
   useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 2000);
+    if (state !== 'copied') return;
+    const timer = setTimeout(() => setFeedback(null), 2000);
     return () => clearTimeout(timer);
-  }, [copied]);
+  }, [state]);
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(true);
-    } catch (err) {
-      console.error('Failed to copy:', err);
+      setFeedback({ text, state: 'copied' });
+    } catch {
+      setFeedback({ text, state: 'failed' });
     }
   };
 
   return (
-    <button className="copy-btn" onClick={handleCopy} title="Copy to clipboard">
-      {copied ? '✓' : '⧉'}
-    </button>
+    <span className="cc-copy-action">
+      <button type="button" className="copy-btn cc-copy-button" onClick={handleCopy} aria-label={label}>
+        {state === 'copied' ? 'Copied' : 'Copy'}
+      </button>
+      <span className={state === 'failed' ? 'cc-copy-error' : 'cc-copy-feedback'} role="status">
+        {state === 'failed' ? 'Could not copy. Try again.' : state === 'copied' ? 'Copied to clipboard' : ''}
+      </span>
+    </span>
   );
 });
 
@@ -113,31 +91,85 @@ function TodoWidget({ todos }) {
   }
 
   return (
-    <div className="todo-widget">
+    <ul className="todo-widget cc-todo-list">
       {todos.map((todo, index) => (
-        <div key={index} className={`todo-item ${todo.status}`}>
-          <span className={`todo-checkbox ${todo.status}`}>
+        <li key={index} className={`todo-item ${todo.status}`}>
+          <span className={`todo-checkbox ${todo.status}`} aria-hidden="true">
             {todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '◐' : '○'}
           </span>
           <span className="todo-content">{todo.content}</span>
-        </div>
+          <span className="cc-todo-status">{todo.status === 'completed' ? 'Completed' : todo.status === 'in_progress' ? 'In progress' : 'Pending'}</span>
+        </li>
       ))}
-    </div>
+    </ul>
   );
+}
+
+export function sessionTodoResult(output) {
+  try {
+    const value = JSON.parse(output);
+    if (!Array.isArray(value?.todos) || !value.todos.every(todo => typeof todo?.id === 'string' && typeof todo?.content === 'string' && typeof todo?.status === 'string')) return null;
+    if (new Set(value.todos.map(todo => todo.id)).size !== value.todos.length) return null;
+    return value.todos;
+  } catch { return null; }
+}
+
+function parallelDelegationResults(output) {
+  try {
+    const results = JSON.parse(output)?.results;
+    if (!Array.isArray(results) || results.length < 1 || results.length > 4 || !results.every(item =>
+      (item?.status === 'completed' && typeof item.result === 'string') ||
+      (item?.status === 'failed' && typeof item.error === 'string'))) return null;
+    return results;
+  } catch { return null; }
+}
+
+function backgroundDelegationStart(output) {
+  try {
+    const result = JSON.parse(output);
+    return result?.status === 'running' && typeof result.delivery === 'string' ? result : null;
+  } catch { return null; }
+}
+
+function SessionTodoWidget({ todos }) {
+  if (!todos.length) return <div className="cc-session-todo-empty">No tasks yet</div>;
+  const byId = new Map(todos.map(todo => [todo.id, todo]));
+  const children = new Map();
+  for (const todo of todos) {
+    let parent = typeof todo.parent === 'string' && byId.has(todo.parent) ? todo.parent : null;
+    const visited = new Set([todo.id]);
+    for (let cursor = parent; cursor; cursor = byId.get(cursor)?.parent) {
+      if (visited.has(cursor)) { parent = null; break; }
+      visited.add(cursor);
+    }
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(todo);
+  }
+  const statuses = { pending: ['○', 'Pending'], in_progress: ['◐', 'In progress'], completed: ['✓', 'Completed'], cancelled: ['–', 'Cancelled'] };
+  const renderList = (items, root = false) => <ul className="cc-session-todos" aria-label={root ? 'Session tasks' : undefined}>
+    {items.map(todo => {
+      const [icon, label] = Object.hasOwn(statuses, todo.status) ? statuses[todo.status] : ['○', 'Unknown'];
+      return <li key={todo.id}>
+        <div className="cc-session-todo-row"><span aria-hidden="true">{icon}</span><span className="cc-session-todo-content">{todo.content}</span><span className="cc-session-todo-status">{label}</span></div>
+        {children.has(todo.id) && renderList(children.get(todo.id))}
+      </li>;
+    })}
+  </ul>;
+  return renderList(children.get(null) || [], true);
 }
 
 // Diff view component for Edit tool
 function DiffView({ oldString, newString, filePath }) {
   const diffLines = useMemo(() => {
-    if (!oldString || !newString) return null;
+    if (typeof oldString !== 'string' || typeof newString !== 'string') return null;
 
     if (oldString === newString) return [];
 
     return [
       `--- ${filePath}`,
       `+++ ${filePath}`,
-      ...oldString.split('\n').map((line) => `-${line}`),
-      ...newString.split('\n').map((line) => `+${line}`)
+      ...(oldString ? oldString.split('\n').map((line) => `-${line}`) : []),
+      ...(newString ? newString.split('\n').map((line) => `+${line}`) : [])
     ];
   }, [oldString, newString, filePath]);
 
@@ -148,7 +180,7 @@ function DiffView({ oldString, newString, filePath }) {
   }
 
   return (
-    <div className="diff-view">
+    <div className="diff-view" tabIndex={0} role="region" aria-label="Proposed changes" data-conversation-scroll-region>
       {diffLines.map((line, i) => {
         let className = 'diff-context';
         if (line.startsWith('+')) className = 'diff-add';
@@ -165,80 +197,330 @@ function DiffView({ oldString, newString, filePath }) {
   );
 }
 
-function getToolDisplayInfo(item) {
+const SHELL_WRAPPER_RE = /^(?:\S*\/)?(?:ba|z|da|k)?sh\s+-l?c\s+([\s\S]+)$/;
+const READ_COMMANDS = new Set(['cat', 'head', 'tail', 'nl', 'bat', 'less', 'more']);
+const LIST_COMMANDS = new Set(['ls', 'tree', 'fd']);
+const SEARCH_COMMANDS = new Set(['rg', 'grep', 'egrep', 'ag']);
+const GREP_VALUE_FLAGS = ['-e', '--regexp', '-f', '--file', '-m', '--max-count', '-A', '-B', '-C', '--include', '--exclude', '--exclude-dir'];
+const VALUE_FLAGS = {
+  head: ['-n', '-c', '--lines', '--bytes'],
+  tail: ['-n', '-c', '--lines', '--bytes'],
+  nl: ['-b', '-v', '-i', '-w', '-s', '-n'],
+  bat: ['-l', '--language', '-r', '--line-range', '-H', '--highlight-line', '--style', '--theme'],
+  rg: ['-g', '--glob', '-t', '--type', '-T', '--type-not', '-m', '--max-count', '-A', '-B', '-C', '--context',
+    '-e', '--regexp', '-f', '--file', '-M', '--max-columns', '--max-depth', '-j', '--threads', '-E', '--encoding'],
+  grep: GREP_VALUE_FLAGS,
+  egrep: GREP_VALUE_FLAGS,
+  git: GREP_VALUE_FLAGS,
+  ag: ['-G', '--file-search-regex', '-A', '-B', '-C', '-m'],
+};
+const MERGEABLE_KINDS = new Set(['read', 'search', 'list']);
+
+// Codex reports commands as `/bin/zsh -lc '<command>'`; the wrapper is noise for a primary label.
+export function unwrapShellCommand(command) {
+  const trimmed = String(command || '').trim();
+  const body = trimmed.match(SHELL_WRAPPER_RE)?.[1]?.trim();
+  if (!body || body.length < 2) return trimmed;
+  if (body.startsWith("'") && body.endsWith("'")) return body.slice(1, -1).replace(/'\\''/g, "'");
+  if (body.startsWith('"') && body.endsWith('"')) return body.slice(1, -1).replace(/\\(["\\$`])/g, '$1');
+  return body;
+}
+
+function splitShellSegments(command) {
+  if (/\$\(|`|<<|[()]/.test(command)) return null;
+  const segments = [{ op: null, tokens: [] }];
+  let token = '';
+  let hasToken = false;
+  let protectedToken = false;
+  let quote = null;
+  const pushToken = () => {
+    if (hasToken) segments[segments.length - 1].tokens.push(token);
+    token = '';
+    hasToken = false;
+    protectedToken = false;
+  };
+
+  for (let i = 0; i < command.length; i += 1) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"' && ['"', '\\', '$', '`', '\n'].includes(command[i + 1])) {
+        const next = command[++i];
+        if (next !== '\n') token += next;
+      } else token += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; hasToken = true; protectedToken = true; continue; }
+    if (ch === '\\' && i + 1 < command.length) {
+      const next = command[++i];
+      if (next !== '\n') { token += next; hasToken = true; protectedToken = true; }
+      continue;
+    }
+    if (/\s/.test(ch) && ch !== '\n') { pushToken(); continue; }
+    const pair = command.slice(i, i + 2);
+    if (ch === '<' || ch === '>') {
+      // Only unquoted digits adjacent to a redirect are an IO descriptor.
+      if (!protectedToken && /^\d+$/.test(token)) { token = ''; hasToken = false; }
+      pushToken();
+      const redirect = ['>>', '>&', '>|', '<>', '<&'].includes(pair) ? pair : ch;
+      segments[segments.length - 1].tokens.push({ redirect });
+      i += redirect.length - 1;
+      continue;
+    }
+    if (pair === '&&' || pair === '||') { pushToken(); segments.push({ op: pair, tokens: [] }); i += 1; continue; }
+    if (ch === '&' || ch === '\\') return null;
+    if (ch === ';' || ch === '|' || ch === '\n') { pushToken(); segments.push({ op: ch === '\n' ? ';' : ch, tokens: [] }); continue; }
+    token += ch;
+    hasToken = true;
+  }
+  if (quote) return null;
+  pushToken();
+  const stripped = segments.map(segment => ({ ...segment, tokens: stripRedirects(segment.tokens) }));
+  if (stripped.some(segment => !segment.tokens)) return null;
+  return stripped.filter(segment => segment.tokens.length > 0);
+}
+
+// Drops harmless redirects (stderr to stdout, /dev/null); returns null when output is written to a file.
+function stripRedirects(tokens) {
+  const result = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (typeof token === 'string') { result.push(token); continue; }
+    const target = tokens[++i];
+    if (typeof target !== 'string' || !target) return null;
+    if (token.redirect === '<') continue;
+    if (['>', '>>', '>|'].includes(token.redirect) && target === '/dev/null') continue;
+    if (['>&', '<&'].includes(token.redirect) && /^\d+$/.test(target)) continue;
+    return null;
+  }
+  return result;
+}
+
+function positionalArgs(args, valueFlags = []) {
+  const values = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') { values.push(...args.slice(i + 1)); break; }
+    if (valueFlags.includes(arg)) { i += 1; continue; }
+    if (arg.startsWith('-') && arg !== '-') continue;
+    values.push(arg);
+  }
+  return values;
+}
+
+function baseName(path) {
+  const trimmed = String(path || '').replace(/\/+$/, '');
+  return trimmed.split('/').pop() || trimmed;
+}
+
+function classifyShellSegment(tokens) {
+  const words = tokens.slice();
+  while (words.length > 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) words.shift();
+  const program = baseName(words[0]);
+  const args = words.slice(1);
+
+  if (READ_COMMANDS.has(program)) {
+    const files = positionalArgs(args, VALUE_FLAGS[program]);
+    return files.length ? { kind: 'read', files } : null;
+  }
+  if (program === 'sed') {
+    if (args.some(arg => arg.startsWith('-') && arg !== '-n')) return null;
+    if (!args.includes('-n')) return null;
+    const [script, ...files] = positionalArgs(args);
+    const range = script?.match(/^(\d+)(?:,(\d+|\$))?p$/);
+    if (!range || files.length === 0) return null;
+    return { kind: 'read', files, range: range[2] ? `${range[1]}–${range[2]}` : range[1] };
+  }
+  if (LIST_COMMANDS.has(program) || (program === 'rg' && args.includes('--files'))
+    || (program === 'find' && !args.some(arg => /^-(?:exec|execdir|delete|ok|okdir|fprint|fls)/.test(arg)))) {
+    return { kind: 'list' };
+  }
+  if (SEARCH_COMMANDS.has(program) || (program === 'git' && args[0] === 'grep')) {
+    const searchArgs = program === 'git' ? args.slice(1) : args;
+    const explicit = searchArgs.findIndex(arg => arg === '-e' || arg === '--regexp');
+    const pattern = explicit >= 0 ? searchArgs[explicit + 1] : positionalArgs(searchArgs, VALUE_FLAGS[program])[0];
+    return pattern ? { kind: 'search', patterns: [pattern] } : null;
+  }
+  if (program === 'git') {
+    let index = 0;
+    while (index < args.length && args[index].startsWith('-')) index += ['-C', '-c'].includes(args[index]) ? 2 : 1;
+    const subcommand = args[index];
+    return subcommand && /^[a-z][a-z-]*$/.test(subcommand) ? { kind: 'git', subcommand } : null;
+  }
+  const runner = ['npx', 'pnpx', 'bunx'].includes(program) ? baseName(args[0]) : program;
+  const runnerArgs = runner === program ? args : args.slice(1);
+  if (['npm', 'pnpm', 'yarn', 'bun'].includes(runner)) {
+    const filtered = positionalArgs(runnerArgs.filter((arg, i) => arg !== '--prefix' && runnerArgs[i - 1] !== '--prefix'));
+    const script = filtered[0] === 'run' ? filtered[1] : filtered[0];
+    if (/^test(?:[:-]|$)/.test(script || '')) return { kind: 'test' };
+    if (/^build(?:[:-]|$)/.test(script || '')) return { kind: 'build' };
+    return null;
+  }
+  if (['vitest', 'jest', 'pytest'].includes(runner) || (runner === 'playwright' && runnerArgs[0] === 'test')
+    || (['cargo', 'go'].includes(runner) && runnerArgs[0] === 'test')) {
+    return { kind: 'test' };
+  }
+  if (runner === 'cargo' && runnerArgs[0] === 'build') return { kind: 'build' };
+  return null;
+}
+
+const IGNORABLE_PREFIXES = new Set(['cd', 'pwd']);
+const OUTPUT_FILTERS = new Set(['head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'cat', 'less', 'more', 'nl', 'column']);
+
+// Only recognises simple, read-only shapes; anything else stays a neutral "Run command".
+export function describeShellCommand(command) {
+  const unwrapped = unwrapShellCommand(command);
+  const segments = splitShellSegments(unwrapped);
+  if (!segments?.length) return null;
+
+  const mains = [];
+  segments.forEach((segment, index) => {
+    const program = baseName(segment.tokens[0]);
+    if (segment.op === '|' && OUTPUT_FILTERS.has(program)) return;
+    if (IGNORABLE_PREFIXES.has(program) && segments[index + 1]?.op === '&&') return;
+    mains.push(segment);
+  });
+  if (mains.length === 0 || mains.some(segment => segment.op === '||' || (segment.op === '|' && segment !== mains[0]))) return null;
+
+  const described = mains.map(segment => classifyShellSegment(segment.tokens));
+  if (described.some(entry => !entry)) return null;
+  if (described.length === 1) return described[0];
+  const kind = described[0].kind;
+  if (!MERGEABLE_KINDS.has(kind) || described.some(entry => entry.kind !== kind)) return null;
+  return {
+    kind,
+    files: described.flatMap(entry => entry.files || []),
+    patterns: described.flatMap(entry => entry.patterns || []),
+  };
+}
+
+const COMMAND_KIND_TITLES = {
+  read: 'Read',
+  search: 'Search',
+  list: 'List files',
+  test: 'Run tests',
+  build: 'Build',
+};
+
+function describeCommandTool(input) {
+  const command = String(input.command || input.cmd || '');
+  const unwrapped = unwrapShellCommand(command).replace(/\s+/g, ' ').trim();
+  const description = typeof input.description === 'string' ? input.description.trim() : '';
+  if (description) return { kind: 'command', title: description, detail: unwrapped };
+
+  const parsed = describeShellCommand(command);
+  if (!parsed) return { kind: 'command', title: 'Run command', detail: unwrapped };
+  if (parsed.kind === 'read') {
+    const names = parsed.files.map(baseName).join(', ');
+    return { kind: 'read', count: parsed.files.length, title: 'Read', detail: parsed.range ? `${names} · lines ${parsed.range}` : names };
+  }
+  if (parsed.kind === 'search') return { kind: 'search', title: 'Search', detail: parsed.patterns.join(', ') };
+  if (parsed.kind === 'git') {
+    return { kind: 'command', title: `Git ${parsed.subcommand}`, detail: unwrapped };
+  }
+  return { kind: parsed.kind === 'list' ? 'list' : 'command', title: COMMAND_KIND_TITLES[parsed.kind], detail: unwrapped };
+}
+
+function stringifyToolInput(input) {
+  if (!input || typeof input !== 'object' || Object.keys(input).length === 0) return '';
+  return JSON.stringify(input, null, 2);
+}
+
+export function getToolDisplayInfo(item) {
   const input = item.toolInput || {};
   const tool = item.tool?.toLowerCase();
+  const filePath = input.file_path || input.path || '';
+  const browserInfo = getBrowserToolDisplayInfo(item.tool, input);
+  if (browserInfo) return browserInfo;
 
   switch (tool) {
-    case 'bash':
+    case 'run_command':
+    case 'exec_command':
+    case 'bash': {
+      const command = input.command || input.cmd || '';
       return {
-        title: 'Bash',
-        subtitle: input.command || input.cmd || '',
-        icon: TOOL_ICONS.bash
+        ...describeCommandTool(input),
+        input: command,
+        inputLabel: 'Command',
+        cwd: typeof input.cwd === 'string' ? input.cwd : ''
       };
+    }
     case 'read':
-      return {
-        title: 'Read',
-        subtitle: input.file_path || input.path || '',
-        icon: TOOL_ICONS.read
-      };
+    case 'read_file':
+      return { kind: 'read', count: 1, title: 'Read', detail: baseName(filePath), input: filePath, inputLabel: 'Path' };
     case 'write':
-      return {
-        title: 'Write',
-        subtitle: input.file_path || input.path || '',
-        icon: TOOL_ICONS.write
-      };
+    case 'write_file':
+      return { kind: 'edit', count: 1, title: 'Write', detail: baseName(filePath), input: filePath, inputLabel: 'Path' };
     case 'edit':
+    case 'replace_text':
       return {
+        kind: 'edit',
+        count: 1,
         title: 'Edit',
-        subtitle: input.file_path || input.path || '',
-        icon: TOOL_ICONS.edit,
+        detail: baseName(filePath),
+        input: filePath,
+        inputLabel: 'Path',
         oldString: input.old_string,
         newString: input.new_string
       };
+    case 'edit_files': {
+      const paths = (Array.isArray(input.changes) ? input.changes : []).map(change => change?.path).filter(Boolean);
+      return {
+        kind: 'edit',
+        count: Math.max(paths.length, 1),
+        title: 'Edit files',
+        detail: paths.map(baseName).join(', '),
+        input: paths.join('\n'),
+        inputLabel: 'Files'
+      };
+    }
     case 'glob':
-      return {
-        title: 'Glob',
-        subtitle: input.pattern || '',
-        icon: TOOL_ICONS.glob
-      };
+    case 'list_files':
+      return { kind: 'list', title: 'List files', detail: input.pattern || filePath, input: input.pattern || filePath, inputLabel: 'Pattern' };
     case 'grep':
-      return {
-        title: 'Grep',
-        subtitle: input.pattern || '',
-        icon: TOOL_ICONS.grep
-      };
+    case 'search_text':
+      return { kind: 'search', title: 'Search', detail: input.pattern || input.text || '', input: stringifyToolInput(input), inputLabel: 'Input' };
     case 'task':
-      return {
-        title: 'Task',
-        subtitle: input.description || input.prompt || '',
-        icon: TOOL_ICONS.task
-      };
+      return { kind: 'other', title: 'Task', detail: input.description || input.prompt || '', input: input.prompt || input.description || '', inputLabel: 'Prompt' };
+    case 'delegate_task':
+      return { kind: 'other', title: 'Read-only investigation', detail: typeof input.prompt === 'string' ? input.prompt : '', input: typeof input.prompt === 'string' ? input.prompt : '', inputLabel: 'Task' };
+    case 'delegate_task_background':
+      return { kind: 'other', title: 'Background investigation', detail: typeof input.prompt === 'string' ? input.prompt : '', input: typeof input.prompt === 'string' ? input.prompt : '', inputLabel: 'Task' };
+    case 'delegate_tasks': {
+      const prompts = Array.isArray(input.prompts) ? input.prompts.filter(prompt => typeof prompt === 'string') : [];
+      return { kind: 'other', title: 'Read-only investigations', detail: `${prompts.length} tasks`, input: prompts.join('\n\n'), inputLabel: 'Tasks' };
+    }
     case 'todowrite':
       return {
+        kind: 'other',
         title: 'Update Todos',
-        subtitle: '',
-        icon: TOOL_ICONS.todowrite,
+        detail: '',
         todos: input.todos
       };
+    case 'todo_list':
+      return { kind: 'other', title: 'Task list', detail: '' };
+    case 'create_schedule':
+      return { kind: 'other', title: 'Create schedule', detail: typeof input.name === 'string' ? input.name : '', input: stringifyToolInput(input), inputLabel: 'Schedule details' };
+    case 'list_schedules':
+      return { kind: 'other', title: 'List schedules', detail: '' };
+    case 'manage_schedule':
+      return { kind: 'other', title: 'Manage schedule', detail: [['edit', 'Edit'], ['pause', 'Pause'], ['resume', 'Resume'], ['run', 'Run now'], ['remove', 'Remove']].find(([action]) => action === input.action)?.[1] || '', input: stringifyToolInput(input), inputLabel: 'Schedule action' };
     case 'webfetch':
-      return {
-        title: 'WebFetch',
-        subtitle: input.url || '',
-        icon: TOOL_ICONS.webfetch
-      };
+    case 'web_extract':
+      return { kind: 'web', title: 'Fetch page', detail: input.url || '', input: input.url || '', inputLabel: 'URL' };
     case 'websearch':
+    case 'web_search':
+      return { kind: 'web', title: 'Web search', detail: input.query || '', input: input.query || '', inputLabel: 'Query' };
+    default: {
+      const full = stringifyToolInput(input);
       return {
-        title: 'WebSearch',
-        subtitle: input.query || '',
-        icon: TOOL_ICONS.websearch
-      };
-    default:
-      return {
+        kind: 'other',
         title: item.tool || 'Tool',
-        subtitle: JSON.stringify(input).slice(0, 80),
-        icon: TOOL_ICONS.default
+        detail: typeof input.description === 'string' ? input.description : filePath,
+        input: full,
+        inputLabel: 'Input'
       };
+    }
   }
 }
 
@@ -276,14 +558,31 @@ function generateToolSummary(tool, input, output, isError) {
     case 'grep':
       return `${lines.toLocaleString()} matches`;
     case 'task':
+    case 'delegate_task':
       return 'Completed';
+    case 'delegate_tasks': {
+      const results = parallelDelegationResults(output);
+      if (results) {
+        const completed = results.filter(result => result.status === 'completed').length;
+        return `${completed} completed, ${results.length - completed} failed`;
+      }
+      return 'Completed';
+    }
     case 'todowrite':
       const todoCount = input?.todos?.length || 0;
       return `${todoCount} items`;
     case 'webfetch':
       return chars > 0 ? `${Math.round(chars / 1024)}KB` : 'Fetched';
+    case 'web_extract':
+      return 'Fetched';
     case 'websearch':
       return lines > 0 ? `${lines} results` : 'Searched';
+    case 'web_search':
+      return 'Searched';
+    case 'create_schedule':
+    case 'list_schedules':
+    case 'manage_schedule':
+      return 'Done';
     default:
       return lines > 0 ? `${lines} lines` : 'Done';
   }
@@ -428,7 +727,7 @@ function ActivitySummaryBlock({ content }) {
   const [expanded, setExpanded] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const [showRaw, setShowRaw] = useState(false);
-  const { groups, rawLines, eventCount } = useMemo(
+  const { groups, eventCount } = useMemo(
     () => buildActivitySummary(content),
     [content]
   );
@@ -526,8 +825,8 @@ function ActivitySummaryBlock({ content }) {
         )}
 
         {showRaw && (
-          <pre className="cc-activity-raw" aria-label="Raw terminal transcript">
-            {rawLines.join('\n')}
+          <pre className="cc-activity-raw" aria-label="Raw terminal transcript" tabIndex={0} data-conversation-scroll-region>
+            {String(content || '')}
           </pre>
         )}
       </div>
@@ -535,31 +834,45 @@ function ActivitySummaryBlock({ content }) {
   );
 }
 
+function MessageActions({ item }) {
+  const copyText = typeof item.content === 'string' ? item.content : item.copyText;
+  const actions = Array.isArray(item.actions) ? item.actions : [];
+  if (!copyText && !actions.length) return null;
+  return <div className="cc-message-actions">
+    {copyText && <CopyButton text={copyText} label="Copy message" />}
+    {actions.map(action => <button key={action.label} type="button" className="cc-message-action" onClick={action.onClick}>{action.label}</button>)}
+  </div>;
+}
+
 export default memo(function ToolCallBlock({ item, onFileClick }) {
   // Default to collapsed for tool blocks
   const [expanded, setExpanded] = useState(false);
   const [showFullOutput, setShowFullOutput] = useState(false);
+  const detailsId = useId();
 
-  // User message - centered card
+  // T3-style chrome: no visible speaker labels (kept for screen readers), actions beneath on hover.
   if (item.type === 'user') {
     return (
-      <div className="cc-message cc-user">
+      <div className="cc-message cc-user cc-transcript-message">
+        <span className="cc-message-author cc-sr-only">You</span>
         <div className="cc-user-bubble">
-          {item.content}
+          <div className="cc-user-content">{item.content}</div>
         </div>
+        <MessageActions item={item} />
       </div>
     );
   }
 
-  // Assistant message - left aligned with markdown
   if (item.type === 'assistant') {
     return (
-      <div className="cc-message cc-assistant">
+      <div className="cc-message cc-assistant cc-transcript-message">
         <div className="cc-assistant-bubble">
+          <span className="cc-message-author cc-sr-only">{item.roleLabel || 'Assistant'}</span>
           <div className="cc-assistant-content">
             <MarkdownContent content={item.content} />
           </div>
         </div>
+        <MessageActions item={item} />
       </div>
     );
   }
@@ -576,7 +889,7 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
   // System message
   if (item.type === 'system') {
     return (
-      <div className={`cc-message cc-system ${item.isError ? 'error' : ''}`}>
+      <div className={`cc-message cc-system ${item.isError ? 'error' : ''}`} role={item.isError ? 'alert' : 'status'}>
         {item.content}
       </div>
     );
@@ -585,108 +898,114 @@ export default memo(function ToolCallBlock({ item, onFileClick }) {
   // Tool use block - compact collapsed style
   if (item.type === 'tool_use') {
     const tool = item.tool?.toLowerCase() || 'default';
-    const toolColor = TOOL_COLORS[tool] || TOOL_COLORS.default;
     const displayInfo = getToolDisplayInfo(item);
 
     const hasResult = !!item.result;
     const isError = item.result?.isError;
     const output = item.result?.toolResult || '';
     const isRunning = !hasResult;
+    const sessionTodos = tool === 'todo_list' && !isError && hasResult ? sessionTodoResult(output) : null;
+    const delegationResults = tool === 'delegate_tasks' && !isError && hasResult ? parallelDelegationResults(output) : null;
+    const backgroundStart = tool === 'delegate_task_background' && !isError && hasResult ? backgroundDelegationStart(output) : null;
 
     // Generate summary for the header
-    const summary = generateToolSummary(item.tool, item.toolInput, output, isError);
-
-    // Special handling for TodoWrite - always show expanded
-    if (tool === 'todowrite' && displayInfo.todos) {
-      return (
-        <div className="cc-message cc-tool-compact">
-          <div
-            className={`cc-tool-header ${expanded ? 'expanded' : ''}`}
-            style={{ '--tool-color': toolColor }}
-            onClick={() => setExpanded(!expanded)}
-          >
-            <span className="cc-tool-expand">{expanded ? '▼' : '▶'}</span>
-            <span className="cc-tool-icon">{displayInfo.icon}</span>
-            <span className="cc-tool-name">{displayInfo.title}</span>
-            <span className="cc-tool-summary">{summary}</span>
-            <span className={`cc-tool-status-icon ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
-              {isRunning ? '⟳' : isError ? '✕' : '✓'}
-            </span>
-          </div>
-          {expanded && (
-            <div className="cc-tool-body">
-              <TodoWidget todos={displayInfo.todos} />
-            </div>
-          )}
-        </div>
-      );
-    }
+    const summary = backgroundStart ? 'Result follows in the queue' : sessionTodos ? `${sessionTodos.length} ${sessionTodos.length === 1 ? 'task' : 'tasks'}` : hasResult && !output ? (isError ? 'Error' : 'No output') : generateToolSummary(item.tool, item.toolInput, output, isError);
 
     // Edit tool with diff
-    const isEditTool = tool === 'edit';
-    const hasDiffData = isEditTool && displayInfo.oldString && displayInfo.newString;
+    const isEditTool = tool === 'edit' || tool === 'replace_text';
+    const hasDiffData = isEditTool && typeof displayInfo.oldString === 'string' && typeof displayInfo.newString === 'string';
 
     // Output handling for expanded view
-    const outputLines = output ? output.split('\n') : [];
-    const maxInitialLines = 10;
+    const outputLines = output ? output.replace(/\n+$/, '').split('\n') : [];
+    const maxInitialLines = 12;
     const hasMoreOutput = outputLines.length > maxInitialLines;
     const displayLines = showFullOutput ? outputLines : outputLines.slice(0, maxInitialLines);
-
-    // Truncate subtitle for display
-    const shortSubtitle = displayInfo.subtitle
-      ? (displayInfo.subtitle.length > 40
-          ? '...' + displayInfo.subtitle.slice(-37)
-          : displayInfo.subtitle)
-      : '';
+    const state = isRunning ? 'running' : isError ? 'failed' : 'completed';
+    const OutputContainer = sessionTodos || delegationResults || backgroundStart ? 'details' : 'div';
 
     return (
       <div className={`cc-message cc-tool-compact ${isError ? 'error' : ''}`}>
-        <div
+        <button type="button"
           className={`cc-tool-header ${expanded ? 'expanded' : ''}`}
-          style={{ '--tool-color': toolColor }}
+          aria-expanded={expanded}
+          aria-controls={expanded ? detailsId : undefined}
+          title={displayInfo.input || undefined}
           onClick={() => setExpanded(!expanded)}
         >
-          <span className="cc-tool-expand">{expanded ? '▼' : '▶'}</span>
-          <span className="cc-tool-icon">{displayInfo.icon}</span>
+          <span className="cc-tool-expand" aria-hidden="true">›</span>
           <span className="cc-tool-name">{displayInfo.title}</span>
-          {shortSubtitle && <span className="cc-tool-path">{shortSubtitle}</span>}
+          {displayInfo.detail && <span className="cc-tool-path">{displayInfo.detail}</span>}
+          <span className={`cc-tool-state is-${state}`}>{isRunning ? 'Running' : isError ? 'Failed' : backgroundStart ? 'Started' : tool === 'delegate_task_background' ? 'Response received' : 'Completed'}</span>
           <span className="cc-tool-summary">{summary}</span>
-          <span className={`cc-tool-status-icon ${isRunning ? 'running' : isError ? 'error' : 'success'}`}>
-            {isRunning ? '⟳' : isError ? '✕' : '✓'}
-          </span>
-        </div>
+        </button>
 
         {/* Expanded content */}
         {expanded && (
-          <div className="cc-tool-body">
+          <div className="cc-tool-body" id={detailsId}>
+            {displayInfo.browserTool && <div className="cc-tool-section">
+              <div className="cc-tool-section-label">Tool <code>{displayInfo.rawTool}</code></div>
+              {displayInfo.server && <div className="cc-tool-section-label">Server <code>{displayInfo.server}</code></div>}
+            </div>}
+            {tool === 'todowrite' && <TodoWidget todos={displayInfo.todos} />}
+            {sessionTodos && <SessionTodoWidget todos={sessionTodos} />}
+            {delegationResults && <section className="cc-tool-section" aria-label="Investigation results">
+              {delegationResults.map((result, index) => <div key={index}>
+                <div className="cc-tool-section-label">Task {index + 1} · {result.status === 'completed' ? 'Completed' : 'Failed'}{result.truncated ? ' · Truncated' : ''}</div>
+                <div className="cc-tool-output" tabIndex={0} data-conversation-scroll-region>{result.status === 'completed' ? result.result : result.error}</div>
+              </div>)}
+            </section>}
+            {backgroundStart && <p className="cc-tool-section">{backgroundStart.delivery}</p>}
+            {displayInfo.input && (
+              <section className="cc-tool-section">
+                <div className="cc-tool-section-label">
+                  {displayInfo.inputLabel || 'Input'}
+                  {displayInfo.cwd && <span className="cc-tool-section-meta" title={displayInfo.cwd}>in {displayInfo.cwd}</span>}
+                  <CopyButton text={displayInfo.input} label="Copy input" />
+                </div>
+                <pre className="cc-tool-input" tabIndex={0} aria-label={displayInfo.inputLabel || 'Input'} data-conversation-scroll-region>{displayInfo.input}</pre>
+              </section>
+            )}
             {/* Diff view for Edit */}
             {hasDiffData && (
               <DiffView
                 oldString={displayInfo.oldString}
                 newString={displayInfo.newString}
-                filePath={displayInfo.subtitle}
+                filePath={displayInfo.input}
               />
             )}
 
             {/* Output */}
-            {hasResult && output && !hasDiffData && (
-              <div className="cc-tool-output">
-                {displayLines.map((line, idx) => (
-                  <div key={idx} className="cc-output-line">
-                    {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
-                  </div>
-                ))}
+            {hasResult && output && (!hasDiffData || isError) && (
+              <OutputContainer className={sessionTodos || delegationResults || backgroundStart ? 'cc-todo-raw' : undefined}>
+              {(sessionTodos || delegationResults || backgroundStart) && <summary>Raw result</summary>}
+              <section className="cc-tool-section">
+                <div className="cc-tool-section-label">
+                  {isError ? 'Error output' : 'Output'}
+                  <CopyButton text={output} label={isError ? 'Copy error output' : 'Copy output'} />
+                </div>
+                <div className="cc-tool-output" tabIndex={0} role="region" aria-label={isError ? 'Error output' : 'Output'} data-conversation-scroll-region>
+                  {displayLines.map((line, idx) => (
+                    <div key={idx} className="cc-output-line">
+                      {onFileClick ? parseFileLinks(line, onFileClick) : line || ' '}
+                    </div>
+                  ))}
+                </div>
                 {hasMoreOutput && !showFullOutput && (
-                  <button className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(true); }}>
+                  <button type="button" className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(true); }}>
                     Show {outputLines.length - maxInitialLines} more lines
                   </button>
                 )}
                 {showFullOutput && hasMoreOutput && (
-                  <button className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(false); }}>
+                  <button type="button" className="cc-show-more-btn" onClick={(e) => { e.stopPropagation(); setShowFullOutput(false); }}>
                     Show less
                   </button>
                 )}
-              </div>
+              </section>
+              </OutputContainer>
+            )}
+
+            {hasResult && !output && !isError && !hasDiffData && (
+              <div className="cc-tool-empty-output">No output</div>
             )}
 
             {/* Error message */}

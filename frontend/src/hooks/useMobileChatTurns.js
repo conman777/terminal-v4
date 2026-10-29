@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { apiFetch } from '../utils/api';
 import { rewriteTerminalAgentInput } from '../utils/aiProviders';
+import { claimTerminalCommand, prepareTerminalInput } from '../utils/terminalCommandDelivery';
 
 function normalizeTurnContent(content) {
   return typeof content === 'string' ? content.trim() : '';
@@ -46,13 +47,14 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSendReady, setIsSendReady] = useState(false);
   const turnsRef = useRef([]);
-  const delayedSubmitTimerRef = useRef(null);
 
   // Ref so the send function registered by TerminalChat is always fresh.
   const sendToTerminalRef = useRef(null);
   const pendingInputsRef = useRef([]);
   const retryFlushTimerRef = useRef(null);
   const optimisticUserTurnsRef = useRef([]);
+  const sendGenerationRef = useRef(0);
+  const flushingInputsRef = useRef(null);
 
   // Track which session we've seeded to avoid redundant fetches.
   const seededSessionRef = useRef(null);
@@ -62,28 +64,43 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
   const pendingTurnsRef = useRef([]);
   const seededRef = useRef(false);
 
-  const flushPendingInputs = useCallback(() => {
+  const flushPendingInputs = useCallback(async () => {
+    if (flushingInputsRef.current) return true;
     const sender = sendToTerminalRef.current;
     if (!sender || pendingInputsRef.current.length === 0) return true;
-
-    const queued = pendingInputsRef.current;
-    pendingInputsRef.current = [];
-    for (let index = 0; index < queued.length; index += 1) {
-      const input = queued[index];
-      const accepted = sender(input);
-      if (accepted === false) {
-        pendingInputsRef.current = queued.slice(index);
-        return false;
+    const flush = { generation: sendGenerationRef.current };
+    flushingInputsRef.current = flush;
+    try {
+      while (pendingInputsRef.current.length && sendToTerminalRef.current === sender && sendGenerationRef.current === flush.generation) {
+        const entry = pendingInputsRef.current[0];
+        try {
+          entry.delivery?.beforeSend();
+          if (!entry.delivery) prepareTerminalInput(sessionId);
+          const accepted = entry.delivery ? sender(entry.input, entry.delivery) : sender(entry.input);
+          if (accepted === false) {
+            entry.delivery?.notAccepted();
+            return false;
+          }
+          pendingInputsRef.current.shift();
+          const receipt = await accepted;
+          if (receipt === false) throw new Error('Terminal input was not accepted.');
+          entry.resolve(receipt);
+        } catch (error) {
+          if (pendingInputsRef.current[0] === entry) pendingInputsRef.current.shift();
+          entry.reject(error);
+        }
       }
+      return true;
+    } finally {
+      if (flushingInputsRef.current === flush) flushingInputsRef.current = null;
     }
-    return true;
-  }, []);
+  }, [sessionId]);
 
   const schedulePendingFlush = useCallback(() => {
     if (retryFlushTimerRef.current) return;
-    retryFlushTimerRef.current = setTimeout(() => {
+    retryFlushTimerRef.current = setTimeout(async () => {
       retryFlushTimerRef.current = null;
-      const flushed = flushPendingInputs();
+      const flushed = await flushPendingInputs();
       if (!flushed && pendingInputsRef.current.length > 0) {
         schedulePendingFlush();
       }
@@ -154,45 +171,57 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
     sendToTerminalRef.current = fn;
     setIsSendReady(true);
 
-    const flushed = flushPendingInputs();
-    if (!flushed && pendingInputsRef.current.length > 0) {
-      schedulePendingFlush();
-    }
+    void flushPendingInputs().then(flushed => {
+      if (!flushed && pendingInputsRef.current.length > 0) schedulePendingFlush();
+    });
   }, [flushPendingInputs, schedulePendingFlush]);
 
-  const sendOrQueue = useCallback((input) => {
+  const sendOrQueue = useCallback((input, delivery) => {
     const sender = sendToTerminalRef.current;
     if (sender) {
-      const accepted = sender(input);
-      if (accepted === false) {
-        pendingInputsRef.current.push(input);
-        schedulePendingFlush();
-        return { queued: true };
+      delivery?.beforeSend();
+      if (!delivery) prepareTerminalInput(sessionId);
+      const accepted = delivery ? sender(input, delivery) : sender(input);
+      if (accepted !== false) {
+        const completion = Promise.resolve(accepted).then(receipt => {
+          if (receipt === false) throw new Error('Terminal input was not accepted.');
+          return receipt;
+        });
+        completion.catch(() => {});
+        return { queued: false, completion };
       }
-      return { queued: false };
+      delivery?.notAccepted();
     }
-    pendingInputsRef.current.push(input);
-    return { queued: true };
-  }, [schedulePendingFlush]);
+    const completion = new Promise((resolve, reject) => pendingInputsRef.current.push({ input, resolve, reject, delivery }));
+    completion.catch(() => {});
+    if (sender) schedulePendingFlush();
+    return { queued: true, completion };
+  }, [schedulePendingFlush, sessionId]);
 
   // Send a message from the chat input bar.
   const handleChatSend = useCallback((text) => {
     const resolvedText = rewriteTerminalAgentInput(text);
     const trimmed = typeof resolvedText === 'string' ? resolvedText.trim() : '';
-    const textResult = sendOrQueue(resolvedText);
-    const submit = () => sendOrQueue('\r');
-
-    if (textResult.queued) {
-      submit();
-    } else {
-      if (delayedSubmitTimerRef.current) {
-        clearTimeout(delayedSubmitTimerRef.current);
-      }
-      delayedSubmitTimerRef.current = setTimeout(() => {
-        delayedSubmitTimerRef.current = null;
-        submit();
-      }, 35);
+    const generation = sendGenerationRef.current;
+    const delivery = claimTerminalCommand(sessionId, resolvedText);
+    let textResult;
+    try {
+      textResult = delivery.phase === 'submit'
+        ? { queued: false, completion: Promise.resolve() }
+        : sendOrQueue(resolvedText, delivery);
+    } catch (error) {
+      throw delivery.failure(error);
     }
+    const completion = textResult.completion.then(async () => {
+      if (delivery.phase === 'text') delivery.acceptText();
+      await new Promise(resolve => setTimeout(resolve, 35));
+      if (sendGenerationRef.current !== generation) throw new Error('The terminal session changed. Your draft was kept.');
+      await sendOrQueue('\r', delivery).completion;
+      delivery.complete();
+    }).catch(error => {
+      throw delivery.failure(error);
+    });
+    completion.catch(() => {});
 
     if (trimmed) {
       optimisticUserTurnsRef.current.push(trimmed);
@@ -209,23 +238,28 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
       setTurns(next);
     }
 
-    return { queued: textResult.queued };
-  }, [sendOrQueue]);
+    return { queued: textResult.queued, completion };
+  }, [sendOrQueue, sessionId]);
 
   // Send raw key/input data directly to the terminal transport.
   const handleRawSend = useCallback((data) => {
+    prepareTerminalInput(sessionId);
     return sendOrQueue(data);
-  }, [sendOrQueue]);
+  }, [sendOrQueue, sessionId]);
 
   // Send Ctrl-C to interrupt Claude.
   const handleInterrupt = useCallback(() => {
+    prepareTerminalInput(sessionId);
     return sendOrQueue('\x03');
-  }, [sendOrQueue]);
+  }, [sendOrQueue, sessionId]);
 
   // Clear turns when session changes.
   // Reset synchronously on session switch so child registration effects can
   // re-register sender afterward without being clobbered by a late parent effect.
   useLayoutEffect(() => {
+    sendGenerationRef.current += 1;
+    flushingInputsRef.current = null;
+    for (const entry of pendingInputsRef.current) entry.reject(new Error('The terminal session changed. Your draft was kept.'));
     turnsRef.current = [];
     setTurns([]);
     setIsSendReady(false);
@@ -236,13 +270,18 @@ export function useMobileChatTurns({ sessionId, chatMode }) {
       clearTimeout(retryFlushTimerRef.current);
       retryFlushTimerRef.current = null;
     }
-    if (delayedSubmitTimerRef.current) {
-      clearTimeout(delayedSubmitTimerRef.current);
-      delayedSubmitTimerRef.current = null;
-    }
     seededRef.current = false;
     seededSessionRef.current = null;
     pendingTurnsRef.current = [];
+    return () => {
+      sendGenerationRef.current += 1;
+      flushingInputsRef.current = null;
+      sendToTerminalRef.current = null;
+      for (const entry of pendingInputsRef.current) entry.reject(new Error('The terminal session changed. Your draft was kept.'));
+      pendingInputsRef.current = [];
+      if (retryFlushTimerRef.current) clearTimeout(retryFlushTimerRef.current);
+      retryFlushTimerRef.current = null;
+    };
   }, [sessionId]);
 
   // Fetch initial turn history when entering chat mode for the first time.

@@ -11,6 +11,7 @@ import {
   getAiInitialCommand,
   getAiLaunchCommand,
   getAiTypeOptions,
+  filterReadyAiOptions,
   inferSessionAiType,
   shouldCreateStructuredSession,
   rewriteTerminalAgentInput,
@@ -108,7 +109,7 @@ describe('aiProviders', () => {
       agent: 'copilot',
       model: 'gpt-4o',
       reasoning: 'low',
-    })).toBe("node backend/dist/api-agent-runner.js --provider 'copilot' --model 'gpt-4o'");
+    })).toBe("terminal-v4-api agent --provider 'copilot' --model 'gpt-4o'");
 
     expect(() => buildAgentLaunchCommand({
       agent: 'codex',
@@ -135,28 +136,47 @@ describe('aiProviders', () => {
   });
 });
 
-describe('Hermes native runtime', () => {
-  it('is available as a native agent and preserves model and reasoning arguments', () => {
-    expect(NEW_TAB_AI_OPTIONS.some(option => option.id === 'hermes')).toBe(true);
-    expect(getAiInitialCommand('hermes')).toBe('hermes');
-    expect(buildAgentLaunchCommand({ agent: 'hermes', model: 'provider/model', reasoning: 'high' })).toBe("hermes --model 'provider/model' --reasoning 'high'");
+describe('independent V4 runtime', () => {
+  it('uses the exact V4 provider identity instead of inferring another agent from the conversation title', () => {
+    const id = 'v4-profile:chat:10000000-0000-4000-8000-000000000001:60000000-0000-4000-8000-000000000001';
+    expect(inferSessionAiType({ runtime: 'v4', aiType: id, shell: id, title: 'Compare Claude and Codex' })).toBe(id);
+    expect(inferSessionAiType({ runtime: 'v4', shell: id, title: 'Compare Claude and Codex' })).toBe(id);
+    expect(getAiDisplayLabel(inferSessionAiType({ runtime: 'v4', aiType: id }))).toBe('Saved connection 00000001');
+    expect(inferSessionAiType({ runtime: 'v4', aiType: id.toUpperCase(), title: 'Claude' })).toBeNull();
+  });
+  it('does not offer Hermes as an execution dependency', () => {
+    expect(NEW_TAB_AI_OPTIONS.some(option => option.id === 'hermes')).toBe(false);
+    expect(() => buildAgentLaunchCommand({ agent: 'hermes' })).toThrow(/invalid/i);
+    expect(buildAgentLaunchCommand({ agent: 'openai-api', model: 'provider-model', launchCommand: "'/V4/terminal-v4-api' agent --owner-hex 6f776e6572" })).toBe("'/V4/terminal-v4-api' agent --owner-hex 6f776e6572 --provider 'openai-api' --model 'provider-model'");
   });
 });
 
-
 describe('host native launchers', () => {
-  const launcher = '"C:\\Program Files\\Hermes\\hermes.exe"';
+  const launcher = '"C:\\Program Files\\Claude\\claude.exe"';
   it('uses an installed native executable and its configured default model', () => {
-    expect(buildAgentLaunchCommand({ agent: 'hermes', model: '', launchCommand: launcher, hostShell: 'cmd' })).toBe(launcher);
-    expect(buildAgentLaunchCommand({ agent: 'hermes', model: 'nous/model:v1', launchCommand: launcher, hostShell: 'cmd' }))
+    expect(buildAgentLaunchCommand({ agent: 'claude', model: '', launchCommand: launcher, hostShell: 'cmd' })).toBe(launcher);
+    expect(buildAgentLaunchCommand({ agent: 'claude', model: 'nous/model:v1', launchCommand: launcher, hostShell: 'cmd' }))
       .toBe(launcher + ' --model "nous/model:v1"');
   });
   it.each(['a%PATH%', 'a!USER!', 'a" & echo bad', 'a^b', 'a&b', 'a|b', 'a\nnext', 'a\u001bb'])('rejects unsafe Windows model %s', model => {
-    expect(() => buildAgentLaunchCommand({ agent: 'hermes', model, launchCommand: launcher, hostShell: 'cmd' })).toThrow(/invalid/i);
+    expect(() => buildAgentLaunchCommand({ agent: 'claude', model, launchCommand: launcher, hostShell: 'cmd' })).toThrow(/invalid/i);
   });
   it('uses Windows arguments for Codex reasoning and refuses unavailable adapters', () => {
     expect(buildAgentLaunchCommand({ agent: 'codex', model: 'gpt-model', reasoning: 'high', hostShell: 'cmd', launchCommand: '"C:\\tools\\codex.cmd"' }))
       .toBe('"C:\\tools\\codex.cmd" --model "gpt-model" --config "model_reasoning_effort=\'high\'"');
-    expect(() => buildAgentLaunchCommand({ agent: 'hermes', available: false })).toThrow(/unavailable/i);
+    expect(() => buildAgentLaunchCommand({ agent: 'claude', available: false })).toThrow(/unavailable/i);
+  });
+});
+
+describe('filterReadyAiOptions', () => {
+  const options = [{ id: null, label: 'CLI (default)' }, { id: 'claude', label: 'Claude Code' }, { id: 'deepseek', label: 'DeepSeek' }, { id: 'xai', label: 'xAI' }, { id: 'my-agent', label: 'Mine' }];
+  const catalog = [{ id: 'claude', available: true }, { id: 'deepseek', available: false }, { id: 'xai', available: false }];
+
+  it('keeps the shell, ready agents, custom commands and the current choice', () => {
+    expect(filterReadyAiOptions(options, catalog, 'xai').map(option => option.label)).toEqual(['CLI (default)', 'Claude Code', 'xAI', 'Mine']);
+  });
+
+  it('shows every option when the catalog is unavailable', () => {
+    expect(filterReadyAiOptions(options, null, null)).toBe(options);
   });
 });

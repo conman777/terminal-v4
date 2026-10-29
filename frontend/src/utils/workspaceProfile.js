@@ -8,7 +8,8 @@ export function buildWorkspaceContext(profile, selectedSkillIds = [], includeMem
   const selected = new Set(selectedSkillIds);
   for (const skill of profile?.skills || []) {
     if (selected.has(skill.id) && skill.instructions?.trim()) {
-      sections.push('Skill: ' + skill.name + '\n' + skill.instructions.trim());
+      const files = Object.entries(skill.supportFiles || {}).map(([path, content]) => '\nSupporting file: ' + path + '\n' + content).join('');
+      sections.push('Skill: ' + skill.name + '\n' + skill.instructions.trim() + files);
     }
   }
   return sections.join('\n\n');
@@ -36,5 +37,19 @@ export async function saveWorkspaceProfile(path, profile) {
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload?.error || 'Unable to save workspace');
+  return payload;
+}
+
+export async function loadAccountKnowledge(options = {}) {
+  const response = await apiFetch('/api/account/knowledge', options);
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error || 'Unable to load account knowledge');
+  return payload;
+}
+
+export async function saveAccountKnowledge(profile) {
+  const response = await apiFetch('/api/account/knowledge', { method: 'PUT', body: profile });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error || 'Unable to save account knowledge');
   return payload;
 }

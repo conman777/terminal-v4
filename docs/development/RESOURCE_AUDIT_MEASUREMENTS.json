@@ -1,0 +1,88 @@
+{
+  "date": "2026-10-20",
+  "environment": {
+    "platform": "macOS",
+    "backend": "debug Rust build",
+    "frontend": "production assets",
+    "browser": "headless Chrome",
+    "quietSampleSeconds": 20,
+    "inference": false,
+    "scope": "Backend process RSS and CPU; browser JS heap; excludes child-process/browser-engine/GPU memory"
+  },
+  "quietWorkloads": [
+    {
+      "name": "One idle Codex chat; no agent process",
+      "durationSeconds": 20.005725084,
+      "backendRssMiB": 32.359375,
+      "backendCpuOneCorePercent": 0.09997138277180172,
+      "browserJsHeapMiB": 5.811256408691406,
+      "domNodes": 436,
+      "networkEncodedBytes": 481,
+      "startupScriptCount": 11
+    },
+    {
+      "name": "Same chat plus five idle PTY shells",
+      "durationSeconds": 20.006864875,
+      "backendRssMiB": 34.71875,
+      "backendCpuOneCorePercent": 2.1492622791555687,
+      "browserJsHeapMiB": 4.846782684326172,
+      "domNodes": 352,
+      "networkEncodedBytes": 4101,
+      "startupScriptCount": 11
+    },
+    {
+      "name": "Twenty synthetic saved chats with 2.5 MiB total text",
+      "durationSeconds": 20.007808042000004,
+      "backendRssMiB": 50.1875,
+      "backendCpuOneCorePercent": 0.14994146253814813,
+      "browserJsHeapMiB": 8.031776428222656,
+      "domNodes": 417,
+      "networkEncodedBytes": 481,
+      "startupScriptCount": 11
+    }
+  ],
+  "inventoryPayload": {
+    "sessionCount": 20,
+    "bytes": 2634471
+  },
+  "syntheticStreaming": [
+    {
+      "priorTextBytes": 0,
+      "chunks": 200,
+      "chunkTextBytes": 200,
+      "status": "completed",
+      "elapsedSeconds": 1.7111528750000002,
+      "backendCpuSeconds": 0.48,
+      "finalSnapshotBytes": 112345,
+      "events": 207
+    },
+    {
+      "priorTextBytes": 131072,
+      "chunks": 200,
+      "chunkTextBytes": 200,
+      "status": "completed",
+      "elapsedSeconds": 2.3868446249999997,
+      "backendCpuSeconds": 1.4700000000000002,
+      "finalSnapshotBytes": 243558,
+      "events": 208
+    },
+    {
+      "priorTextBytes": 524288,
+      "chunks": 200,
+      "chunkTextBytes": 200,
+      "status": "completed",
+      "elapsedSeconds": 5.534351208,
+      "backendCpuSeconds": 4.66,
+      "finalSnapshotBytes": 636774,
+      "events": 208
+    }
+  ],
+  "limitations": [
+    "Single short samples, shared development host",
+    "First quiet interval overlaps a backend compilation on the host",
+    "Focus-aware inventory polling can pause/back off; not a sustained foreground typing workload",
+    "Later RSS includes allocator/cache retention from previous workloads",
+    "Synthetic stream receipt polling every100ms; single trial per history size",
+    "No physical mobile, Tauri/WebKit, release, Windows/Linux, sustained stress or leak measurements"
+  ]
+}

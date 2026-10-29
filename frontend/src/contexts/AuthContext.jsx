@@ -1,12 +1,13 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens } from '../utils/auth';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { getAccessToken, getRefreshToken, getUser, setTokens, setUser, clearTokens, setAuthInitializing, refreshTokens, beginAuthChange, captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
 import { resolveHomeApiUrl } from '../utils/apiBase';
 
 const AuthContext = createContext(null);
 
 function normalizeAuthError(err) {
   if (err instanceof TypeError) {
-    return new Error('Cannot reach the Rust API on http://127.0.0.1:3020. Start `cargo run -p terminal-v4-api --manifest-path rust/Cargo.toml` or `npm run desktop:dev`.');
+    const origin = new URL(resolveHomeApiUrl('/api/auth/login'), window.location.origin).origin;
+    return new Error(`Cannot connect to the app at ${origin}. Restart the local app and try again.`);
   }
 
   if (err instanceof Error) {
@@ -29,175 +30,182 @@ export function AuthProvider({ children }) {
   const [user, setUserState] = useState(() => getUser());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [cleanupNotice, setCleanupNotice] = useState('');
 
-  // Validate session with backend on mount
+  const liveRef = useRef(true);
+
+  // Validate session with backend on mount, without granting late responses auth authority.
   useEffect(() => {
+    let mounted = true;
+    liveRef.current = true;
+    let validationScope = captureAuthScope();
+    const current = () => mounted && isAuthScopeCurrent(validationScope);
+    const unsubscribe = subscribeAuth(reason => {
+      if (!mounted) return;
+      const authenticatedUser = getAccessToken() || getRefreshToken() ? getUser() : null;
+      setUserState(authenticatedUser);
+      if (authenticatedUser) setCleanupNotice('');
+      if (reason !== 'rotation') { setLoading(false); setAuthInitializing(false); }
+    });
+    setAuthInitializing(true);
     const validateSession = async () => {
-      // Mark auth as initializing to prevent race conditions with apiFetch
-      setAuthInitializing(true);
-
       try {
         const accessToken = getAccessToken();
         const storedRefreshToken = getRefreshToken();
-
-        // No tokens stored - not authenticated
         if (!accessToken && !storedRefreshToken) {
-          setUserState(null);
-          setLoading(false);
+          if (current()) { setUserState(null); setLoading(false); }
           return;
         }
-
-        // Try to validate the access token with the backend
         if (accessToken) {
           try {
-            const response = await fetch(resolveHomeApiUrl('/api/auth/me'), {
-              headers: { 'Authorization': `Bearer ${accessToken}` }
-            });
-
+            const response = await fetch(resolveHomeApiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${accessToken}` } });
+            if (!current()) return;
             if (response.ok) {
               const userData = await response.json();
+              if (!current()) return;
               setUser(userData);
+              validationScope = captureAuthScope();
               setUserState(userData);
               await syncPreviewSession(accessToken).catch(() => {});
-              setLoading(false);
+              if (current()) setLoading(false);
               return;
             }
-
-            // If not unauthorized, avoid logging out on transient errors.
-            if (response.status !== 401) {
-              setLoading(false);
-              return;
-            }
+            if (response.status !== 401 && response.status !== 403) { setLoading(false); return; }
           } catch {
-            // Network error - keep existing session and try again later.
-            setLoading(false);
+            if (current()) setLoading(false);
             return;
           }
         }
-
-        // Access token invalid/expired - try to refresh using centralized function
         if (storedRefreshToken) {
           try {
             const result = await refreshTokens();
+            if (!current()) return;
             if (result.user) {
               setUser(result.user);
+              validationScope = captureAuthScope();
               setUserState(result.user);
             } else {
-              // Fetch user data if not returned from refresh
-              const meResponse = await fetch(resolveHomeApiUrl('/api/auth/me'), {
-                headers: { 'Authorization': `Bearer ${result.accessToken}` }
-              });
+              const meResponse = await fetch(resolveHomeApiUrl('/api/auth/me'), { headers: { Authorization: `Bearer ${result.accessToken}` } });
+              if (!current()) return;
+              if (meResponse.status === 401 || meResponse.status === 403) { clearTokens(true); return; }
               if (meResponse.ok) {
                 const userData = await meResponse.json();
+                if (!current()) return;
                 setUser(userData);
+                validationScope = captureAuthScope();
                 setUserState(userData);
               }
             }
             await syncPreviewSession(result.accessToken).catch(() => {});
-            setLoading(false);
+            if (current()) setLoading(false);
             return;
           } catch (err) {
-            const message = err instanceof Error ? err.message : '';
-            const isAuthFailure =
-              message === 'Token refresh failed' ||
-              message === 'No refresh token' ||
-              message === 'Invalid token response';
-            if (!isAuthFailure) {
+            if (!current()) return;
+            if (!['Token refresh failed', 'No refresh token', 'Invalid token response'].includes(err?.message)) {
               setLoading(false);
               return;
             }
-            // Refresh failed with an auth error - clear below.
           }
         }
-
-        // Both access and refresh failed - clear tokens and show login
-        clearTokens(true); // Force clear since we're done initializing
-        setUserState(null);
-        setLoading(false);
+        if (current()) { clearTokens(true); setUserState(null); setLoading(false); }
       } finally {
-        // Always mark auth as done initializing
-        setAuthInitializing(false);
+        if (current()) setAuthInitializing(false);
       }
     };
-
-    validateSession();
+    void validateSession();
+    return () => { mounted = false; liveRef.current = false; unsubscribe(); };
   }, []);
 
-  const login = useCallback(async (username, password) => {
+  const login = useCallback(async (username, password, mode = 'password') => {
+    let scope = beginAuthChange();
+    const current = () => liveRef.current && isAuthScopeCurrent(scope);
     setError(null);
     try {
-      const response = await fetch(resolveHomeApiUrl('/api/auth/login'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+      const response = await fetch(resolveHomeApiUrl(mode === 'local-testing' ? '/api/auth/local-testing' : '/api/auth/login'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mode === 'local-testing' ? {username} : { username, password })
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Login failed');
-      }
-
+      if (!current()) throw new Error('Authentication changed');
+      if (!response.ok) throw new Error(data.error || 'Login failed');
       setTokens(data.tokens.accessToken, data.tokens.refreshToken);
       setUser(data.user);
+      scope = captureAuthScope();
       setUserState(data.user);
+      setCleanupNotice('');
+      setLoading(false);
+      setAuthInitializing(false);
       await syncPreviewSession(data.tokens.accessToken).catch(() => {});
+      if (!current()) throw new Error('Authentication changed');
       return data.user;
     } catch (err) {
       const normalized = normalizeAuthError(err);
-      setError(normalized.message);
+      if (current()) setError(normalized.message);
       throw normalized;
     }
   }, []);
 
   const register = useCallback(async (username, password) => {
+    let scope = beginAuthChange();
+    const current = () => liveRef.current && isAuthScopeCurrent(scope);
     setError(null);
     try {
       const response = await fetch(resolveHomeApiUrl('/api/auth/register'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password })
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Registration failed');
-      }
-
+      if (!current()) throw new Error('Authentication changed');
+      if (!response.ok) throw new Error(data.error || 'Registration failed');
       setTokens(data.tokens.accessToken, data.tokens.refreshToken);
       setUser(data.user);
+      scope = captureAuthScope();
       setUserState(data.user);
+      setCleanupNotice('');
+      setLoading(false);
+      setAuthInitializing(false);
       await syncPreviewSession(data.tokens.accessToken).catch(() => {});
+      if (!current()) throw new Error('Authentication changed');
       return data.user;
     } catch (err) {
       const normalized = normalizeAuthError(err);
-      setError(normalized.message);
+      if (current()) setError(normalized.message);
       throw normalized;
     }
   }, []);
 
-  const loginWithPasskeyResult = useCallback((data) => {
+  const loginWithPasskeyResult = useCallback((data, scope) => {
+    if (!liveRef.current || !scope || !isAuthScopeCurrent(scope)) return false;
     setTokens(data.tokens.accessToken, data.tokens.refreshToken);
     setUser(data.user);
     setUserState(data.user);
+    setCleanupNotice('');
+    setLoading(false);
+    setAuthInitializing(false);
     void syncPreviewSession(data.tokens.accessToken).catch(() => {});
+    return true;
   }, []);
 
   const logout = useCallback(async () => {
+    const scope = beginAuthChange();
+    let notice = '';
     try {
       const token = getAccessToken();
       if (token) {
-        await fetch(resolveHomeApiUrl('/api/auth/logout'), {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
+        const response = await fetch(resolveHomeApiUrl('/api/auth/logout'), { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+        const result = typeof response.json === 'function' ? await response.json().catch(() => null) : null;
+        if (!response.ok || (result?.cleanup && (result.success !== true || !['complete', 'pending'].includes(result.cleanup.state))) || (response.status === 202 && result?.cleanup?.state !== 'pending')) {
+          notice = 'Signed out on this device, but server cleanup could not be confirmed. Sign back in to check.';
+        } else if (result?.cleanup?.state === 'pending') {
+          notice = 'Signed out. Server cleanup is still pending; sign back in to check its status.';
+        }
       }
     } catch {
-      // Ignore logout errors
+      notice = 'Signed out on this device, but server cleanup could not be confirmed. Sign back in to check.';
     } finally {
-      clearTokens(true);
-      setUserState(null);
+      if (isAuthScopeCurrent(scope)) {
+        clearTokens(true);
+        if (liveRef.current) { setUserState(null); setLoading(false); setCleanupNotice(notice); }
+        setAuthInitializing(false);
+      }
     }
   }, []);
 
@@ -205,6 +213,7 @@ export function AuthProvider({ children }) {
     user,
     loading,
     error,
+    cleanupNotice,
     isAuthenticated: !!user,
     login,
     loginWithPasskeyResult,

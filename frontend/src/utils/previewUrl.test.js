@@ -5,7 +5,7 @@ vi.mock('./api', () => ({
   apiFetch: vi.fn()
 }));
 
-import { toPathPreviewFallbackUrl, toPreviewUrl } from './previewUrl';
+import { toPathPreviewFallbackUrl, toPreviewUrl, withAuthToken } from './previewUrl';
 
 const PREVIEW_PROXY_HOSTS_KEY = 'terminal_preview_proxy_hosts';
 
@@ -18,6 +18,34 @@ describe('toPreviewUrl', () => {
     localStorage.clear();
   });
 
+  it.each([
+    ['file:///tmp/preview%20space/index.html', '/tmp/preview space', 'index.html'],
+    ['file:///C:/project%20space/index.html', 'C:/project space', 'index.html'],
+    ['file:///tmp/preview%invalid.html', '/tmp', 'preview%invalid.html'],
+    ['file:///tmp/preview space 100%.html', '/tmp', 'preview space 100%.html'],
+    ['/tmp/preview space # %.html', '/tmp', 'preview space # %.html'],
+    [String.raw`C:\project space\index.html`, String.raw`C:\project space`, 'index.html'],
+  ])('retains the exact static filesystem target for %s', (input, directory, filename) => {
+    const target = new URL(toPreviewUrl(input), window.location.origin);
+    expect(target.pathname).toBe('/api/preview');
+    expect(target.searchParams.get('path')).toBe(directory);
+    expect(target.searchParams.get('file')).toBe(filename);
+  });
+
+  it('keeps full access credentials out of known preview URLs while retaining resource grants', () => {
+    localStorage.setItem('terminal_access_token', 'full-access-fixture');
+    const target = new URL(withAuthToken('/api/preview?path=%2Ftmp&file=index.html&previewToken=resource-grant'), window.location.origin);
+    expect(target.searchParams.has('token')).toBe(false);
+    expect(target.searchParams.get('previewToken')).toBe('resource-grant');
+  });
+
+  it('preserves authentication behavior for API routes outside known preview targets', () => {
+    localStorage.setItem('terminal_access_token', 'full-access-fixture');
+    const target = new URL(withAuthToken('/api/preview/4173/logs'), window.location.origin);
+    expect(target.searchParams.get('token')).toBe('full-access-fixture');
+    expect(withAuthToken('https://external.example.com/api/preview')).toBe('https://external.example.com/api/preview');
+  });
+
   it('keeps preview path URLs unchanged', () => {
     expect(toPreviewUrl('/preview/5173/app')).toBe('/preview/5173/app');
   });
@@ -25,6 +53,10 @@ describe('toPreviewUrl', () => {
   it('uses path-based previews for localhost apps', () => {
     const result = toPreviewUrl('http://localhost:5173/app');
     expect(result).toBe('/preview/5173/app');
+  });
+
+  it.each(['http://[::1]:5173/app?fixture=1#selected', 'http://[0:0:0:0:0:0:0:1]:5173/app?fixture=1#selected'])('routes IPv6 loopback through local preview: %s', input => {
+    expect(toPreviewUrl(input)).toBe('/preview/5173/app?fixture=1#selected');
   });
 
   it('keeps remote private IP targets as direct URLs', () => {

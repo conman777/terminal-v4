@@ -10,13 +10,14 @@ vi.mock('../utils/api', () => ({
 
 describe('useMobileChatTurns', () => {
   beforeEach(() => {
+    localStorage.clear();
     apiFetchMock.mockReset();
     apiFetchMock.mockResolvedValue({
       json: async () => ({ turns: [] }),
     });
   });
 
-  it('queues chat input until terminal sender is registered', () => {
+  it('does not submit queued chat input after an intervening queued interrupt', async () => {
     const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
     const sender = vi.fn();
 
@@ -33,14 +34,11 @@ describe('useMobileChatTurns', () => {
     });
 
     expect(result.current.isSendReady).toBe(true);
-    expect(sender.mock.calls).toEqual([
-      ['claude'],
-      ['\r'],
-      ['\x03'],
-    ]);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['claude'], ['\x03']]);
   });
 
-  it('re-queues input when sender rejects it and flushes on next sender', () => {
+  it('re-queues input when sender rejects it and flushes on next sender', async () => {
     const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
     const rejectingSender = vi.fn(() => false);
     const readySender = vi.fn(() => true);
@@ -54,17 +52,17 @@ describe('useMobileChatTurns', () => {
       sendResult = result.current.handleChatSend('claude');
     });
 
-    expect(sendResult).toEqual({ queued: true });
-    expect(rejectingSender.mock.calls).toEqual([
+    expect(sendResult).toEqual({ queued: true, completion: expect.any(Promise) });
+    expect(rejectingSender.mock.calls.map(([input]) => [input])).toEqual([
       ['claude'],
-      ['\r'],
     ]);
 
     act(() => {
       result.current.handleRegisterSendText(readySender);
     });
 
-    expect(readySender.mock.calls).toEqual([
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+    expect(readySender.mock.calls.map(([input]) => [input])).toEqual([
       ['claude'],
       ['\r'],
     ]);
@@ -86,22 +84,22 @@ describe('useMobileChatTurns', () => {
       sendResult = result.current.handleChatSend('hey');
     });
 
-    expect(sendResult).toEqual({ queued: true });
-    expect(sender.mock.calls).toEqual([
+    expect(sendResult).toEqual({ queued: true, completion: expect.any(Promise) });
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([
       ['hey'],
-      ['\r'],
     ]);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(sender).toHaveBeenCalledTimes(3);
-    expect(sender.mock.calls[2]).toEqual(['hey']);
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['hey'], ['hey']]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(40); });
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['hey'], ['hey'], ['\r']]);
     vi.useRealTimers();
   });
 
-  it('sends terminal-first prompts as separate text and submit writes', () => {
+  it('sends terminal-first prompts as separate text and submit writes', async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
     const sender = vi.fn(() => true);
@@ -111,13 +109,11 @@ describe('useMobileChatTurns', () => {
       result.current.handleChatSend('hello');
     });
 
-    expect(sender.mock.calls).toEqual([['hello']]);
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['hello']]);
 
-    act(() => {
-      vi.advanceTimersByTime(40);
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(40); });
 
-    expect(sender.mock.calls).toEqual([
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([
       ['hello'],
       ['\r'],
     ]);
@@ -150,7 +146,7 @@ describe('useMobileChatTurns', () => {
     ]);
   });
 
-  it('translates slash agent aliases before sending them to the shell', () => {
+  it('translates slash agent aliases before sending them to the shell', async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: true }));
     const sender = vi.fn(() => true);
@@ -160,16 +156,14 @@ describe('useMobileChatTurns', () => {
       result.current.handleChatSend('/codex');
     });
 
-    expect(sender.mock.calls).toEqual([['codex --yolo']]);
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['codex --yolo']]);
     expect(result.current.turns).toEqual([
       expect.objectContaining({ role: 'user', content: 'codex --yolo' })
     ]);
 
-    act(() => {
-      vi.advanceTimersByTime(40);
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(40); });
 
-    expect(sender.mock.calls).toEqual([
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([
       ['codex --yolo'],
       ['\r'],
     ]);
@@ -185,7 +179,7 @@ describe('useMobileChatTurns', () => {
       result.current.handleChatSend('/gemni');
     });
 
-    expect(sender).toHaveBeenCalledWith('gemini --yolo');
+    expect(sender).toHaveBeenCalledWith('gemini --yolo', expect.objectContaining({ phase: 'text' }));
     expect(result.current.turns).toEqual([
       expect.objectContaining({ role: 'user', content: 'gemini --yolo' })
     ]);
@@ -230,4 +224,51 @@ describe('useMobileChatTurns', () => {
       { role: 'assistant', content: 'Ready.', ts: 1000 }
     ]);
   });
+  it('waits for transport acceptance before Enter and exposes HTTP failure', async () => {
+    const { result } = renderHook(() => useMobileChatTurns({ sessionId: 'session-1', chatMode: false }));
+    let rejectText;
+    const sender = vi.fn(() => new Promise((_resolve, reject) => { rejectText = reject; }));
+    act(() => result.current.handleRegisterSendText(sender));
+    let receipt;
+    act(() => { receipt = result.current.handleChatSend('echo synthetic'); });
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['echo synthetic']]);
+    await act(async () => { rejectText(Object.assign(new Error('HTTP 403 synthetic'), { definitelyRejected: true })); });
+    await expect(receipt.completion).rejects.toThrow('HTTP 403');
+    expect(sender.mock.calls.map(([input]) => [input])).toEqual([['echo synthetic']]);
+  });
+
+  it('does not submit an accepted command after the session changes', async () => {
+    const { result, rerender } = renderHook(({ sessionId }) => useMobileChatTurns({ sessionId, chatMode: false }), { initialProps: { sessionId: 'session-1' } });
+    let resolveText;
+    const oldSender = vi.fn(() => new Promise(resolve => { resolveText = resolve; }));
+    act(() => result.current.handleRegisterSendText(oldSender));
+    let receipt;
+    act(() => { receipt = result.current.handleChatSend('echo old'); });
+    rerender({ sessionId: 'session-2' });
+    const newSender = vi.fn(() => true);
+    act(() => result.current.handleRegisterSendText(newSender));
+    await act(async () => { resolveText(true); await new Promise(resolve => setTimeout(resolve, 50)); });
+    await expect(receipt.completion).rejects.toThrow('session changed');
+    expect(oldSender.mock.calls.map(([input]) => [input])).toEqual([['echo old']]);
+    expect(newSender.mock.calls.map(([input]) => [input])).toEqual([]);
+  });
+
+  it('flushes a new session queue while the previous session transport is still pending', async () => {
+    const { result, rerender } = renderHook(({ sessionId }) => useMobileChatTurns({ sessionId, chatMode: false }), { initialProps: { sessionId: 'session-old' } });
+    let resolveOld;
+    let oldReceipt;
+    act(() => { oldReceipt = result.current.handleChatSend('old queued text'); });
+    act(() => result.current.handleRegisterSendText(() => new Promise(resolve => { resolveOld = resolve; })));
+    rerender({ sessionId: 'session-new' });
+    let newReceipt;
+    act(() => { newReceipt = result.current.handleChatSend('new queued text'); });
+    const newSender = vi.fn(() => true);
+    act(() => result.current.handleRegisterSendText(newSender));
+    await act(async () => { await newReceipt.completion; });
+    expect(newSender.mock.calls.map(([input]) => [input])).toEqual([['new queued text'], ['\r']]);
+    await act(async () => { resolveOld(true); await new Promise(resolve => setTimeout(resolve, 50)); });
+    await expect(oldReceipt.completion).rejects.toThrow('session changed');
+    expect(newSender.mock.calls.map(([input]) => [input])).toEqual([['new queued text'], ['\r']]);
+  });
+
 });

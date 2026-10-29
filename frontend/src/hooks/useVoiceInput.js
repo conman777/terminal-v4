@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { apiPost, apiGet } from '../utils/api';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
+import { apiFetch, apiGet } from '../utils/api';
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
+import { subscribeEnvironment } from '../utils/remoteEnvironments';
 
 // Map API health check reasons to user-friendly messages
 const HEALTH_ERROR_MESSAGES = {
@@ -14,167 +16,183 @@ const HEALTH_ERROR_MESSAGES = {
   no_provider: 'No transcription provider available'
 };
 
-export function useVoiceInput(onTranscribed, { provider } = {}) {
+function stopStream(stream) {
+  stream?.getTracks().forEach(track => {
+    try { track.stop(); } catch { /* Release the remaining tracks as well. */ }
+  });
+}
+
+function releaseMedia(attempt) {
+  const recorder = attempt.recorder;
+  attempt.recorder = null;
+  if (recorder) {
+    recorder.ondataavailable = null;
+    recorder.onstop = null;
+    recorder.onerror = null;
+    try {
+      if (recorder.state !== 'inactive') recorder.stop();
+    } catch { /* Track release must also run when the recorder fails. */ }
+  }
+  stopStream(attempt.stream);
+  attempt.stream = null;
+  attempt.chunks = [];
+}
+
+export function useVoiceInput(onTranscribed, { provider, scopeKey, available = true } = {}) {
   const [isRecording, setIsRecording] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
   const [isRequesting, setIsRequesting] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState(null);
   const [audioStream, setAudioStream] = useState(null);
+  const attemptRef = useRef(null);
+  const mountedRef = useRef(false);
+  const isRecordingRef = useRef(false);
 
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const streamRef = useRef(null);
-  const isRecordingRef = useRef(false); // Ref to avoid stale closures in toggle
-
-  // Cleanup function - stops any existing recording and releases resources
   const cleanup = useCallback(() => {
-    // Stop media recorder if active
-    if (mediaRecorderRef.current) {
-      try {
-        if (mediaRecorderRef.current.state !== 'inactive') {
-          mediaRecorderRef.current.stop();
-        }
-      } catch (e) {
-        // Ignore errors during cleanup
-      }
-      mediaRecorderRef.current = null;
+    const attempt = attemptRef.current;
+    // Invalidate before stop(): some recorders dispatch their final events synchronously.
+    attemptRef.current = null;
+    isRecordingRef.current = false;
+    if (attempt) {
+      attempt.controller.abort();
+      releaseMedia(attempt);
     }
-
-    // Stop all audio tracks
-    if (streamRef.current) {
-      try {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      } catch (e) {
-        // Ignore errors during cleanup
-      }
-      streamRef.current = null;
-      setAudioStream(null);
-    }
-
-    // Clear audio chunks
-    audioChunksRef.current = [];
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => {
+  const resetState = useCallback(() => {
+    setIsRecording(false);
+    setIsChecking(false);
+    setIsRequesting(false);
+    setIsTranscribing(false);
+    setAudioStream(null);
+    setError(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (available) return;
+    cleanup();
+    setIsRecording(false);
+    setIsChecking(false);
+    setIsRequesting(false);
+    setIsTranscribing(false);
+    setAudioStream(null);
+  }, [available, cleanup]);
+
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    resetState();
+    const invalidate = () => { cleanup(); resetState(); };
+    let authority = captureAuthScope();
+    const stopAuth = subscribeAuth(() => {
+      const next = captureAuthScope();
+      if (isAuthScopeCurrent(authority) && authority.userId === next.userId) return;
+      authority = next;
+      invalidate();
+    });
+    const stopEnvironment = subscribeEnvironment(invalidate);
     return () => {
+      mountedRef.current = false;
+      stopAuth();
+      stopEnvironment();
       cleanup();
     };
-  }, [cleanup]);
+  }, [cleanup, resetState, provider, scopeKey]);
 
-  // Clear error after 4 seconds (slightly longer for better readability)
   useEffect(() => {
-    if (error) {
+    if (error && available) {
       const timer = setTimeout(() => setError(null), 4000);
       return () => clearTimeout(timer);
     }
-  }, [error]);
-
-  // Pre-flight API health check
-  const checkApiHealth = useCallback(async () => {
-    try {
-      const url = provider ? `/api/transcribe/health?provider=${provider}` : '/api/transcribe/health';
-      const result = await apiGet(url);
-      if (result.ok) {
-        return { ok: true };
-      }
-      return {
-        ok: false,
-        message: HEALTH_ERROR_MESSAGES[result.reason] || 'API check failed'
-      };
-    } catch (err) {
-      return {
-        ok: false,
-        message: "Can't reach server - check connection"
-      };
-    }
-  }, [provider]);
+  }, [error, available]);
 
   const startRecording = useCallback(async () => {
-    // Cleanup any existing recording first
+    if (!mountedRef.current || !available) return;
     cleanup();
+    resetState();
+    const attempt = { controller: new AbortController(), auth: captureAuthScope(), stream: null, recorder: null, chunks: [], stopRequested: false };
+    attemptRef.current = attempt;
+    const isCurrent = () => {
+      if (attemptRef.current !== attempt || attempt.controller.signal.aborted) return false;
+      if (isAuthScopeCurrent(attempt.auth)) return true;
+      cleanup();
+      resetState();
+      return false;
+    };
 
-    setError(null);
-    isRecordingRef.current = false;
-    setIsRecording(false);
-
-    // Check if getUserMedia is available
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    if (!navigator.mediaDevices?.getUserMedia) {
       setError('Microphone not available (HTTPS required)');
       return;
     }
 
-    // Pre-flight check: verify API is available before recording
     setIsChecking(true);
-    const healthCheck = await checkApiHealth();
+    let health;
+    try {
+      const url = provider ? `/api/transcribe/health?provider=${provider}` : '/api/transcribe/health';
+      health = await apiGet(url, { signal: attempt.controller.signal });
+    } catch {
+      if (!isCurrent()) return;
+      setIsChecking(false);
+      setError("Can't reach server - check connection");
+      return;
+    }
+    if (!isCurrent()) return;
     setIsChecking(false);
-
-    if (!healthCheck.ok) {
-      setError(healthCheck.message);
+    if (!health?.available) {
+      setError(HEALTH_ERROR_MESSAGES[health?.reason] || health?.message || 'API check failed');
       return;
     }
 
-    // Show requesting state while browser prompts for permission
     setIsRequesting(true);
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // Permission granted, hide requesting state
+      if (!isCurrent()) {
+        stopStream(stream);
+        return;
+      }
+      attempt.stream = stream;
       setIsRequesting(false);
-      streamRef.current = stream;
       setAudioStream(stream);
-
-      // Try webm first, fall back to other formats
       const mimeType = MediaRecorder.isTypeSupported('audio/webm')
         ? 'audio/webm'
-        : MediaRecorder.isTypeSupported('audio/mp4')
-          ? 'audio/mp4'
-          : 'audio/wav';
+        : MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : 'audio/wav';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      attempt.recorder = recorder;
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
+      recorder.ondataavailable = event => {
+        if (isCurrent() && event.data.size > 0) attempt.chunks.push(event.data);
       };
-
-      mediaRecorder.onstop = async () => {
-        // Stop all tracks
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-          streamRef.current = null;
-          setAudioStream(null);
-        }
-
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        audioChunksRef.current = [];
-
-        // Skip if too small (likely no audio)
+      recorder.onstop = async () => {
+        if (!isCurrent() || attempt.recorder !== recorder) return;
+        const audioBlob = new Blob(attempt.chunks, { type: mimeType });
+        releaseMedia(attempt);
+        isRecordingRef.current = false;
+        setIsRecording(false);
+        setAudioStream(null);
+        if (!attempt.stopRequested) return;
         if (audioBlob.size < 100) {
+          setIsTranscribing(false);
           setError('No audio recorded');
           return;
         }
 
-        // Send to backend for transcription
         setIsTranscribing(true);
         try {
           const formData = new FormData();
-          formData.append('audio', audioBlob, `recording.${mimeType.split('/')[1]}`);
-
-          const transcribeUrl = provider ? `/api/transcribe?provider=${provider}` : '/api/transcribe';
-          const result = await apiPost(transcribeUrl, formData);
-
+          formData.append('file', audioBlob, `recording.${mimeType.split('/')[1]}`);
+          const url = provider ? `/api/transcribe?provider=${provider}` : '/api/transcribe';
+          const response = await apiFetch(url, {
+            method: 'POST', body: formData, signal: attempt.controller.signal
+          });
+          if (!isCurrent()) return;
+          const result = await response.json();
+          if (!isCurrent()) return;
+          if (!response.ok) throw new Error(result.error || 'Request failed');
           if (result.text) {
-            onTranscribed?.(result.text);
+            await onTranscribed?.(result.text);
           } else if (result.message) {
             setError(result.message);
           } else if (result.error) {
-            // Parse specific error types from transcription response
             if (result.details?.includes('rate_limit') || result.details?.includes('429')) {
               setError('Rate limited - wait a moment');
             } else if (result.details?.includes('EAI_AGAIN') || result.details?.includes('ENOTFOUND')) {
@@ -184,39 +202,38 @@ export function useVoiceInput(onTranscribed, { provider } = {}) {
             }
           }
         } catch (err) {
-          // Handle fetch errors with better messages
+          if (!isCurrent()) return;
           if (err.message?.includes('fetch') || err.message?.includes('network')) {
             setError("Network error - can't connect");
           } else {
             setError(err.message || 'Transcription failed');
           }
         } finally {
-          setIsTranscribing(false);
+          if (isCurrent()) setIsTranscribing(false);
         }
       };
-
-      mediaRecorder.onerror = (e) => {
-        console.error('MediaRecorder error:', e);
-        setError('Recording error occurred');
+      recorder.onerror = () => {
+        if (!isCurrent()) return;
         cleanup();
-        isRecordingRef.current = false;
-        setIsRecording(false);
+        resetState();
+        setError('Recording error occurred');
       };
 
-      // Start recording
       try {
-        mediaRecorder.start(250);
+        recorder.start(250);
+        if (!isCurrent()) return;
         isRecordingRef.current = true;
         setIsRecording(true);
-      } catch (startErr) {
-        console.error('Failed to start MediaRecorder:', startErr);
-        setError('Failed to start recording');
+      } catch {
+        if (!isCurrent()) return;
         cleanup();
+        resetState();
+        setError('Failed to start recording');
       }
     } catch (err) {
-      setIsRequesting(false);
-      console.error('Recording error:', err.name, err.message);
-
+      if (!isCurrent()) return;
+      cleanup();
+      resetState();
       if (err.name === 'NotAllowedError') {
         setError('Microphone access denied');
       } else if (err.name === 'NotSupportedError') {
@@ -229,27 +246,36 @@ export function useVoiceInput(onTranscribed, { provider } = {}) {
         setError(`Could not start recording: ${err.message}`);
       }
     }
-  }, [cleanup, checkApiHealth, onTranscribed]);
+  }, [cleanup, resetState, onTranscribed, provider, available]);
 
   const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try {
-        mediaRecorderRef.current.stop();
-      } catch (e) {
-        console.error('Error stopping recorder:', e);
-      }
+    const attempt = attemptRef.current;
+    if (!mountedRef.current || !attempt) return;
+    if (!attempt.recorder || attempt.recorder.state === 'inactive') {
+      if (!attempt.stopRequested) { cleanup(); resetState(); }
+      return;
+    }
+    attempt.stopRequested = true;
+    setIsTranscribing(true);
+    try {
+      attempt.recorder.stop();
+    } catch {
+      cleanup();
+      resetState();
+      setError('Failed to stop recording');
     }
     isRecordingRef.current = false;
     setIsRecording(false);
-  }, []);
+  }, [cleanup, resetState]);
 
-  // Use ref to check recording state to avoid stale closure issues
+  const cancelRecording = useCallback(() => {
+    cleanup();
+    resetState();
+  }, [cleanup, resetState]);
+
   const toggleRecording = useCallback(() => {
-    if (isRecordingRef.current) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
+    if (isRecordingRef.current) stopRecording();
+    else startRecording();
   }, [startRecording, stopRecording]);
 
   return {
@@ -261,6 +287,7 @@ export function useVoiceInput(onTranscribed, { provider } = {}) {
     audioStream,
     toggleRecording,
     startRecording,
-    stopRecording
+    stopRecording,
+    cancelRecording
   };
 }

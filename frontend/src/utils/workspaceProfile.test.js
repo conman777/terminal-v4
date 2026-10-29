@@ -20,6 +20,10 @@ describe('buildWorkspaceContext', () => {
     expect(buildWorkspaceContext(profile, ['ship'], false)).toBe('Skill: Ship\nRun the release gates.');
   });
 
+  it('includes selected owned supporting text without loading external files', () => {
+    expect(buildWorkspaceContext({ memory: '', skills: [{ id: 'review', name: 'Review', instructions: 'Use references.', supportFiles: { 'references/checklist.md': 'Check async boundaries.' } }] }, ['review'], false)).toBe('Skill: Review\nUse references.\nSupporting file: references/checklist.md\nCheck async boundaries.');
+  });
+
   it('returns no context for an empty workspace or missing skill IDs', () => {
     expect([
       buildWorkspaceContext(null, [], true),

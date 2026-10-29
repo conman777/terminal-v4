@@ -16,6 +16,19 @@ const profile = {
 };
 
 describe('WorkspaceProfileButton', () => {
+  it('isolates the knowledge dialog from the workspace and restores its trigger on close', async () => {
+    render(<div id="root"><WorkspaceProfileButton workspacePath={path} /></div>);
+    const root = document.getElementById('root');
+    const previous = root.inert;
+    const trigger = screen.getByRole('button', { name: 'Workspace knowledge' });
+    fireEvent.click(trigger);
+    await screen.findByLabelText('Project knowledge');
+    expect(root.inert).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Close workspace knowledge' }));
+    expect(root.inert).toBe(previous);
+    expect(trigger).toHaveFocus();
+  });
+
   beforeEach(() => {
     apiFetch.mockReset();
     apiFetch.mockResolvedValue({ ok: true, json: async () => profile });
@@ -30,6 +43,21 @@ describe('WorkspaceProfileButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to prompt' }));
     expect(onInsertContext).toHaveBeenCalledWith('Workspace knowledge:\nUse Rust for API changes.\n\nSkill: Review\nCheck error boundaries.');
     expect(apiFetch.mock.calls).toEqual([[url, { signal: expect.any(AbortSignal) }]]);
+  });
+
+  it('exports knowledge to a file and imports it back for review before saving', async () => {
+    const exported = [];
+    URL.createObjectURL = vi.fn(blob => { exported.push(blob); return 'blob:knowledge'; });
+    URL.revokeObjectURL = vi.fn();
+    render(<WorkspaceProfileButton workspacePath={path} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace knowledge' }));
+    await screen.findByLabelText('Project knowledge');
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    const file = new File([JSON.stringify({ ...profile, memory: 'Imported notes.' })], 'knowledge.json', { type: 'application/json' });
+    fireEvent.change(screen.getByLabelText('Import knowledge file'), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText('Project knowledge')).toHaveValue('Imported notes.'));
+    const exportedText = await new Promise(resolve => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.readAsText(exported[0]); });
+    expect([JSON.parse(exportedText), screen.getByText('Unsaved changes') !== null, apiFetch.mock.calls.length]).toEqual([profile, true, 1]);
   });
 
   it('persists edited knowledge and defaults through the authenticated API', async () => {
@@ -73,5 +101,43 @@ describe('WorkspaceProfileButton', () => {
     await screen.findByLabelText('Project knowledge');
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('owned skill package editing', () => {
+  beforeEach(() => {
+    apiFetch.mockReset();
+    apiFetch.mockResolvedValue({ ok: true, json: async () => ({ ...profile, skills: [{ ...profile.skills[0], supportFiles: { 'references/review.md': 'Original checklist.' } }] }) });
+  });
+  it('saves an explicit on-demand choice and preserves the selected package in the prompt', async () => {
+    const onInsertContext = vi.fn();
+    render(<WorkspaceProfileButton workspacePath={path} onInsertContext={onInsertContext} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace knowledge' }));
+    fireEvent.change(await screen.findByLabelText('When to use Review'), { target: { value: 'onDemand' } });
+    expect(screen.getByText(/V4 can read the instructions when relevant or requested/)).toBeInTheDocument();
+    expect(screen.queryByText(/until then V4 includes saved instructions/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() => expect(apiFetch.mock.calls.find(([, options]) => options?.method === 'PUT')[1].body.skills[0]).toEqual({ ...profile.skills[0], activation: 'onDemand', supportFiles: { 'references/review.md': 'Original checklist.' } }));
+    fireEvent.click(screen.getByLabelText('Include Review'));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to prompt' }));
+    expect(onInsertContext).toHaveBeenCalledWith('Workspace knowledge:\nUse Rust for API changes.\n\nSkill: Review\nCheck error boundaries.\nSupporting file: references/review.md\nOriginal checklist.');
+  });
+  it('edits support files and preserves them during a manual save', async () => {
+    render(<WorkspaceProfileButton workspacePath={path} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace knowledge' }));
+    fireEvent.change(await screen.findByLabelText('Contents of references/review.md'), { target: { value: 'New checklist.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenLastCalledWith(url, { method: 'PUT', body: { ...profile, skills: [{ ...profile.skills[0], supportFiles: { 'references/review.md': 'New checklist.' } }] } }));
+  });
+  it('imports an owned package, previews all its files, and saves only after review', async () => {
+    render(<WorkspaceProfileButton workspacePath={path} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Workspace knowledge' }));
+    const imported = { id: '00000000-0000-4000-8000-000000000002', name: 'Ship', instructions: 'Use release instructions.', supportFiles: { 'references/release.md': 'Run gates.' } };
+    fireEvent.change(await screen.findByLabelText('Skill package JSON'), { target: { value: JSON.stringify(imported) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill package' }));
+    expect(screen.getByLabelText('Contents of references/release.md')).toHaveValue('Run gates.');
+    expect(apiFetch.mock.calls.filter(([, options]) => options?.method === 'PUT')).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save workspace' }));
+    await waitFor(() => expect(apiFetch.mock.calls.find(([, options]) => options?.method === 'PUT')[1].body.skills).toContainEqual(imported));
   });
 });

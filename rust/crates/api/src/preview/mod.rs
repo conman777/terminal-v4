@@ -1,3 +1,4 @@
+pub mod auth_urls;
 pub mod cookie_jar;
 pub mod dev_proxy;
 pub mod external_proxy;
@@ -8,9 +9,14 @@ pub mod performance;
 pub mod port_scan;
 pub mod proxy;
 pub mod request_logs;
+pub(crate) mod resource_auth;
 pub mod script_inject;
 pub mod static_files;
+pub mod static_rewrite;
+pub mod ws_logs;
 pub mod ws_proxy;
+
+pub(crate) const DOCUMENT_SANDBOX: &str = "sandbox allow-downloads allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-scripts";
 
 use regex_lite::Regex;
 use std::sync::LazyLock;
@@ -34,6 +40,15 @@ pub fn extract_port_from_preview_subdomain(host: &str, bases: &[String]) -> Opti
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(base))
         .then_some(port)
+}
+
+/// The host a `preview-PORT.` subdomain was derived from; other hosts are unchanged.
+pub fn strip_preview_subdomain(host: &str) -> &str {
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)^preview-\d+\.(.+)$").expect("valid regex"));
+    RE.captures(host)
+        .and_then(|captures| captures.get(1))
+        .map_or(host, |base| base.as_str())
 }
 
 /// Extract a preview port from a path like `/preview/8080/...`.
@@ -83,6 +98,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn strip_preview_subdomain_returns_the_base_host() {
+        let hosts = [
+            strip_preview_subdomain("preview-8799.192.168.1.5.nip.io:3020"),
+            strip_preview_subdomain("PREVIEW-5173.localhost:3030"),
+            strip_preview_subdomain("localhost:3041"),
+        ];
+        assert_eq!(
+            hosts,
+            [
+                "192.168.1.5.nip.io:3020",
+                "localhost:3030",
+                "localhost:3041"
+            ]
+        );
+    }
+
+    #[test]
     fn extract_port_from_subdomain() {
         assert_eq!(extract_port_from_host("preview-8080.localhost"), Some(8080));
         assert_eq!(
@@ -122,3 +154,11 @@ mod tests {
         assert!(extract_port_from_path("/api/health").is_none());
     }
 }
+
+#[cfg(test)]
+mod regression_tests;
+#[cfg(test)]
+mod resource_auth_tests;
+
+#[cfg(test)]
+mod backend_regression_tests;

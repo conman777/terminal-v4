@@ -1,5 +1,6 @@
 import { apiFetch } from '../../utils/api';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import './WebSocketTab.css';
 
 /**
  * WebSocketTab Component
@@ -9,71 +10,98 @@ import React, { useState, useEffect } from 'react';
 export function WebSocketTab({ port }) {
   const [connections, setConnections] = useState([]);
   const [messages, setMessages] = useState([]);
+  const requestRevision = useRef(0);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [error, setError] = useState(null);
+  const [isClearing, setIsClearing] = useState(false);
+  const clearOwner = useRef(null);
   const [selectedConnectionId, setSelectedConnectionId] = useState(null);
   const [directionFilter, setDirectionFilter] = useState('all'); // 'all', 'sent', 'received'
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [refreshInterval, setRefreshInterval] = useState(null);
   const [notAvailable, setNotAvailable] = useState(false);
+  const messageButtons = useRef(new Map());
+  const returnFocusId = useRef(null);
 
   useEffect(() => {
-    fetchData();
-  }, [port, selectedConnectionId, directionFilter]);
-
-  useEffect(() => {
-    if (refreshInterval && !notAvailable) {
-      const id = setInterval(() => {
-        fetchData();
-      }, refreshInterval);
-      return () => clearInterval(id);
+    if (!selectedMessage && returnFocusId.current) {
+      messageButtons.current.get(returnFocusId.current)?.focus();
+      returnFocusId.current = null;
     }
-  }, [refreshInterval, port, selectedConnectionId, directionFilter, notAvailable]);
+  }, [selectedMessage]);
 
-  const fetchData = async () => {
-    try {
-      const params = new URLSearchParams();
-      if (selectedConnectionId) params.set('connectionId', selectedConnectionId);
-      if (directionFilter !== 'all') params.set('direction', directionFilter);
+  useEffect(() => {
+    setConnections([]);
+    setMessages([]);
+    setSelectedConnectionId(null);
+    setSelectedMessage(null);
+    setNotAvailable(false);
+    setError(null);
+    setIsClearing(false);
+    clearOwner.current = null;
+    return () => { clearOwner.current = null; };
+  }, [port]);
 
-      const response = await apiFetch(`/api/preview/${port}/websockets?${params}`);
-      if (response.status === 404) {
-        setNotAvailable(true);
-        return;
-      }
-      if (response.ok) {
+  useEffect(() => {
+    if (!port || clearOwner.current) return;
+    const controller = new AbortController();
+    const revision = ++requestRevision.current;
+    const current = () => !controller.signal.aborted && requestRevision.current === revision;
+    const load = async () => {
+      try {
+        const params = new URLSearchParams();
+        if (selectedConnectionId) params.set('connectionId', selectedConnectionId);
+        if (directionFilter !== 'all') params.set('direction', directionFilter);
+        const response = await apiFetch(`/api/preview/${port}/websockets?${params}`, { signal: controller.signal });
+        if (!current()) return;
+        if (response.status === 404) { setNotAvailable(true); return; }
+        if (!response.ok) throw new Error('WebSocket request failed');
         const data = await response.json();
+        if (!current()) return;
+        if (!Array.isArray(data.connections) || !Array.isArray(data.messages)) throw new Error('Invalid WebSocket response');
         setConnections(data.connections);
         setMessages(data.messages);
+        setNotAvailable(false);
+        setError(null);
+      } catch {
+        if (current()) setError('Could not load WebSocket telemetry. Try refreshing.');
       }
-    } catch (err) {
-      setNotAvailable(true);
-    }
-  };
+    };
+    void load();
+    return () => controller.abort();
+  }, [port, selectedConnectionId, directionFilter, refreshRevision]);
+
+  useEffect(() => {
+    if (!refreshInterval || notAvailable || isClearing || !port) return;
+    const id = setInterval(() => setRefreshRevision(value => value + 1), refreshInterval);
+    return () => clearInterval(id);
+  }, [refreshInterval, notAvailable, isClearing, port]);
+
+  const fetchData = () => setRefreshRevision(value => value + 1);
 
   const clearLogs = async () => {
+    if (!port || clearOwner.current) return;
+    const owner = {};
+    clearOwner.current = owner;
+    requestRevision.current += 1;
+    setIsClearing(true);
+    setError(null);
     try {
-      await apiFetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/preview/${port}/websockets`, { method: 'DELETE' });
+      if (clearOwner.current !== owner) return;
+      if (!response.ok) throw new Error('Clear request failed');
       setConnections([]);
       setMessages([]);
       setSelectedConnectionId(null);
       setSelectedMessage(null);
-    } catch (err) {
-      console.error('Error clearing logs:', err);
+    } catch {
+      if (clearOwner.current === owner) setError('Could not clear WebSocket telemetry. The server may not support clearing.');
+    } finally {
+      if (clearOwner.current === owner) {
+        clearOwner.current = null;
+        setIsClearing(false);
+      }
     }
-  };
-
-  const getStatusBadge = (status) => {
-    const colors = {
-      connecting: 'bg-yellow-100 text-yellow-800',
-      connected: 'bg-green-100 text-green-800',
-      closing: 'bg-orange-100 text-orange-800',
-      closed: 'bg-gray-100 text-gray-800',
-      error: 'bg-red-100 text-red-800'
-    };
-    return (
-      <span className={`px-2 py-1 rounded text-xs font-medium ${colors[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
-      </span>
-    );
   };
 
   const formatTime = (timestamp) => {
@@ -98,237 +126,163 @@ export function WebSocketTab({ port }) {
     }
   };
 
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setError(null);
+    } catch {
+      setError('Could not copy message. Clipboard access is unavailable; try again with clipboard permission.');
+    }
   };
 
   if (notAvailable) {
     return (
-      <div className="p-4 h-full flex flex-col overflow-hidden">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-semibold">WebSocket Debugger</h2>
-        </div>
-        <div className="text-center py-12 text-gray-500">
-          <p className="text-lg font-medium mb-2">WebSocket debugging not available</p>
-          <p>The backend endpoints for WebSocket inspection have not been implemented yet.</p>
+      <div className="websocket-tab">
+        <h2>WebSocket Debugger</h2>
+        <div className="websocket-tab__empty">
+          <p>WebSocket debugging not available</p>
+          <p>This preview server does not provide WebSocket inspection.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="p-4 h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-semibold">WebSocket Debugger</h2>
-        <div className="flex gap-2">
+    <div className="websocket-tab">
+      <div className="websocket-tab__toolbar">
+        <h2>WebSocket Debugger</h2>
+        <div className="websocket-tab__actions">
           <select
+            aria-label="WebSocket refresh interval"
             value={refreshInterval || ''}
             onChange={(e) => setRefreshInterval(e.target.value ? parseInt(e.target.value) : null)}
-            className="px-3 py-1 border border-gray-300 rounded text-sm"
           >
             <option value="">Manual Refresh</option>
             <option value="1000">Refresh every 1s</option>
             <option value="2000">Refresh every 2s</option>
             <option value="5000">Refresh every 5s</option>
           </select>
-          <button
-            onClick={fetchData}
-            className="px-3 py-1 bg-amber-600 text-white rounded text-sm font-medium hover:bg-amber-700"
-          >
-            Refresh
-          </button>
-          <button
-            onClick={clearLogs}
-            className="px-3 py-1 bg-red-600 text-white rounded text-sm font-medium hover:bg-red-700"
-          >
-            Clear
-          </button>
+          <button type="button" onClick={fetchData} disabled={!port || isClearing}>Refresh</button>
+          <button type="button" onClick={clearLogs} disabled={!port || isClearing} className="websocket-tab__error">Clear</button>
         </div>
       </div>
 
-      <div className="flex-1 grid grid-cols-12 gap-4 overflow-hidden">
-        {/* Connections List */}
-        <div className="col-span-4 flex flex-col overflow-hidden">
-          <h3 className="text-lg font-semibold mb-2">
-            Connections ({connections.length})
-          </h3>
-          <div className="flex-1 bg-white rounded-lg border border-gray-200 overflow-auto">
+      {error && <p role="alert" className="websocket-tab__error">{error}</p>}
+      <div className="websocket-tab__layout">
+        <section className="websocket-tab__pane" aria-label="Connections">
+          <h3>Connections ({connections.length})</h3>
+          <div className="websocket-tab__scroll" role="region" aria-label="WebSocket connections" tabIndex={0}>
             {connections.length === 0 ? (
-              <div className="p-4 text-center text-gray-500">No connections</div>
-            ) : (
-              <div className="divide-y">
-                {connections.map((conn) => (
-                  <div
-                    key={conn.id}
-                    onClick={() => setSelectedConnectionId(conn.id === selectedConnectionId ? null : conn.id)}
-                    className={`p-3 cursor-pointer hover:bg-gray-50 ${
-                      selectedConnectionId === conn.id ? 'bg-amber-50' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-mono text-gray-500">
-                        {conn.id.substring(0, 12)}...
-                      </span>
-                      {getStatusBadge(conn.status)}
-                    </div>
-                    <div className="text-sm font-medium truncate" title={conn.url}>
-                      {conn.url}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      {formatTime(conn.timestamp)}
-                    </div>
-                    {conn.protocols && conn.protocols.length > 0 && (
-                      <div className="text-xs text-gray-500 mt-1">
-                        Protocols: {conn.protocols.join(', ')}
-                      </div>
-                    )}
-                    {conn.error && (
-                      <div className="text-xs text-red-600 mt-1">
-                        Error: {conn.error}
-                      </div>
-                    )}
-                    {conn.closeCode && (
-                      <div className="text-xs text-gray-500 mt-1">
-                        Close: {conn.closeCode} {conn.closeReason}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+              <div className="websocket-tab__empty">No connections</div>
+            ) : connections.map((conn) => (
+              <button
+                type="button"
+                key={conn.id}
+                aria-label={`Connection ${conn.id}: ${conn.url} (${conn.status})`}
+                aria-pressed={selectedConnectionId === conn.id}
+                disabled={isClearing}
+                onClick={() => setSelectedConnectionId(conn.id === selectedConnectionId ? null : conn.id)}
+                className="websocket-tab__connection"
+              >
+                <span className="websocket-tab__row-heading">
+                  <span className="websocket-tab__mono">{conn.id.substring(0, 12)}...</span>
+                  <span className="websocket-tab__status" data-status={conn.status}>{conn.status}</span>
+                </span>
+                <span className="websocket-tab__url" title={conn.url}>{conn.url}</span>
+                <span className="websocket-tab__muted">{formatTime(conn.timestamp)}</span>
+                {conn.protocols && conn.protocols.length > 0 && (
+                  <span className="websocket-tab__muted">Protocols: {conn.protocols.join(', ')}</span>
+                )}
+                {conn.error && <span className="websocket-tab__error">Error: {conn.error}</span>}
+                {conn.closeCode && <span className="websocket-tab__muted">Close: {conn.closeCode} {conn.closeReason}</span>}
+              </button>
+            ))}
           </div>
-        </div>
+        </section>
 
-        {/* Messages List */}
-        <div className="col-span-8 flex flex-col overflow-hidden">
-          <div className="flex justify-between items-center mb-2">
-            <h3 className="text-lg font-semibold">
-              Messages ({messages.length})
-            </h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setDirectionFilter('all')}
-                className={`px-3 py-1 rounded text-sm font-medium ${
-                  directionFilter === 'all'
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => setDirectionFilter('sent')}
-                className={`px-3 py-1 rounded text-sm font-medium ${
-                  directionFilter === 'sent'
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                Sent
-              </button>
-              <button
-                onClick={() => setDirectionFilter('received')}
-                className={`px-3 py-1 rounded text-sm font-medium ${
-                  directionFilter === 'received'
-                    ? 'bg-amber-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                Received
-              </button>
+        <section className="websocket-tab__pane" aria-label="Messages">
+          <div className="websocket-tab__toolbar">
+            <h3>Messages ({messages.length})</h3>
+            <div className="websocket-tab__actions" role="group" aria-label="Message direction">
+              {['all', 'sent', 'received'].map(direction => (
+                <button
+                  type="button"
+                  key={direction}
+                  onClick={() => setDirectionFilter(direction)}
+                  aria-pressed={directionFilter === direction}
+                  disabled={isClearing}
+                >
+                  {direction[0].toUpperCase() + direction.slice(1)}
+                </button>
+              ))}
             </div>
           </div>
 
           {selectedMessage ? (
-            // Message Detail View
-            <div className="flex-1 bg-white rounded-lg border border-gray-200 p-4 overflow-auto">
-              <div className="flex justify-between items-center mb-4">
-                <h4 className="text-md font-semibold">Message Details</h4>
-                <button
-                  onClick={() => setSelectedMessage(null)}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  Close
-                </button>
+            <div className="websocket-tab__scroll websocket-tab__details" role="region" aria-label="Message details" tabIndex={0}>
+              <div className="websocket-tab__toolbar">
+                <h4>Message Details</h4>
+                <button type="button" autoFocus onClick={() => setSelectedMessage(null)}>Close</button>
               </div>
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm font-medium text-gray-500">Direction</div>
-                  <div className={`text-sm font-medium ${
-                    selectedMessage.direction === 'sent' ? 'text-amber-600' : 'text-green-600'
-                  }`}>
-                    {selectedMessage.direction === 'sent' ? '→ Sent' : '← Received'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-gray-500">Timestamp</div>
-                  <div className="text-sm">{formatTime(selectedMessage.timestamp)}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-gray-500">Format</div>
-                  <div className="text-sm">{selectedMessage.format}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-gray-500">Size</div>
-                  <div className="text-sm">{selectedMessage.size} bytes</div>
-                </div>
-                <div>
-                  <div className="flex justify-between items-center mb-2">
-                    <div className="text-sm font-medium text-gray-500">Data</div>
-                    <button
-                      onClick={() => copyToClipboard(selectedMessage.data)}
-                      className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                  <pre className="text-xs bg-gray-50 p-3 rounded overflow-auto max-h-96">
-                    {formatMessageData(selectedMessage.data, selectedMessage.format)}
-                  </pre>
-                </div>
+              <dl>
+                <dt>Direction</dt>
+                <dd className="websocket-tab__direction" data-direction={selectedMessage.direction}>
+                  {selectedMessage.direction === 'sent' ? '→ Sent' : '← Received'}
+                </dd>
+                <dt>Timestamp</dt>
+                <dd>{formatTime(selectedMessage.timestamp)}</dd>
+                <dt>Format</dt>
+                <dd>{selectedMessage.format}</dd>
+                <dt>Size</dt>
+                <dd>{selectedMessage.size} bytes</dd>
+              </dl>
+              <div className="websocket-tab__toolbar">
+                <span className="websocket-tab__muted">Data</span>
+                <button type="button" onClick={() => copyToClipboard(selectedMessage.data)}>Copy</button>
               </div>
+              <pre>{formatMessageData(selectedMessage.data, selectedMessage.format)}</pre>
             </div>
           ) : (
-            // Messages List View
-            <div className="flex-1 bg-white rounded-lg border border-gray-200 overflow-auto">
+            <div className="websocket-tab__scroll" role="region" aria-label="WebSocket messages" tabIndex={0}>
               {messages.length === 0 ? (
-                <div className="p-4 text-center text-gray-500">
-                  No messages
-                  {selectedConnectionId && ' for selected connection'}
+                <div className="websocket-tab__empty">
+                  No messages{selectedConnectionId && ' for selected connection'}
                 </div>
               ) : (
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b sticky top-0">
+                <table className="websocket-tab__table" aria-label="WebSocket messages">
+                  <thead>
                     <tr>
-                      <th className="text-left p-2 w-24">Time</th>
-                      <th className="text-left p-2 w-24">Direction</th>
-                      <th className="text-left p-2 w-20">Format</th>
-                      <th className="text-left p-2 w-20">Size</th>
-                      <th className="text-left p-2">Data Preview</th>
+                      <th scope="col">Time</th>
+                      <th scope="col">Direction</th>
+                      <th scope="col">Format</th>
+                      <th scope="col">Size</th>
+                      <th scope="col">Data Preview</th>
                     </tr>
                   </thead>
                   <tbody>
                     {messages.map((msg) => (
                       <tr
                         key={msg.id}
-                        onClick={() => setSelectedMessage(msg)}
-                        className="border-b hover:bg-gray-50 cursor-pointer"
+                        onClick={() => { returnFocusId.current = msg.id; setSelectedMessage(msg); }}
                       >
-                        <td className="p-2 text-xs font-mono">
-                          {formatTime(msg.timestamp)}
+                        <td className="websocket-tab__mono">{formatTime(msg.timestamp)}</td>
+                        <td className="websocket-tab__direction" data-direction={msg.direction}>
+                          {msg.direction === 'sent' ? '→ Sent' : '← Received'}
                         </td>
-                        <td className="p-2">
-                          <span className={`text-xs font-medium ${
-                            msg.direction === 'sent' ? 'text-amber-600' : 'text-green-600'
-                          }`}>
-                            {msg.direction === 'sent' ? '→ Sent' : '← Received'}
-                          </span>
-                        </td>
-                        <td className="p-2 text-xs">{msg.format}</td>
-                        <td className="p-2 text-xs">{msg.size}B</td>
-                        <td className="p-2 text-xs font-mono truncate max-w-md">
-                          {msg.data.length > 100 ? `${msg.data.substring(0, 100)}...` : msg.data}
+                        <td>{msg.format}</td>
+                        <td>{msg.size}B</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="websocket-tab__message"
+                            ref={node => {
+                              if (node) messageButtons.current.set(msg.id, node);
+                              else messageButtons.current.delete(msg.id);
+                            }}
+                            aria-label={`Inspect message ${msg.id}: ${msg.data.length > 100 ? `${msg.data.substring(0, 100)}...` : msg.data}`}
+                          >
+                            {msg.data.length > 100 ? `${msg.data.substring(0, 100)}...` : msg.data}
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -337,7 +291,7 @@ export function WebSocketTab({ port }) {
               )}
             </div>
           )}
-        </div>
+        </section>
       </div>
     </div>
   );

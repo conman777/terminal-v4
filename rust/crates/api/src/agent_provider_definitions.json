@@ -5,12 +5,10 @@
     "transport": "anthropic-messages",
     "auth": "api-key",
     "authMethods": [
-      "api-key",
-      "oauth"
+      "api-key"
     ],
-    "oauthCommand": "claude auth login --console",
-    "oauthHelp": "Claude opens the Anthropic Console OAuth flow with API usage billing.",
     "baseUrl": "https://api.anthropic.com",
+    "baseUrlEnvKey": "ANTHROPIC_BASE_URL",
     "envKeys": [
       "ANTHROPIC_API_KEY",
       "ANTHROPIC_TOKEN"
@@ -19,67 +17,227 @@
       {
         "id": "claude-fable-5",
         "label": "Claude Fable 5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/fable-5/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-sonnet-5",
         "label": "Claude Sonnet 5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/sonnet-5/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-opus-4-8",
         "label": "Claude Opus 4.8",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/opus-4-8/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-opus-4-7",
         "label": "Claude Opus 4.7",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/opus-4-7/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-opus-4-6",
         "label": "Claude Opus 4.6",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/opus-4-6/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-sonnet-4-6",
         "label": "Claude Sonnet 4.6",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "adaptive"
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-opus-4-5-20251101",
         "label": "Claude Opus 4.5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/models/opus-4-5/overview",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "thinkingOnReasoning": {
+          "type": "enabled",
+          "budget_tokens": 4096
+        },
+        "reasoningStatus": "supported"
       },
       {
         "id": "claude-sonnet-4-5-20250929",
         "label": "Claude Sonnet 4.5",
-        "default": false
-      },
-      {
-        "id": "claude-opus-4-20250514",
-        "label": "Claude Opus 4",
-        "default": false
-      },
-      {
-        "id": "claude-sonnet-4-20250514",
-        "label": "Claude Sonnet 4",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "claude-haiku-4-5-20251001",
         "label": "Claude Haiku 4.5",
-        "default": false
-      },
-      {
-        "id": "claude-opus-4-1-20250805",
-        "label": "Claude Opus 4.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "claude-opus-5",
         "label": "Claude Opus 5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "imageInput": true,
+        "capabilitySources": [
+          "https://platform.claude.com/docs/en/build-with-claude/effort",
+          "https://platform.claude.com/docs/en/about-claude/model-deprecations",
+          "https://platform.claude.com/docs/en/build-with-claude/thinking"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       }
     ],
     "reasoningLevels": [
@@ -104,37 +262,78 @@
       {
         "id": "grok-build-0.1",
         "label": "Grok Build 0.1",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 256000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://docs.x.ai/developers/models/grok-build-0.1",
+          "https://x.ai/news/grok-build-0-1"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "grok-composer-2.5-fast",
         "label": "Grok Composer 2.5 Fast",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "grok-4.20-0309-non-reasoning",
         "label": "Grok 4.20",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "grok-4.20-0309-reasoning",
         "label": "Grok 4.20 Reasoning",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "grok-4.20-multi-agent-0309",
         "label": "Grok 4.20 Multi-Agent",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "grok-4.3",
         "label": "Grok 4.3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "contextWindow": 1000000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://docs.x.ai/developers/models/grok-4.3"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       },
       {
         "id": "grok-4.5",
         "label": "Grok 4.5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "capabilitySources": [
+          "https://docs.x.ai/developers/models/grok-4.5",
+          "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       }
     ],
     "reasoningLevels": [
@@ -143,11 +342,12 @@
       "high",
       "xhigh",
       "max"
-    ]
+    ],
+    "supportsEncryptedResponseState": true
   },
   {
     "id": "xai-oauth",
-    "label": "xAI / Grok OAuth profile (API fallback)",
+    "label": "xAI API (alternate profile)",
     "transport": "openai-responses",
     "auth": "api-key",
     "authMethods": [
@@ -162,12 +362,36 @@
       {
         "id": "grok-4.5",
         "label": "Grok 4.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "capabilitySources": [
+          "https://docs.x.ai/developers/models/grok-4.5",
+          "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       },
       {
         "id": "grok-4.3",
         "label": "Grok 4.3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "contextWindow": 1000000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://docs.x.ai/developers/models/grok-4.3"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       }
     ],
     "reasoningLevels": [
@@ -176,7 +400,8 @@
       "high",
       "xhigh",
       "max"
-    ]
+    ],
+    "supportsEncryptedResponseState": true
   },
   {
     "id": "openai-api",
@@ -192,12 +417,36 @@
       {
         "id": "gpt-5.4",
         "label": "GPT-5.4",
-        "default": true
+        "default": true,
+        "reasoningLevels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "contextWindow": 1050000,
+        "maxOutputTokens": 128000,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://developers.openai.com/api/docs/models/gpt-5.4"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       },
       {
         "id": "gpt-4.1",
         "label": "GPT-4.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "contextWindow": 1047576,
+        "maxOutputTokens": 32768,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://developers.openai.com/api/docs/models/gpt-4.1"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -206,7 +455,8 @@
       "high",
       "xhigh",
       "max"
-    ]
+    ],
+    "supportsEncryptedResponseState": true
   },
   {
     "id": "actual",
@@ -223,12 +473,16 @@
       {
         "id": "actual/test-model",
         "label": "Actual hosted model",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "actual/local-model",
         "label": "Actual local model",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -237,7 +491,8 @@
       "medium",
       "high",
       "max"
-    ]
+    ],
+    "supportsEncryptedResponseState": false
   },
   {
     "id": "copilot",
@@ -250,12 +505,16 @@
       {
         "id": "gpt-4o",
         "label": "GPT-4o",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "gpt-4.1",
         "label": "GPT-4.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ]
   },
@@ -273,12 +532,44 @@
       {
         "id": "deepseek-v4-pro",
         "label": "DeepSeek V4 Pro",
-        "default": true
+        "default": true,
+        "reasoningLevels": [
+          "none",
+          "low",
+          "high",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 393216,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://api-docs.deepseek.com/quick_start/pricing/",
+          "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "https://api-docs.deepseek.com/api/create-chat-completion/"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       },
       {
         "id": "deepseek-v4-flash",
         "label": "DeepSeek V4 Flash",
-        "default": false
+        "default": false,
+        "reasoningLevels": [
+          "none",
+          "low",
+          "high",
+          "max"
+        ],
+        "contextWindow": 1000000,
+        "maxOutputTokens": 393216,
+        "imageInput": true,
+        "capabilitySources": [
+          "https://api-docs.deepseek.com/quick_start/pricing/",
+          "https://api-docs.deepseek.com/guides/thinking_mode/",
+          "https://api-docs.deepseek.com/api/create-chat-completion/"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       }
     ],
     "reasoningLevels": [
@@ -300,7 +591,9 @@
       {
         "id": "default",
         "label": "Default ensemble",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ]
   },
@@ -318,17 +611,35 @@
       {
         "id": "openai/gpt-4o",
         "label": "OpenAI GPT-4o",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 128000,
+        "maxOutputTokens": 16384,
+        "capabilitySources": [
+          "https://openrouter.ai/api/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "anthropic/claude-sonnet-4",
         "label": "Claude Sonnet",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "google/gemini-2.5-pro",
         "label": "Gemini 2.5 Pro",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "contextWindow": 1048576,
+        "maxOutputTokens": 65536,
+        "capabilitySources": [
+          "https://openrouter.ai/api/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -353,12 +664,16 @@
       {
         "id": "Hermes-4-70B",
         "label": "Nous 4 70B",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "Hermes-4-405B",
         "label": "Nous 4 405B",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -387,12 +702,16 @@
       {
         "id": "qwen3-coder-plus",
         "label": "Qwen3 Coder Plus",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "qwen3.5-plus",
         "label": "Qwen3.5 Plus",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -405,7 +724,7 @@
   },
   {
     "id": "minimax-oauth",
-    "label": "MiniMax OAuth/API",
+    "label": "MiniMax API (alternate profile)",
     "transport": "anthropic-messages",
     "auth": "api-key",
     "baseUrl": "https://api.minimax.io/anthropic",
@@ -417,12 +736,28 @@
       {
         "id": "MiniMax-M2.5",
         "label": "MiniMax M2.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "MiniMax-M2.1",
         "label": "MiniMax M2.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -446,7 +781,9 @@
       {
         "id": "default",
         "label": "Copilot CLI default",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ]
   },
@@ -465,7 +802,9 @@
       {
         "id": "local-model",
         "label": "LM Studio loaded model",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -491,7 +830,9 @@
       {
         "id": "default",
         "label": "TokenHub default model",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -518,17 +859,30 @@
       {
         "id": "glm-5",
         "label": "GLM-5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 200000,
+        "maxOutputTokens": 128000,
+        "capabilitySources": [
+          "https://docs.z.ai/guides/llm/glm-5",
+          "https://docs.z.ai/guides/capabilities/thinking-mode"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "glm-4.5",
         "label": "GLM-4.5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "glm-4.5-air",
         "label": "GLM-4.5 Air",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -553,12 +907,28 @@
       {
         "id": "MiniMax-M2.5",
         "label": "MiniMax M2.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "MiniMax-M2.1",
         "label": "MiniMax M2.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -584,12 +954,28 @@
       {
         "id": "MiniMax-M2.5",
         "label": "MiniMax M2.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "MiniMax-M2.1",
         "label": "MiniMax M2.1",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "contextWindow": 204800,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://platform.minimax.io/docs/api-reference/text-anthropic-api"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -602,7 +988,7 @@
   },
   {
     "id": "kimi-coding",
-    "label": "Kimi Coding",
+    "label": "Moonshot API",
     "transport": "openai-chat",
     "auth": "api-key",
     "baseUrl": "https://api.moonshot.ai/v1",
@@ -614,17 +1000,23 @@
       {
         "id": "kimi-k2.5",
         "label": "Kimi K2.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "kimi-k2-thinking",
         "label": "Kimi K2 Thinking",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "kimi-k2",
         "label": "Kimi K2",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -637,7 +1029,7 @@
   },
   {
     "id": "kimi-coding-cn",
-    "label": "Kimi Coding China",
+    "label": "Moonshot API China",
     "transport": "openai-chat",
     "auth": "api-key",
     "baseUrl": "https://api.moonshot.cn/v1",
@@ -650,17 +1042,23 @@
       {
         "id": "kimi-k2.5",
         "label": "Kimi K2.5",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "kimi-k2-thinking",
         "label": "Kimi K2 Thinking",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "kimi-k2",
         "label": "Kimi K2",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -685,17 +1083,23 @@
       {
         "id": "qwen-plus",
         "label": "Qwen Plus",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "qwen-max",
         "label": "Qwen Max",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "qwen3-coder-plus",
         "label": "Qwen3 Coder Plus",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -711,22 +1115,33 @@
     "label": "Alibaba Coding Plan",
     "transport": "openai-chat",
     "auth": "api-key",
-    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
     "baseUrlEnvKey": "ALIBABA_CODING_PLAN_BASE_URL",
     "envKeys": [
-      "ALIBABA_CODING_PLAN_API_KEY",
-      "DASHSCOPE_API_KEY"
+      "ALIBABA_CODING_PLAN_API_KEY"
     ],
     "models": [
       {
         "id": "qwen3-coder-plus",
         "label": "Qwen3 Coder Plus",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://www.alibabacloud.com/help/en/model-studio/coding-plan"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "qwen3-coder-next",
         "label": "Qwen3 Coder Next",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://www.alibabacloud.com/help/en/model-studio/coding-plan"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -735,7 +1150,8 @@
       "high",
       "xhigh",
       "max"
-    ]
+    ],
+    "durableTasks": false
   },
   {
     "id": "xiaomi",
@@ -751,12 +1167,16 @@
       {
         "id": "mimo-v2-flash",
         "label": "MiMo V2 Flash",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "mimo-v2-pro",
         "label": "MiMo V2 Pro",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -781,12 +1201,24 @@
       {
         "id": "meta-llama/Llama-3.3-70B-Instruct",
         "label": "Llama 3.3 70B Instruct",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://router.huggingface.co/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "Qwen/Qwen3-235B-A22B",
         "label": "Qwen3 235B",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://router.huggingface.co/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -811,12 +1243,22 @@
       {
         "id": "accounts/fireworks/models/llama-v3p1-70b-instruct",
         "label": "Llama 3.1 70B",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 131072,
+        "imageInput": false,
+        "capabilitySources": [
+          "https://fireworks.ai/models/fireworks/llama-v3p1-70b-instruct"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "accounts/fireworks/models/deepseek-v3",
         "label": "DeepSeek V3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -832,7 +1274,7 @@
     "label": "Novita AI",
     "transport": "openai-chat",
     "auth": "api-key",
-    "baseUrl": "https://api.novita.ai/openai",
+    "baseUrl": "https://api.novita.ai/openai/v1",
     "baseUrlEnvKey": "NOVITA_BASE_URL",
     "envKeys": [
       "NOVITA_API_KEY"
@@ -841,12 +1283,16 @@
       {
         "id": "deepseek/deepseek-v3-0324",
         "label": "DeepSeek V3",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "meta-llama/llama-3.3-70b-instruct",
         "label": "Llama 3.3 70B",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -871,12 +1317,21 @@
       {
         "id": "meta/llama-3.3-70b-instruct",
         "label": "Llama 3.3 70B",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "imageInput": false,
+        "capabilitySources": [
+          "https://build.nvidia.com/meta/llama-3_3-70b-instruct?nim=hosted"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
         "label": "Llama Nemotron Ultra",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -901,12 +1356,16 @@
       {
         "id": "meta-llama/Meta-Llama-3.3-70B-Instruct",
         "label": "Llama 3.3 70B",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "deepseek-ai/DeepSeek-V3",
         "label": "DeepSeek V3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -931,7 +1390,9 @@
       {
         "id": "gmi-default",
         "label": "GMI default model",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -956,12 +1417,16 @@
       {
         "id": "virtuoso-large",
         "label": "Virtuoso Large",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "coder-large",
         "label": "Coder Large",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -986,12 +1451,21 @@
       {
         "id": "step-3.5-flash",
         "label": "Step 3.5 Flash",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "contextWindow": 256000,
+        "capabilitySources": [
+          "https://platform.stepfun.ai/docs/en/guides/models/step-3.5-flash"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "step-3",
         "label": "Step 3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1016,12 +1490,29 @@
       {
         "id": "solar-pro2",
         "label": "Solar Pro 2",
-        "default": true
+        "default": true,
+        "reasoningLevels": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "capabilitySources": [
+          "https://console.upstage.ai/docs/capabilities/generate/reasoning"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "supported"
       },
       {
         "id": "solar-mini",
         "label": "Solar Mini",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://console.upstage.ai/docs/capabilities/generate/reasoning"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1046,7 +1537,9 @@
       {
         "id": "kilo-default",
         "label": "KiloCode default model",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1071,12 +1564,16 @@
       {
         "id": "openai/gpt-4o",
         "label": "OpenAI GPT-4o",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "anthropic/claude-sonnet-4",
         "label": "Claude Sonnet",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1092,7 +1589,7 @@
     "label": "OpenCode Zen",
     "transport": "openai-chat",
     "auth": "api-key",
-    "baseUrl": "https://opencode.ai/zen/v1",
+    "baseUrl": "https://opencode.ai/inference/openai/v1",
     "baseUrlEnvKey": "OPENCODE_ZEN_BASE_URL",
     "envKeys": [
       "OPENCODE_API_KEY"
@@ -1101,12 +1598,20 @@
       {
         "id": "big-pickle",
         "label": "Big Pickle",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://opencode.ai/inference/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "claude-sonnet",
         "label": "Claude Sonnet",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1122,7 +1627,7 @@
     "label": "OpenCode Go",
     "transport": "openai-chat",
     "auth": "api-key",
-    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "baseUrl": "https://opencode.ai/inference/go/openai/v1",
     "baseUrlEnvKey": "OPENCODE_GO_BASE_URL",
     "envKeys": [
       "OPENCODE_GO_API_KEY",
@@ -1132,22 +1637,45 @@
       {
         "id": "minimax-m3",
         "label": "MiniMax M3",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://opencode.ai/inference/go/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "transport": "anthropic-messages",
+        "baseUrl": "https://opencode.ai/inference/go/anthropic",
+        "baseUrlEnvKey": "OPENCODE_GO_ANTHROPIC_BASE_URL",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "kimi-k3",
         "label": "Kimi K3",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://opencode.ai/inference/go/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       },
       {
         "id": "glm-5",
         "label": "GLM-5",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "deepseek-v4-pro",
         "label": "DeepSeek V4 Pro",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "capabilitySources": [
+          "https://opencode.ai/inference/go/v1/models"
+        ],
+        "capabilityVerifiedAt": "2026-10-17",
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1172,12 +1700,16 @@
       {
         "id": "gpt-oss:120b",
         "label": "GPT OSS 120B",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "qwen3:235b",
         "label": "Qwen3 235B",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [
@@ -1204,17 +1736,23 @@
       {
         "id": "anthropic.claude-3-7-sonnet-20250219-v1:0",
         "label": "Claude 3.7 Sonnet",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "amazon.nova-pro-v1:0",
         "label": "Amazon Nova Pro",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "meta.llama3-3-70b-instruct-v1:0",
         "label": "Llama 3.3 70B",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ]
   },
@@ -1236,12 +1774,16 @@
       {
         "id": "gemini-2.5-pro",
         "label": "Gemini 2.5 Pro",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "gemini-2.5-flash",
         "label": "Gemini 2.5 Flash",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ]
   },
@@ -1260,12 +1802,16 @@
       {
         "id": "gpt-4.1",
         "label": "GPT-4.1 deployment",
-        "default": true
+        "default": true,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       },
       {
         "id": "claude-sonnet-4",
         "label": "Claude Sonnet deployment",
-        "default": false
+        "default": false,
+        "reasoningLevels": [],
+        "reasoningStatus": "unknown"
       }
     ],
     "reasoningLevels": [

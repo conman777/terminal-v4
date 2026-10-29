@@ -10,12 +10,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .is_some_and(|argument| argument == "agent")
     {
         let config = AppConfig::from_env();
-        let exit_code = match terminal_v4_api::hermes_provider_bridge::run_agent_bridge(
-            &config.data_dir,
-            &arguments[1..],
-        )
-        .await
-        {
+        let outcome = terminal_v4_api::v4_agent::run(&config.data_dir, &arguments[1..]).await;
+        let exit_code = match outcome {
             Ok(code) => code,
             Err(message) => {
                 eprintln!("{message}");
@@ -33,7 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = AppConfig::from_env();
     config.validate_runtime()?;
-    let state = ApiState::new(config.clone())?;
+    let state = ApiState::new_runtime(config.clone())?;
+    #[cfg(all(unix, feature = "supervised-input-preview"))]
+    if std::env::var("TERMINAL_V4_SUPERVISED_INPUT_FIXTURE").as_deref() == Ok("1") {
+        state.enable_supervised_input_loopback_fixture()?;
+    }
     state
         .terminal_manager()
         .recover_orphaned_tmux_sessions()

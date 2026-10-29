@@ -1,10 +1,24 @@
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 
 const E2E_USERNAME = process.env.E2E_USERNAME || process.env.ALLOWED_USERNAME || 'conor';
 const E2E_PASSWORD = process.env.E2E_PASSWORD || 'P@ssw0rd213@';
 
 test.describe('Mobile keyboard viewport restoration', () => {
-  test.beforeEach(async ({ page, request }) => {
+  test.beforeEach(async ({ page }) => {
+    if (process.env.E2E_LOCAL_TESTING === '1') {
+      const session = {
+        id: 'ss-mobile-keyboard-viewport', provider: 'codex', runtime: 'codex',
+        title: 'Keyboard fixture', cwd: '/tmp/mobile-keyboard-fixture', status: 'completed',
+        model: 'gpt-6.1-sol', reasoning: 'high',
+        createdAt: '2026-10-25T10:00:00Z', updatedAt: '2026-10-25T10:00:00Z',
+      };
+      await page.route(/\/api\/structured\/sessions(?:\?.*)?$/, route => route.fulfill({ json: [session] }));
+      await page.route(`**/api/structured/sessions/${session.id}`, route => route.fulfill({ json: session }));
+      await page.routeWebSocket(`**/api/structured/sessions/${session.id}/ws*`, socket => {
+        socket.send(JSON.stringify({ __terminal_meta: true, type: 'structured_event', event: { type: 'message_completed', role: 'assistant', content: 'Ready.', messageId: 'assistant', turnId: 'turn', seq: 1 } }));
+      });
+    }
     await page.addInitScript(() => {
       const listeners = new Map<string, Set<(event: Event) => void>>();
       const state = {
@@ -73,12 +87,17 @@ test.describe('Mobile keyboard viewport restoration', () => {
 
     if (!(await appShellMarker.isVisible({ timeout: 1000 }).catch(() => false))) {
       const usernameInput = page.getByRole('textbox', { name: 'Username' }).first();
-      const passwordInput = page.getByRole('textbox', { name: 'Password' }).first();
       await expect(usernameInput).toBeVisible({ timeout: 10000 });
-      await expect(passwordInput).toBeVisible({ timeout: 10000 });
-      await usernameInput.fill(E2E_USERNAME);
-      await passwordInput.fill(E2E_PASSWORD);
-      await page.getByRole('button', { name: /^Initialize Session$|^Sign In$/ }).first().click();
+      if (process.env.E2E_LOCAL_TESTING === '1') {
+        await usernameInput.fill(`keyboard-${randomUUID()}`);
+        await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
+      } else {
+        const passwordInput = page.getByLabel('Password', { exact: true }).first();
+        await expect(passwordInput).toBeVisible({ timeout: 10000 });
+        await usernameInput.fill(E2E_USERNAME);
+        await passwordInput.fill(E2E_PASSWORD);
+        await page.getByRole('button', { name: /^Initialize Session$|^Sign In$/ }).first().click();
+      }
     }
 
     await expect(appShellMarker).toBeVisible({ timeout: 15000 });
@@ -107,6 +126,8 @@ test.describe('Mobile keyboard viewport restoration', () => {
       const headerRect = header.getBoundingClientRect();
       return {
         layoutTop: Math.round(layoutRect.top),
+        environmentBarHeight: Math.round(document.querySelector('.remote-environment-bar')?.getBoundingClientRect().height || 0),
+        layoutBottom: Math.round(layoutRect.bottom),
         layoutHeight: Math.round(layoutRect.height),
         headerTop: Math.round(headerRect.top),
         focusedTag: composerInput === document.activeElement ? (composerInput as HTMLElement).tagName : '',
@@ -118,7 +139,7 @@ test.describe('Mobile keyboard viewport restoration', () => {
 
     const initialMetrics = await readShellMetrics();
     expect(initialMetrics).toBeTruthy();
-    expect(initialMetrics?.layoutTop).toBe(0);
+    expect(initialMetrics?.layoutTop).toBe(initialMetrics?.environmentBarHeight);
 
     await composer.focus();
     await page.evaluate(() => {
@@ -130,9 +151,26 @@ test.describe('Mobile keyboard viewport restoration', () => {
 
     const keyboardOpenMetrics = await readShellMetrics();
     expect(keyboardOpenMetrics).toBeTruthy();
-    expect(keyboardOpenMetrics?.layoutTop).toBe(248);
-    expect(keyboardOpenMetrics?.layoutHeight).toBe(402);
+    expect(keyboardOpenMetrics?.layoutTop).toBe(248 + (keyboardOpenMetrics?.environmentBarHeight || 0));
+    expect(keyboardOpenMetrics?.layoutHeight).toBe(402 - (keyboardOpenMetrics?.environmentBarHeight || 0));
+    expect(keyboardOpenMetrics?.layoutBottom).toBeLessThanOrEqual(248 + 402);
     expect(keyboardOpenMetrics?.headerTop).toBe(keyboardOpenMetrics?.layoutTop);
+
+    const scrolledMetrics = await page.evaluate(async () => {
+      (window as typeof window & {
+        __setMockVisualViewport?: (next: { height?: number; offsetTop?: number }) => void;
+      }).__setMockVisualViewport?.({ height: 402, offsetTop: 0 });
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const layout = document.querySelector('.layout.mobile');
+      const composer = document.querySelector('[aria-label="Command composer"]');
+      return {
+        height: Math.round(layout?.getBoundingClientRect().height || 0),
+        environmentBarHeight: Math.round(document.querySelector('.remote-environment-bar')?.getBoundingClientRect().height || 0),
+        focused: composer === document.activeElement,
+      };
+    });
+    expect(scrolledMetrics.focused).toBe(true);
+    expect(scrolledMetrics.height).toBe(402 - scrolledMetrics.environmentBarHeight);
 
     await page.evaluate(() => {
       const input = document.querySelector('[aria-label="Command composer"]');
@@ -152,10 +190,10 @@ test.describe('Mobile keyboard viewport restoration', () => {
 
     const keyboardClosedMetrics = await readShellMetrics();
     expect(keyboardClosedMetrics).toBeTruthy();
-    expect(keyboardClosedMetrics?.layoutTop).toBe(0);
-    expect(keyboardClosedMetrics?.headerTop).toBe(0);
-    expect(keyboardClosedMetrics?.layoutHeight).toBeGreaterThanOrEqual((keyboardClosedMetrics?.windowInnerHeight ?? 0) - 2);
-    expect(keyboardClosedMetrics?.viewportHeightVar).toBe(`${keyboardClosedMetrics?.windowInnerHeight}px`);
+    expect(keyboardClosedMetrics?.layoutTop).toBe(keyboardClosedMetrics?.environmentBarHeight);
+    expect(keyboardClosedMetrics?.headerTop).toBe(keyboardClosedMetrics?.layoutTop);
+    expect(keyboardClosedMetrics?.layoutHeight).toBeGreaterThanOrEqual((keyboardClosedMetrics?.windowInnerHeight ?? 0) - (keyboardClosedMetrics?.environmentBarHeight || 0) - 2);
+    expect(keyboardClosedMetrics?.viewportHeightVar).toBe(`${(keyboardClosedMetrics?.windowInnerHeight || 0) - (keyboardClosedMetrics?.environmentBarHeight || 0)}px`);
     expect(keyboardClosedMetrics?.viewportOffsetVar).toBe('0px');
   });
 });

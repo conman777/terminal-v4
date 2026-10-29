@@ -25,7 +25,10 @@ export function WorkspaceRewindPanel({ workspacePath = '', onSelectSession }) {
   const load = useCallback(async () => {
     const version = generation.current;
     const result = await request();
-    if (version === generation.current && !controller.current?.signal.aborted) setData(result);
+    if (version === generation.current && !controller.current?.signal.aborted) {
+      setData(result);
+      setOperation(current => current ? result.operations?.find(item => item.id === current.id) || current : null);
+    }
   }, [request]);
   useEffect(() => {
     generation.current += 1;
@@ -55,9 +58,10 @@ export function WorkspaceRewindPanel({ workspacePath = '', onSelectSession }) {
     if (action === 'resume' && result.session?.id) await onSelectSession?.(result.session.id);
   }
   return <div className="workspace-rewind-panel">
-    <h3>Conversation rewind</h3>
-    <p>Choose a native conversation turn and a files checkpoint. Rewind forks the provider conversation before that user turn and restores the selected files in this isolated worktree.</p>
-    {error && <p role="alert">{error}</p>}
+    <header><h3>Conversation rewind</h3>
+    <p>Choose a native conversation turn and a files checkpoint. Rewind forks the provider conversation before that user turn and restores the selected files in this isolated worktree.</p></header>
+    <button type="button" disabled={busy || !workspacePath} onClick={() => perform(load)}>Refresh checkpoints</button>
+    {error && <div role="alert"><p>{error}</p><button type="button" disabled={busy} onClick={() => perform(load)}>Retry rewind</button></div>}
     {!data && !error && <p role="status">Loading native conversations and checkpoints…</p>}
     {data && !data.managed && <p role="note">Create an isolated worktree in Git &amp; worktrees first. Coordinated rewind requires a managed checkout and a saved files checkpoint.</p>}
     <div className="workspace-rewind-fields">

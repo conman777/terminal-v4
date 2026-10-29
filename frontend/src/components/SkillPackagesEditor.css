@@ -1,0 +1,14 @@
+.skill-packages-editor { min-width: 0; }
+.skill-package-import { margin: 14px 0; }
+.skill-package-import summary { cursor: pointer; }
+.skill-package-import button { margin-top: 8px; }
+.skill-package-files { border-left: 2px solid var(--border-color, #3b3733); margin-top: 14px; padding-left: 12px; }
+.skill-package-files h4 { margin: 0; font-size: 13px; }
+.skill-package-file { margin: 14px 0; min-width: 0; }
+.skill-package-file > div { display: flex; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.skill-package-file strong { overflow-wrap: anywhere; font-size: 12px; }
+.skill-package-add-file { display: flex; align-items: center; gap: 8px; }
+.skill-package-add-file button, .skill-package-file button { flex-shrink: 0; }
+@media (max-width: 600px) { .skill-packages-editor button { min-height: 44px; } .skill-package-add-file { flex-wrap: wrap; } .skill-package-add-file button { width: 100%; } }
+
+.workspace-profile-skill-activation { display: grid; gap: 6px; margin-top: 10px; }

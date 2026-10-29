@@ -1,0 +1,265 @@
+{
+  "date": "2026-10-20",
+  "method": {
+    "platform": "macOS arm64",
+    "backendBuild": "debug",
+    "provider": "synthetic local Codex app-server; no model requests",
+    "workload": "200 chunks of 200 text bytes through the real adapter/session manager; three fresh sessions per history size and build",
+    "cpu": "Backend process CPU seconds from ps; excludes shell/provider/browser child processes",
+    "elapsed": "Request through terminal receipt, 100 ms receipt polling",
+    "limits": "Same shared development host; before then after, not randomized; no repeated release, battery, total browser memory or leak measurements"
+  },
+  "before": {
+    "label": "before",
+    "debugBackend": true,
+    "syntheticProvider": true,
+    "trials": [
+      {
+        "trial": 1,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 1.3937985000000002,
+        "backendCpuSeconds": 0.46,
+        "finalSnapshotBytes": 112363,
+        "events": 207
+      },
+      {
+        "trial": 1,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 2.2898689169999997,
+        "backendCpuSeconds": 1.42,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 1,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 5.477718916999999,
+        "backendCpuSeconds": 4.55,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 1.3896841249999998,
+        "backendCpuSeconds": 0.45999999999999996,
+        "finalSnapshotBytes": 112363,
+        "events": 207
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 2.2739269999999996,
+        "backendCpuSeconds": 1.4299999999999988,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 5.385585915999998,
+        "backendCpuSeconds": 4.48,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 1.2945707909999984,
+        "backendCpuSeconds": 0.46000000000000085,
+        "finalSnapshotBytes": 112363,
+        "events": 207
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 2.289724582999999,
+        "backendCpuSeconds": 1.4000000000000004,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 5.375150917000003,
+        "backendCpuSeconds": 4.499999999999998,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      }
+    ],
+    "inventory": {
+      "conversations": 20,
+      "priorTextBytesEach": 131072,
+      "fullResponseBytes": 2633921,
+      "inventoryResponseBytes": null
+    }
+  },
+  "after": {
+    "label": "after",
+    "debugBackend": true,
+    "syntheticProvider": true,
+    "trials": [
+      {
+        "trial": 1,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.860764833,
+        "backendCpuSeconds": 0.08999999999999997,
+        "finalSnapshotBytes": 112363,
+        "events": 207
+      },
+      {
+        "trial": 1,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.9695592500000002,
+        "backendCpuSeconds": 0.09000000000000002,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 1,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.8913959159999999,
+        "backendCpuSeconds": 0.11999999999999994,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.866166667,
+        "backendCpuSeconds": 0.08000000000000007,
+        "finalSnapshotBytes": 112363,
+        "events": 207
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.874938208,
+        "backendCpuSeconds": 0.08999999999999997,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 2,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.8947442499999997,
+        "backendCpuSeconds": 0.12,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 0,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.9681813329999995,
+        "backendCpuSeconds": 0.09999999999999998,
+        "finalSnapshotBytes": 112359,
+        "events": 207
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 131072,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.9680032080000001,
+        "backendCpuSeconds": 0.10000000000000009,
+        "finalSnapshotBytes": 243576,
+        "events": 208
+      },
+      {
+        "trial": 3,
+        "priorTextBytes": 524288,
+        "chunks": 200,
+        "chunkTextBytes": 200,
+        "status": "completed",
+        "elapsedSeconds": 0.8892972499999996,
+        "backendCpuSeconds": 0.10999999999999988,
+        "finalSnapshotBytes": 636792,
+        "events": 208
+      }
+    ],
+    "inventory": {
+      "conversations": 20,
+      "priorTextBytesEach": 131072,
+      "fullResponseBytes": 2633921,
+      "inventoryResponseBytes": 10041
+    }
+  },
+  "summary": [
+    {
+      "priorTextBytes": 0,
+      "trialsEach": 3,
+      "beforeMedianBackendCpuSeconds": 0.46,
+      "afterMedianBackendCpuSeconds": 0.08999999999999997,
+      "cpuReductionPercent": 80.43478260869566,
+      "beforeMedianElapsedSeconds": 1.3896841249999998,
+      "afterMedianElapsedSeconds": 0.866166667
+    },
+    {
+      "priorTextBytes": 131072,
+      "trialsEach": 3,
+      "beforeMedianBackendCpuSeconds": 1.42,
+      "afterMedianBackendCpuSeconds": 0.09000000000000002,
+      "cpuReductionPercent": 93.66197183098592,
+      "beforeMedianElapsedSeconds": 2.289724582999999,
+      "afterMedianElapsedSeconds": 0.9680032080000001
+    },
+    {
+      "priorTextBytes": 524288,
+      "trialsEach": 3,
+      "beforeMedianBackendCpuSeconds": 4.499999999999998,
+      "afterMedianBackendCpuSeconds": 0.11999999999999994,
+      "cpuReductionPercent": 97.33333333333334,
+      "beforeMedianElapsedSeconds": 5.385585915999998,
+      "afterMedianElapsedSeconds": 0.8913959159999999
+    }
+  ]
+}

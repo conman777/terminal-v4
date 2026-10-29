@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTerminalRuntimeInfo } from './terminalRuntimeInfo';
+import { parseTerminalRuntimeInfo, resolveForegroundAiType } from './terminalRuntimeInfo';
 
 describe('parseTerminalRuntimeInfo', () => {
   it('parses Claude runtime status lines', () => {
@@ -36,5 +36,17 @@ describe('parseTerminalRuntimeInfo', () => {
 
   it('returns null when no recognizable runtime info exists', () => {
     expect(parseTerminalRuntimeInfo('C:\\repo>', 'codex')).toBeNull();
+  });
+});
+
+describe('resolveForegroundAiType', () => {
+  it('drops a saved agent once its terminal is back at a shell prompt', () => {
+    const results = [
+      resolveForegroundAiType('claude', null, 'Claude Code v2\n❯ Try "fix"\n⏵⏵ auto mode on'),
+      resolveForegroundAiType('claude', null, "conordart@host ~ % claude --model 'sonnet'\nconordart@host ~ %"),
+      resolveForegroundAiType(null, { providerId: 'codex' }, 'OpenAI Codex'),
+      resolveForegroundAiType('claude', null, ''),
+    ];
+    expect(results).toEqual(['claude', null, 'codex', 'claude']);
   });
 });

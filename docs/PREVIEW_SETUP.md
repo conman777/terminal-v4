@@ -3,6 +3,9 @@
 This document explains how the preview panel routes local apps and how to make
 it work when accessing Terminal V4 over a LAN IP or hostname.
 
+Examples use the default port 3020; if you run the server with another `PORT`
+(for example 3030), use that port instead. The proxy lives in `rust/crates/api/src/preview/`.
+
 ## Quick Rules
 
 - If you access Terminal V4 at `http://localhost:3020`, previews prefer

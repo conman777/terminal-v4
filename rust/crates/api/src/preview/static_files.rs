@@ -37,6 +37,7 @@ const MIME_TYPES: &[(&str, &str)] = &[
 #[derive(Debug)]
 pub struct StaticPreviewFile {
     pub content_type: &'static str,
+    pub relative_file: String,
     pub bytes: Vec<u8>,
 }
 
@@ -53,17 +54,19 @@ pub async fn load_preview_file(
         .await
         .map_err(|_| "File not found".to_string())?;
 
-    let resolved_file = if metadata.is_dir() {
-        full_path.join("index.html")
+    let requested_path = if metadata.is_dir() {
+        requested_path.join("index.html")
     } else {
-        full_path
+        requested_path
     };
+    let resolved_file = resolve_descendant_path(&base_path, &requested_path).await?;
 
     let bytes = fs::read(&resolved_file)
         .await
         .map_err(|_| "File not found".to_string())?;
     Ok(StaticPreviewFile {
         content_type: content_type_for_path(&resolved_file),
+        relative_file: requested_path.to_string_lossy().replace('\\', "/"),
         bytes,
     })
 }
@@ -74,6 +77,18 @@ fn content_type_for_path(path: &Path) -> &'static str {
         .iter()
         .find_map(|(ext, content_type)| path.ends_with(ext).then_some(*content_type))
         .unwrap_or("application/octet-stream")
+}
+
+pub(crate) async fn validate_preview_root(path: &str) -> Result<(), String> {
+    let root = resolve_project_path(path).await?;
+    if fs::metadata(root)
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+    {
+        Ok(())
+    } else {
+        Err("Preview project directory not found".into())
+    }
 }
 
 async fn resolve_project_path(path: &str) -> Result<PathBuf, String> {

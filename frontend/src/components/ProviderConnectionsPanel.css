@@ -1,0 +1,34 @@
+.provider-connections { display: grid; gap: 12px; max-width: 780px; }
+.provider-connections h3, .provider-connections h4, .provider-connections p { margin: 0; }
+.provider-connections p, .provider-connections small { line-height: 1.5; overflow-wrap: anywhere; }
+.provider-connections fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 9px; min-width: 0; }
+.provider-connections input, .provider-connections select { width: 100%; box-sizing: border-box; min-width: 0; }
+.provider-connections button { justify-self: start; }
+.provider-connection-actions { display: grid; gap: 9px; }
+.provider-discovery { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-color, #444); }
+.provider-discovery ul { margin: 0; padding-left: 20px; }
+.provider-discovery li { margin-bottom: 12px; overflow-wrap: anywhere; }
+.provider-discovery code { white-space: normal; }
+.provider-connections [role="alert"] { color: var(--error-color, #db6b6b); }
+
+.provider-connections input, .provider-connections select {
+  min-height: 40px; padding: 8px 10px; border: 1px solid var(--border-color, #61513a);
+  border-radius: 7px; background: var(--bg-base, #191712); color: var(--text-primary, #f0e9de); font: inherit;
+}
+.provider-connections label { font-size: .875rem; font-weight: 600; }
+.provider-connections small { color: var(--text-secondary, #c1b7a5); font-size: .8125rem; }
+.provider-connections button {
+  min-height: 40px; max-width: 100%; padding: 8px 13px; border-radius: 7px;
+  border: 1px solid var(--border-color, #61513a); background: var(--bg-elevated, #332a1e);
+  color: var(--text-primary, #f0e9de); font: inherit; font-size: .875rem; cursor: pointer;
+}
+.provider-connections button[type="submit"] { background: var(--accent-primary, #df8700); color: var(--bg-base, #211500); font-weight: 600; }
+.provider-connections button:disabled { opacity: .5; cursor: default; }
+.provider-connections :is(button, input, select):focus-visible { outline: 2px solid var(--accent-primary, #df8700); outline-offset: 2px; }
+.provider-connections fieldset:disabled input, .provider-connections fieldset:disabled select { opacity: .6; }
+.provider-connections .provider-discovery-origin { padding: 9px 12px; border-left: 2px solid var(--accent-primary, #df8700); font-size: .875rem; }
+
+@media (max-width: 560px) {
+  .provider-connections :is(button, input, select) { min-height: 44px; }
+  .provider-connections input, .provider-connections select { font-size: 16px; }
+}

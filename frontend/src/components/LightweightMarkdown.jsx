@@ -1,10 +1,69 @@
-import { memo } from 'react';
+import { Fragment, memo, useState } from 'react';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
+import { MermaidFlowchart, parseFlowchart } from './MermaidFlowchart';
+import { MermaidSequence, parseSequence } from './MermaidSequence';
+import './LightweightMarkdown.css';
 
-const LINK_RE = /(https?:\/\/[^\s)]+)|`([^`]+)`/g;
+const LINK_RE = /(`+)|\[([^\]]+)\]\(|\*\*([^*]+)\*\*|(https?:\/\/)|(?<![\\$])\$(?!\$)/g;
 const SAFE_URL_RE = /^https?:\/\//i;
-const BULLET_RE = /^\s*[-*\u2022]\s+(.+)$/;
-const NUMBERED_RE = /^\s*(\d+)[.)]\s+(.+)$/;
 const HEADING_RE = /^(#{1,4})\s+(.+)$/;
+const FENCE_RE = /^(`{3,}|~{3,})([\w.+#-]*)[ \t]*$/;
+const IMAGE_RE = /^!\[([^\]]*)\]\(([^\s)]+)\)\s*$/;
+const safeUrl = href => SAFE_URL_RE.test(href) || /^\/(?![\\/])/.test(href);
+
+function mathMarkup(content, displayMode) {
+  if (!content || content.length > 4096) return null;
+  try {
+    return katex.renderToString(content, { displayMode, throwOnError: true, trust: false, maxSize: 10, maxExpand: 100 });
+  } catch { return null; }
+}
+
+function mathSpan(text, start) {
+  if (/\s/.test(text[start + 1] || '') || !text[start + 1]) return null;
+  for (let index = start + 1; index < text.length; index += 1) {
+    if (text[index] === '\\') { index += 1; continue; }
+    if (text[index] !== '$' || text[index + 1] === '$') continue;
+    if (/\s/.test(text[index - 1]) || /\d/.test(text[index + 1] || '')) return null;
+    return { content: text.slice(start + 1, index), end: index + 1 };
+  }
+  return null;
+}
+
+function codeSpan(text, start) {
+  const delimiter = text.slice(start).match(/^`+/)?.[0];
+  if (!delimiter) return null;
+  const runs = /`+/g;
+  runs.lastIndex = start + delimiter.length;
+  let match;
+  while ((match = runs.exec(text))) {
+    if (match[0] === delimiter) return { content: text.slice(start + delimiter.length, match.index), end: runs.lastIndex };
+  }
+  return null;
+}
+
+function linkDestination(text, start, explicit) {
+  let href = '', depth = 0, index = start;
+  for (; index < text.length; index += 1) {
+    const character = text[index];
+    if (/\s|</.test(character)) break;
+    if (character === '\\' && /[\\()]/.test(text[index + 1] || '')) {
+      href += text[++index];
+      continue;
+    }
+    if (character === '(') depth += 1;
+    if (character === ')') {
+      if (depth === 0) {
+        if (explicit) return { href, end: index + 1, suffix: '' };
+        break;
+      }
+      depth -= 1;
+    }
+    href += character;
+  }
+  if (explicit) return null;
+  return { href: href.replace(/[.,;:!]+$/, ''), end: index, suffix: href.match(/[.,;:!]+$/)?.[0] || '' };
+}
 
 function renderInline(text, linkClassName) {
   if (!text) return null;
@@ -13,33 +72,38 @@ function renderInline(text, linkClassName) {
   let lastIndex = 0;
   LINK_RE.lastIndex = 0;
 
-  for (const match of text.matchAll(LINK_RE)) {
+  let match;
+  while ((match = LINK_RE.exec(text))) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
 
-    if (match[1]) {
-      const href = match[1];
-      parts.push(
-        <a
-          key={`${match.index}-${href}`}
-          href={SAFE_URL_RE.test(href) ? href : undefined}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={linkClassName}
-        >
-          {href}
-        </a>
-      );
+    let end = LINK_RE.lastIndex;
+    if (match[0] === '$') {
+      const span = mathSpan(text, match.index);
+      const markup = span && mathMarkup(span.content, false);
+      parts.push(markup ? <span key={match.index} className="md-math-inline" dangerouslySetInnerHTML={{ __html: markup }} /> : span ? text.slice(match.index, span.end) : '$');
+      if (span) end = span.end;
+    } else if (match[1]) {
+      const span = codeSpan(text, match.index);
+      parts.push(span ? <code key={match.index} className="inline-code">{span.content}</code> : match[0]);
+      if (span) end = span.end;
+    } else if (match[3]) {
+      parts.push(<strong key={match.index}>{match[3]}</strong>);
     } else {
-      parts.push(
-        <code key={`${match.index}-${match[2]}`} className="inline-code">
-          {match[2]}
-        </code>
-      );
+      const destination = linkDestination(text, match[2] ? end : match.index, Boolean(match[2]));
+      if (destination) {
+        const { href, suffix } = destination;
+        parts.push(safeUrl(href)
+          ? <a key={match.index} href={href} target="_blank" rel="noopener noreferrer" className={linkClassName}>{match[2] || href}</a>
+          : <span key={match.index}>{match[2] || href}</span>);
+        if (suffix) parts.push(suffix);
+        end = destination.end;
+      } else parts.push(match[0]);
     }
 
-    lastIndex = match.index + match[0].length;
+    lastIndex = end;
+    LINK_RE.lastIndex = end;
   }
 
   if (lastIndex < text.length) {
@@ -49,45 +113,149 @@ function renderInline(text, linkClassName) {
   return parts.length > 0 ? parts : text;
 }
 
-function normalizeContent(content) {
-  return String(content || '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/([^\n])\s+(?=\u2022\s+)/g, '$1\n');
+function closesFence(line, fence) {
+  const closing = line.match(/^(`{3,}|~{3,})[ \t]*$/)?.[1];
+  return Boolean(closing && closing[0] === fence[0] && closing.length >= fence.length);
 }
 
-function isBlockStart(line) {
+function tableCells(row) {
+  return row.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(cell => cell.trim().replace(/\\\|/g, '|'));
+}
+
+function isTableStart(line, nextLine = '') {
+  const headers = tableCells(line);
+  const separators = tableCells(nextLine);
+  return headers.length > 1 && headers.length === separators.length && separators.every(cell => /^:?-{3,}:?$/.test(cell));
+}
+
+function isBlockStart(line, nextLine) {
   return (
-    /^```(\w+)?\s*$/.test(line)
-    || BULLET_RE.test(line)
-    || NUMBERED_RE.test(line)
+    /^\s*\$\$/.test(line)
+    || isTableStart(line, nextLine)
+    || IMAGE_RE.test(line)
+    || /^>\s?/.test(line)
+    || FENCE_RE.test(line)
+    || Boolean(listMarker(line))
     || HEADING_RE.test(line)
   );
 }
 
+function indentation(text) {
+  return [...text].reduce((width, character) => width + (character === '\t' ? 4 - width % 4 : 1), 0);
+}
+
+function listMarker(line) {
+  const match = line.match(/^([ \t]*)([-+*\u2022]|\d+[.)])([ \t]+)(.*)$/);
+  if (!match) return null;
+  return { indent: indentation(match[1]), contentIndent: indentation(match[1] + match[2] + match[3]),
+    ordered: /^\d/.test(match[2]), start: Number.parseInt(match[2], 10), content: match[4] };
+}
+
+function removeIndent(line, width) {
+  let index = 0, columns = 0;
+  while (index < line.length && columns < width) {
+    columns += line[index] === '\t' ? 4 - columns % 4 : 1;
+    index += 1;
+  }
+  return ' '.repeat(Math.max(0, columns - width)) + line.slice(index);
+}
+
+function parseList(lines, startIndex) {
+  const first = listMarker(lines[startIndex]);
+  const items = [];
+  let index = startIndex, loose = false;
+  while (index < lines.length) {
+    const marker = listMarker(lines[index]);
+    if (!marker || marker.indent !== first.indent || marker.ordered !== first.ordered) break;
+    const itemLines = [marker.content];
+    index += 1;
+    let blanks = 0;
+    while (index < lines.length) {
+      const line = lines[index];
+      if (!line.trim()) { blanks += 1; index += 1; continue; }
+      const next = listMarker(line);
+      if (next && next.indent === first.indent) {
+        if (blanks && next.ordered === first.ordered) loose = true;
+        break;
+      }
+      if (indentation(line.match(/^[ \t]*/)[0]) < marker.contentIndent) break;
+      if (blanks) { loose = true; itemLines.push(...Array(blanks).fill('')); blanks = 0; }
+      itemLines.push(removeIndent(line, marker.contentIndent));
+      index += 1;
+    }
+    items.push(parseBlocks(itemLines.join('\n')));
+  }
+  return { block: { type: 'list', ordered: first.ordered, start: first.start, items, loose }, index };
+}
+
 function parseBlocks(content) {
   const blocks = [];
-  const lines = normalizeContent(content).split('\n');
+  const lines = String(content || '').replace(/\r\n?/g, '\n').split('\n');
   let index = 0;
 
   while (index < lines.length) {
     const line = lines[index];
-    const fence = line.match(/^```(\w+)?\s*$/);
+    const fence = line.match(FENCE_RE);
 
     if (fence) {
-      const language = fence[1] || 'text';
+      const language = fence[2] || 'text';
       const code = [];
       index += 1;
-      while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+      while (index < lines.length && !closesFence(lines[index], fence[1])) {
         code.push(lines[index]);
         index += 1;
       }
-      blocks.push({ type: 'code', language, content: code.join('\n') });
+      blocks.push({ type: 'code', language, content: code.join('\n'), closed: index < lines.length });
       index += 1;
       continue;
     }
 
+    const singleMath = line.trim().match(/^\$\$(.+)\$\$$/);
+    if (singleMath) {
+      blocks.push({ type: 'math', content: singleMath[1] });
+      index += 1;
+      continue;
+    }
+    if (line.trim() === '$$') {
+      const close = lines.findIndex((candidate, position) => position > index && candidate.trim() === '$$');
+      if (close !== -1) {
+        blocks.push({ type: 'math', content: lines.slice(index + 1, close).join('\n') });
+        index = close + 1;
+        continue;
+      }
+    }
+
     if (!line.trim()) {
       index += 1;
+      continue;
+    }
+
+    if (isTableStart(line, lines[index + 1])) {
+      const headers = tableCells(line);
+      const rows = [];
+      index += 2;
+      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        rows.push(tableCells(lines[index]));
+        index += 1;
+      }
+      blocks.push({ type: 'table', headers, rows });
+      continue;
+    }
+
+    const image = line.match(IMAGE_RE);
+    if (image) {
+      blocks.push({ type: 'image', alt: image[1], src: image[2] });
+      index += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quote = [];
+      while (index < lines.length && /^>\s?/.test(lines[index])) {
+        quote.push(lines[index].replace(/^>\s?/, ''));
+        index += 1;
+      }
+      blocks.push({ type: 'quote', content: quote.join(' ') });
       continue;
     }
 
@@ -102,29 +270,10 @@ function parseBlocks(content) {
       continue;
     }
 
-    const bullet = line.match(BULLET_RE);
-    if (bullet) {
-      const items = [];
-      while (index < lines.length) {
-        const item = lines[index].match(BULLET_RE);
-        if (!item) break;
-        items.push(item[1].trim());
-        index += 1;
-      }
-      blocks.push({ type: 'list', ordered: false, items });
-      continue;
-    }
-
-    const numbered = line.match(NUMBERED_RE);
-    if (numbered) {
-      const items = [];
-      while (index < lines.length) {
-        const item = lines[index].match(NUMBERED_RE);
-        if (!item) break;
-        items.push(item[2].trim());
-        index += 1;
-      }
-      blocks.push({ type: 'list', ordered: true, items });
+    if (listMarker(line)) {
+      const list = parseList(lines, index);
+      blocks.push(list.block);
+      index = list.index;
       continue;
     }
 
@@ -133,7 +282,7 @@ function parseBlocks(content) {
     while (
       index < lines.length &&
       lines[index].trim() &&
-      !isBlockStart(lines[index])
+      !isBlockStart(lines[index], lines[index + 1])
     ) {
       paragraph.push(lines[index]);
       index += 1;
@@ -144,6 +293,84 @@ function parseBlocks(content) {
   return blocks;
 }
 
+function MarkdownImage({ src, alt }) {
+  const [failed, setFailed] = useState(false);
+  if (!safeUrl(src)) return <p>{alt || 'Image unavailable'}</p>;
+  return (
+    <figure className="md-image">
+      <a href={src} target="_blank" rel="noopener noreferrer" aria-label={`Open image: ${alt || 'Image'}`}>
+        {failed ? <span className="md-image-fallback">Image unavailable: {alt || 'Image'}</span>
+          : <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setFailed(true)} />}
+      </a>
+      {alt && <figcaption>{alt}</figcaption>}
+    </figure>
+  );
+}
+
+function renderBlocks(blocks, options, tight = false) {
+  const { linkClassName, codeClassName, renderCodeActions } = options;
+  return blocks.map((block, index) => {
+    if (block.type === 'math') {
+      const markup = mathMarkup(block.content, true);
+      return markup ? <div key={index} className="md-math-block" role="region" aria-label="Math expression" tabIndex={0} data-conversation-scroll-region dangerouslySetInnerHTML={{ __html: markup }} />
+        : <pre key={index} className="md-math-fallback">{`$$\n${block.content}\n$$`}</pre>;
+    }
+    if (block.type === 'code') {
+      const isFlowchart = block.closed && block.language.toLowerCase() === 'mermaid' && parseFlowchart(block.content);
+      const isSequence = block.closed && block.language.toLowerCase() === 'mermaid' && !isFlowchart && parseSequence(block.content);
+      return (
+        <div key={index} className="code-block-wrapper md-code-block">
+          <div className="md-code-toolbar">
+            <span className="md-code-language">{block.language}</span>
+            {renderCodeActions?.(block.content)}
+          </div>
+          {isFlowchart && <MermaidFlowchart source={block.content} />}
+          {isSequence && <MermaidSequence source={block.content} />}
+          {isFlowchart || isSequence ? <details className="md-diagram-source"><summary>Show diagram source</summary><pre className={codeClassName} tabIndex={0} role="region" aria-label={`${block.language} code`} data-conversation-scroll-region><code>{block.content}</code></pre></details>
+            : <pre className={codeClassName} tabIndex={0} role="region" aria-label={`${block.language} code`} data-conversation-scroll-region><code>{block.content}</code></pre>}
+        </div>
+      );
+    }
+
+    if (block.type === 'table') {
+      return <div className="md-table-scroll" role="region" aria-label="Markdown table" tabIndex={0} data-conversation-scroll-region key={index}><table className="md-table">
+        <thead><tr>{block.headers.map((cell, column) => <th key={column} scope="col">{renderInline(cell, linkClassName)}</th>)}</tr></thead>
+        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{block.headers.map((_, column) => <td key={column}>{renderInline(row[column] || '', linkClassName)}</td>)}</tr>)}</tbody>
+      </table></div>;
+    }
+    if (block.type === 'image') return <MarkdownImage key={`${index}-${block.src}`} src={block.src} alt={block.alt} />;
+    if (block.type === 'quote') return <blockquote className="md-blockquote" key={index}>{renderInline(block.content, linkClassName)}</blockquote>;
+    if (block.type === 'heading') {
+      const HeadingTag = `h${block.level}`;
+      return (
+        <HeadingTag key={index}>
+          {renderInline(block.content, linkClassName)}
+        </HeadingTag>
+      );
+    }
+
+    if (block.type === 'list') {
+      const ListTag = block.ordered ? 'ol' : 'ul';
+      return (
+        <ListTag key={index} className="md-list" start={block.ordered ? block.start : undefined}>
+          {block.items.map((item, itemIndex) => (
+            <li key={itemIndex}>
+              {renderBlocks(item, options, !block.loose)}
+            </li>
+          ))}
+        </ListTag>
+      );
+    }
+
+    if (tight) return <Fragment key={index}>{renderInline(block.content, linkClassName)}</Fragment>;
+    return (
+      <p key={index}>
+        {renderInline(block.content, linkClassName)}
+      </p>
+    );
+  });
+}
+
 export const LightweightMarkdown = memo(function LightweightMarkdown({
   content,
   linkClassName,
@@ -151,49 +378,9 @@ export const LightweightMarkdown = memo(function LightweightMarkdown({
   renderCodeActions
 }) {
   if (!content) return null;
-
   return (
-    <>
-      {parseBlocks(content).map((block, index) => {
-        if (block.type === 'code') {
-          return (
-            <div key={index} className="code-block-wrapper">
-              {renderCodeActions?.(block.content)}
-              <pre className={codeClassName}>
-                <code>{block.content}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        if (block.type === 'heading') {
-          const HeadingTag = `h${block.level}`;
-          return (
-            <HeadingTag key={index}>
-              {renderInline(block.content, linkClassName)}
-            </HeadingTag>
-          );
-        }
-
-        if (block.type === 'list') {
-          const ListTag = block.ordered ? 'ol' : 'ul';
-          return (
-            <ListTag key={index} className="md-list">
-              {block.items.map((item, itemIndex) => (
-                <li key={`${itemIndex}-${item.slice(0, 24)}`}>
-                  {renderInline(item, linkClassName)}
-                </li>
-              ))}
-            </ListTag>
-          );
-        }
-
-        return (
-          <p key={index}>
-            {renderInline(block.content, linkClassName)}
-          </p>
-        );
-      })}
-    </>
+    <div className="lightweight-markdown">
+      {renderBlocks(parseBlocks(content), { linkClassName, codeClassName, renderCodeActions })}
+    </div>
   );
 });

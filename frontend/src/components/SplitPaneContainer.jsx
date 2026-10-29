@@ -1,315 +1,176 @@
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { TerminalPane } from './TerminalPane';
+import { getPaneIds, getPaneTreeGeometry, paneTreeFromLegacy, resizePaneTree } from '../utils/paneTree';
 
 const MAX_PANES = 8;
+const RetainedTerminalPane = memo(TerminalPane);
 
-// Recursive component to render the layout tree
-function LayoutNode({
-  node,
-  sessions,
-  activePaneId,
-  canSplit,
-  onPaneSessionSelect,
-  onPaneSplit,
-  onPaneClose,
-  onPaneFocus,
-  onPaneFullscreen,
-  showPreview,
-  onMinimizeMainTerminal,
-  keybarOpen,
-  viewportHeight,
-  onUrlDetected,
-  fontSize,
-  webglEnabled,
-  desktopAllowTerminalInput,
-  sessionActivity,
-  onSessionBusyChange,
-  projectInfo,
-  sessionAiTypes,
-  customAiProviders,
-  onSetSessionAiType,
-  onAddCustomAiProvider,
-  onStartWorkspaceTask,
-  onSelectHistorySession,
-  paneCount,
-  currentDesktopId,
-  fitSignal
-}) {
-  if (!node) return null;
-
-  // Render a pane
-  if (node.type === 'pane') {
-    return (
-      <TerminalPane
-        pane={node}
-        isActive={node.id === activePaneId}
-        isFullscreen={false}
-        sessions={sessions}
-        canSplit={canSplit}
-        canClose={paneCount > 1}
-        onSessionSelect={onPaneSessionSelect}
-        onSplit={onPaneSplit}
-        onClose={onPaneClose}
-        onFocus={onPaneFocus}
-        onFullscreen={onPaneFullscreen}
-        showPreview={showPreview}
-        onMinimizeMainTerminal={onMinimizeMainTerminal}
-        keybarOpen={keybarOpen}
-        viewportHeight={viewportHeight}
-        onUrlDetected={onUrlDetected}
-        fontSize={fontSize}
-        webglEnabled={webglEnabled}
-        desktopAllowTerminalInput={desktopAllowTerminalInput}
-        sessionActivity={sessionActivity}
-        onSessionBusyChange={onSessionBusyChange}
-        projectInfo={projectInfo}
-        sessionAiTypes={sessionAiTypes}
-        customAiProviders={customAiProviders}
-        onSetSessionAiType={onSetSessionAiType}
-        onAddCustomAiProvider={onAddCustomAiProvider}
-        onStartWorkspaceTask={onStartWorkspaceTask}
-        onSelectHistorySession={onSelectHistorySession}
-        currentDesktopId={currentDesktopId}
-        fitSignal={fitSignal}
-      />
-    );
-  }
-
-  // Render a split container
-  if (node.type === 'split') {
-    const isHorizontal = node.direction === 'horizontal';
-    const style = {
-      display: 'flex',
-      flexDirection: isHorizontal ? 'row' : 'column',
-      flex: 1,
-      minWidth: 0,
-      minHeight: 0,
-      gap: '2px'
-    };
-
-    return (
-      <div className="split-container" style={style}>
-        {node.children.map((child, index) => (
-          <LayoutNode
-            key={child.type === 'pane' ? child.id : `split-${index}`}
-            node={child}
-            sessions={sessions}
-            activePaneId={activePaneId}
-            canSplit={canSplit}
-            onPaneSessionSelect={onPaneSessionSelect}
-            onPaneSplit={onPaneSplit}
-            onPaneClose={onPaneClose}
-            onPaneFocus={onPaneFocus}
-            onPaneFullscreen={onPaneFullscreen}
-            showPreview={showPreview}
-            onMinimizeMainTerminal={onMinimizeMainTerminal}
-            keybarOpen={keybarOpen}
-            viewportHeight={viewportHeight}
-            onUrlDetected={onUrlDetected}
-            fontSize={fontSize}
-            webglEnabled={webglEnabled}
-            desktopAllowTerminalInput={desktopAllowTerminalInput}
-            sessionActivity={sessionActivity}
-            onSessionBusyChange={onSessionBusyChange}
-            projectInfo={projectInfo}
-            sessionAiTypes={sessionAiTypes}
-            customAiProviders={customAiProviders}
-            onSetSessionAiType={onSetSessionAiType}
-            onAddCustomAiProvider={onAddCustomAiProvider}
-            onStartWorkspaceTask={onStartWorkspaceTask}
-            onSelectHistorySession={onSelectHistorySession}
-            paneCount={paneCount}
-            currentDesktopId={currentDesktopId}
-            fitSignal={fitSignal}
-          />
-        ))}
-      </div>
-    );
-  }
-
-  return null;
+function ariaPercent(value) {
+  return Math.round(value * 1000000) / 1000000;
 }
 
 export function SplitPaneContainer({
   layout,
-  sessions,
+  paneLayout,
+  onPaneResize,
   onPaneSessionSelect,
   onPaneSplit,
   onPaneClose,
   onPaneFocus,
   onPaneFullscreen,
   fullscreenPaneId,
-  showPreview,
-  onMinimizeMainTerminal,
-  keybarOpen,
-  viewportHeight,
-  onUrlDetected,
-  fontSize,
-  webglEnabled,
-  desktopAllowTerminalInput,
-  sessionActivity,
-  onSessionBusyChange,
-  projectInfo,
-  sessionAiTypes,
-  customAiProviders,
-  onSetSessionAiType,
-  onAddCustomAiProvider,
-  onStartWorkspaceTask,
-  onSelectHistorySession,
-  paneLayout,
   currentDesktopId,
-  fitSignal
+  ...paneProps
 }) {
-  // Use tree-based layout if available, fall back to legacy
-  const root = paneLayout?.root;
+  const legacyRoot = useMemo(() => paneTreeFromLegacy(layout), [layout]);
+  const sourceRoot = paneLayout?.root || legacyRoot;
+  const [localLayout, setLocalLayout] = useState(null);
+  const root = localLayout?.source === sourceRoot && localLayout.desktopId === currentDesktopId ? localLayout.root : sourceRoot;
   const activePaneId = paneLayout?.activePaneId || layout?.activePaneId;
+  const paneIds = getPaneIds(root);
+  const selectedFullscreenPaneId = paneIds.includes(fullscreenPaneId) ? fullscreenPaneId : null;
+  const containerRef = useRef(null);
+  const dragRef = useRef(null);
+  const resizeRef = useRef(null);
+  const hostOrder = useRef([]);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const geometry = getPaneTreeGeometry(root, dimensions.width, dimensions.height);
+  // Keep DOM order independent of tree order so moving a split cannot blur an existing terminal.
+  hostOrder.current = [...hostOrder.current.filter(id => paneIds.includes(id)), ...paneIds.filter(id => !hostOrder.current.includes(id))];
+  const topology = JSON.stringify([currentDesktopId, selectedFullscreenPaneId, geometry.dividers.map(({ path, direction, paneIds: ids }) => [path, direction, ids])]);
 
-  // Count panes for canSplit check
-  const countPanes = (node) => {
-    if (!node) return 0;
-    if (node.type === 'pane') return 1;
-    return node.children.reduce((sum, child) => sum + countPanes(child), 0);
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    const measure = () => {
+      const { width, height } = container.getBoundingClientRect();
+      setDimensions(previous => previous.width === width && previous.height === height ? previous : { width, height });
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(container);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, []);
+
+  resizeRef.current = (divider, value) => {
+    if (!divider.pairSize) return;
+    const bounded = Math.max(divider.min, Math.min(divider.max, value));
+    const sizes = [...divider.sizes];
+    const pairShare = sizes[divider.index] + sizes[divider.index + 1];
+    sizes[divider.index] = pairShare * bounded / 100;
+    sizes[divider.index + 1] = pairShare * (100 - bounded) / 100;
+    const nextRoot = resizePaneTree(root, divider.path, sizes, divider.paneIds);
+    if (nextRoot === root) return;
+    setLocalLayout({ source: sourceRoot, desktopId: currentDesktopId, root: nextRoot });
+    onPaneResize?.(divider.path, sizes, divider.paneIds);
   };
 
-  const paneCount = root ? countPanes(root) : (layout?.panes?.length || 1);
-  const canSplit = paneCount < MAX_PANES;
-
-  // When in fullscreen mode, only render the fullscreen pane
-  if (fullscreenPaneId && root) {
-    // Find the fullscreen pane in the tree
-    const findPane = (node) => {
-      if (!node) return null;
-      if (node.type === 'pane' && node.id === fullscreenPaneId) return node;
-      if (node.children) {
-        for (const child of node.children) {
-          const found = findPane(child);
-          if (found) return found;
-        }
-      }
-      return null;
+  useEffect(() => {
+    const stop = event => {
+      const drag = dragRef.current;
+      if (!drag || (event?.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      dragRef.current = null;
+      if (drag.target.hasPointerCapture?.(drag.pointerId)) drag.target.releasePointerCapture(drag.pointerId);
     };
-
-    const fullscreenPane = findPane(root);
-    if (fullscreenPane) {
-      return (
-        <div className="split-pane-container fullscreen">
-          <TerminalPane
-            pane={fullscreenPane}
-            isActive={true}
-            isFullscreen={true}
-            sessions={sessions}
-            canSplit={canSplit}
-            canClose={paneCount > 1}
-            onSessionSelect={onPaneSessionSelect}
-            onSplit={onPaneSplit}
-            onClose={onPaneClose}
-            onFocus={onPaneFocus}
-            onFullscreen={onPaneFullscreen}
-            showPreview={showPreview}
-            onMinimizeMainTerminal={onMinimizeMainTerminal}
-            keybarOpen={keybarOpen}
-            viewportHeight={viewportHeight}
-            onUrlDetected={onUrlDetected}
-            fontSize={fontSize}
-            webglEnabled={webglEnabled}
-            desktopAllowTerminalInput={desktopAllowTerminalInput}
-            sessionActivity={sessionActivity}
-            onSessionBusyChange={onSessionBusyChange}
-            projectInfo={projectInfo}
-            sessionAiTypes={sessionAiTypes}
-            customAiProviders={customAiProviders}
-            onSetSessionAiType={onSetSessionAiType}
-            onAddCustomAiProvider={onAddCustomAiProvider}
-            onStartWorkspaceTask={onStartWorkspaceTask}
-            onSelectHistorySession={onSelectHistorySession}
-            currentDesktopId={currentDesktopId}
-            fitSignal={fitSignal}
-          />
-        </div>
-      );
-    }
-  }
-
-  // Render tree-based layout
-  if (root) {
-    return (
-      <div className="split-pane-container tree-layout">
-        <LayoutNode
-          node={root}
-          sessions={sessions}
-          activePaneId={activePaneId}
-          canSplit={canSplit}
-          onPaneSessionSelect={onPaneSessionSelect}
-          onPaneSplit={onPaneSplit}
-          onPaneClose={onPaneClose}
-          onPaneFocus={onPaneFocus}
-          onPaneFullscreen={onPaneFullscreen}
-          showPreview={showPreview}
-          onMinimizeMainTerminal={onMinimizeMainTerminal}
-          keybarOpen={keybarOpen}
-          viewportHeight={viewportHeight}
-          onUrlDetected={onUrlDetected}
-          fontSize={fontSize}
-          webglEnabled={webglEnabled}
-          desktopAllowTerminalInput={desktopAllowTerminalInput}
-          sessionActivity={sessionActivity}
-          onSessionBusyChange={onSessionBusyChange}
-          projectInfo={projectInfo}
-          sessionAiTypes={sessionAiTypes}
-          customAiProviders={customAiProviders}
-          onSetSessionAiType={onSetSessionAiType}
-          onAddCustomAiProvider={onAddCustomAiProvider}
-          onStartWorkspaceTask={onStartWorkspaceTask}
-          onSelectHistorySession={onSelectHistorySession}
-          paneCount={paneCount}
-          currentDesktopId={currentDesktopId}
-          fitSignal={fitSignal}
-        />
-      </div>
-    );
-  }
-
-  // Fallback to legacy rendering (shouldn't happen with new code)
-  const { type, panes } = layout;
-  const panesToRender = fullscreenPaneId
-    ? panes.filter(p => p.id === fullscreenPaneId)
-    : panes;
+    const move = event => {
+      const drag = dragRef.current;
+      if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      event.preventDefault();
+      const coordinate = drag.divider.direction === 'horizontal' ? event.clientX : event.clientY;
+      resizeRef.current(drag.divider, drag.divider.value + (coordinate - drag.coordinate) / drag.divider.pairSize * 100);
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+    window.addEventListener('blur', stop);
+    return () => {
+      stop();
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      window.removeEventListener('blur', stop);
+    };
+  }, [topology, dimensions.width, dimensions.height]);
 
   return (
-    <div className={`split-pane-container ${fullscreenPaneId ? 'fullscreen' : type}`}>
-      {panesToRender.map((pane) => (
-        <TerminalPane
-          key={pane.id}
-          pane={pane}
-          isActive={pane.id === activePaneId}
-          isFullscreen={pane.id === fullscreenPaneId}
-          sessions={sessions}
-          canSplit={canSplit}
-          canClose={panes.length > 1}
-          onSessionSelect={onPaneSessionSelect}
-          onSplit={onPaneSplit}
-          onClose={onPaneClose}
-          onFocus={onPaneFocus}
-          onFullscreen={onPaneFullscreen}
-          showPreview={showPreview}
-          onMinimizeMainTerminal={onMinimizeMainTerminal}
-          keybarOpen={keybarOpen}
-          viewportHeight={viewportHeight}
-          onUrlDetected={onUrlDetected}
-          fontSize={fontSize}
-          webglEnabled={webglEnabled}
-          desktopAllowTerminalInput={desktopAllowTerminalInput}
-          sessionActivity={sessionActivity}
-          onSessionBusyChange={onSessionBusyChange}
-          projectInfo={projectInfo}
-          sessionAiTypes={sessionAiTypes}
-          customAiProviders={customAiProviders}
-          onSetSessionAiType={onSetSessionAiType}
-          onAddCustomAiProvider={onAddCustomAiProvider}
-          onStartWorkspaceTask={onStartWorkspaceTask}
-          onSelectHistorySession={onSelectHistorySession}
-          fitSignal={fitSignal}
-        />
-      ))}
+    <div
+      ref={containerRef}
+      className={`split-pane-container tree-layout${selectedFullscreenPaneId ? ' fullscreen' : ''}`}
+      style={{ position: 'relative', display: 'block', minWidth: 0, minHeight: 0, overflow: 'hidden' }}
+    >
+      {hostOrder.current.map(id => {
+        const { pane, rect } = geometry.leaves.find(leaf => leaf.pane.id === id);
+        const hidden = Boolean(selectedFullscreenPaneId && pane.id !== selectedFullscreenPaneId);
+        return (
+          <div
+            key={pane.id}
+            data-pane-host={pane.id}
+            style={{ position: 'absolute', display: hidden ? 'none' : 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0,
+              ...(selectedFullscreenPaneId ? { inset: 0 } : rect) }}
+            inert={hidden ? '' : undefined}
+            aria-hidden={hidden || undefined}
+          >
+            <RetainedTerminalPane
+              {...paneProps}
+              pane={pane}
+              currentDesktopId={currentDesktopId}
+              isActive={pane.id === (selectedFullscreenPaneId || activePaneId)}
+              isFullscreen={pane.id === selectedFullscreenPaneId}
+              canSplit={paneIds.length < MAX_PANES}
+              canClose={paneIds.length > 1}
+              onSessionSelect={onPaneSessionSelect}
+              onSplit={onPaneSplit}
+              onClose={onPaneClose}
+              onFocus={onPaneFocus}
+              onFullscreen={onPaneFullscreen}
+            />
+          </div>
+        );
+      })}
+      {!selectedFullscreenPaneId && geometry.dividers.map((divider, ordinal) => {
+        const horizontal = divider.direction === 'horizontal';
+        return <div
+          key={`divider-${divider.path.join('-')}-${divider.index}`}
+          role="separator"
+          tabIndex={0}
+          data-pane-resize-handle=""
+          aria-label={`Resize panes ${horizontal ? 'left and right' : 'up and down'} ${ordinal + 1}`}
+          aria-orientation={horizontal ? 'vertical' : 'horizontal'}
+          aria-valuemin={ariaPercent(divider.min)}
+          aria-valuemax={ariaPercent(divider.max)}
+          aria-valuenow={ariaPercent(divider.value)}
+          aria-valuetext={`${ariaPercent(divider.value)}% of adjacent panes`}
+          title="Drag to resize. Arrow keys: 5%, Shift: 10%, Home/End: limits, Enter: equal panes."
+          style={{ position: 'absolute', ...divider.rect, zIndex: 1, cursor: horizontal ? 'col-resize' : 'row-resize',
+            touchAction: 'none', userSelect: 'none', background: 'var(--border-subtle)' }}
+          onPointerDown={event => {
+            if (event.button !== 0 || event.isPrimary === false || !divider.pairSize) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.focus({ preventScroll: true });
+            event.currentTarget.setPointerCapture?.(event.pointerId);
+            dragRef.current = { divider, coordinate: horizontal ? event.clientX : event.clientY,
+              pointerId: event.pointerId, target: event.currentTarget };
+          }}
+          onLostPointerCapture={() => { dragRef.current = null; }}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === 'Tab') return;
+            event.preventDefault();
+            if (event.altKey || event.ctrlKey || event.metaKey) return;
+            const step = event.shiftKey ? 10 : 5;
+            if (event.key === (horizontal ? 'ArrowRight' : 'ArrowDown')) resizeRef.current(divider, divider.value + step);
+            else if (event.key === (horizontal ? 'ArrowLeft' : 'ArrowUp')) resizeRef.current(divider, divider.value - step);
+            else if (event.key === 'Home') resizeRef.current(divider, divider.min);
+            else if (event.key === 'End') resizeRef.current(divider, divider.max);
+            else if (event.key === 'Enter') resizeRef.current(divider, 50);
+          }}
+          onKeyUp={event => event.stopPropagation()}
+        />;
+      })}
     </div>
   );
 }

@@ -587,74 +587,36 @@ async fn codex_sources(workspace: &Path, owner: &str) -> Result<Vec<NativeConver
     }
     Ok(results)
 }
-fn hermes_runtime() -> Option<(Command, PathBuf)> {
-    let python = std::env::var_os("HERMES_PYTHON")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HERMES_EXECUTABLE")
-                .map(PathBuf::from)
-                .and_then(|p| {
-                    p.parent().map(|p| {
-                        p.join(if cfg!(windows) {
-                            "python.exe"
-                        } else {
-                            "python"
-                        })
-                    })
-                })
-        })?;
-    if !python.is_absolute() || !python.is_file() {
-        return None;
-    }
-    let home = std::env::var_os("HERMES_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .or_else(|| std::env::var_os("HOME"))
-                .map(|p| PathBuf::from(p).join(".hermes"))
-        })?;
-    Some((Command::new(python), home.join("state.db")))
+fn v4_sources(data: &Path, workspace: &Path, owner: &str) -> Vec<NativeConversation> {
+    crate::v4_agent::sessions(data, owner, workspace)
+        .into_iter()
+        .filter_map(|session| {
+            let turns = session
+                .messages
+                .iter()
+                .filter(|m| m.role == "user")
+                .enumerate()
+                .map(|(ordinal, m)| turn(ordinal.to_string(), m.text.clone(), ordinal, true, None))
+                .collect::<Vec<_>>();
+            if turns.is_empty() {
+                return None;
+            }
+            Some(NativeConversation {
+                source_id: source_id(owner, workspace, &session.provider, &session.id),
+                provider: session.provider.clone(),
+                native_session_id: session.id.clone(),
+                title: turns[0].prompt.chars().take(100).collect(),
+                turns,
+                fingerprint: crate::v4_agent::session_fingerprint(&session),
+            })
+        })
+        .collect()
 }
-async fn hermes_sources(workspace: &Path, owner: &str) -> Result<Vec<NativeConversation>, String> {
-    let Some((mut command, database)) = hermes_runtime() else {
-        return Ok(Vec::new());
-    };
-    if !database.is_file() {
-        return Ok(Vec::new());
-    }
-    command
-        .arg(script("provider-rewind-hermes.py"))
-        .arg(json!({"operation":"list","workspace":workspace,"database":database}).to_string())
-        .env("PYTHONIOENCODING", "utf-8");
-    let rows = output(command).await?;
-    let mut results = Vec::new();
-    for row in rows.as_array().ok_or("Hermes returned invalid history")? {
-        let native_id = row["nativeSessionId"]
-            .as_str()
-            .ok_or("Hermes native session unavailable")?;
-        let turns: Vec<RewindTurn> = serde_json::from_value(row["turns"].clone())
-            .map_err(|_| "Hermes turn history unsupported")?;
-        if turns.is_empty() {
-            continue;
-        }
-        results.push(NativeConversation {
-            source_id: source_id(owner, workspace, "hermes", native_id),
-            provider: "hermes".into(),
-            native_session_id: native_id.into(),
-            title: row["title"]
-                .as_str()
-                .unwrap_or("Hermes conversation")
-                .into(),
-            turns,
-            fingerprint: row["fingerprint"]
-                .as_str()
-                .ok_or("Hermes history fingerprint unavailable")?
-                .into(),
-        });
-    }
-    Ok(results)
-}
-pub(crate) async fn list(workspace: &Path, owner: &str) -> Result<Vec<NativeConversation>, String> {
+pub(crate) async fn list(
+    data: &Path,
+    workspace: &Path,
+    owner: &str,
+) -> Result<Vec<NativeConversation>, String> {
     if !workspace.is_absolute() || !workspace.is_dir() || owner.is_empty() {
         return Err("Select an available workspace and account".into());
     }
@@ -668,16 +630,11 @@ pub(crate) async fn list(workspace: &Path, owner: &str) -> Result<Vec<NativeConv
     })
     .await
     .map_err(|_| "Unable to load native Claude history")?;
-    let (codex, hermes) = tokio::join!(
-        codex_sources(workspace, owner),
-        hermes_sources(workspace, owner)
-    );
+    rows.extend(v4_sources(data, workspace, owner));
     let mut errors = Vec::new();
-    for provider in [codex, hermes] {
-        match provider {
-            Ok(provider) => rows.extend(provider),
-            Err(error) => errors.push(error),
-        }
+    match codex_sources(workspace, owner).await {
+        Ok(provider) => rows.extend(provider),
+        Err(error) => errors.push(error),
     }
     let mut seen = HashSet::new();
     rows.retain(|row| seen.insert(row.source_id.clone()));
@@ -687,12 +644,13 @@ pub(crate) async fn list(workspace: &Path, owner: &str) -> Result<Vec<NativeConv
     Ok(rows)
 }
 pub(crate) async fn plan(
+    data: &Path,
     workspace: &Path,
     owner: &str,
     source: &str,
     target: &str,
 ) -> Result<NativePlan, String> {
-    let conversation = list(workspace, owner)
+    let conversation = list(data, workspace, owner)
         .await?
         .into_iter()
         .find(|row| row.source_id == source)
@@ -715,11 +673,13 @@ pub(crate) async fn plan(
     })
 }
 pub(crate) async fn apply(
+    data: &Path,
     workspace: &Path,
     owner: &str,
     planned: &NativePlan,
 ) -> Result<NativeFork, String> {
     let current = plan(
+        data,
         workspace,
         owner,
         &planned.conversation.source_id,
@@ -828,16 +788,16 @@ pub(crate) async fn apply(
             }
             (id.clone(), vec!["resume".into(), id])
         }
-        "hermes" => {
-            let (mut command, database) = hermes_runtime()
-                .ok_or("Hermes native Python runtime unavailable; configure HERMES_PYTHON")?;
-            command.arg(script("provider-rewind-hermes.py")).arg(json!({"operation":"fork","database":database,"workspace":workspace,"sessionId":original,"targetTurnId":planned.target_turn_id,"fingerprint":planned.fingerprint}).to_string()).env("PYTHONIOENCODING","utf-8");
-            let response = output(command).await?;
-            let id = response["sessionId"]
-                .as_str()
-                .ok_or("Hermes fork ID unavailable")?
-                .to_owned();
-            (id.clone(), vec!["--resume".into(), id])
+        provider if crate::v4_agent::supports(provider) => {
+            let fork = crate::v4_agent::fork(
+                data,
+                owner,
+                workspace,
+                original,
+                target.ordinal,
+                &planned.fingerprint,
+            )?;
+            (fork.id.clone(), vec!["--resume".into(), fork.id])
         }
         _ => return Err("This provider has no native conversation rewind adapter".into()),
     };

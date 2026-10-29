@@ -1,0 +1,15 @@
+Original V4 provider connections runtime. Runtime and tests only; historical scratch artifacts are excluded.
+
+Implements scoped profile CAS and encrypted credentials; bound GET inventory HTTP owners; durable data-only job checkpoints with a separate HMAC key domain; atomic Running checkpoint plus actor registration before transport start; exact coordinator/snapshot/consumer admission; real join and durable release before publication; retained failure retries; raw-response disposal after durable terminal settlement; authenticated-server facade and explicit shutdown polling.
+
+Interrupted jobs reopen as failed with unconfirmed I/O, without live permits/owners/proofs or automatic network restart. Historical unknown cleanup is not automatically resolved by process-restart data. App/API/UI and inference consumer integration require separate verification. Stored format2 is the first candidate application format; earlier isolated prototype format2 databases with a different exact schema are rejected, not silently migrated.
+
+Actual process-restart fixture, rollback/retry failures and unknown-capability preservation are tested. TLS/DNS/IPv6/proxy and poisoned-discard paths have earlier stated coverage limits. No paid inference or real accounts are used.
+
+TickReport explicitly separates local_resources_stopped from cleanup_confirmed. Recovered unconfirmed I/O, nonquiescent durable actors or pending configurations keep cleanup_confirmed false. Catalog publication has a23MiB aggregate budget, leaving control/failure/tombstone capacity within the32MiB checkpoint limit. Prospective catalog capacity is checked before the live job CAS. Excess publication becomes a small durable failure after the original worker is joined; earlier history remains available.
+
+The concrete private-filesystem/lease adapter currently targets Unix. The API supplies an explicit unavailable adapter on other platforms so existing application functionality remains buildable; full cross-platform provider-profile parity is unfinished.
+
+Global cleanup confirmation also requires a valid signed stop fact bound to every quiescent actor reference, identity and generation. Missing, altered or incorrectly bound evidence keeps cleanup unconfirmed.
+
+Background polling retries any dirty checkpoint before checking exact settled job bindings and the original stop proof. Settled catalogs are not projected into JSON on idle ticks. Public job reads still return their full catalog.

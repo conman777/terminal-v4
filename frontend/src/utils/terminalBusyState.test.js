@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cliEventIndicatesTerminalIdle, outputIndicatesTerminalIdle } from './terminalBusyState';
+import { cliEventIndicatesTerminalIdle, outputIndicatesTerminalIdle, screenShowsShellPrompt } from './terminalBusyState';
 
 describe('outputIndicatesTerminalIdle', () => {
   it('detects idle cmd prompts', () => {
@@ -18,6 +18,10 @@ describe('outputIndicatesTerminalIdle', () => {
     expect(outputIndicatesTerminalIdle('\n❯\n')).toBe(true);
   });
 
+  it('detects the default macOS zsh prompt after bracketed-paste codes', () => {
+    expect(outputIndicatesTerminalIdle('\x1b[Jconordart@host ~ % \x1b[K\x1b[?2004h')).toBe(true);
+  });
+
   it('does not treat echoed commands as idle prompts', () => {
     expect(outputIndicatesTerminalIdle('C:\\Users\\conor>echo hello')).toBe(false);
   });
@@ -28,5 +32,12 @@ describe('cliEventIndicatesTerminalIdle', () => {
     expect(cliEventIndicatesTerminalIdle({ type: 'assistant_turn' })).toBe(true);
     expect(cliEventIndicatesTerminalIdle({ type: 'prompt_required' })).toBe(true);
     expect(cliEventIndicatesTerminalIdle({ type: 'user_turn' })).toBe(false);
+  });
+});
+
+describe('screenShowsShellPrompt', () => {
+  it('recognises shell prompts but not agent prompts or running output', () => {
+    const screens = ['user@host ~ %', 'user@host:~/project$', 'PS C:\\work>', '❯ Try "create a util"', '> ', 'Compiling crate'];
+    expect(screens.map(screenShowsShellPrompt)).toEqual([true, true, true, false, false, false]);
   });
 });

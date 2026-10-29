@@ -41,6 +41,15 @@ static JS_DYNAMIC_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 pub fn rewrite_html_for_path_preview(html: &str, port: u16, api_origin: &str) -> String {
+    rewrite_html_for_path_preview_at_path(html, port, api_origin, "/")
+}
+
+pub fn rewrite_html_for_path_preview_at_path(
+    html: &str,
+    port: u16,
+    api_origin: &str,
+    document_path: &str,
+) -> String {
     let preview_base = preview_base(port);
     let rewritten = rewrite_html_attribute_urls(html, &preview_base, port);
     let rewritten = STYLE_BLOCK_RE
@@ -60,11 +69,12 @@ pub fn rewrite_html_for_path_preview(html: &str, port: u16, api_origin: &str) ->
             format!("<script{}>{}</script>", attrs, rewritten_script)
         })
         .to_string();
-    script_inject::inject_debug_script_with_options(
+    script_inject::inject_debug_script_for_document(
         &rewritten,
         port,
         api_origin,
         Some(&preview_base),
+        document_path,
     )
 }
 
@@ -322,5 +332,30 @@ mod tests {
     fn preview_base_format() {
         assert_eq!(preview_base(3000), "/preview/3000");
         assert_eq!(preview_base(8080), "/preview/8080");
+    }
+}
+
+#[cfg(test)]
+mod nested_regressions {
+    use super::*;
+    #[test]
+    fn nested_document_keeps_its_directory_and_existing_base() {
+        let html = "<html><head></head><body><img src='relative.svg'></body></html>";
+        assert!(rewrite_html_for_path_preview_at_path(
+            html,
+            5173,
+            "http://localhost:3020",
+            "/nested/page.html?q=one"
+        )
+        .contains("<base href=\"/preview/5173/nested/\">"));
+        let explicit = "<html><head><base href='/custom/'></head></html>";
+        let result = rewrite_html_for_path_preview_at_path(
+            explicit,
+            5173,
+            "http://localhost:3020",
+            "/nested/page.html",
+        );
+        assert_eq!(result.matches("<base ").count(), 1);
+        assert!(result.contains("href='/preview/5173/custom/'"));
     }
 }

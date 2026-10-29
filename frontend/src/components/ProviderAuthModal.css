@@ -1,0 +1,48 @@
+dialog.modal-overlay.tv4-provider-auth-overlay {
+  box-sizing: border-box;
+  inset: 0;
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  border: 0;
+  background: rgb(0 0 0 / 32%);
+  color: var(--text-primary);
+  font: 14px/1.5 var(--font-ui);
+  z-index: var(--ui-layer-modal, 13000);
+  backdrop-filter: none;
+  animation: none;
+  overflow: hidden;
+}
+
+dialog.tv4-provider-auth-overlay:not([open]) { display: none; }
+dialog.tv4-provider-auth-overlay::backdrop { background: transparent; }
+
+.tv4-provider-auth-overlay .tv4-provider-auth-modal {
+  width: min(720px, 100%);
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  border-radius: 8px;
+}
+
+.tv4-provider-auth-modal .modal-header {
+  min-height: 52px;
+  align-items: center;
+  padding: 10px 16px;
+}
+
+.tv4-provider-auth-modal .modal-header h2 { min-width: 0; overflow-wrap: anywhere; }
+.tv4-provider-auth-modal .modal-close { min-height: 28px; }
+.tv4-provider-auth-modal .modal-body { padding: 16px; overflow-wrap: anywhere; }
+.tv4-provider-auth-modal .tv4-provider-auth-subtitle { margin: 0 0 16px; }
+.tv4-provider-auth-modal .tv4-provider-auth-oauth code { max-width: 100%; }
+
+@media (pointer: coarse) {
+  .tv4-provider-auth-modal .modal-header { padding-block: 3px; }
+  .tv4-provider-auth-modal .modal-close { min-height: 44px; }
+}

@@ -8,6 +8,7 @@ export function PreviewInspector({
   onClearSelection,
   onCopyElementInfo,
   onCopyToTerminal,
+  onToggleStyleEditor,
   onStylePreview,
   onStyleApply,
   onStyleRevert,
@@ -40,16 +41,7 @@ export function PreviewInspector({
           {elementPath.map((item, index) => (
             <span key={index} className="breadcrumb-item">
               {index > 0 && <span className="breadcrumb-separator">›</span>}
-              <button
-                className="breadcrumb-btn"
-                onClick={() => {
-                  const newEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
-                  item.element.dispatchEvent(newEvent);
-                }}
-                title={item.selector}
-              >
-                {item.tag}
-              </button>
+              <span className="breadcrumb-tag" title={item.selector}>{item.selector}</span>
             </span>
           ))}
         </div>
@@ -149,6 +141,14 @@ export function PreviewInspector({
       {/* Actions: Copy and Send to Terminal */}
       <div className="preview-inspector-actions">
         <div className="preview-inspector-btns">
+          <button
+            type="button"
+            className={`preview-inspector-style-btn${showStyleEditor ? ' active' : ''}`}
+            onClick={onToggleStyleEditor}
+            aria-expanded={showStyleEditor}
+          >
+            {showStyleEditor ? 'Hide style editor' : 'Edit styles'}
+          </button>
           <button
             type="button"
             className={`preview-inspector-copy-btn${copyFeedback ? ' copied' : ''}`}

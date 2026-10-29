@@ -12,6 +12,7 @@ const SLASH_COMMANDS = [
 ];
 
 export default function ClaudeCodeInput({
+  sessionId,
   onSend,
   disabled,
   isProcessing,
@@ -35,8 +36,8 @@ export default function ClaudeCodeInput({
     textareaRef.current?.focus();
   }, []);
 
-  const localVoice = useVoiceInput(handleTranscription, { provider: 'local' });
-  const groqVoice = useVoiceInput(handleTranscription, { provider: 'groq' });
+  const localVoice = useVoiceInput(handleTranscription, { provider: 'local', scopeKey: sessionId });
+  const groqVoice = useVoiceInput(handleTranscription, { provider: 'groq', scopeKey: sessionId });
 
   // Aggregate states from both providers
   const isRecording = localVoice.isRecording || groqVoice.isRecording;

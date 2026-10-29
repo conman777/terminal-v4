@@ -11,17 +11,22 @@
     "rust:fmt:check": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
     "rust:check": "cargo check -p terminal-v4-api --manifest-path rust/Cargo.toml",
     "rust:test": "cargo test --manifest-path rust/Cargo.toml",
-    "app:build": "npm run frontend:build && cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml",
+    "browser:install": "node scripts/prepare-browser-runtime.cjs",
+    "browser:verify": "node scripts/prepare-browser-runtime.cjs --verify",
+    "test:browser-runtime": "node --test scripts/prepare-browser-runtime.test.cjs",
+    "app:build": "npm run browser:install && npm run frontend:build && cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml",
     "app:verify": "node scripts/verify-local-app.cjs",
     "test": "npm run rust:test && npm run frontend:test",
-    "verify": "npm run rust:fmt:check && npm run rust:check && npm run rust:test && npm run frontend:test && npm run frontend:build",
-    "test:e2e": "npm --prefix frontend exec -- playwright test",
-    "test:e2e:headed": "npm --prefix frontend exec -- playwright test --headed",
-    "desktop:install": "npm --prefix desktop/tauri install",
+    "verify": "npm run test:browser-runtime && npm run test:providers && npm run test:local-dev && npm run rust:fmt:check && npm run rust:check && npm run rust:test && npm run frontend:test && npm run frontend:build",
+    "test:local-dev": "node --test frontend/vite.config.test.mjs",
+    "test:e2e": "npm --prefix frontend run test:e2e --",
+    "test:e2e:headed": "npm --prefix frontend run test:e2e:headed --",
+    "desktop:install": "npm install --omit=dev --ignore-scripts && npm --prefix frontend install && npm --prefix desktop/tauri install && npm run browser:install",
     "desktop:prepare": "node scripts/prepare-desktop-dev.cjs",
-    "desktop:predev": "npm --prefix frontend run build",
+    "desktop:predev": "npm run browser:install && npm --prefix frontend run build",
     "desktop:dev": "npm run desktop:install && npm run desktop:prepare && npm run desktop:predev && npm --prefix desktop/tauri run tauri dev -- --no-dev-server-wait",
-    "desktop:build": "npm run desktop:install && npm run desktop:prepare && npm run desktop:predev && npm --prefix desktop/tauri run tauri build"
+    "desktop:build": "npm run desktop:install && npm run desktop:prepare && npm run desktop:predev && npm --prefix desktop/tauri run tauri build",
+    "test:providers": "node --test scripts/provider-metadata.test.mjs"
   },
   "keywords": [],
   "author": "",
@@ -31,6 +36,7 @@
     "@playwright/test": "^1.56.1"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.276"
+    "@anthropic-ai/claude-agent-sdk": "0.3.276",
+    "playwright": "1.64.1"
   }
 }

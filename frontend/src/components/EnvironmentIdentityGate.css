@@ -1,0 +1,2 @@
+.environment-identity-status { margin: 0; padding: 12px 16px; background: var(--bg-surface); color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); font: 14px/1.5 var(--font-ui); overflow-wrap: anywhere; }
+.environment-identity-status[role="alert"] { color: var(--warning); }

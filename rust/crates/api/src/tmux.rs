@@ -66,6 +66,44 @@ pub async fn kill_session(session_id: &str) -> Result<(), String> {
     }
 }
 
+/// Stop exactly the persisted owned session, accepting only explicit absence.
+/// Other errors retain its recovery journal for a later Delete retry.
+pub async fn kill_session_if_present(session_id: &str) -> Result<(), String> {
+    let name = session_name(session_id);
+    let target = format!("={name}");
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new("tmux")
+            .args(["kill-session", "-t", &target])
+            .env("LC_ALL", "C")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "tmux kill-session timed out".to_string())?
+    .map_err(|error| format!("Failed to kill tmux session: {error}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if output.status.success()
+        || (output.status.code() == Some(1) && named_session_absent(&stderr, &name))
+    {
+        Ok(())
+    } else {
+        Err(format!("tmux kill-session failed: {stderr}"))
+    }
+}
+
+fn named_session_absent(stderr: &str, name: &str) -> bool {
+    let error = stderr.trim();
+    if error.lines().count() != 1 {
+        return false;
+    }
+    error == format!("can't find session: {name}")
+        || error == format!("can't find session: ={name}")
+        || error.starts_with("no server running on ")
+        || (error.starts_with("error connecting to ")
+            && error.ends_with(" (No such file or directory)"))
+}
+
 /// Get the current working directory of a tmux session's active pane.
 pub async fn get_session_cwd(session_id: &str) -> Option<String> {
     let name = session_name(session_id);
@@ -198,6 +236,34 @@ async fn run_tmux(args: &[&str], timeout_secs: u64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_cleanup_absence_requires_an_explicit_exact_tmux_diagnostic() {
+        let name = "terminal-app-owned";
+        for (stderr, expected) in [
+            ("can't find session: terminal-app-owned\n", true),
+            ("can't find session: =terminal-app-owned\n", true),
+            ("no server running on /synthetic/tmux/default\n", true),
+            (
+                "error connecting to /synthetic/tmux/default (No such file or directory)\n",
+                true,
+            ),
+            (
+                "error connecting to /synthetic/tmux/default (Permission denied)\n",
+                false,
+            ),
+            ("can't find session: terminal-app-other", false),
+            ("can't find session: terminal-app-owned-extra", false),
+            (
+                "no server running on /synthetic/tmux/default\npermission denied",
+                false,
+            ),
+            ("synthetic named cleanup refused", false),
+            ("", false),
+        ] {
+            assert_eq!(named_session_absent(stderr, name), expected, "{stderr:?}");
+        }
+    }
 
     #[test]
     fn session_name_uses_prefix() {

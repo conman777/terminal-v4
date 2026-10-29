@@ -1,0 +1,8 @@
+{
+  "source": "Independent offline source-authoring vector using Python standard-library HMAC-SHA256 and synthetic [7;32] master only; no production/authenticator code, accountkey, provider or app runtime executed.",
+  "keyDerivationDomain": "v4.provider-stop-fact-key.v1",
+  "masterHex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "canonicalRecordUTF8": "[\"v4.provider-stop-fact.v1\",[\"v4.connection-ref.v1\",\"synthetic-owner\",\"synthetic-execution-server\",\"10000000-0000-4000-8000-000000000001\",\"20000000-0000-4000-8000-000000000001\",\"30000000-0000-4000-8000-000000000001\",\"40000000-0000-4000-8000-000000000001\"],[\"70000000-0000-4000-8000-000000000001\",\"80000000-0000-4000-8000-000000000001\",\"90000000-0000-4000-8000-000000000001\"],7,\"a0000000-0000-4000-8000-000000000001\",\"synthetic-child-exit\"]",
+  "expectedTagHex": "3cde46ed1eb805da7f3333dc466faa80fd77570729855b6f308880f7eb321200",
+  "envelopeUTF8": "[\"v4.provider-stop-fact-envelope.v1\",[\"v4.provider-stop-fact.v1\",[\"v4.connection-ref.v1\",\"synthetic-owner\",\"synthetic-execution-server\",\"10000000-0000-4000-8000-000000000001\",\"20000000-0000-4000-8000-000000000001\",\"30000000-0000-4000-8000-000000000001\",\"40000000-0000-4000-8000-000000000001\"],[\"70000000-0000-4000-8000-000000000001\",\"80000000-0000-4000-8000-000000000001\",\"90000000-0000-4000-8000-000000000001\"],7,\"a0000000-0000-4000-8000-000000000001\",\"synthetic-child-exit\"],\"3cde46ed1eb805da7f3333dc466faa80fd77570729855b6f308880f7eb321200\"]"
+}

@@ -56,6 +56,18 @@ function buildProps(overrides = {}) {
 }
 
 describe('Header', () => {
+  it('shows the selected workspace while session metadata is loading', () => {
+    render(<Header {...buildProps({ projectInfo: null, workspacePath: '/Users/fixture/projects/example' })} />);
+    expect(screen.getByText('example')).toBeInTheDocument();
+    expect(screen.getByTitle('/Users/fixture/projects/example')).toBeInTheDocument();
+  });
+
+  it('shows an honest empty state before a workspace is selected', () => {
+    render(<Header {...buildProps({ projectInfo: null })} />);
+    expect(screen.getByText('No workspace selected')).toBeInTheDocument();
+    expect(screen.queryByText('term-v4')).not.toBeInTheDocument();
+  });
+
   it('renders the desktop titlebar and primary controls', () => {
     render(<Header {...buildProps()} />);
 

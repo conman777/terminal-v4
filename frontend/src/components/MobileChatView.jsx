@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { TerminalMicButton } from './TerminalMicButton';
 import { uploadScreenshot } from '../utils/api';
@@ -311,6 +311,13 @@ export function MobileChatView({
 }) {
   const { theme } = useTheme();
   const [inputValue, setInputValue] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const sendRequestRef = useRef(null);
+  useEffect(() => {
+    setSending(false); setSendError('');
+    return () => { sendRequestRef.current = null; };
+  }, [sessionId]);
   const [isMicRecording, setIsMicRecording] = useState(false);
   const textareaRef = useRef(null);
   const assistantLabel = getAiDisplayLabel(aiType, customAiProviders) || 'Assistant';
@@ -347,15 +354,24 @@ export function MobileChatView({
     onViewportStateChange,
   });
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = inputValue.trim();
-    if (!text) return;
-    onSend(text);
-    setInputValue('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+    if (!text || sendRequestRef.current) return;
+    const request = {};
+    sendRequestRef.current = request;
+    setSending(true); setSendError('');
+    try {
+      const receipt = await onSend(text);
+      if (sendRequestRef.current !== request) return;
+      if (receipt?.accepted === false) throw new Error('Message was not accepted. Your draft was kept.');
+      setInputValue(value => value.trim() === text ? '' : value);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      markShouldStickToBottom();
+    } catch (error) {
+      if (sendRequestRef.current === request) setSendError(error.message || 'Message was not accepted. Your draft was kept.');
+    } finally {
+      if (sendRequestRef.current === request) { sendRequestRef.current = null; setSending(false); }
     }
-    markShouldStickToBottom();
   }, [inputValue, onSend, markShouldStickToBottom]);
 
   const handleKeyDown = useCallback((e) => {
@@ -465,12 +481,14 @@ export function MobileChatView({
         </button>
       )}
 
+      {sendError && <p role="alert">{sendError}</p>}
       <div className="chat-input-bar">
         {!isMicRecording && (
           <textarea
             ref={textareaRef}
             className="chat-input"
             value={inputValue}
+            disabled={sending}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
@@ -523,7 +541,7 @@ export function MobileChatView({
               type="button"
               className="chat-send-btn"
               onClick={handleSend}
-              disabled={!inputValue.trim()}
+              disabled={sending || !inputValue.trim()}
               aria-label="Send message"
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

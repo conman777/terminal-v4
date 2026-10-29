@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import './JsonTreeView.css';
 
 /**
  * JsonTreeView - Collapsible JSON tree viewer
@@ -6,7 +7,7 @@ import { useState } from 'react';
 export function JsonTreeView({ data, initialExpanded = false }) {
   return (
     <div className="json-tree-view">
-      <JsonNode data={data} path="" initialExpanded={initialExpanded} />
+      <JsonNode data={data} path="root" initialExpanded={initialExpanded} />
     </div>
   );
 }
@@ -43,12 +44,15 @@ function JsonNode({ data, path, initialExpanded }) {
 
     return (
       <div className="json-expandable">
-        <span
+        <button
+          type="button"
           className="json-toggle"
-          onClick={() => setExpanded(!expanded)}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} array at ${path}`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(value => !value)}
         >
           {expanded ? '▼' : '▶'}
-        </span>
+        </button>
         <span className="json-bracket">[</span>
         {expanded && (
           <div className="json-children">
@@ -74,12 +78,15 @@ function JsonNode({ data, path, initialExpanded }) {
 
     return (
       <div className="json-expandable">
-        <span
+        <button
+          type="button"
           className="json-toggle"
-          onClick={() => setExpanded(!expanded)}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} object at ${path}`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(value => !value)}
         >
           {expanded ? '▼' : '▶'}
-        </span>
+        </button>
         <span className="json-brace">{'{'}</span>
         {expanded && (
           <div className="json-children">

@@ -22,10 +22,13 @@ See [FEATURES.md](docs/FEATURES.md) for a comprehensive feature catalog.
 ## Agent workspace
 
 The [Hermes and T3 inspired workspace](docs/features/HERMES_T3_WORKSPACE.md)
-adds native Hermes and compatible API runtimes, Git review/worktrees/checkpoints,
-parallel tasks and schedules, saved/native history handoff, reviewed project
-knowledge, and [paired hosts with native conversation/files rewind](docs/features/PAIRED_ENVIRONMENTS_AND_REWIND.md). See [Hermes setup](docs/features/HERMES_RUNTIME.md) to configure the
-installed runtime before running model tasks.
+uses V4's own agent runtime alongside native Codex and Claude Code sessions. It
+includes Git review/worktrees/checkpoints, parallel tasks and schedules,
+saved/native history handoff, reviewed project knowledge, and [paired hosts with
+native conversation/files rewind](docs/features/PAIRED_ENVIRONMENTS_AND_REWIND.md).
+See [V4 runtime](docs/features/V4_RUNTIME.md) for provider setup and runtime
+capabilities, and [Hermes compatibility](docs/features/HERMES_RUNTIME.md) for
+history migration.
 
 ## Remote workspace
 
@@ -37,7 +40,7 @@ host features and Workspace tools for transfers, sharing and replay.
 
 ## Requirements
 
-- Node.js 18+ (Node.js 22 recommended for node-pty prebuilt compatibility)
+- Node.js 20.19+ or 22.12+ (Node.js 22 recommended)
 - Rust stable toolchain (`cargo`, `rustfmt`)
 - On Windows, Strawberry Perl on `PATH` for the passkey/OpenSSL Rust build
 - Windows (PowerShell/cmd), macOS, or Linux
@@ -47,10 +50,10 @@ host features and Workspace tools for transfers, sharing and replay.
 See [Quick Start Guide](docs/QUICK_START.md) for detailed setup instructions.
 
 **TL;DR:**
-1. Install dependencies: `npm install && cd frontend && npm install`
-2. Create `.env` with JWT secrets and optional API keys
-3. Start Rust API: `npm run api:dev`
-4. Start frontend: `npm run frontend:dev`
+1. From the repository root, install dependencies: `npm install && npm --prefix frontend install`
+2. Set backend environment variables in the shell used to launch the API; see the [setup guide](docs/development/SETUP.md). Direct Rust startup reads the process environment.
+3. From the repository root, start the Rust API: `npm run api:dev`
+4. In another shell at the repository root, start the frontend: `npm run frontend:dev`
 5. Open `http://localhost:5173` and create your first terminal!
 
 For the production-style local path, build the frontend and use the Rust API as
@@ -62,7 +65,7 @@ npm run api:dev
 npm run app:verify
 ```
 
-Then open `http://127.0.0.1:3020`. This is the same serving model used by the
+Then open `http://localhost:3020`. This is the same serving model used by the
 desktop/native wrapper and avoids Vite dev-server transforms.
 
 ## Windows Desktop (Phase 1)
@@ -78,7 +81,7 @@ What this does:
 - Stops any stale Windows desktop wrapper process before rebuild so the app binary is not locked
 - Builds `frontend/dist` and the Rust API binary
 - Starts the Rust backend in desktop local-only mode (`HOST=127.0.0.1`, `PORT=3020`)
-- Launches a native Tauri window pointed at `http://127.0.0.1:3020`
+- Launches a native Tauri window pointed at `http://localhost:3020`
 
 To expose the desktop backend on your LAN during development, start it with:
 
@@ -181,11 +184,11 @@ git status            # Git operations
 
 ## Architecture Highlights
 
-- **Backend**: Rust Axum API for the primary desktop/runtime path, with the legacy Fastify backend still available during migration
-- **PTY**: `@homebridge/node-pty-prebuilt-multiarch` for true terminal emulation
+- **Backend**: Rust Axum API (`rust/crates/api`). The old Fastify code in `backend/` is legacy and no longer used at runtime
+- **PTY**: `portable-pty` (ConPTY on Windows) for true terminal emulation
 - **Frontend**: React + xterm.js for professional terminal UI
 - **Communication**: WebSocket for real-time streaming
-- **Session Management**: In-memory store with multi-session support
+- **Session Management**: Terminal and agent sessions persisted in the data directory, with multi-session support
 
 ## Security Considerations
 
@@ -241,7 +244,7 @@ npm run test:e2e      # Frontend Playwright tests against localhost:3020
 - Clear Vite cache: `rm -rf frontend/node_modules/.vite`
 
 ### Node.js version issues
-- Supports Node.js 18+ (Node.js 22 recommended for node-pty prebuilt compatibility)
+- Supports Node.js 20.19+ or 22.12+ (Node.js 22 recommended)
 - Use `nvm` to switch Node versions if needed
 
 ## Contributing
@@ -258,5 +261,5 @@ MIT
 ## Acknowledgments
 
 - Built with [xterm.js](https://xtermjs.org/) for terminal emulation
-- Uses [node-pty](https://github.com/microsoft/node-pty) for PTY support
-- Powered by [Axum](https://github.com/tokio-rs/axum) and [React](https://reactjs.org/), with the legacy Fastify implementation retained during migration
+- Uses [portable-pty](https://crates.io/crates/portable-pty) for PTY support
+- Powered by [Axum](https://github.com/tokio-rs/axum) and [React](https://reactjs.org/)

@@ -1,0 +1,15 @@
+.screenshot-gallery { box-sizing: border-box; width: min(880px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 16px; }
+.screenshot-gallery header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.screenshot-gallery h2 { margin: 0; font-size: 16px; }
+.screenshot-capture { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font: 13px var(--font-ui); }
+.screenshot-capture label { display: grid; gap: 4px; color: var(--text-secondary); }
+.screenshot-capture input:not([type="checkbox"]) { width: 90px; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 8px; background: var(--bg-base); color: var(--text-primary); font: inherit; }
+.screenshot-capture .screenshot-full { display: flex; align-items: center; gap: 6px; }
+.screenshot-capture button { padding: 6px 12px; border: 0; border-radius: 8px; background: var(--accent-fill); color: var(--accent-fill-foreground); font: inherit; cursor: pointer; }
+.screenshot-capture button:disabled { opacity: .55; cursor: default; }
+.screenshot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
+.screenshot-grid li { overflow: hidden; border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-surface); }
+.screenshot-grid img, .screenshot-placeholder { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; object-position: top; background: var(--bg-base); }
+.screenshot-grid li div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; font: 12px var(--font-ui); }
+.screenshot-grid li small { color: var(--text-secondary); }
+.screenshot-grid li button { border: 0; background: transparent; color: var(--error); font: inherit; cursor: pointer; }

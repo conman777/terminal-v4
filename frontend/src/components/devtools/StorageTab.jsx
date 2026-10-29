@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 
 /**
  * StorageTab - Storage inspection and editing
@@ -10,14 +10,48 @@ import { useState, useMemo } from 'react';
  */
 export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
   const [selectedType, setSelectedType] = useState('localStorage');
+  return <StorageEditor key={`${previewPort}:${selectedType}`} storage={storage} onUpdateStorage={onUpdateStorage} selectedType={selectedType} onSelectType={setSelectedType} />;
+}
+
+function StorageEditor({ storage, onUpdateStorage, selectedType, onSelectType }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingKey, setEditingKey] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
+  const [isPending, setIsPending] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const active = useRef(true);
+  const pending = useRef(false);
+
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   const currentStorage = storage[selectedType] || {};
+  const storageUnavailable = storage.available?.[selectedType] === false;
+  const canUpdate = useRef(false);
+  canUpdate.current = !storageUnavailable && Boolean(onUpdateStorage);
+  const mutationsDisabled = !canUpdate.current || isPending;
+
+  const runUpdate = async (failureMessage, update) => {
+    if (!active.current || !canUpdate.current || pending.current) return;
+    pending.current = true;
+    setIsPending(true);
+    setError('');
+    setNotice('');
+    try {
+      await update();
+    } catch (error) {
+      if (active.current) setError(`${failureMessage}. ${error?.message || 'Try again.'}`);
+    } finally {
+      pending.current = false;
+      if (active.current) setIsPending(false);
+    }
+  };
 
   // Filter storage by search
   const filteredEntries = useMemo(() => {
@@ -32,50 +66,41 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
   }, [currentStorage, searchQuery]);
 
   const handleAdd = async () => {
-    if (!newKey.trim() || !onUpdateStorage) return;
-
-    try {
+    if (!newKey.trim()) return;
+    await runUpdate('Could not add storage item', async () => {
       await onUpdateStorage(selectedType, 'set', newKey.trim(), newValue);
+      if (!active.current) return;
       setNewKey('');
       setNewValue('');
       setShowAddForm(false);
-    } catch (error) {
-      console.error('Failed to add storage item:', error);
-    }
+    });
   };
 
   const handleEdit = async (key) => {
-    if (!onUpdateStorage) return;
-
-    try {
+    await runUpdate('Could not save storage item', async () => {
       await onUpdateStorage(selectedType, 'set', key, editValue);
+      if (!active.current) return;
       setEditingKey(null);
       setEditValue('');
-    } catch (error) {
-      console.error('Failed to edit storage item:', error);
-    }
+    });
   };
 
   const handleDelete = async (key) => {
-    if (!onUpdateStorage) return;
+    if (mutationsDisabled) return;
     if (!confirm(`Delete "${key}"?`)) return;
 
-    try {
+    await runUpdate('Could not delete storage item', async () => {
       await onUpdateStorage(selectedType, 'remove', key);
-    } catch (error) {
-      console.error('Failed to delete storage item:', error);
-    }
+    });
   };
 
   const handleClearAll = async () => {
-    if (!onUpdateStorage) return;
+    if (mutationsDisabled) return;
     if (!confirm(`Clear all ${selectedType} items?`)) return;
 
-    try {
+    await runUpdate('Could not clear storage', async () => {
       await onUpdateStorage(selectedType, 'clear');
-    } catch (error) {
-      console.error('Failed to clear storage:', error);
-    }
+    });
   };
 
   const handleExport = () => {
@@ -95,7 +120,8 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
 
   const handleImport = async (event) => {
     const file = event.target.files?.[0];
-    if (!file || !onUpdateStorage) return;
+    event.target.value = '';
+    if (!file || mutationsDisabled) return;
 
     // Constants
     const MAX_FILE_SIZE = 1024 * 1024; // 1MB
@@ -105,15 +131,16 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
 
     // Check file size before reading
     if (file.size > MAX_FILE_SIZE) {
-      alert(`File too large: ${(file.size / 1024).toFixed(0)}KB (max ${MAX_FILE_SIZE / 1024}KB)`);
+      setError(`File too large: ${(file.size / 1024).toFixed(0)}KB (max ${MAX_FILE_SIZE / 1024}KB)`);
       return;
     }
 
-    try {
+    await runUpdate('Failed to import storage', async () => {
       const text = await file.text();
+      if (!active.current || !canUpdate.current) return;
       const data = JSON.parse(text);
 
-      if (!data.data || typeof data.data !== 'object') {
+      if (!data?.data || typeof data.data !== 'object' || Array.isArray(data.data)) {
         throw new Error('Invalid format: missing data object');
       }
 
@@ -126,6 +153,9 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
 
       // Validate each entry
       for (const [key, value] of entries) {
+        if (typeof value !== 'string') {
+          throw new Error(`Value for '${key}' must be a string`);
+        }
         if (key.length > MAX_KEY_LENGTH) {
           throw new Error(`Key too long: ${key.substring(0, 50)}... (max ${MAX_KEY_LENGTH} chars)`);
         }
@@ -137,15 +167,13 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
       // Import all entries
       let imported = 0;
       for (const [key, value] of entries) {
+        if (!active.current || !canUpdate.current) return;
         await onUpdateStorage(selectedType, 'set', key, value);
         imported++;
       }
 
-      alert(`Successfully imported ${imported} entries`);
-    } catch (error) {
-      console.error('Failed to import storage:', error);
-      alert('Failed to import storage: ' + error.message);
-    }
+      if (active.current) setNotice(`Successfully imported ${imported} entries`);
+    });
   };
 
   const startEdit = (key, value) => {
@@ -173,7 +201,8 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
             <button
               key={type.value}
               className={`storage-tree-item ${selectedType === type.value ? 'active' : ''}`}
-              onClick={() => setSelectedType(type.value)}
+              onClick={() => onSelectType(type.value)}
+              aria-pressed={selectedType === type.value}
             >
               <span className="storage-icon">{type.icon}</span>
               <span className="storage-label">{type.label}</span>
@@ -186,6 +215,9 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
       </div>
 
       <div className="storage-content">
+        {storageUnavailable && <p role="status">Browser storage is unavailable in this isolated preview. Open the preview in a separate tab to use browser storage.</p>}
+        {error && <p role="alert">{error}</p>}
+        {notice && <p role="status">{notice}</p>}
         <div className="storage-toolbar">
           <div className="storage-search">
             <input
@@ -206,7 +238,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
             )}
           </div>
           <div className="storage-actions">
-            <button onClick={() => setShowAddForm(!showAddForm)} className="btn-icon" title="Add new item">
+            <button onClick={() => setShowAddForm(!showAddForm)} disabled={mutationsDisabled} className="btn-icon" title="Add new item">
               ➕
             </button>
             <button onClick={handleExport} className="btn-icon" title="Export storage">
@@ -218,22 +250,24 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                 type="file"
                 accept=".json"
                 onChange={handleImport}
+                disabled={mutationsDisabled}
                 style={{ display: 'none' }}
               />
             </label>
-            <button onClick={handleClearAll} className="btn-icon" title="Clear all">
+            <button onClick={handleClearAll} disabled={mutationsDisabled} className="btn-icon" title="Clear all">
               🗑️
             </button>
           </div>
         </div>
 
-        {showAddForm && (
+        {showAddForm && !storageUnavailable && (
           <div className="storage-add-form">
             <input
               type="text"
               value={newKey}
               onChange={(e) => setNewKey(e.target.value)}
               placeholder="Key"
+              disabled={isPending}
               className="form-input"
             />
             <input
@@ -241,13 +275,14 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
               value={newValue}
               onChange={(e) => setNewValue(e.target.value)}
               placeholder="Value"
+              disabled={isPending}
               className="form-input"
             />
             <div className="form-actions">
-              <button onClick={handleAdd} disabled={!newKey.trim()} className="btn-primary">
+              <button onClick={handleAdd} disabled={mutationsDisabled || !newKey.trim()} className="btn-primary">
                 Add
               </button>
-              <button onClick={() => setShowAddForm(false)} className="btn-secondary">
+              <button onClick={() => setShowAddForm(false)} disabled={isPending} className="btn-secondary">
                 Cancel
               </button>
             </div>
@@ -286,6 +321,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                           onChange={(e) => setEditValue(e.target.value)}
                           className="edit-input"
                           autoFocus
+                          disabled={mutationsDisabled}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') handleEdit(key);
                             if (e.key === 'Escape') cancelEdit();
@@ -302,6 +338,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                         <>
                           <button
                             onClick={() => handleEdit(key)}
+                            disabled={mutationsDisabled}
                             className="action-btn"
                             title="Save"
                           >
@@ -309,6 +346,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                           </button>
                           <button
                             onClick={cancelEdit}
+                            disabled={isPending}
                             className="action-btn"
                             title="Cancel"
                           >
@@ -319,6 +357,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                         <>
                           <button
                             onClick={() => startEdit(key, value)}
+                            disabled={mutationsDisabled}
                             className="action-btn"
                             title="Edit"
                           >
@@ -326,6 +365,7 @@ export function StorageTab({ storage = {}, onUpdateStorage, previewPort }) {
                           </button>
                           <button
                             onClick={() => handleDelete(key)}
+                            disabled={mutationsDisabled}
                             className="action-btn"
                             title="Delete"
                           >

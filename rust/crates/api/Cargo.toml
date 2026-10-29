@@ -4,14 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+supervised-input-preview = []
+queued-authority-preview = []
+
 [dependencies]
+base64 = "0.22"
 aes-gcm = "0.10"
 async-trait.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10", features = ["multipart"] }
 bcrypt.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 futures-util = "0.3"
 hex.workspace = true
+html5ever = "0.29.1"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 jsonwebtoken.workspace = true
@@ -49,9 +57,10 @@ zip = "2"
 
 [target.'cfg(windows)'.dependencies]
 conpty = "0.7"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
+terminal-v4-provider-connections = { path = "../provider-connections" }
 libc = "0.2"
 
 [dev-dependencies]

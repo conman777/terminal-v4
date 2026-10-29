@@ -31,6 +31,45 @@ function buildProps(overrides = {}) {
 }
 
 describe('MobileSessionPicker', () => {
+  it('contains keyboard focus and returns it to the opener on dismissal', () => {
+    const props = buildProps();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const view = render(<MobileSessionPicker {...props} />);
+    const close = screen.getByRole('button', { name: 'Close session picker' });
+    const last = screen.getByRole('button', { name: /this should only show/i });
+    expect(close).toHaveFocus();
+    last.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+    view.rerender(<MobileSessionPicker {...props} isOpen={false} />);
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
+  it('does not dismiss when a session list scroll ends in a downward swipe', () => {
+    const props = buildProps();
+    render(<MobileSessionPicker {...props} />);
+    const session = screen.getByRole('button', { name: /discard local changes/i });
+    fireEvent.touchStart(session, { touches: [{ clientX: 80, clientY: 100 }] });
+    fireEvent.touchEnd(session, { changedTouches: [{ clientX: 80, clientY: 210 }] });
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps search focus and its query when parent activity updates recreate callbacks', () => {
+    const props = buildProps({ sessions: Array.from({ length: 7 }, (_, index) => ({ id: `session-${index}`, title: `Terminal ${index}` })) });
+    const view = render(<MobileSessionPicker {...props} />);
+    const search = screen.getByRole('textbox', { name: 'Search sessions' });
+    search.focus();
+    fireEvent.change(search, { target: { value: 'Terminal 2' } });
+    view.rerender(<MobileSessionPicker {...props} onClose={vi.fn()} sessionActivity={{ 'session-2': { isBusy: true } }} />);
+    expect(search).toHaveFocus();
+    expect(search).toHaveValue('Terminal 2');
+  });
+
   it('shows preferred thread topics instead of raw terminal titles', () => {
     render(<MobileSessionPicker {...buildProps()} />);
 

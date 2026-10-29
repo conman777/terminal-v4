@@ -204,3 +204,13 @@ describe('MobileStatusBar', () => {
     expect(composer).toHaveAttribute('spellcheck', 'false');
   });
 });
+
+
+it('shows a rejected mobile send and keeps its draft available for retry', async () => {
+  const onSendMessage = vi.fn().mockResolvedValue({ accepted: false });
+  render(<MobileStatusBar {...buildProps({ onSendMessage })} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Command composer' }), { target: { value: 'Unaccepted phone draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send to terminal' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/not accepted/i);
+  expect(screen.getByRole('textbox', { name: 'Command composer' })).toHaveValue('Unaccepted phone draft');
+});

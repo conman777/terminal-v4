@@ -1,8 +1,37 @@
+import { AgentNotificationSetting } from './AgentNotificationSetting';
+import { AppearanceSetting } from './AppearanceSetting';
+import { SetupChecklist } from './SetupChecklist';
+import { KeyboardShortcutsSetting } from './KeyboardShortcutsSetting';
+import { UsageSummary } from './UsageSummary';
+import { TelegramSetting } from './TelegramSetting';
 import { getActiveEnvironment } from '../utils/remoteEnvironments';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useId, useMemo } from 'react';
+import './SettingsModal.css';
+import './UtilityDialogs.css';
 import { FolderBrowserModal } from './FolderBrowserModal';
-import { getAccessToken } from '../utils/auth';
+import { McpSettingsPanel } from './McpSettingsPanel';
+import { AccountKnowledgePanel } from './AccountKnowledgePanel';
+import { AgentBrowserSettingsPanel } from './AgentBrowserSettingsPanel';
+import { ProviderConnectionsPanel } from './ProviderConnectionsPanel';
+import { MountOnFirstOpen } from './MountOnFirstOpen';
+import { apiFetch } from '../utils/api';
+import { isStructuredSessionId } from '../utils/structuredSessions';
 import { getTerminalRendererGuardReason, resolveTerminalWebglEnabled } from '../utils/terminalRendererPolicy';
+
+const dialogSelector = 'dialog, [role="dialog"], [role="alertdialog"]';
+
+function getFocusableControls(dialog) {
+  return [...dialog.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex]')]
+    .filter(element => {
+      if (element.tabIndex < 0 || element.matches(':disabled') || element.closest('[hidden], [inert]')) return false;
+      if (element.closest(dialogSelector) !== dialog) return false;
+      for (let ancestor = element; ancestor && dialog.contains(ancestor); ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+      }
+      return true;
+    });
+}
 
 export function SettingsModal({
   isOpen,
@@ -21,28 +50,107 @@ export function SettingsModal({
   onDesktopTerminalInputChange,
   onOpenApiSettings,
   onOpenProcessManager,
+  onOpenSystemResources,
   showTabStatusLabels,
   onTabStatusLabelsChange
 }) {
+  const titleId = useId();
   const [workingDir, setWorkingDir] = useState(currentCwd || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [activeSection, setActiveSection] = useState('workspace');
+  const [dirtySections, setDirtySections] = useState({});
+  const dirtyHandlers = useMemo(() => Object.fromEntries(['mcp', 'browser', 'knowledge', 'connections'].map(section => [section, dirty => {
+    setDirtySections(previous => previous[section] === dirty ? previous : { ...previous, [section]: dirty });
+  }])), []);
+  const unsavedLabels = [['mcp', 'MCP servers'], ['browser', 'Agent browser'], ['knowledge', 'Account knowledge'], ['connections', 'Provider connections']]
+    .filter(([section]) => dirtySections[section]).map(([, label]) => label);
+  const [saveError, setSaveError] = useState('');
+  const [downloadError, setDownloadError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const sectionSavesOwnSettings = ['mcp', 'browser', 'knowledge', 'connections'].includes(activeSection);
   const resolvedWebglEnabled = resolveTerminalWebglEnabled(terminalWebglEnabled);
   const webglGuardReason = getTerminalRendererGuardReason();
   const webglLocked = Boolean(webglGuardReason);
   const resolvedDesktopAllowTerminalInput = desktopAllowTerminalInput === true;
   const resolvedShowTabStatusLabels = showTabStatusLabels !== false;
+  const dialogRef = useRef(null);
+  const closeRef = useRef(null);
+  const openerRef = useRef(null);
   const dropdownRef = useRef(null);
+  const operationGenerationRef = useRef(0);
   const normalizedWorkingDir = workingDir.trim();
   const normalizedCurrentCwd = typeof currentCwd === 'string' ? currentCwd.trim() : '';
   const shouldNavigateOnSave = Boolean(normalizedWorkingDir) && normalizedWorkingDir !== normalizedCurrentCwd;
+  useEffect(() => { if (!isOpen) setDirtySections({}); }, [isOpen]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const dialog = dialogRef.current;
+    openerRef.current = document.activeElement;
+    let lastFocused = closeRef.current;
+    lastFocused.focus({ preventScroll: true });
+    const containFocus = event => {
+      const targetDialog = event.target.closest(dialogSelector);
+      if (dialog.contains(event.target)) {
+        if (targetDialog === dialog) lastFocused = event.target;
+        return;
+      }
+      if (targetDialog) return;
+      const controls = getFocusableControls(dialog);
+      const target = controls.includes(lastFocused) ? lastFocused : controls[0] || dialog;
+      target.focus({ preventScroll: true });
+    };
+    document.addEventListener('focusin', containFocus);
+    return () => document.removeEventListener('focusin', containFocus);
+  }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen) return;
+    const opener = openerRef.current;
+    const dialog = dialogRef.current;
+    return () => {
+      const focusedDialog = document.activeElement?.closest(dialogSelector);
+      if (opener?.isConnected && (!focusedDialog || focusedDialog === dialog)) opener.focus({ preventScroll: true });
+    };
+  }, [isOpen]);
+
+  function handleDialogKeyDown(event) {
+    if (event.defaultPrevented || event.target.closest(dialogSelector) !== event.currentTarget) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const controls = getFocusableControls(event.currentTarget);
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (!first || document.activeElement === event.currentTarget) {
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus({ preventScroll: true });
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus({ preventScroll: true });
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus({ preventScroll: true });
+    }
+  }
+
+  useEffect(() => {
+    operationGenerationRef.current += 1;
+    setIsSaving(false);
+    setIsDownloading(false);
     if (isOpen) {
       setWorkingDir(currentCwd || '');
+      setSaveError('');
+      setDownloadError('');
     }
-  }, [isOpen, currentCwd]);
+    return () => { operationGenerationRef.current += 1; };
+  }, [isOpen, currentCwd, sessionId]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -54,23 +162,63 @@ export function SettingsModal({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleSave = () => {
-    if (shouldNavigateOnSave) {
-      onAddRecentFolder(normalizedWorkingDir);
-      onSave(sessionId, normalizedWorkingDir);
+  const handleSave = async () => {
+    if (isSaving) return;
+    const generation = operationGenerationRef.current;
+    setSaveError('');
+    if (shouldNavigateOnSave && !sessionId) {
+      setSaveError('Select a terminal session before changing its working directory.');
+      return;
     }
-    onClose();
+    if (shouldNavigateOnSave && isStructuredSessionId(sessionId)) {
+      setSaveError('This conversation has a fixed workspace. Create a new conversation in the selected folder.');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      if (shouldNavigateOnSave) {
+        await onSave(sessionId, normalizedWorkingDir);
+        if (generation !== operationGenerationRef.current) return;
+        onAddRecentFolder(normalizedWorkingDir);
+      }
+      onClose();
+    } catch (error) {
+      if (generation !== operationGenerationRef.current) return;
+      setSaveError(error.message || 'Could not navigate. Your selected directory is still here; try again.');
+    } finally {
+      if (generation === operationGenerationRef.current) setIsSaving(false);
+    }
   };
 
-  const handleDownload = () => {
-    const pathToDownload = workingDir || currentCwd;
-    if (!pathToDownload) return;
-    const params = new URLSearchParams({ path: pathToDownload });
-    const token = getAccessToken();
-    if (token) {
-      params.set('token', token);
+  const handleDownload = async () => {
+    const pathToDownload = normalizedWorkingDir || normalizedCurrentCwd;
+    if (!pathToDownload || isDownloading) return;
+    const generation = operationGenerationRef.current;
+    setDownloadError('');
+    setIsDownloading(true);
+    try {
+      const params = new URLSearchParams({ path: pathToDownload });
+      const response = await apiFetch(`/api/fs/download?${params}`);
+      if (!response.ok) throw new Error(`Failed to download folder (${response.status})`);
+      const blob = await response.blob();
+      if (generation !== operationGenerationRef.current) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${pathToDownload.split(/[\\/]/).filter(Boolean).pop() || 'workspace'}.zip`;
+      document.body.appendChild(link);
+      try {
+        link.click();
+      } finally {
+        link.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      if (generation !== operationGenerationRef.current) return;
+      setDownloadError(error.message || 'Could not download folder. Try again.');
+    } finally {
+      if (generation === operationGenerationRef.current) setIsDownloading(false);
     }
-    window.location.href = `/api/fs/download?${params.toString()}`;
   };
 
   const handleSelectFolder = (folder) => {
@@ -86,23 +234,15 @@ export function SettingsModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content session-settings-modal" onClick={(e) => e.stopPropagation()}>
+      <div ref={dialogRef} className="modal-content session-settings-modal ui-utility-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={handleDialogKeyDown} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header session-settings-header">
           <div className="session-settings-title-wrap">
-            <div className="session-settings-icon-shell" aria-hidden="true">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-                <circle cx="12" cy="12" r="3" />
-              </svg>
-            </div>
             <div className="session-settings-title-copy">
-              <span className="session-settings-kicker">Workspace controls</span>
-              <h2>Session Settings</h2>
-              <p>Adjust this session&apos;s workspace path, interaction model, and runtime tooling.</p>
+              <h2 id={titleId}>Session Settings</h2>
             </div>
           </div>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <button ref={closeRef} className="modal-close" onClick={onClose} aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -115,13 +255,22 @@ export function SettingsModal({
               ['workspace', 'Workspace'],
               ['terminal', 'Terminal'],
               ['interface', 'Interface'],
+              ['connections', 'Provider connections'],
+              ['mcp', 'MCP servers'],
+              ['browser', 'Agent browser'],
+              ['knowledge', 'Account knowledge'],
               ['voice', 'Voice'],
               ['processes', 'Processes'],
+              ['messaging', 'Messaging'],
+              ['usage', 'Usage'],
+              ['shortcuts', 'Keyboard shortcuts'],
+              ['setup', 'Setup check'],
             ].map(([id, label]) => (
               <button
                 key={id}
                 type="button"
                 className={`session-settings-nav-btn${activeSection === id ? ' active' : ''}`}
+                aria-current={activeSection === id ? 'page' : undefined}
                 onClick={() => setActiveSection(id)}
               >
                 {label}
@@ -143,6 +292,7 @@ export function SettingsModal({
                       id="working-dir"
                       type="text"
                       value={workingDir}
+                      disabled={isSaving}
                       onChange={(e) => setWorkingDir(e.target.value)}
                       placeholder={'e.g., C:\\Users\\YourName\\Projects'}
                       onFocus={() => recentFolders.length > 0 && setShowDropdown(true)}
@@ -151,6 +301,7 @@ export function SettingsModal({
                       <button
                         type="button"
                         className="dropdown-toggle"
+                        disabled={isSaving}
                         onClick={() => setShowDropdown(!showDropdown)}
                         aria-label="Show recent folders"
                       >
@@ -165,9 +316,10 @@ export function SettingsModal({
                             key={index}
                             type="button"
                             className="folder-dropdown-item"
+                            disabled={isSaving}
                             onClick={() => handleSelectFolder(folder)}
                           >
-                            <span className="folder-icon">📁</span>
+                            <span className="folder-icon" aria-hidden="true">/</span>
                             <span className="folder-path" title={folder}>
                               {folder}
                             </span>
@@ -181,6 +333,7 @@ export function SettingsModal({
                       type="button"
                       className="btn-secondary btn-small"
                       onClick={() => setShowFolderBrowser(true)}
+                      disabled={isSaving}
                       title="Browse folders"
                     >
                       Browse
@@ -190,6 +343,7 @@ export function SettingsModal({
                         type="button"
                         className="btn-secondary btn-small"
                         onClick={() => setWorkingDir(currentCwd)}
+                        disabled={isSaving}
                         title="Use current terminal directory"
                       >
                         Use Current
@@ -200,6 +354,7 @@ export function SettingsModal({
                         type="button"
                         className="btn-secondary btn-small"
                         onClick={handleClear}
+                        disabled={isSaving}
                         title="Clear directory"
                       >
                         Clear
@@ -224,12 +379,13 @@ export function SettingsModal({
                 <button
                   className="btn-secondary"
                   onClick={handleDownload}
-                  disabled={!workingDir && !currentCwd}
+                  disabled={isDownloading || (!normalizedWorkingDir && !normalizedCurrentCwd)}
                   title="Download folder as .zip"
                 >
-                  ↓ Download
+                  {isDownloading ? 'Downloading...' : '↓ Download'}
                 </button>
               </div>
+              {downloadError && <p role="alert">{downloadError}</p>}
             </div>
           </section>
 
@@ -264,6 +420,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       className={`mode-btn ${resolvedWebglEnabled ? 'active' : ''}`}
+                      aria-pressed={resolvedWebglEnabled}
                       disabled={webglLocked}
                       onClick={() => onWebglChange?.(true)}
                       title={webglGuardReason || 'Use the GPU-accelerated renderer'}
@@ -273,6 +430,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       className={`mode-btn ${!resolvedWebglEnabled ? 'active' : ''}`}
+                      aria-pressed={!resolvedWebglEnabled}
                       onClick={() => onWebglChange?.(false)}
                       title={webglLocked ? 'Stable renderer for this device' : 'Use the stable canvas renderer'}
                     >
@@ -285,6 +443,22 @@ export function SettingsModal({
             </div>
           </section>
 
+          <section className="session-settings-section" hidden={activeSection !== 'messaging'}>
+            {activeSection === 'messaging' && <TelegramSetting />}
+          </section>
+
+          <section className="session-settings-section" hidden={activeSection !== 'usage'}>
+            {activeSection === 'usage' && <UsageSummary />}
+          </section>
+
+          <section className="session-settings-section" hidden={activeSection !== 'shortcuts'}>
+            {activeSection === 'shortcuts' && <KeyboardShortcutsSetting />}
+          </section>
+
+          <section className="session-settings-section" hidden={activeSection !== 'setup'}>
+            {activeSection === 'setup' && <SetupChecklist />}
+          </section>
+
           <section className="session-settings-section" hidden={activeSection !== 'interface'}>
             <div className="session-settings-section-heading">
               <span className="session-settings-section-kicker">Desktop UX</span>
@@ -292,12 +466,20 @@ export function SettingsModal({
             </div>
             <div className="session-settings-grid">
               <div className="session-settings-panel session-settings-panel-compact">
+                <AgentNotificationSetting />
+              </div>
+              <div className="session-settings-panel session-settings-panel-compact">
+                <AppearanceSetting />
+              </div>
+
+              <div className="session-settings-panel session-settings-panel-compact">
                 <div className="form-group session-settings-field">
                   <label>Tab Status Labels</label>
                   <div className="mode-toggle" role="group" aria-label="Tab status labels">
                     <button
                       type="button"
                       className={`mode-btn ${resolvedShowTabStatusLabels ? 'active' : ''}`}
+                      aria-pressed={resolvedShowTabStatusLabels}
                       onClick={() => onTabStatusLabelsChange?.(true)}
                     >
                       Show
@@ -305,6 +487,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       className={`mode-btn ${!resolvedShowTabStatusLabels ? 'active' : ''}`}
+                      aria-pressed={!resolvedShowTabStatusLabels}
                       onClick={() => onTabStatusLabelsChange?.(false)}
                     >
                       Compact
@@ -321,6 +504,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       className={`mode-btn ${!resolvedDesktopAllowTerminalInput ? 'active' : ''}`}
+                      aria-pressed={!resolvedDesktopAllowTerminalInput}
                       onClick={() => onDesktopTerminalInputChange?.(false)}
                     >
                       Ask V4 Only
@@ -328,6 +512,7 @@ export function SettingsModal({
                     <button
                       type="button"
                       className={`mode-btn ${resolvedDesktopAllowTerminalInput ? 'active' : ''}`}
+                      aria-pressed={resolvedDesktopAllowTerminalInput}
                       onClick={() => onDesktopTerminalInputChange?.(true)}
                     >
                       Ask V4 + Terminal
@@ -338,6 +523,11 @@ export function SettingsModal({
               </div>
             </div>
           </section>
+
+          <section className="session-settings-section" hidden={activeSection !== 'mcp'}><MountOnFirstOpen isOpen={activeSection === 'mcp'}><McpSettingsPanel isActive={activeSection === 'mcp'} onDirtyChange={dirtyHandlers.mcp} /></MountOnFirstOpen></section>
+          <section className="session-settings-section" hidden={activeSection !== 'browser'}><MountOnFirstOpen isOpen={activeSection === 'browser'}><AgentBrowserSettingsPanel onDirtyChange={dirtyHandlers.browser} /></MountOnFirstOpen></section>
+          <section className="session-settings-section" hidden={activeSection !== 'knowledge'}><MountOnFirstOpen isOpen={activeSection === 'knowledge'}><AccountKnowledgePanel onDirtyChange={dirtyHandlers.knowledge} /></MountOnFirstOpen></section>
+          <section className="session-settings-section" hidden={activeSection !== 'connections'}><MountOnFirstOpen isOpen={activeSection === 'connections'}><ProviderConnectionsPanel onDirtyChange={dirtyHandlers.connections} /></MountOnFirstOpen></section>
 
           <section className="session-settings-section" hidden={activeSection !== 'voice' && activeSection !== 'processes'}>
             <div className="session-settings-section-heading">
@@ -382,6 +572,9 @@ export function SettingsModal({
                     >
                       Open Process Manager
                     </button>
+                    <button type="button" className="btn-secondary btn-small" onClick={onOpenSystemResources} disabled={!onOpenSystemResources}>
+                      Open System Resources
+                    </button>
                   </div>
                 </div>
               </div>
@@ -391,17 +584,16 @@ export function SettingsModal({
 
         <div className="modal-footer session-settings-footer">
           <div className="session-settings-footer-copy">
+            {saveError && <p role="alert">{saveError}</p>}
             <span className="session-settings-footer-status">
-              {shouldNavigateOnSave ? 'Saving will reopen this session in the new workspace.' : 'Settings are applied immediately where possible.'}
+              {unsavedLabels.length ? `Unsaved changes in ${unsavedLabels.join(', ')}. Save in those sections before closing.` : sectionSavesOwnSettings ? 'Changes are kept between sections. Save before closing settings.' : shouldNavigateOnSave ? isStructuredSessionId(sessionId) ? 'Conversation workspaces are fixed. Create a new conversation to use another folder.' : 'Saving will send a directory change to this terminal.' : 'Display settings apply immediately.'}
             </span>
           </div>
           <div className="session-settings-footer-actions">
-            <button className="btn-secondary" onClick={onClose}>
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={handleSave}>
-              {shouldNavigateOnSave ? 'Save & Navigate' : 'Save'}
-            </button>
+            {sectionSavesOwnSettings ? <button className="btn-primary" onClick={onClose}>Close settings</button> : <>
+              <button className="btn-secondary" onClick={onClose}>Cancel</button>
+              <button className="btn-primary" onClick={handleSave} disabled={isSaving}>{isSaving ? 'Navigating...' : shouldNavigateOnSave ? 'Save & Navigate' : 'Done'}</button>
+            </>}
           </div>
         </div>
 
@@ -411,293 +603,12 @@ export function SettingsModal({
           currentPath={workingDir || currentCwd}
           recentFolders={recentFolders}
           onSelect={(path) => {
+            if (isSaving) return;
             setWorkingDir(path);
             setShowFolderBrowser(false);
           }}
         />
-        <style>{`
-          .session-settings-modal {
-            max-width: 820px;
-            background:
-              linear-gradient(180deg, color-mix(in srgb, var(--accent-primary) 10%, var(--bg-surface)) 0%, var(--bg-surface) 18%, var(--bg-surface) 100%);
-            overflow: hidden;
-          }
 
-          .session-settings-header {
-            align-items: flex-start;
-            padding-bottom: 12px;
-          }
-
-          .session-settings-title-wrap {
-            display: flex;
-            align-items: flex-start;
-            gap: 16px;
-            min-width: 0;
-          }
-
-          .session-settings-icon-shell {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 44px;
-            height: 44px;
-            border-radius: 14px;
-            background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
-            color: var(--accent-primary);
-            border: 1px solid color-mix(in srgb, var(--accent-primary) 26%, transparent);
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            flex-shrink: 0;
-          }
-
-          .session-settings-title-copy {
-            min-width: 0;
-          }
-
-          .session-settings-title-copy h2 {
-            margin: 0;
-          }
-
-          .session-settings-kicker,
-          .session-settings-section-kicker,
-          .session-settings-hero-label,
-          .session-settings-meta-label,
-          .session-settings-utility-label {
-            display: inline-block;
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: var(--text-muted);
-          }
-
-          .session-settings-title-copy p {
-            margin: 8px 0 0;
-            max-width: 52ch;
-            font-size: 14px;
-            line-height: 1.5;
-            color: var(--text-secondary);
-          }
-
-          .session-settings-body {
-            display: grid;
-            grid-template-columns: 150px minmax(0, 1fr);
-            align-items: start;
-            gap: 20px;
-          }
-
-          .session-settings-nav {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            padding: 6px;
-            border-radius: 16px;
-            background: color-mix(in srgb, var(--bg-base) 62%, transparent);
-            border: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent);
-          }
-
-          .session-settings-nav-btn {
-            min-height: 38px;
-            padding: 0 12px;
-            border: 1px solid transparent;
-            border-radius: 10px;
-            background: transparent;
-            color: var(--text-secondary);
-            text-align: left;
-            font-size: 13px;
-            font-weight: 650;
-            cursor: pointer;
-            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-          }
-
-          .session-settings-nav-btn:hover,
-          .session-settings-nav-btn.active {
-            color: var(--text-primary);
-            border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-default));
-            background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-          }
-
-          .session-settings-hero-card,
-          .session-settings-panel {
-            border: 1px solid color-mix(in srgb, var(--border-default) 88%, transparent);
-            background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
-            border-radius: 20px;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-          }
-
-          .session-settings-hero-card {
-            display: grid;
-            grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.9fr);
-            gap: 18px;
-            padding: 20px;
-          }
-
-          .session-settings-hero-main h3,
-          .session-settings-section-heading h3 {
-            margin: 8px 0 0;
-            font-size: 22px;
-            line-height: 1.1;
-            letter-spacing: -0.03em;
-            color: var(--text-primary);
-          }
-
-          .session-settings-hero-main p {
-            margin: 10px 0 0;
-            color: var(--text-secondary);
-            line-height: 1.55;
-          }
-
-          .session-settings-hero-meta {
-            display: grid;
-            gap: 12px;
-          }
-
-          .session-settings-meta-block {
-            display: grid;
-            gap: 8px;
-            padding: 14px 16px;
-            border-radius: 16px;
-            background: color-mix(in srgb, var(--bg-surface) 82%, transparent);
-            border: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
-          }
-
-          .session-settings-meta-block code,
-          .session-settings-meta-block span:last-child {
-            overflow-wrap: anywhere;
-            color: var(--text-primary);
-          }
-
-          .session-settings-meta-block code {
-            font-size: 12px;
-            background: color-mix(in srgb, var(--bg-base) 84%, transparent);
-            border: 1px solid color-mix(in srgb, var(--border-subtle) 75%, transparent);
-            border-radius: 10px;
-            padding: 8px 10px;
-          }
-
-          .session-settings-section {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-          }
-
-          .session-settings-section[hidden],
-          .session-settings-panel[hidden] {
-            display: none;
-          }
-
-          .session-settings-section-heading {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-          }
-
-          .session-settings-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
-          }
-
-          .session-settings-panel {
-            padding: 18px;
-          }
-
-          .session-settings-field {
-            gap: 10px;
-          }
-
-          .session-settings-inline-utility {
-            margin-top: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding-top: 16px;
-            border-top: 1px solid color-mix(in srgb, var(--border-subtle) 90%, transparent);
-          }
-
-          .session-settings-inline-utility p {
-            margin: 6px 0 0;
-            color: var(--text-secondary);
-            font-size: 13px;
-          }
-
-          .settings-inline-actions {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            min-height: 100%;
-          }
-
-          .settings-inline-title {
-            font-size: 13px;
-            font-weight: 600;
-            margin-bottom: 4px;
-          }
-
-          .session-settings-footer {
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            padding-top: 12px;
-          }
-
-          .session-settings-footer-copy {
-            min-width: 0;
-            flex: 1;
-          }
-
-          .session-settings-footer-status {
-            display: block;
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.45;
-          }
-
-          .session-settings-footer-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-          }
-
-          @media (max-width: 720px) {
-            .session-settings-modal {
-              max-width: 100%;
-            }
-
-            .session-settings-hero-card,
-            .session-settings-grid,
-            .session-settings-body {
-              grid-template-columns: 1fr;
-            }
-
-            .session-settings-nav {
-              flex-direction: row;
-              overflow-x: auto;
-            }
-
-            .session-settings-nav-btn {
-              flex: 0 0 auto;
-            }
-
-            .session-settings-inline-utility,
-            .settings-inline-actions,
-            .session-settings-footer {
-              flex-direction: column;
-              align-items: stretch;
-            }
-
-            .session-settings-footer-actions {
-              width: 100%;
-              justify-content: stretch;
-            }
-
-            .session-settings-footer-actions > button {
-              flex: 1;
-            }
-          }
-        `}</style>
       </div>
     </div>
   );

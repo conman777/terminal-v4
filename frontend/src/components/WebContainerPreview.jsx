@@ -1,4 +1,6 @@
+import { isTrustedWebContainerUrl } from '../utils/webcontainerWindow';
 import { apiFetch } from '../utils/api';
+import './preview/PreviewPanel.css';
 /**
  * WebContainerPreview Component
  *
@@ -13,10 +15,9 @@ import {
   isWebContainerSupported,
   getWebContainer,
   mountFiles,
-  writeFile,
   installDependencies,
   startDevServer,
-  getStatus
+  createPreviewSession
 } from '../utils/webcontainer';
 
 // Status phases
@@ -51,7 +52,8 @@ export function WebContainerPreview({
   onServerReady,
   onError,
   onConsoleLog,
-  onFallbackToProxy
+  onFallbackToProxy,
+  isScopeCurrent
 }) {
   const [status, setStatus] = useState(STATUS.CHECKING);
   const [statusMessage, setStatusMessage] = useState(STATUS_MESSAGES[STATUS.CHECKING]);
@@ -62,18 +64,16 @@ export function WebContainerPreview({
   const [installProgress, setInstallProgress] = useState('');
 
   const iframeRef = useRef(null);
-  const serverProcessRef = useRef(null);
-  const mountedRef = useRef(false);
-  const initStartedRef = useRef(false);
+  const [retryGeneration, setRetryGeneration] = useState(0);
+  const callbacksRef = useRef({});
+  callbacksRef.current = { onStatusChange, onConsoleLog, onError, onServerReady };
 
   // Update status with callback
   const updateStatus = useCallback((newStatus, message) => {
     setStatus(newStatus);
     setStatusMessage(message || STATUS_MESSAGES[newStatus]);
-    if (onStatusChange) {
-      onStatusChange(newStatus, message || STATUS_MESSAGES[newStatus]);
-    }
-  }, [onStatusChange]);
+    callbacksRef.current.onStatusChange?.(newStatus, message || STATUS_MESSAGES[newStatus]);
+  }, []);
 
   // Add log entry
   const addLog = useCallback((text, type = 'info') => {
@@ -84,10 +84,8 @@ export function WebContainerPreview({
       type
     };
     setLogs(prev => [...prev.slice(-200), entry]);
-    if (onConsoleLog) {
-      onConsoleLog(entry);
-    }
-  }, [onConsoleLog]);
+    callbacksRef.current.onConsoleLog?.(entry);
+  }, []);
 
   // Handle errors
   const handleError = useCallback((error, phase) => {
@@ -96,143 +94,104 @@ export function WebContainerPreview({
     setErrorDetails({ phase, message: errorMsg });
     updateStatus(STATUS.ERROR, `Error during ${phase}: ${errorMsg}`);
     addLog(`Error: ${errorMsg}`, 'error');
-    if (onError) {
-      onError(error, phase);
-    }
-  }, [updateStatus, addLog, onError]);
+    callbacksRef.current.onError?.(error, phase);
+  }, [updateStatus, addLog]);
 
-  // Initialize WebContainer
   useEffect(() => {
-    if (initStartedRef.current) return;
-    initStartedRef.current = true;
+    const session = createPreviewSession();
+    updateStatus(STATUS.CHECKING);
+    setServerUrl(null);
+    setServerPort(null);
+    setLogs([]);
+    setErrorDetails(null);
+    setInstallProgress('');
 
-    async function init() {
-      try {
-        // Step 1: Check support
-        updateStatus(STATUS.CHECKING);
-        const support = isWebContainerSupported();
-
-        if (!support.supported) {
-          updateStatus(STATUS.UNSUPPORTED, support.reason);
-          setErrorDetails({ phase: 'support', message: support.reason });
-          return;
+    session.run(async signal => {
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        if (isScopeCurrent && !isScopeCurrent()) {
+          session.dispose();
+          throw new DOMException('The project account or environment changed', 'AbortError');
         }
+      };
+      assertCurrent();
+      updateStatus(STATUS.CHECKING);
+      const support = isWebContainerSupported();
+      if (!support.supported) {
+        updateStatus(STATUS.UNSUPPORTED, support.reason);
+        setErrorDetails({ phase: 'support', message: support.reason });
+        return;
+      }
 
-        // Step 2: Boot WebContainer
-        updateStatus(STATUS.BOOTING);
-        addLog('Booting WebContainer...');
+      updateStatus(STATUS.BOOTING);
+      addLog('Booting WebContainer...');
+      assertCurrent();
+      await getWebContainer();
+      assertCurrent();
+      addLog('WebContainer booted successfully');
 
-        const wc = await getWebContainer();
-        addLog('WebContainer booted successfully');
-
-        // Step 3: Mount files if provided
-        if (projectFiles && Object.keys(projectFiles).length > 0) {
-          updateStatus(STATUS.MOUNTING);
-          addLog(`Mounting ${Object.keys(projectFiles).length} files...`);
-
-          await mountFiles(projectFiles);
-          mountedRef.current = true;
-          addLog('Files mounted successfully');
-        } else if (projectPath) {
-          // Fetch files from backend API
-          updateStatus(STATUS.MOUNTING, 'Fetching project files...');
-          addLog(`Fetching files from ${projectPath}...`);
-
-          try {
-            const response = await apiFetch(`/api/webcontainer/files?path=${encodeURIComponent(projectPath)}`);
-            if (!response.ok) {
-              throw new Error(`Failed to fetch files: ${response.statusText}`);
-            }
-            const data = await response.json();
-            if (data.files && Object.keys(data.files).length > 0) {
-              addLog(`Mounting ${Object.keys(data.files).length} files...`);
-              await mountFiles(data.files);
-              mountedRef.current = true;
-              addLog('Files mounted successfully');
-            } else {
-              throw new Error('No files found in project');
-            }
-          } catch (err) {
-            handleError(err, 'file fetch');
-            return;
-          }
-        } else {
-          // No files to mount - just boot
-          addLog('No project files provided, WebContainer ready for use');
+      let files = projectFiles;
+      if (!files || Object.keys(files).length === 0) {
+        if (!projectPath) {
           updateStatus(STATUS.READY);
           return;
         }
-
-        // Step 4: Install dependencies
-        updateStatus(STATUS.INSTALLING);
-        addLog('Running npm install...');
-
-        const installExitCode = await installDependencies((output) => {
-          const text = output.trim();
-          if (text) {
-            // Parse npm progress if possible
-            if (text.includes('added') || text.includes('packages')) {
-              setInstallProgress(text);
-            }
-            addLog(text);
-          }
-        });
-
-        if (installExitCode !== 0) {
-          handleError(new Error(`npm install failed with exit code ${installExitCode}`), 'install');
-          return;
-        }
-        addLog('Dependencies installed successfully');
-
-        // Step 5: Start dev server
-        updateStatus(STATUS.STARTING);
-
-        // Parse start command
-        const [cmd, ...args] = startCommand.split(' ');
-        addLog(`Starting: ${startCommand}`);
-
-        const { url, port, process } = await startDevServer(cmd, args, (output) => {
-          const text = output.trim();
-          if (text) {
-            addLog(text);
-          }
-        });
-
-        serverProcessRef.current = process;
-        setServerUrl(url);
-        setServerPort(port);
-        updateStatus(STATUS.READY);
-        addLog(`Dev server ready at ${url}`);
-
-        if (onServerReady) {
-          onServerReady(url, port);
-        }
-
-      } catch (error) {
-        handleError(error, 'initialization');
+        updateStatus(STATUS.MOUNTING, 'Fetching project files...');
+        assertCurrent();
+        const response = await apiFetch(`/api/webcontainer/files?path=${encodeURIComponent(projectPath)}`, { signal });
+        assertCurrent();
+        if (!response.ok) throw new Error(`Failed to fetch files: ${response.statusText}`);
+        assertCurrent();
+        const data = await response.json();
+        assertCurrent();
+        files = data.files;
+        if (!files || Object.keys(files).length === 0) throw new Error('No files found in project');
       }
-    }
 
-    init();
-  }, [projectFiles, projectPath, startCommand, updateStatus, addLog, handleError, onServerReady]);
+      updateStatus(STATUS.MOUNTING);
+      assertCurrent();
+      await mountFiles(files, { signal, replace: true, assertCurrent });
+      assertCurrent();
+      updateStatus(STATUS.INSTALLING);
+      addLog('Running npm install...');
+      const installExitCode = await installDependencies(output => {
+        if (signal.aborted || isScopeCurrent && !isScopeCurrent()) return;
+        const text = output.trim();
+        if (text) {
+          if (text.includes('added') || text.includes('packages')) setInstallProgress(text);
+          addLog(text);
+        }
+      }, { signal, assertCurrent });
+      assertCurrent();
+      if (installExitCode !== 0) throw new Error(`npm install failed with exit code ${installExitCode}`);
 
-  // Handle file updates (for HMR)
-  useEffect(() => {
-    if (!mountedRef.current || !projectFiles) return;
+      updateStatus(STATUS.STARTING);
+      const [cmd, ...args] = startCommand.trim().split(/\s+/);
+      addLog(`Starting: ${startCommand}`);
+      const { url, port } = await startDevServer(cmd, args, output => {
+        if (!signal.aborted && (!isScopeCurrent || isScopeCurrent()) && output.trim()) addLog(output.trim());
+      }, { signal, assertCurrent, onExit: error => {
+        if (signal.aborted || isScopeCurrent && !isScopeCurrent()) return;
+        session.dispose();
+        setServerUrl(null);
+        setServerPort(null);
+        handleError(error, 'dev server');
+      } });
+      assertCurrent();
+      if (!isTrustedWebContainerUrl(url)) throw new Error('The runtime returned an untrusted preview origin.');
+      setServerUrl(url);
+      setServerPort(port);
+      updateStatus(STATUS.READY);
+      addLog(`Dev server ready at ${url}`);
+      callbacksRef.current.onServerReady?.(url, port);
+    }).catch(error => {
+      if (session.signal.aborted) return;
+      session.dispose();
+      handleError(error, 'initialization');
+    });
 
-    // This effect can be used to sync file changes
-    // For now, we'll rely on the initial mount
-  }, [projectFiles]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (serverProcessRef.current) {
-        serverProcessRef.current.kill();
-        serverProcessRef.current = null;
-      }
-    };
-  }, []);
+    return () => session.dispose();
+  }, [projectFiles, projectPath, startCommand, retryGeneration, updateStatus, addLog, handleError, isScopeCurrent]);
 
   // Handle fallback button click
   const handleFallback = useCallback(() => {
@@ -241,16 +200,8 @@ export function WebContainerPreview({
     }
   }, [onFallbackToProxy]);
 
-  // Retry initialization
   const handleRetry = useCallback(() => {
-    initStartedRef.current = false;
-    setStatus(STATUS.CHECKING);
-    setErrorDetails(null);
-    setLogs([]);
-    setServerUrl(null);
-    setServerPort(null);
-    // Trigger re-init by updating a ref and forcing re-render
-    window.location.reload();
+    setRetryGeneration(generation => generation + 1);
   }, []);
 
   // Render based on status
@@ -259,7 +210,7 @@ export function WebContainerPreview({
       <div className="webcontainer-preview webcontainer-unsupported">
         <div className="webcontainer-status">
           <div className="webcontainer-status-icon">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -283,10 +234,10 @@ export function WebContainerPreview({
 
   if (status === STATUS.ERROR) {
     return (
-      <div className="webcontainer-preview webcontainer-error">
+      <div className="webcontainer-preview webcontainer-error" role="alert">
         <div className="webcontainer-status">
           <div className="webcontainer-status-icon error">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" />
               <line x1="15" y1="9" x2="9" y2="15" />
               <line x1="9" y1="9" x2="15" y2="15" />
@@ -326,20 +277,12 @@ export function WebContainerPreview({
 
   if (status !== STATUS.READY) {
     return (
-      <div className="webcontainer-preview webcontainer-loading">
+      <div className="webcontainer-preview webcontainer-loading" role="status">
         <div className="webcontainer-status">
-          <div className="webcontainer-spinner">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <div className="webcontainer-spinner" aria-hidden="true">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
               <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round">
-                <animateTransform
-                  attributeName="transform"
-                  type="rotate"
-                  from="0 12 12"
-                  to="360 12 12"
-                  dur="1s"
-                  repeatCount="indefinite"
-                />
               </path>
             </svg>
           </div>
@@ -375,7 +318,8 @@ export function WebContainerPreview({
         src={serverUrl}
         className="webcontainer-iframe"
         title="WebContainer Preview"
-        allow="camera; microphone"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads"
+        referrerPolicy="no-referrer"
       />
     </div>
   );

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../utils/api';
+import { isStructuredSessionId } from '../utils/structuredSessions';
 import { replayEvents, replayTranscript, validateRecording } from '../utils/sessionReplay';
+import { getTerminalTheme } from '../utils/terminalTheme';
 import './SessionReplayPanel.css';
 
 function ReplayTerminal({ events, position }) {
@@ -12,14 +14,18 @@ function ReplayTerminal({ events, position }) {
   const [fallback, setFallback] = useState(false);
   useEffect(() => {
     let cancelled = false;
+    let observer;
     Promise.all([import('@xterm/xterm'), import('@xterm/xterm/css/xterm.css')]).then(([{ Terminal }]) => {
       if (cancelled) return;
-      const instance = new Terminal({ disableStdin: true, cols: 100, rows: 18, scrollback: 10000, convertEol: true, theme: { background: '#111318' } });
+      const currentTheme = () => getTerminalTheme(document.documentElement.getAttribute('data-theme'));
+      const instance = new Terminal({ disableStdin: true, cols: 100, rows: 18, scrollback: 10000, convertEol: true, theme: currentTheme() });
       terminal.current = instance;
       instance.open(container.current);
+      observer = new MutationObserver(() => { instance.options.theme = currentTheme(); });
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] });
       setReady(true);
     }).catch(() => { if (!cancelled) setFallback(true); });
-    return () => { cancelled = true; renderVersion.current += 1; terminal.current?.dispose(); terminal.current = null; };
+    return () => { cancelled = true; observer?.disconnect(); renderVersion.current += 1; terminal.current?.dispose(); terminal.current = null; };
   }, []);
   useEffect(() => {
     if (!ready) return;
@@ -43,10 +49,12 @@ export function SessionReplayPanel({ workspacePath = '', sessionId = '' }) {
   const [record, setRecord] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [position, setPosition] = useState(0);
   const [consent, setConsent] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const scope = useRef(0);
   const controller = useRef(null);
   const selected = useRef(null);
@@ -58,22 +66,28 @@ export function SessionReplayPanel({ workspacePath = '', sessionId = '' }) {
   }, []);
   const load = useCallback(async () => {
     const generation = scope.current;
-    const result = await request('?' + new URLSearchParams({ workspacePath }));
-    if (generation !== scope.current) return;
-    setRecordings(result.recordings || []);
-    if (selected.current) {
-      const selectedId = selected.current;
-      const next = validateRecording(await request('/' + encodeURIComponent(selectedId)));
-      if (generation === scope.current && selected.current === selectedId) setRecord(next);
+    try {
+      const result = await request('?' + new URLSearchParams({ workspacePath }));
+      if (generation !== scope.current) return;
+      setRecordings(result.recordings || []);
+      setLoaded(true);
+      if (selected.current) {
+        const selectedId = selected.current;
+        const next = validateRecording(await request('/' + encodeURIComponent(selectedId)));
+        if (generation === scope.current && selected.current === selectedId) setRecord(next);
+      }
+      if (generation === scope.current) setLoadError('');
+    } catch (failure) {
+      if (generation === scope.current && !controller.current?.signal.aborted) setLoadError(failure.message || 'Unable to refresh recordings');
+      throw failure;
     }
   }, [request, workspacePath]);
   useEffect(() => {
     scope.current += 1;
-    const generation = scope.current;
     controller.current = new AbortController();
     selected.current = null;
-    setRecordings([]); setRecord(null); setError(''); setPlaying(false); setConsent(false); setPosition(0); setBusy(false);
-    if (workspacePath) load().catch(failure => { if (generation === scope.current && !controller.current.signal.aborted) setError(failure.message); });
+    setRecordings([]); setLoaded(false); setRecord(null); setError(''); setLoadError(''); setPlaying(false); setConsent(false); setPosition(0); setBusy(false);
+    if (workspacePath) load().catch(() => {});
     const timer = workspacePath ? setInterval(() => load().catch(() => {}), 3000) : null;
     return () => { scope.current += 1; controller.current?.abort(); clearInterval(timer); };
   }, [workspacePath, load]);
@@ -105,13 +119,13 @@ export function SessionReplayPanel({ workspacePath = '', sessionId = '' }) {
     if (generation !== scope.current || selected.current !== id) return;
     setRecord(next); setPosition(next.events[0]?.ts ?? 0);
   }
-  const structured = sessionId.startsWith('structured:');
-  const nativeSessionId = structured ? sessionId.slice('structured:'.length) : sessionId;
+  const nativeSessionId = sessionId.startsWith('structured:') ? sessionId.slice('structured:'.length) : sessionId;
+  const structured = isStructuredSessionId(nativeSessionId) || sessionId.startsWith('structured:');
   const active = recordings.find(item => item.sessionId === nativeSessionId && item.status === 'recording');
   return <div className="session-replay-panel">
-    <h3>Session replay</h3>
-    <p>Record terminal output or structured agent events, including existing saved output. Keystrokes are not captured separately; echoed commands and sensitive output can still appear. Recordings stay on the selected server until you delete them.</p>
-    {error && <p role="alert">{error}</p>}
+    <header><h3>Session replay</h3>
+    <p>Record terminal output or structured agent events, including existing saved output. Keystrokes are not captured separately; echoed commands and sensitive output can still appear. Recordings stay on the selected server until you delete them.</p></header>
+    {(error || loadError) && <div role="alert">{error && <p>{error}</p>}{loadError && <><p>{loadError}</p><p>Recording list may be out of date. Refresh to check its current state.</p></>}<button type="button" disabled={busy} onClick={() => perform(load)}>Refresh recordings</button></div>}
     <label className="session-replay-consent"><input type="checkbox" checked={consent} onChange={event => setConsent(event.target.checked)} />I want to record this session’s output.</label>
     <button disabled={busy || !workspacePath || !nativeSessionId || !consent || Boolean(active)} onClick={() => perform(async generation => {
       const result = await request('', { method: 'POST', body: { sessionId: nativeSessionId, kind: structured ? 'structured' : 'terminal', workspacePath } });
@@ -123,7 +137,8 @@ export function SessionReplayPanel({ workspacePath = '', sessionId = '' }) {
       <option value="">Select recording</option>
       {recordings.map(item => <option key={item.id} value={item.id}>{new Date(item.startedAt).toLocaleString()} · {item.kind} · {item.status}</option>)}
     </select></label>
-    {!recordings.length && <p>No recordings in this workspace.</p>}
+    {!loaded && !error && !loadError && workspacePath && <p role="status">Loading recordings…</p>}
+    {loaded && !error && !loadError && !recordings.length && <p>No recordings in this workspace.</p>}
     {record && <section aria-label="Replay controls">
       <p role="status">{record.status}{record.receipt ? ': ' + record.receipt : ''}</p>
       <div className="session-replay-controls">

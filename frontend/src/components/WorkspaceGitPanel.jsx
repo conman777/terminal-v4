@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { apiFetch } from '../utils/api';
+import { DiffView } from './DiffView';
+import { prepareWorktreeCreation } from '../utils/worktreeCreationIntent';
 import './WorkspaceGitPanel.css';
 
 async function request(url, options) {
@@ -19,6 +21,8 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   const [checkpointId, setCheckpointId] = useState('');
   const [selectedFile, setSelectedFile] = useState('');
   const [diff, setDiff] = useState(null);
+  const [diffError, setDiffError] = useState('');
+  const [diffRefresh, setDiffRefresh] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -28,6 +32,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   const [label, setLabel] = useState('');
   const [restore, setRestore] = useState(null);
   const [notice, setNotice] = useState('');
+  const [worktreeAttempt, setWorktreeAttempt] = useState(false);
   const mounted = useRef(false);
   const id = useId();
   const query = new URLSearchParams({ path: workspacePath, mode, base, ...(checkpointId ? { checkpointId } : {}) }).toString();
@@ -50,14 +55,14 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   }, [workspacePath, query, refresh]);
 
   useEffect(() => {
-    setDiff(null);
+    setDiff(null); setDiffError('');
     if (!selectedFile) return;
     const controller = new AbortController();
     request('/api/workspace/git/diff?' + query + '&file=' + encodeURIComponent(selectedFile), { signal: controller.signal })
       .then(value => { if (!controller.signal.aborted) setDiff(value); })
-      .catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
+      .catch(failure => { if (!controller.signal.aborted) setDiffError(failure.message); });
     return () => controller.abort();
-  }, [query, selectedFile]);
+  }, [query, selectedFile, diffRefresh]);
 
   async function mutate(action) {
     setBusy(true); setError(''); setNotice('');
@@ -67,6 +72,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
   }
 
   return <section className="workspace-git-panel" aria-label="Git review and isolated tasks">
+    <header><h3>Git &amp; worktrees</h3><p>Review changes, manage isolated tasks, and save file checkpoints.</p></header>
     <div className="workspace-git-toolbar">
       <label htmlFor={id + '-mode'}>Review changes</label>
       <select id={id + '-mode'} value={mode} disabled={busy} onChange={event => { setMode(event.target.value); setCheckpointId(''); }}>
@@ -81,6 +87,11 @@ function GitWorkspace({ workspacePath, onStartTask }) {
       <button disabled={busy || !baseDraft.trim()}>Compare base</button>
     </form>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && worktreeAttempt && <div><p>A previous request may have created a checkout. Review the list before using a new request.</p><button type="button" disabled={busy} onClick={() => {
+      try { prepareWorktreeCreation(workspacePath, 'git-panel').discard(); setWorktreeAttempt(false); setError(''); setRefresh(value => value + 1); }
+      catch (failure) { setError(failure.message); }
+    }}>Use a new worktree request</button></div>}
+
     {loading && <p role="status">Loading Git workspace…</p>}
     {status && <>
       {status.truncated && <p>File list exceeds the preview limit. Review remaining changes locally.</p>}
@@ -94,18 +105,31 @@ function GitWorkspace({ workspacePath, onStartTask }) {
         </nav>
         <div className="workspace-git-patch">
           {!selectedFile && <p>Select a file to review its changes.</p>}
-          {selectedFile && !diff && <p role="status">Loading diff…</p>}
+          {selectedFile && !diff && !diffError && <p role="status">Loading diff…</p>}
+          {selectedFile && diffError && <div role="alert"><p>{diffError}</p><button type="button" onClick={() => setDiffRefresh(value => value + 1)}>Retry diff</button></div>}
           {diff?.binary && <p>Binary file: text diff unavailable.</p>}
           {diff?.truncated && <p>Diff exceeds the preview limit. Review the full file locally.</p>}
-          {diff && !diff.binary && <pre tabIndex={0} aria-label={'Diff for ' + selectedFile}><code>{diff.patch || 'No text changes.'}</code></pre>}
+          {diff && !diff.binary && (diff.patch ? <DiffView patch={diff.patch} file={selectedFile} /> : <p>No text changes.</p>)}
         </div>
       </div>
     </>}
     <h3>Isolated tasks</h3><p>Create a separate checkout and branch for a task, then choose its agent. It starts from committed code. Archiving saves a checkpoint and keeps the checkout, including ignored files, for reactivation.</p>
     <form className="workspace-git-inline" onSubmit={event => {
       event.preventDefault(); mutate(async () => {
-        const tree = await request('/api/workspace/git/worktrees', { method: 'POST', body: { path: workspacePath, name: name.trim(), baseRef: baseRef.trim() } });
+        const operation = prepareWorktreeCreation(workspacePath, 'git-panel');
+        setWorktreeAttempt(true);
+        let tree;
+        try { tree = await request('/api/workspace/git/worktrees', { method: 'POST', signal: operation.signal, body: { path: workspacePath, name: name.trim(), baseRef: baseRef.trim(), operationId: operation.operationId } }); }
+        catch (failure) {
+          operation.assertCurrent();
+          if (failure instanceof TypeError) throw new Error('Connection lost while creating the worktree. The request may have completed.');
+          throw failure;
+        }
+        operation.assertCurrent();
+        if (!tree?.path || tree.available === false || tree.creationStatus === 'unconfirmed') throw new Error('Could not confirm this worktree. Review the list before continuing.');
         if (!mounted.current) return;
+        operation.complete();
+        setWorktreeAttempt(false);
         setTrees(current => [...current, tree]); setName(''); setNotice('Isolated task created.');
       });
     }}>
@@ -113,7 +137,9 @@ function GitWorkspace({ workspacePath, onStartTask }) {
       <label htmlFor={id + '-base'}>Start from</label><input id={id + '-base'} value={baseRef} maxLength={200} disabled={busy} onChange={event => setBaseRef(event.target.value)} />
       <button disabled={busy || !workspacePath || !name.trim() || !baseRef.trim()}>Create isolated task</button>
     </form>
+    {!loading && !error && trees.length === 0 && <p>No isolated tasks yet.</p>}
     <ul className="workspace-git-list">{trees.map(tree => <li key={tree.id}><div><strong>{tree.name}</strong><small>{tree.branch}</small><small title={tree.path}>{tree.path}</small></div>
+      {tree.creationStatus === 'unconfirmed' && <small>Creation unconfirmed · inspect the checkout before retrying</small>}
       {tree.archived && <small>Archived · checkout retained</small>}
       {!tree.archived && <button type="button" aria-label={'Start ' + tree.name} disabled={busy || !tree.available || !onStartTask} onClick={() => onStartTask?.(tree.path)}>{tree.available ? 'Start task' : 'Checkout unavailable'}</button>}
       <button type="button" aria-label={(tree.archived ? 'Reactivate ' : 'Archive ') + tree.name} disabled={busy || !tree.available} onClick={() => mutate(async () => {
@@ -133,6 +159,7 @@ function GitWorkspace({ workspacePath, onStartTask }) {
       });
     }}><label htmlFor={id + '-label'}>Checkpoint label</label><input id={id + '-label'} value={label} disabled={busy} maxLength={120} onChange={event => setLabel(event.target.value)} />
       <button disabled={busy || !workspacePath || !label.trim()}>Save checkpoint</button></form>
+    {!loading && !error && checkpoints.length === 0 && <p>No file checkpoints saved yet.</p>}
     <ul className="workspace-git-list">{checkpoints.map(checkpoint => <li key={checkpoint.id}><div><strong>{checkpoint.label}</strong><small>{new Date(checkpoint.createdAt * 1000).toLocaleString()}</small></div>
       <button type="button" disabled={busy} onClick={() => { setMode('checkpoint'); setCheckpointId(checkpoint.id); }}>Review changes</button>
       <button type="button" aria-label={'Restore ' + checkpoint.label} disabled={busy || !status?.managed} onClick={() => setRestore(checkpoint)}>Restore</button>

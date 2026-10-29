@@ -1,0 +1,35 @@
+.agent-browser-settings { font-family: var(--font-ui); font-size: 14px; }
+.agent-browser-settings { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.agent-browser-settings p { margin: 0; line-height: 1.5; }
+.agent-browser-settings .session-settings-section-heading p { color: var(--text-secondary); font-size: 13px; margin-top: 6px; }
+.agent-browser-settings-note { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.agent-browser-settings-error { padding: 10px 12px; border: 1px solid var(--error); border-radius: 8px; color: var(--error); font-size: 13px; overflow-wrap: anywhere; }
+.agent-browser-settings-message { color: var(--text-secondary); font-size: 13px; }
+.agent-browser-settings form { min-width: 0; }
+.agent-browser-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.agent-browser-settings fieldset { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-elevated, var(--bg-base)); padding: 16px; margin: 0; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.agent-browser-settings label:not(.agent-browser-check) { display: flex; flex-direction: column; gap: 6px; color: var(--text-secondary); font-size: 13px; min-width: 0; }
+.agent-browser-settings input:not([type="checkbox"]), .agent-browser-settings textarea { width: 100%; min-width: 0; box-sizing: border-box; color: var(--text-primary); background: var(--bg-base); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 9px 10px; font: inherit; }
+.agent-browser-settings textarea { font-family: var(--font-ui); resize: vertical; }
+.agent-browser-settings input:focus-visible, .agent-browser-settings textarea:focus-visible, .agent-browser-settings button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.agent-browser-check { display: inline-flex; gap: 8px; align-items: center; color: var(--text-secondary); font-size: 12px; }
+.agent-browser-check input { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--accent-primary); }
+.agent-browser-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 16px; }
+.agent-browser-settings-actions { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); padding: 8px 0; }
+.agent-browser-settings-actions > [role="status"] { flex-basis: 100%; }
+.agent-browser-settings-actions > p { flex-basis: 100%; }
+.agent-browser-disclosure { min-width: 0; border-top: 1px solid var(--border-subtle); padding-top: 10px; }
+.agent-browser-disclosure summary { color: var(--text-primary); font-size: 13px; cursor: pointer; }
+.agent-browser-disclosure summary:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.agent-browser-advanced-fields { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; }
+@media (max-width: 560px) {
+  .agent-browser-settings-grid { grid-template-columns: 1fr; }
+  .agent-browser-settings fieldset { padding: 12px; }
+  .agent-browser-settings button, .agent-browser-check { min-height: 44px; }
+  .agent-browser-settings input:not([type="checkbox"]), .agent-browser-settings textarea { font-size: 16px; }
+}
+
+@media (pointer: coarse) {
+  .agent-browser-settings button, .agent-browser-settings summary, .agent-browser-settings label:has(input[type="checkbox"]) { min-height: 44px; }
+  .agent-browser-settings input:not([type="checkbox"]), .agent-browser-settings select, .agent-browser-settings textarea { min-height: 44px; font-size: 16px; }
+}

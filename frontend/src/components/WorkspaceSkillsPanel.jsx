@@ -7,8 +7,10 @@ function SkillsContent({ workspacePath, onInsertContext }) {
   const [warnings, setWarnings] = useState([]);
   const [selected, setSelected] = useState([]);
   const [error, setError] = useState('');
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
+    setError('');
     apiFetch('/api/workspace/skills?path=' + encodeURIComponent(workspacePath), { signal: controller.signal })
       .then(async response => {
         const payload = await response.json();
@@ -16,15 +18,15 @@ function SkillsContent({ workspacePath, onInsertContext }) {
         if (!controller.signal.aborted) { setSkills(payload.skills); setWarnings(payload.warnings); }
       }).catch(loadError => { if (!controller.signal.aborted) setError(loadError.message); });
     return () => controller.abort();
-  }, [workspacePath]);
+  }, [workspacePath, refresh]);
   const context = (skills || []).filter(skill => selected.includes(skill.id)).map(skill =>
     'Installed skill: ' + skill.name + ' (' + skill.provider + ', ' + skill.scope + ')\nSource: ' + skill.path + '\n\n' + skill.instructions).join('\n\n');
   const withinBudget = Array.from(context).length <= 50000;
   return <section className="workspace-installed-skills" aria-label="Installed skill context">
-    <h3>Installed skill context</h3>
-    <p>Browse skill Markdown from this project and the host's configured agent profiles. Selected instructions are added to your editable prompt.</p>
+    <header><h3>Installed skill context</h3>
+    <p>Browse skill Markdown from this project and the host's configured agent profiles. Selected instructions are added to your editable prompt.</p></header>
     <p>Review the text before sending. Linked supporting files and scripts are not loaded.</p>
-    {error && <p role="alert">{error}</p>}
+    {error && <div role="alert"><p>{error}</p><button type="button" onClick={() => setRefresh(value => value + 1)}>Retry skills</button></div>}
     {!skills && !error && <p role="status">Discovering installed skills…</p>}
     {warnings.map((warning, index) => <p className="workspace-skills-warning" key={index}>{warning}</p>)}
     {skills?.length === 0 && <p>No compatible skill files found in the configured roots.</p>}

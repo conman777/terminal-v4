@@ -29,8 +29,9 @@ export async function loginViaApi(request: APIRequestContext): Promise<string> {
 }
 
 async function loginViaApiSession(request: APIRequestContext): Promise<ApiLoginSession> {
-  const response = await request.post('/api/auth/login', {
-    data: { username: E2E_USERNAME, password: E2E_PASSWORD }
+  const localTesting = process.env.E2E_LOCAL_TESTING === '1';
+  const response = await request.post(localTesting ? '/api/auth/local-testing' : '/api/auth/login', {
+    data: localTesting ? { username: E2E_USERNAME } : { username: E2E_USERNAME, password: E2E_PASSWORD }
   });
 
   if (!response.ok()) {
@@ -123,7 +124,8 @@ export async function deleteStructuredSessionsByTitle(
 export async function loginIfNeeded(page: Page, request: APIRequestContext): Promise<void> {
   await page.goto('/');
 
-  const signInHeading = page.getByRole('heading', { name: 'Sign In' }).first();
+  const localTesting = process.env.E2E_LOCAL_TESTING === '1';
+  const signInHeading = page.getByRole('heading', { name: localTesting ? 'Choose your username' : /^(Sign In|Access Workspace)$/ }).first();
   const appShellMarker = page.locator(
     '.threads-sidebar, .main-container, .terminal-main, .session-tab-bar-modern, .mobile-header, .terminal-pane, .preview-panel'
   ).first();
@@ -148,12 +150,19 @@ export async function loginIfNeeded(page: Page, request: APIRequestContext): Pro
     }
   }
 
-  await ensureAccountExists(request);
-  await page.getByPlaceholder('Enter username').fill(E2E_USERNAME);
-  await page.getByPlaceholder('Enter password').fill(E2E_PASSWORD);
-  await page.getByRole('button', { name: /^Sign In$/ }).click();
+  if (localTesting) {
+    await page.getByLabel('Username', { exact: true }).fill(E2E_USERNAME);
+    await page.getByRole('button', { name: 'Open workspace', exact: true }).click();
+    await expect(appShellMarker).toBeVisible({ timeout: 15000 });
+    return;
+  }
 
-  const loginError = page.locator('.login-error').first();
+  await ensureAccountExists(request);
+  await page.getByLabel('Username', { exact: true }).fill(E2E_USERNAME);
+  await page.getByLabel('Password', { exact: true }).fill(E2E_PASSWORD);
+  await page.getByRole('button', { name: /^(Sign In|Initialize Session)$/ }).click();
+
+  const loginError = page.locator('.login-error, .pro-error').first();
   if (await appShellMarker.isVisible({ timeout: 5000 }).catch(() => false)) {
     return;
   }
@@ -185,6 +194,17 @@ export async function loginIfNeeded(page: Page, request: APIRequestContext): Pro
 export async function openPreviewPanel(page: Page): Promise<void> {
   const previewPanel = page.locator('.preview-panel').first();
   if (await previewPanel.isVisible({ timeout: 1000 }).catch(() => false)) {
+    return;
+  }
+
+  const showPreviewButton = page.getByRole('button', { name: 'Show preview', exact: true }).first();
+  if (await showPreviewButton.isVisible().catch(() => false)) {
+    await showPreviewButton.click();
+    await expect(previewPanel).toBeVisible({ timeout: 10000 });
+    return;
+  }
+  if (await page.getByRole('button', { name: 'Hide preview', exact: true }).isVisible().catch(() => false)) {
+    await expect(previewPanel).toBeVisible({ timeout: 10000 });
     return;
   }
 

@@ -89,6 +89,53 @@ describe('useSessionActivity', () => {
     expect(result.current.activity['session-a'].isBusy).toBe(false);
   });
 
+  it('keeps a structured conversation busy until its lifecycle reports completion', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    act(() => result.current.setBusy('ss-structured', true, { persistent: true }));
+    act(() => vi.advanceTimersByTime(30000));
+    expect(result.current.activity['ss-structured'].isBusy).toBe(true);
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true }));
+    expect(result.current.activity['ss-structured']).toEqual(expect.objectContaining({ isBusy: false, needsAttention: true }));
+  });
+
+  it('ignores an older idle snapshot without dropping the structured busy marker', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    const current = Date.now();
+    act(() => result.current.setBusy('ss-structured', true, { persistent: true, lastActivityAt: current }));
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true, lastActivityAt: current - 1000 }));
+    act(() => vi.advanceTimersByTime(30000));
+    expect(result.current.activity['ss-structured'].isBusy).toBe(true);
+  });
+
+  it('uses lifecycle sequence instead of server clock order for structured snapshots', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    const now = Date.now();
+    act(() => result.current.setBusy('ss-structured', true, { persistent: true, statusSeq: 7, lastActivityAt: now + 60000 }));
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true, statusSeq: 8, lastActivityAt: now - 60000 }));
+    expect(result.current.activity['ss-structured']).toEqual(expect.objectContaining({ isBusy: false, needsAttention: true }));
+  });
+
+  it('does not let the same old lifecycle snapshot undo a newer local event', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    const now = Date.now();
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true, statusSeq: 7, lastActivityAt: now }));
+    act(() => result.current.setBusy('ss-structured', true, { persistent: true }));
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true, statusSeq: 7, lastActivityAt: now + 60000 }));
+    expect(result.current.activity['ss-structured'].isBusy).toBe(true);
+    act(() => result.current.setBusy('ss-structured', false, { persistent: true, statusSeq: 8, lastActivityAt: now - 60000 }));
+    expect(result.current.activity['ss-structured'].isBusy).toBe(false);
+  });
+
+  it('forgets lifecycle state when a session is removed in the same update batch', () => {
+    const { result } = renderHook(() => useSessionActivity());
+    act(() => {
+      result.current.setBusy('ss-reused', true, { persistent: true, statusSeq: 100 });
+      result.current.removeSession('ss-reused');
+    });
+    act(() => result.current.setBusy('ss-reused', true, { persistent: true, statusSeq: 1 }));
+    expect(result.current.activity['ss-reused']?.isBusy).toBe(true);
+  });
+
   it('does not auto-clear busy if activity is refreshed', () => {
     const { result } = renderHook(() => useSessionActivity());
 

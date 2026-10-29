@@ -7,6 +7,7 @@ import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
 import { useAutocorrect } from '../contexts/AutocorrectContext';
 import { AI_TYPE_OPTIONS, getAiDisplayLabel, getAiTypeOptions } from '../utils/aiProviders';
+import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
 import { buildTerminalAttachmentPrefix } from '../utils/mobileTerminalInput';
 
@@ -31,6 +32,13 @@ export function MobileStatusBar({
 }) {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState([]);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const sendRequestRef = useRef(null);
+  useEffect(() => {
+    setSending(false); setSendError('');
+    return () => { sendRequestRef.current = null; };
+  }, [sessionId]);
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
@@ -50,7 +58,8 @@ export function MobileStatusBar({
     handleKeyDown: autocorrectKeyDown,
     handleSelectionChange: handleAutocorrectSelectionChange
   } = useAutocorrectInput(inputText, setInputText, autocorrectEnabled);
-  const aiOptions = useMemo(() => getAiTypeOptions(customAiProviders), [customAiProviders]);
+  const allAiOptions = useMemo(() => getAiTypeOptions(customAiProviders), [customAiProviders]);
+  const aiOptions = useReadyAiOptions(allAiOptions, aiType);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
   const slashSuggestions = useMemo(
     () => getComposerSlashSuggestions(inputText, activeRuntimeProviderId, customAiProviders),
@@ -76,7 +85,7 @@ export function MobileStatusBar({
   }, []);
 
   const sendToTerminal = useCallback(async (text, currentAttachments = attachments) => {
-    if (!sessionId) return;
+    if (!sessionId || sendRequestRef.current) return;
     const trimmed = String(text || '').trim();
     const attachmentPrefix = buildTerminalAttachmentPrefix(currentAttachments
       .map((attachment) => attachment?.path)
@@ -84,16 +93,21 @@ export function MobileStatusBar({
     const payload = [attachmentPrefix, trimmed].filter(Boolean).join(' ').trim();
     if (!payload) return;
 
+    const request = {};
+    sendRequestRef.current = request;
+    setSending(true); setSendError('');
     try {
-      if (typeof onSendMessage === 'function') {
-        await Promise.resolve(onSendMessage(payload));
-      } else {
-        await sendToSession?.(sessionId, payload.endsWith('\r') || payload.endsWith('\n') ? payload : `${payload}\r`);
-      }
-      setInputText('');
-      setAttachments([]);
+      const receipt = typeof onSendMessage === 'function'
+        ? await onSendMessage(payload)
+        : await sendToSession?.(sessionId, payload.endsWith('\r') || payload.endsWith('\n') ? payload : `${payload}\r`);
+      if (sendRequestRef.current !== request) return;
+      if (receipt?.accepted === false) throw new Error('Message was not accepted. Your draft was kept.');
+      setInputText(value => value.trim() === trimmed ? '' : value);
+      setAttachments(current => current.filter(attachment => !currentAttachments.includes(attachment)));
     } catch (error) {
-      console.error('Failed to send input to terminal:', error);
+      if (sendRequestRef.current === request) setSendError(error.message || 'Send failed. Your draft was kept.');
+    } finally {
+      if (sendRequestRef.current === request) { sendRequestRef.current = null; setSending(false); }
     }
   }, [attachments, onSendMessage, sendToSession, sessionId]);
 
@@ -248,7 +262,7 @@ export function MobileStatusBar({
     focusComposerInput();
   }, [focusComposerInput]);
 
-  const canSubmit = !isPastingImage && (Boolean(inputText.trim()) || attachments.length > 0);
+  const canSubmit = !sending && !isPastingImage && (Boolean(inputText.trim()) || attachments.length > 0);
   const hasBranchContext = Boolean(gitBranches.length > 0 || currentGitBranch);
 
   const moreItems = [
@@ -274,6 +288,7 @@ export function MobileStatusBar({
 
   return (
     <div className="mobile-status-bar mobile-composer-shell">
+      {sendError && <p role="alert">{sendError}</p>}
       {attachments.length > 0 && (
         <div className="mobile-composer-attachments" aria-label="Composer attachments">
           {attachments.map((attachment, index) => (
@@ -327,7 +342,7 @@ export function MobileStatusBar({
           autoCorrect={autocorrectEnabled ? 'on' : 'off'}
           autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}
           spellCheck={autocorrectEnabled}
-          disabled={isPastingImage}
+          disabled={sending || isPastingImage}
         />
         <input
           ref={imageInputRef}
@@ -424,7 +439,7 @@ export function MobileStatusBar({
               type="button"
               className="mobile-status-btn"
               onClick={() => imageInputRef.current?.click()}
-              disabled={isPastingImage}
+              disabled={sending || isPastingImage}
               aria-label="Upload image"
               title="Upload image"
             >

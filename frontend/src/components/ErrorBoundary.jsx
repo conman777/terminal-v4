@@ -27,15 +27,16 @@ export class ErrorBoundary extends Component {
       }
 
       return (
-        <div className="error-boundary-fallback">
-          <p>Something went wrong{this.props.name ? ` in ${this.props.name}` : ''}.</p>
+        <section className="error-boundary-fallback" role="alert">
+          <h2>Unable to display {this.props.name || 'this view'}</h2>
+          <p>Try opening this view again. Your session can continue running in the background.</p>
           <button
             className="btn-primary"
             onClick={() => this.setState({ hasError: false, error: null })}
           >
             Retry
           </button>
-        </div>
+        </section>
       );
     }
 

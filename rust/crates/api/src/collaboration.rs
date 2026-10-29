@@ -1,5 +1,5 @@
 use crate::{
-    auth::{self, AuthenticatedUser},
+    auth::AuthenticatedUser,
     remote_permissions::Capabilities,
     state::{AppState, HistoryQuery},
     terminal::TerminalSubscriptionEvent,
@@ -21,6 +21,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
+
+#[cfg(test)]
+mod structured_invitations;
+#[cfg(test)]
+mod structured_projection;
+#[cfg(test)]
+mod structured_stream;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -64,12 +71,7 @@ fn owner(state: &AppState, headers: &HeaderMap) -> Result<AuthenticatedUser, Api
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or_else(denied)?;
-    auth::authenticate_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
-        credential,
-    )
-    .map_err(|_| denied())
+    crate::auth::authenticate_local_token(&state, credential).map_err(|_| denied())
 }
 fn workspace(value: &str) -> Result<String, ApiError> {
     let path = std::fs::canonicalize(value)

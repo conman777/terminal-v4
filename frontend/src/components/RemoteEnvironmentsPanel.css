@@ -1,61 +1,113 @@
-.remote-environment-bar { position: relative; z-index: 25; min-height: 36px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 12px; background: var(--bg-secondary, #181a20); color: var(--text-primary, #eee); border-bottom: 1px solid var(--border-color, #383c45); flex-shrink: 0; }
-.remote-environment-bar button { font-size: 12px; padding: 4px 8px; }
-.remote-environment-bar span { font-size: 12px; }
+.remote-environment-bar { position: relative; z-index: 25; box-sizing: border-box; height: 44px; min-height: 44px; display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 0 12px; background: var(--bg-surface); color: var(--text-primary); border-bottom: 1px solid var(--border-subtle); flex-shrink: 0; font: 12px/1.4 var(--font-ui); }
+.remote-environment-bar button { min-width: 0; min-height: 32px; display: inline-flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-surface); color: var(--text-primary); font: 500 13px/1.4 var(--font-ui); cursor: pointer; }
+.remote-environment-bar button:hover { background: var(--bg-hover); }
+.remote-environment-bar button:focus-visible, .remote-environment-dialog:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.remote-environment-bar > button:first-child { flex: 0 1 auto; overflow: hidden; }
+.remote-environment-bar strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.remote-environment-kicker { color: var(--text-secondary); font-size: 12px; }
+.remote-environment-chevron { flex-shrink: 0; }
+.remote-server-compact-trigger { display: inline-flex; flex: 0 0 44px; align-items: center; justify-content: center; gap: 2px; width: 44px; min-width: 44px; height: 44px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.remote-server-compact-trigger:hover { background: var(--bg-hover); }
+.remote-server-compact-trigger:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.remote-environment-bar > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.remote-environment-bar > button:last-child { flex-shrink: 0; }
 .remote-environment-overlay { z-index: 11000; padding: 16px; }
-.remote-environment-dialog { width: min(680px, 100%); max-height: min(90dvh, 900px); overflow: auto; padding: 20px; background: var(--bg-primary, #15171b); color: var(--text-primary, #eee); border: 1px solid var(--border-color, #383c45); border-radius: 12px; }
-.remote-environment-dialog header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.remote-environment-dialog h2 { margin: 0; }
-.remote-environments-panel section, .remote-environments-panel form { border-top: 1px solid var(--border-color, #383c45); padding: 12px 0; }
-.remote-environments-panel p, .remote-environments-panel small { color: var(--text-secondary, #b2bac8); font-size: 13px; }
-.remote-environments-panel label { display: grid; gap: 5px; margin: 10px 0; font-size: 13px; }
-.remote-environments-panel input:not([type=checkbox]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px; color: inherit; background: var(--bg-secondary, #22252c); border: 1px solid var(--border-color, #464b56); border-radius: 6px; }
-.remote-environments-panel button { min-height: 34px; }
-.remote-environment-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 0; }
-.remote-environment-row > div { flex: 1; min-width: 140px; overflow-wrap: anywhere; }
+.remote-environment-dialog { width: min(720px, 100%); max-height: min(90dvh, 900px); overflow: auto; padding: 0 20px 20px; box-sizing: border-box; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-default); border-radius: 8px; font: 14px/1.5 var(--font-ui); }
+.remote-environment-dialog > header { position: sticky; top: 0; z-index: 1; min-height: 52px; display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border-subtle); }
+.remote-environment-dialog h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.remote-environment-dialog > header button { min-width: 28px; min-height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: 22px/1 var(--font-ui); cursor: pointer; }
+.remote-environment-dialog > header button:hover { background: var(--bg-hover); }
+.remote-environment-dialog > header button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.remote-environments-panel > section, .remote-environments-panel > form { border-top: 1px solid var(--border-subtle); padding: 16px 0; }
+.remote-environments-panel label { display: grid; gap: 6px; margin: 12px 0; }
+.remote-environments-panel :is(input:not([type="checkbox"]), select) { width: 100%; }
+.remote-environment-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px 0; }
+.remote-environment-row > div { flex: 1; min-width: min(180px, 100%); overflow-wrap: anywhere; }
+.remote-environment-row strong { font-size: 13px; font-weight: 600; }
 .remote-environment-row small { display: block; }
-.remote-environment-consent { display: flex !important; align-items: center; }
+.remote-environments-panel .remote-environment-consent { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 2px 0; }
 .remote-environment-code { margin-top: 12px; display: grid; gap: 6px; }
-.remote-environment-code output { user-select: all; overflow-wrap: anywhere; font-family: monospace; padding: 10px; background: var(--bg-secondary, #22252c); }
-.remote-environments-panel [role=alert] { color: #ffadad; }
-@media (max-width: 600px) { .remote-environment-dialog { padding: 14px; max-height: 90dvh; } .remote-environment-overlay { padding: 8px; } .remote-environment-bar { padding: 4px 6px; } .remote-environment-bar button { min-height: 36px; } }
-
-.environment-shell { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
-.environment-workspace { flex: 1; min-height: 0; position: relative; }
-
-.environment-workspace > .layout { height: 100%; min-height: 0; }
-.remote-environment-bar { box-sizing: border-box; height: 44px; min-height: 44px; flex-wrap: nowrap; overflow: hidden; }
-.remote-environment-bar > button:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.remote-environment-bar > button:last-child, .remote-environment-bar > span { flex-shrink: 0; }
-@media (max-width: 768px) {
-  .environment-workspace > .layout.mobile { top: calc(var(--mobile-viewport-offset, 0px) + 44px); height: var(--mobile-viewport-height, calc(100dvh - 44px)); }
-  .environment-workspace .mobile-header { top: calc(var(--mobile-viewport-offset, 0px) + 44px); }
-}
-
-.remote-environments-panel select { width: 100%; min-height: 44px; padding: 9px; border: 1px solid var(--border-color, #464b56); border-radius: 6px; color: inherit; background: var(--bg-secondary, #22252c); }
-.remote-environments-panel button, .remote-environment-dialog header button { min-height: 44px; }
+.remote-environment-code output { user-select: all; overflow-wrap: anywhere; font: 14px/1.5 var(--font-ui); padding: 10px 12px; background: var(--bg-base); border: 1px solid var(--border-default); border-radius: 6px; }
 .remote-directory-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .remote-directory-controls > label:first-child { flex: 1; min-width: min(220px, 100%); }
 .remote-directory-controls > button { margin-left: auto; }
-.remote-device-entry + .remote-device-entry { border-top: 1px solid var(--border-color, #383c45); }
-.remote-device-actions { display: flex; flex: 0 1 auto !important; gap: 8px; flex-wrap: wrap; }
-.remote-device-tags { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
-.remote-device-tags span { font-size: 12px; padding: 3px 7px; border-radius: 12px; border: 1px solid var(--border-color, #464b56); }
-.remote-device-status { margin-top: 5px; }
-.remote-device-status.online { color: var(--success-color, #86d9b0); }
-.remote-device-editor { padding: 10px !important; border: 1px solid var(--border-color, #383c45); border-radius: 6px; }
-.remote-permission-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; border: 1px solid var(--border-color, #383c45); }
-.remote-environment-consent { min-height: 44px; margin: 2px 0 !important; }
-.remote-environment-consent input { flex-shrink: 0; width: 18px; height: 18px; }
+.remote-device-entry + .remote-device-entry { border-top: 1px solid var(--border-subtle); }
+.remote-environment-row > .remote-device-actions { display: flex; flex: 0 1 auto; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.remote-device-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.remote-device-tags span { font-size: 12px; padding: 2px 6px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-secondary); }
+.remote-device-status { margin-top: 6px; }
+.remote-device-status.online { color: var(--success); }
+.remote-device-editor { padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-base); }
+.remote-permission-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; min-width: 0; margin: 12px 0; padding: 12px; border: 1px solid var(--border-default); border-radius: 6px; }
+.remote-permission-options legend { color: var(--text-secondary); font-size: 12px; }
 .remote-device-permissions { margin-top: 6px; }
+.remote-readonly-notice { flex-shrink: 0; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); font: 12px/1.5 var(--font-ui); color: var(--text-secondary); background: var(--bg-surface); overflow-wrap: anywhere; }
+.remote-readonly-notice[role="alert"] { color: var(--error); }
+
+.environment-shell { --environment-bar-height: 44px; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.environment-workspace { flex: 1; min-height: 0; position: relative; }
+.environment-workspace > .layout { height: 100%; min-height: 0; }
+
+@media (max-width: 768px) {
+  .environment-workspace > .layout.mobile { top: calc(var(--mobile-viewport-offset, 0px) + var(--environment-bar-height)); height: var(--mobile-viewport-height, calc(100dvh - var(--environment-bar-height))); }
+  .environment-workspace .mobile-header,
+  .environment-workspace .mobile-drawer-modern,
+  .environment-workspace .mobile-drawer-overlay-modern { top: calc(var(--mobile-viewport-offset, 0px) + var(--environment-bar-height)); }
+  .environment-workspace .mobile-keybar { top: calc(var(--mobile-viewport-offset, 0px) + var(--environment-bar-height) + var(--mobile-header-height, 48px)); }
+}
 @media (max-width: 600px) {
-  .remote-device-actions { flex-basis: 100% !important; }
+  .remote-environment-dialog { padding: 0 12px 12px; max-height: calc(100dvh - 16px); }
+  .remote-environment-overlay { padding: 8px; }
+  .remote-environment-bar { gap: 6px; padding-inline: 8px; }
+  .remote-environment-bar .remote-environment-kicker { display: none; }
+  .remote-environment-row > .remote-device-actions { flex-basis: 100%; }
   .remote-device-actions button { flex: 1; }
   .remote-permission-options { grid-template-columns: 1fr; }
   .remote-directory-controls > button { margin-left: 0; }
 }
+@media (pointer: coarse) {
+  .remote-environment-bar button { min-height: 44px; }
+  .remote-environment-dialog > header { min-height: 56px; }
+  .remote-environment-dialog > header button { min-width: 44px; min-height: 44px; }
+  .remote-environments-panel .remote-environment-consent { min-height: 44px; }
+}
 
-.remote-readonly-notice { flex-shrink: 0; margin: 0; padding: 8px 12px; font-size: 13px; color: var(--text-secondary, #b2bac8); background: var(--bg-secondary, #22252c); }
-
-.remote-environment-bar { padding-block: 0; }
-.remote-environment-bar button { min-height: 44px; }
-@media (max-width: 600px) { .remote-environment-bar > span { max-width: 35%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
+/* The top bar selects a server; management is an explicit second step. */
+.remote-environment-bar .remote-environment-kicker { display: inline; color: var(--text-muted); }
+.server-switcher-overlay { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: start; justify-items: start; box-sizing: border-box; padding: 52px 12px 12px; background: rgb(0 0 0 / 18%); }
+.remote-environment-dialog.server-switcher-dialog { display: flex; flex-direction: column; width: min(360px, 100%); max-height: 100%; padding: 0; overflow: hidden; border-radius: 12px; box-shadow: var(--shadow-lg); }
+.server-switcher-dialog > header { position: static; flex-shrink: 0; gap: 8px; min-height: 52px; margin: 0; padding: 4px 4px 4px 16px; }
+.server-switcher-dialog > header > div { min-width: 0; }
+.server-switcher-dialog > header h2 { font: 600 14px/1.5 var(--font-ui); }
+.server-switcher-dialog > header > button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; font-size: 24px; }
+.server-switcher-dialog [hidden] { display: none !important; }
+.server-chooser-body { display: flex; flex-direction: column; min-height: 0; }
+.server-chooser-description { flex-shrink: 0; margin: 0; padding: 12px 16px 6px; color: var(--text-secondary); font: 12px/1.5 var(--font-ui); }
+.server-chooser-search { display: grid; flex-shrink: 0; gap: 6px; padding: 8px 16px; color: var(--text-secondary); font-size: 12px; }
+.server-chooser-search input { box-sizing: border-box; width: 100%; min-height: 44px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font: 16px var(--font-ui); }
+.server-chooser-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px; }
+.server-chooser-list > p { margin: 0; padding: 10px; color: var(--text-muted); font: 12px/1.5 var(--font-ui); }
+.server-chooser-list .server-chooser-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; box-sizing: border-box; width: 100%; min-height: 56px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.server-chooser-option > span:first-child { display: grid; gap: 4px; min-width: 0; }
+.server-chooser-option strong { font: 500 13px/1.5 var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-chooser-option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font: 12px/1.4 var(--font-ui); }
+.server-chooser-list .server-chooser-option[aria-pressed=true], .server-chooser-list .server-chooser-option:hover { background: var(--bg-hover); }
+.server-chooser-check { flex-shrink: 0; width: 16px; color: var(--accent-primary); }
+.server-chooser-error { padding: 8px 10px; color: var(--error); font: 12px/1.5 var(--font-ui); overflow-wrap: anywhere; }
+.server-chooser-error button { display: block; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--text-primary); text-decoration: underline; cursor: pointer; }
+.server-chooser-footer { flex-shrink: 0; border-top: 1px solid var(--border-subtle); padding: 4px 6px; }
+.server-chooser-footer button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); text-align: left; font: 13px var(--font-ui); cursor: pointer; }
+.server-chooser-footer button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.server-switcher-dialog :is(button, input):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+.server-switcher-overlay.server-switcher-managing { align-items: center; justify-items: center; padding: 12px; }
+.remote-environment-dialog.server-management-dialog { width: min(760px, 100%); }
+.server-management-dialog > header { padding-left: 16px; }
+.server-management-dialog .server-switcher-back { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--text-secondary); font: 12px var(--font-ui); cursor: pointer; }
+.server-switcher-back > span { font-size: 22px; }
+.server-management-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px; }
+.server-advanced-tools > button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; margin-top: 12px; }
+@media (max-width: 768px), (pointer: coarse) {
+ .remote-environment-bar button { min-height: 44px; align-self: flex-start; }
+ .server-management-body .remote-access-panel :is(button, select, input:not([type=checkbox]), summary) { min-height: 44px; }
+ .server-management-body .remote-access-panel :is(input:not([type=checkbox]), select, textarea) { font-size: 16px; }
+}

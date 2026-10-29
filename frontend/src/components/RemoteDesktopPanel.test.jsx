@@ -14,6 +14,12 @@ describe('RemoteDesktopPanel', () => {
     expect(apiFetch).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('button',{name:'Start viewing'})).not.toBeInTheDocument();
   });
+  it('stays out of the way on hosts that cannot share their desktop', async () => {
+    apiFetch.mockResolvedValue(response({enabled:false,available:false,platform:'macos',message:'Desktop viewing currently requires an interactive Windows host.',monitors:[]}));
+    const { container } = render(<RemoteDesktopPanel />);
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.innerHTML).toBe(''));
+  });
   it('requires explicit viewing and never offers control on a view-only host', async () => {
     apiFetch.mockResolvedValue(response({enabled:true,available:true,control:false,monitors:[{id:'display',label:'Display 1',width:1920,height:1080}]}));
     render(<RemoteDesktopPanel />);

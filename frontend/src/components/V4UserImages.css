@@ -1,0 +1,4 @@
+.v4-user-images { display: grid; gap: 10px; max-width: 100%; min-width: 0; margin: 8px 0; }
+.v4-user-image { min-width: 0; max-width: 100%; margin: 0; }
+.v4-user-image img { display: block; width: auto; max-width: 100%; max-height: 360px; object-fit: contain; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-base); }
+.v4-user-image figcaption, .v4-user-image p, .v4-user-image-unavailable { max-width: 100%; margin: 4px 0; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; color: var(--text-muted); }

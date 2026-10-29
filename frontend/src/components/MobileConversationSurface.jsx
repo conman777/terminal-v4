@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { MobileChatView } from './MobileChatView';
 import { LazyTerminalChat } from './LazyTerminalChat';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
+import './MobileUI.css';
 
 export function MobileConversationSurface({
   session,
@@ -36,7 +37,7 @@ export function MobileConversationSurface({
 
   if (!session) {
     return (
-      <div className="claude-code-panel">
+      <div className="claude-code-panel mobile-conversation-legacy mobile-ui">
         <div className="claude-code-empty">
           <div className="empty-icon">CC</div>
           <div className="empty-title">Conversation</div>
@@ -47,7 +48,7 @@ export function MobileConversationSurface({
   }
 
   return (
-    <div className="claude-code-panel">
+    <div className="claude-code-panel mobile-conversation-legacy mobile-ui">
       <div
         style={{
           position: 'absolute',

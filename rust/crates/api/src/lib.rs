@@ -1,47 +1,81 @@
+mod agent_browser;
 mod agent_catalog;
+mod agent_mcp;
+mod agent_mcp_apps;
 mod agent_runtime;
 mod auth;
+mod browser_runtime;
 mod collaboration;
 mod device_relay;
 mod external_auth;
 mod file_transfers;
 pub mod files;
+mod followup_queue;
 pub mod git;
-pub mod hermes_provider_bridge;
+mod local_testing;
 mod native_history;
 mod native_provider_events;
+mod open_in_editor;
 mod paired_environments;
 pub mod passkey;
 pub mod preview;
+mod process_tree;
 pub mod processes;
+#[cfg(unix)]
+pub mod provider_connections;
+#[cfg(not(unix))]
+#[path = "provider_connections_unavailable.rs"]
+pub mod provider_connections;
 mod provider_rewind;
 mod remote_desktop;
 mod remote_permissions;
 mod remote_tunnels;
 pub mod screenshots;
+mod system_doctor;
+mod telegram_gateway;
+mod workspace_files;
+mod workspace_scripts;
+
+#[cfg(test)]
+mod feature_delivery_contract_tests;
+#[cfg(test)]
+mod file_rename_contract_tests;
+#[cfg(test)]
+mod rebuild_route_tests;
 mod session_recordings;
 mod session_search;
 mod state;
+#[cfg(test)]
+mod static_frontend_route_tests;
 mod structured;
+mod system_rebuild;
 pub mod system_stats;
 mod terminal;
 pub mod tmux;
 pub mod transcribe;
 pub mod turn_detector;
+#[cfg(test)]
+mod upload_contract_tests;
+#[cfg(test)]
+mod user_attachments_red_preview;
+mod user_images;
+#[cfg(test)]
+mod utility_route_tests;
+pub mod v4_agent;
 pub mod vault;
 pub mod webcontainer;
 mod workspace;
 mod workspace_activity;
+mod workspace_browser;
 mod workspace_git;
 mod workspace_proposals;
 mod workspace_rewind;
 mod workspace_skills;
 pub mod workspace_tasks;
 
-use auth::{
-    authenticate_preview_token, authenticate_token, issue_preview_token, require_auth,
-    AuthenticatedUser,
-};
+#[cfg(test)]
+use auth::issue_preview_token;
+use auth::{require_auth, AuthenticatedUser};
 use axum::body::Body;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -74,14 +108,33 @@ use webauthn_rs::prelude::{PublicKeyCredential, RegisterPublicKeyCredential};
 pub use state::AppState as ApiState;
 
 pub fn start_services(state: &AppState) {
+    workspace_browser::register_host(state);
+    state.stats_collector().start_background_collection();
     device_relay::start(state);
+    telegram_gateway::start_workers(state);
 }
 
 pub async fn shutdown_services(state: &AppState) {
+    workspace_browser::shutdown(state).await;
+    state.stats_collector().shutdown().await;
     device_relay::shutdown(state).await;
     remote_tunnels::shutdown(state);
-    session_recordings::shutdown(&state.config().data_dir).await;
-    workspace_tasks::shutdown_workers().await;
+    state.provider_connections().request_drain();
+    let (_, structured, _, _, _) = tokio::join!(
+        workspace_tasks::shutdown_workers(),
+        async { state.structured_session_manager().shutdown().await },
+        agent_mcp_apps::shutdown(&state.config().data_dir),
+        agent_mcp::shutdown(&state.config().data_dir),
+        async {
+            state.terminal_manager().shutdown().await;
+            session_recordings::shutdown(&state.config().data_dir).await;
+        },
+    );
+    if let Err(error) = structured {
+        tracing::warn!(%error,"Structured agent cleanup could not be confirmed; provider verifier remains available for retained cleanup");
+    } else if !state.provider_connections().shutdown().await {
+        tracing::warn!("Provider supervisor is still retaining original resources during shutdown");
+    }
 }
 
 const PREVIEW_COOKIE_NAME: &str = "terminal_preview_token";
@@ -140,23 +193,88 @@ pub fn app(state: AppState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    #[cfg(unix)]
+    let ownership_recovery_routes = structured::ownership_recovery::routes();
+    #[cfg(not(unix))]
+    let ownership_recovery_routes = Router::new();
+
+    #[cfg(unix)]
+    let input_recovery_routes = Router::new()
+        .route(
+            "/api/structured/input-watermark",
+            get(supervised_input_watermark),
+        )
+        .route(
+            "/api/structured/input-capabilities",
+            get(supervised_input_capabilities),
+        )
+        .route(
+            "/api/structured/input-receipts/{session}/{operation}",
+            get(get_supervised_input_receipt),
+        )
+        .route(
+            "/api/structured/sessions/{id}/input-receipts",
+            get(list_supervised_input_receipts),
+        )
+        .route(
+            "/api/structured/input-receipts",
+            get(list_unresolved_input_receipts),
+        )
+        .route(
+            "/api/structured/input-receipts/{session}/{operation}/review",
+            post(review_supervised_input_receipt),
+        );
+    #[cfg(not(unix))]
+    let input_recovery_routes = Router::new();
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    let supervised_input_routes = Router::new()
+        .route(
+            "/api/structured/sessions/{id}/input-capabilities",
+            get(supervised_input_session_capabilities),
+        )
+        .route(
+            "/api/structured/sessions/{id}/supervised-input",
+            post(send_supervised_input),
+        )
+        .route(
+            "/api/structured/sessions/{id}/input-operation",
+            post(issue_supervised_input_operation),
+        );
+    #[cfg(not(all(unix, any(test, feature = "supervised-input-preview"))))]
+    let supervised_input_routes = Router::new();
+
     let protected = Router::new()
         .merge(paired_environments::routes())
         .merge(device_relay::routes())
         .merge(remote_desktop::routes())
+        .merge(workspace_browser::routes())
         .merge(collaboration::routes())
         .merge(agent_catalog::routes())
+        .merge(provider_connections::routes())
+        .merge(agent_mcp::routes())
+        .merge(agent_mcp_apps::routes())
+        .merge(agent_browser::routes())
         .merge(native_history::routes())
         .merge(workspace::routes())
         .merge(workspace_proposals::routes())
         .merge(workspace_skills::routes())
         .merge(workspace_git::routes())
+        .merge(open_in_editor::routes())
+        .merge(system_doctor::routes())
+        .merge(workspace_files::routes())
+        .merge(workspace_scripts::routes())
+        .merge(telegram_gateway::routes())
         .merge(file_transfers::routes())
         .merge(session_recordings::routes())
         .merge(remote_tunnels::routes())
         .merge(workspace_rewind::routes())
         .merge(session_search::routes())
         .merge(workspace_tasks::routes())
+        .merge(structured::start_requests::routes())
+        .merge(ownership_recovery_routes)
+        .merge(supervised_input_routes)
+        .merge(input_recovery_routes)
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/change-password", post(change_password))
@@ -175,12 +293,37 @@ pub fn app(state: AppState) -> Router {
             get(get_structured_thread).patch(update_structured_thread),
         )
         .route(
+            "/api/structured/sessions/{id}/selection",
+            axum::routing::patch(update_structured_selection),
+        )
+        .route(
+            "/api/structured/sessions/{id}/access",
+            axum::routing::patch(update_structured_access),
+        )
+        .route("/api/structured/usage", get(structured_usage))
+        .route(
             "/api/structured/sessions/{id}/message",
             post(send_structured_message),
         )
         .route(
             "/api/structured/sessions/{id}/input",
             post(send_structured_input),
+        )
+        .merge(structured::queue::routes())
+        .merge(structured::context::routes())
+        .merge(structured::turn_changes::routes())
+        .merge(user_images::routes())
+        .route(
+            "/api/structured/sessions/{id}/compact",
+            post(compact_structured_session),
+        )
+        .route(
+            "/api/structured/sessions/{id}/requests/{requestId}",
+            get(get_structured_request_receipt),
+        )
+        .route(
+            "/api/structured/sessions/{id}/artifacts/{artifactId}/{format}",
+            get(get_structured_artifact),
         )
         .route(
             "/api/structured/sessions/{id}/interrupt",
@@ -189,6 +332,18 @@ pub fn app(state: AppState) -> Router {
         .route(
             "/api/structured/sessions/{id}/approve",
             post(approve_structured_session),
+        )
+        .route(
+            "/api/structured/sessions/{id}/approval-capability",
+            get(get_codex_approval_capability),
+        )
+        .route(
+            "/api/structured/sessions/{id}/approval-claims/{approval_id}/reserve",
+            post(reserve_codex_approval),
+        )
+        .route(
+            "/api/structured/sessions/{id}/approval-claims/{approval_id}/review",
+            post(review_codex_approval_claim),
         )
         .route(
             "/api/terminal",
@@ -242,6 +397,10 @@ pub fn app(state: AppState) -> Router {
         .route("/api/settings", get(get_settings).patch(update_settings))
         .route("/api/system/preview-config", get(get_preview_config))
         .route("/api/preview/session", post(create_preview_session))
+        .route(
+            "/api/preview/resource-auth",
+            post(preview::resource_auth::issue_resource_auth),
+        )
         .route("/api/bookmarks", get(list_bookmarks).post(create_bookmark))
         .route(
             "/api/bookmarks/{id}",
@@ -262,12 +421,28 @@ pub fn app(state: AppState) -> Router {
         // File routes
         .route("/api/files/list", get(list_files))
         .route("/api/files/mkdir", post(mkdir))
-        .route("/api/files/upload", post(upload_file))
+        .route(
+            "/api/files/upload",
+            post(upload_file).layer(axum::extract::DefaultBodyLimit::max(
+                100 * 1024 * 1024 + 65_536,
+            )),
+        )
         .route("/api/files/download", get(download_file))
         .route("/api/files/delete", delete(delete_file).post(delete_file))
         .route("/api/files/rename", post(rename_file))
         .route("/api/files/unzip", post(unzip_file))
-        .route("/api/files/screenshot", post(upload_screenshot))
+        .route(
+            "/api/files/screenshot",
+            post(upload_screenshot).layer(axum::extract::DefaultBodyLimit::max(
+                10 * 1024 * 1024 + 65_536,
+            )),
+        )
+        .route(
+            "/api/files/attachment",
+            post(upload_attachment).layer(axum::extract::DefaultBodyLimit::max(
+                ATTACHMENT_LIMIT + 65_536,
+            )),
+        )
         .route("/api/fs/download", get(download_directory))
         .route("/api/preview", get(get_preview_file))
         // Passkey routes (authed)
@@ -304,10 +479,18 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/api/preview/{port}/log-stream", get(stream_preview_logs))
         .route(
+            "/api/preview/{port}/websockets",
+            get(get_preview_websockets).delete(clear_preview_websockets),
+        )
+        .route(
             "/api/preview/{port}/storage",
             get(get_preview_storage).post(update_preview_storage),
         )
         .route("/api/preview/{port}/evaluate", post(evaluate_preview))
+        .route(
+            "/api/preview/{port}/client-operation",
+            post(authorize_preview_client_operation),
+        )
         .route(
             "/api/preview/{port}/performance",
             get(get_preview_performance)
@@ -357,7 +540,12 @@ pub fn app(state: AppState) -> Router {
         .route("/api/webcontainer/files", get(get_webcontainer_files))
         // Transcription
         .route("/api/transcribe/health", get(transcribe_health))
-        .route("/api/transcribe", post(transcribe_audio))
+        .route(
+            "/api/transcribe",
+            post(transcribe_audio).layer(axum::extract::DefaultBodyLimit::max(
+                25 * 1024 * 1024 + 65_536,
+            )),
+        )
         // Screenshots
         .route(
             "/api/preview/{port}/screenshot",
@@ -387,6 +575,7 @@ pub fn app(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     let router = Router::new()
+        .merge(workspace_browser::public_routes())
         .merge(paired_environments::public_routes())
         .merge(device_relay::public_routes())
         .merge(collaboration::public_routes())
@@ -395,6 +584,8 @@ pub fn app(state: AppState) -> Router {
         .route("/api/client-build", get(client_build))
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/mode", get(local_testing::mode))
+        .route("/api/auth/local-testing", post(local_testing::enter))
         .route("/api/auth/refresh", post(refresh))
         .route("/api/latency/ws", get(connect_latency_ws))
         .route("/preview/{port}", any(preview_proxy_root))
@@ -471,14 +662,26 @@ pub fn app(state: AppState) -> Router {
                 }
             }
         });
+        let runner_document = spa_fallback.clone();
         let serve_dir =
             tower_http::services::ServeDir::new(&frontend_dir).not_found_service(spa_fallback);
         // Wrap the static file service with cache-control middleware
         let static_handler = get(|request: axum::extract::Request| async move {
             let path = request.uri().path().to_string();
-            let mut response = serve_dir.oneshot(request).await.into_response();
-            // Set cache headers based on file type
-            if path.ends_with(".html") || path == "/" {
+            let is_runner = matches!(path.as_str(), "/webcontainer" | "/webcontainer/");
+            let mut response = if is_runner {
+                runner_document.oneshot(request).await.into_response()
+            } else {
+                serve_dir.oneshot(request).await.into_response()
+            };
+            let is_html = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(';').next())
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/html"));
+            // HTML reached through a directory or SPA fallback must never be immutable.
+            if is_html || path.ends_with(".html") || path == "/" {
                 let headers = response.headers_mut();
                 headers.insert(
                     "cache-control",
@@ -492,6 +695,23 @@ pub fn app(state: AppState) -> Router {
                 headers.insert(
                     "cache-control",
                     "public, max-age=31536000, immutable".parse().unwrap(),
+                );
+            }
+            if is_runner && response.status().is_success() && is_html {
+                let headers = response.headers_mut();
+                headers.insert("cross-origin-opener-policy", "same-origin".parse().unwrap());
+                headers.insert(
+                    "cross-origin-embedder-policy",
+                    "require-corp".parse().unwrap(),
+                );
+                headers.insert("cache-control", "no-store".parse().unwrap());
+                headers.insert(
+                    "referrer-policy",
+                    "strict-origin-when-cross-origin".parse().unwrap(),
+                );
+                headers.insert(
+                    "content-security-policy",
+                    "frame-ancestors 'none'".parse().unwrap(),
                 );
             }
             response
@@ -514,22 +734,38 @@ async fn remote_workspace_cache_policy(
     request: axum::extract::Request,
     next: middleware::Next,
 ) -> axum::response::Response {
-    let private = matches!(
-        request
+    let private = request.uri().path() == "/api/structured/start-requests"
+        || request
             .uri()
             .path()
-            .strip_prefix("/api/")
-            .and_then(|path| path.split('/').next()),
-        Some(
-            "transfers"
-                | "recordings"
-                | "collaboration"
-                | "desktop"
-                | "tunnels"
-                | "relay"
-                | "environments"
-        )
-    );
+            .starts_with("/api/structured/start-requests/")
+        || request.uri().path() == "/api/structured/ownership"
+        || request.uri().path() == "/api/structured/owner-cleanup"
+        || request
+            .uri()
+            .path()
+            .starts_with("/api/structured/owner-cleanup/")
+        || request
+            .uri()
+            .path()
+            .starts_with("/api/structured/ownership/")
+        || matches!(
+            request
+                .uri()
+                .path()
+                .strip_prefix("/api/")
+                .and_then(|path| path.split('/').next()),
+            Some(
+                "transfers"
+                    | "recordings"
+                    | "collaboration"
+                    | "desktop"
+                    | "workspace-browser"
+                    | "tunnels"
+                    | "relay"
+                    | "environments"
+            )
+        );
     let mut response = next.run(request).await;
     if private {
         response.headers_mut().insert(
@@ -541,13 +777,22 @@ async fn remote_workspace_cache_policy(
 }
 
 fn resolve_frontend_dir(data_dir: &FsPath) -> PathBuf {
-    resolve_frontend_dir_with_current_dir(data_dir, std::env::current_dir().ok().as_deref())
+    let configured_dir = std::env::var_os("TERMINAL_V4_FRONTEND_DIR").map(PathBuf::from);
+    resolve_frontend_dir_with_current_dir(
+        data_dir,
+        std::env::current_dir().ok().as_deref(),
+        configured_dir.as_deref(),
+    )
 }
 
 fn resolve_frontend_dir_with_current_dir(
     data_dir: &FsPath,
     current_dir: Option<&FsPath>,
+    configured_dir: Option<&FsPath>,
 ) -> PathBuf {
+    if let Some(directory) = configured_dir {
+        return directory.to_path_buf();
+    }
     let data_relative_frontend_dir = data_dir
         .parent()
         .and_then(|p| p.parent())
@@ -735,9 +980,49 @@ async fn logout(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<axum::response::Response, ApiError> {
-    state
-        .logout_user(&user.user_id)
+    #[cfg(unix)]
+    let manager = state.structured_session_manager();
+    #[cfg(unix)]
+    let coordinated = manager.owner_cleanup_enabled();
+    #[cfg(not(unix))]
+    let coordinated = false;
+    let logout_state = state.clone();
+    let logout_owner = user.user_id.clone();
+    #[cfg(unix)]
+    let status_owner = logout_owner.clone();
+    tokio::task::spawn_blocking(move || logout_state.logout_user(&logout_owner))
+        .await
+        .map_err(|_| ApiError::internal("Logout worker unavailable"))?
         .map_err(ApiError::internal)?;
+    tokio::spawn(async move {
+        workspace_browser::close_owner(&state, &user.user_id).await;
+        tokio::join!(
+            async {
+                if !coordinated {
+                    if let Err(error) = state.structured_session_manager().close_owner(&user.user_id).await {
+                        tracing::warn!(%error,"Structured owner cleanup could not be confirmed during logout");
+                    }
+                }
+            },
+            agent_mcp_apps::close_owner(&state.config().data_dir, &user.user_id),
+            agent_mcp::close_owner(&state.config().data_dir, &user.user_id),
+        );
+    }).await.map_err(|_| ApiError::internal("Owner cleanup worker stopped"))?;
+    #[cfg(unix)]
+    if coordinated {
+        let pending =
+            tokio::task::spawn_blocking(move || manager.owner_cleanup_status(&status_owner))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .is_none_or(|status| status["state"] != "complete");
+        return Ok((
+            if pending { StatusCode::ACCEPTED } else { StatusCode::OK },
+            [(axum::http::header::SET_COOKIE, expired_preview_cookie())],
+            Json(json!({"success":true,"cleanup":{"state":if pending { "pending" } else { "complete" }}})),
+        ).into_response());
+    }
     Ok((
         [(axum::http::header::SET_COOKIE, expired_preview_cookie())],
         Json(json!({ "success": true })),
@@ -750,25 +1035,26 @@ async fn create_preview_session(
     Extension(user): Extension<AuthenticatedUser>,
     headers: HeaderMap,
 ) -> Result<axum::response::Response, ApiError> {
-    let owner = headers
+    let access = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .and_then(|token| {
-            auth::authenticate_token(
-                &state.config().jwt_secret,
-                state.config().allowed_username.as_deref(),
-                token,
-            )
-            .ok()
-        })
+        .ok_or_else(|| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "A direct owner login is required to create a preview session".into(),
+        })?;
+    let owner = crate::auth::authenticate_local_token(&state, access)
+        .ok()
         .filter(|owner| owner.user_id == user.user_id)
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             message: "A direct owner login is required to create a preview session".into(),
         })?;
-    let user = owner;
-    let token = issue_preview_token(&state.config().jwt_secret, &user.user_id, &user.username);
+    let _user = owner;
+    let token = crate::auth::preview_token_for_access(&state, access).map_err(|_| ApiError {
+        status: StatusCode::UNAUTHORIZED,
+        message: "The owner login is no longer valid".into(),
+    })?;
     Ok((
         [(
             axum::http::header::SET_COOKIE,
@@ -807,37 +1093,72 @@ async fn change_password(
             status: StatusCode::FORBIDDEN,
             message: "Password changes are managed by the external auth provider".to_string(),
         }),
+        ChangePasswordResult::LocalTesting => Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "Testing accounts use only a username and do not have a password".into(),
+        }),
     }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StructuredSessionCreateInput {
     cwd: String,
     provider: Option<String>,
     model: Option<String>,
+    reasoning: Option<String>,
+    service_tier: Option<String>,
     title: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StructuredMessageInput {
     text: String,
+    request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StructuredInputWrite {
     text: String,
     fallback_to_message: Option<bool>,
+    request_id: Option<String>,
+    delivery_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StructuredApprovalInput {
     approved: bool,
+    approval_id: Option<String>,
+    reservation_id: Option<String>,
+    reservation_token: Option<String>,
+    /// Answers to an agent's questions, keyed by question id.
+    answers: Option<Value>,
+    /// Also allow this kind of action for the rest of the conversation.
+    #[serde(default)]
+    for_session: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct StructuredRenameInput {
     title: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StructuredSelectionInput {
+    model: String,
+    reasoning: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_service_tier_update")]
+    service_tier: Option<Option<String>>,
+}
+
+fn deserialize_service_tier_update<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 async fn create_structured_session(
@@ -847,51 +1168,108 @@ async fn create_structured_session(
 ) -> Result<(StatusCode, Json<StructuredSessionSnapshot>), ApiError> {
     validate_string(&input.cwd, 1, 4096, "cwd")?;
     if let Some(provider) = &input.provider {
-        validate_string(provider, 1, 80, "provider")?;
+        #[cfg(unix)]
+        let saved_profile = v4_agent::profile::Binding::parse(provider).is_some();
+        #[cfg(not(unix))]
+        let saved_profile = false;
+        if !saved_profile {
+            validate_string(provider, 1, 80, "provider")?;
+        }
     }
     if let Some(model) = &input.model {
-        validate_string(model, 1, 120, "model")?;
+        validate_string(model, 1, 200, "model")?;
     }
     if let Some(title) = &input.title {
         validate_string(title, 1, 80, "title")?;
     }
 
-    let session = state
-        .structured_session_manager()
-        .create_session(
-            &user.user_id,
-            &input.cwd,
-            input.provider.as_deref(),
-            input.model.as_deref(),
-            input.title.as_deref(),
-        )
-        .await
-        .map_err(ApiError::internal)?;
+    if let Some(reasoning) = &input.reasoning {
+        validate_string(reasoning, 1, 40, "reasoning")?;
+    }
+    let manager = state.structured_session_manager();
+    let result = if input.reasoning.is_some() || input.service_tier.is_some() {
+        manager
+            .create_with_options(
+                &user.user_id,
+                &input.cwd,
+                input.provider.as_deref(),
+                input.model.as_deref(),
+                input.reasoning.as_deref(),
+                input.service_tier.as_deref(),
+                input.title.as_deref(),
+            )
+            .await
+    } else {
+        manager
+            .create_session(
+                &user.user_id,
+                &input.cwd,
+                input.provider.as_deref(),
+                input.model.as_deref(),
+                input.title.as_deref(),
+            )
+            .await
+    };
+    let session = result.map_err(|message| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        message,
+    })?;
     Ok((StatusCode::CREATED, Json(session)))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StructuredSessionListQuery {
+    view: Option<String>,
 }
 
 async fn list_structured_sessions(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-) -> Result<Json<Vec<StructuredSessionSnapshot>>, ApiError> {
-    state
-        .structured_session_manager()
-        .list_sessions(&user.user_id)
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    method: axum::http::Method,
+    Query(query): Query<StructuredSessionListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let manager = state.structured_session_manager();
+    let inventory = match query.view.as_deref() {
+        Some("inventory") => true,
+        None | Some("") => false,
+        Some(_) => return Err(ApiError::bad_request("Unknown structured session view")),
+    };
+    manager
+        .list_sessions_authorized(
+            &user.user_id,
+            inventory,
+            &state,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            method.as_str(),
+        )
         .await
         .map(Json)
-        .map_err(ApiError::internal)
+        .map_err(structured_read_error)
 }
 
 async fn get_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    method: axum::http::Method,
     Path(session_id): Path<String>,
 ) -> Result<Json<StructuredSessionSnapshot>, ApiError> {
     let Some(session) = state
         .structured_session_manager()
-        .get_session(&user.user_id, &session_id)
+        .get_session_authorized(
+            &user.user_id,
+            &session_id,
+            &state,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            method.as_str(),
+        )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(structured_read_error)?
     else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
@@ -901,18 +1279,53 @@ async fn get_structured_session(
     Ok(Json(session))
 }
 
+fn structured_read_error(error: structured::StructuredControlError) -> ApiError {
+    let status = match error.code {
+        "unauthorized" => StatusCode::UNAUTHORIZED,
+        "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    ApiError {
+        status,
+        message: error.message,
+    }
+}
+
 async fn rename_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Path(session_id): Path<String>,
     Json(input): Json<StructuredRenameInput>,
 ) -> Result<Json<StructuredSessionSnapshot>, ApiError> {
     validate_string(&input.title, 1, 80, "title")?;
     let Some(session) = state
         .structured_session_manager()
-        .rename_session(&user.user_id, &session_id, &input.title)
+        .rename_session_authorized(
+            &user.user_id,
+            &session_id,
+            &input.title,
+            &state,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+        )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|error| match error.code {
+            "unauthorized" => ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                message: error.message,
+            },
+            "unavailable" => ApiError {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                message: error.message,
+            },
+            "conflict" => ApiError {
+                status: StatusCode::CONFLICT,
+                message: error.message,
+            },
+            _ => ApiError::internal(error.message),
+        })?
     else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
@@ -921,6 +1334,57 @@ async fn rename_structured_session(
     };
 
     Ok(Json(session))
+}
+async fn update_structured_selection(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<String>,
+    Json(input): Json<StructuredSelectionInput>,
+) -> Result<Json<StructuredSessionSnapshot>, ApiError> {
+    state
+        .structured_session_manager()
+        .update_codex_options(
+            &user.user_id,
+            &session_id,
+            &input.model,
+            input.reasoning.as_deref(),
+            input.service_tier.as_ref().map(|tier| tier.as_deref()),
+        )
+        .await
+        .map(Json)
+        .map_err(structured_control_error)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredAccessInput {
+    mode: String,
+}
+
+async fn structured_usage(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Value>, ApiError> {
+    let threads = state
+        .structured_session_manager()
+        .usage_summary(&user.user_id)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "threads": threads })))
+}
+
+async fn update_structured_access(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(session_id): Path<String>,
+    Json(input): Json<StructuredAccessInput>,
+) -> Result<Json<StructuredSessionSnapshot>, ApiError> {
+    state
+        .structured_session_manager()
+        .update_access_mode(&user.user_id, &session_id, &input.mode)
+        .await
+        .map(Json)
+        .map_err(structured_control_error)
 }
 
 async fn get_structured_thread(
@@ -946,12 +1410,25 @@ async fn get_structured_thread(
 async fn update_structured_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Path(session_id): Path<String>,
     Json(input): Json<ThreadUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
+    if input
+        .snooze_for_seconds
+        .is_some_and(|seconds| !(60..=2_592_000).contains(&seconds))
+    {
+        return Err(ApiError::bad_request(
+            "Snooze must be between one minute and 30 days",
+        ));
+    }
+    if input.wake_snooze == Some(true) && input.snooze_for_seconds.is_some() {
+        return Err(ApiError::bad_request("Choose either snooze or wake"));
+    }
     let Some(thread) = state
         .structured_session_manager()
-        .update_thread(
+        .update_thread_authorized(
             &user.user_id,
             &session_id,
             structured::StructuredThreadUpdate {
@@ -960,10 +1437,44 @@ async fn update_structured_thread(
                 pinned: input.pinned,
                 archived: input.archived,
                 project_path: input.project_path,
+                snooze_for_seconds: input.snooze_for_seconds,
+                wake_snooze: input.wake_snooze.unwrap_or(false),
+                settled: input.settled,
             },
+            &state,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
         )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|error| {
+            if error.code == "unauthorized" {
+                ApiError {
+                    status: StatusCode::UNAUTHORIZED,
+                    message: error.message,
+                }
+            } else if error.code == "unavailable" {
+                ApiError {
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    message: error.message,
+                }
+            } else if error.code == "conflict"
+                || matches!(
+                    error.message.as_str(),
+                    "Resolve pending requests or recovery before snoozing this thread"
+                        | "Finish or resolve this thread's work before settling it"
+                        | "Settle this thread without another lifecycle change"
+                        | "Settlement is available only for V4 conversations"
+                        | "Settlement is unavailable on this server"
+                )
+            {
+                ApiError {
+                    status: StatusCode::CONFLICT,
+                    message: error.message,
+                }
+            } else {
+                ApiError::internal(error.message)
+            }
+        })?
     else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
@@ -971,82 +1482,662 @@ async fn update_structured_thread(
         });
     };
 
-    Ok(Json(json!({ "thread": thread })))
+    Ok(Json(
+        json!({ "thread": thread, "threadLifecycleVersion": 1, "threadSettlementVersion": 1 }),
+    ))
 }
 
+fn structured_control_error(error: structured::StructuredControlError) -> ApiError {
+    ApiError {
+        status: match error.code {
+            "not_found" => StatusCode::NOT_FOUND,
+            "invalid" => StatusCode::BAD_REQUEST,
+            "conflict" => StatusCode::CONFLICT,
+            "gone" => StatusCode::GONE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        },
+        message: error.message,
+    }
+}
 async fn send_structured_message(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(session_id): Path<String>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
     Json(input): Json<StructuredMessageInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     validate_string(&input.text, 1, 100_000, "text")?;
-    state
+    let receipt = state
         .structured_session_manager()
-        .send_message(&user.user_id, &session_id, &input.text)
+        .submit_message_with_paired(
+            &user.user_id,
+            &id,
+            &input.text,
+            input.request_id.as_deref(),
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            &state,
+        )
         .await
-        .map_err(ApiError::internal)?;
-    Ok((StatusCode::ACCEPTED, Json(json!({ "status": "accepted" }))))
+        .map_err(structured_control_error)?;
+    Ok((StatusCode::ACCEPTED, Json(json!(receipt))))
 }
-
 async fn send_structured_input(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(session_id): Path<String>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
     Json(input): Json<StructuredInputWrite>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     validate_string(&input.text, 1, 100_000, "text")?;
-    state
-        .structured_session_manager()
-        .send_input(
+    let manager = state.structured_session_manager();
+    let snapshot = manager
+        .get_session(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Session not found".into(),
+        })?;
+    if matches!(snapshot.runtime.as_deref(), Some("v4" | "codex")) {
+        if input.fallback_to_message != Some(true) {
+            return Err(ApiError {
+                status: StatusCode::CONFLICT,
+                message: "V4 conversation input requires an accepted message request".into(),
+            });
+        }
+        let receipt = manager
+            .submit_message_with_paired(
+                &user.user_id,
+                &id,
+                &input.text,
+                input.request_id.as_deref(),
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await
+            .map_err(structured_control_error)?;
+        return Ok((StatusCode::ACCEPTED, Json(json!(receipt))));
+    }
+    let result = manager
+        .send_input_with_authority(
             &user.user_id,
-            &session_id,
+            &id,
             &input.text,
             input.fallback_to_message.unwrap_or(false),
+            input.request_id.as_deref(),
+            input.delivery_token.as_deref(),
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            Some(&state),
         )
-        .await
-        .map_err(ApiError::internal)?;
-    Ok((StatusCode::ACCEPTED, Json(json!({ "status": "accepted" }))))
+        .await;
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    if state.supervised_input_enabled() && input.delivery_token.is_some() {
+        return match result {
+            Ok(()) => Ok((
+                StatusCode::ACCEPTED,
+                Json(
+                    json!({"status":"accepted", "outcome":"delivered", "requestId": input.request_id}),
+                ),
+            )),
+            Err(message) => Ok((
+                StatusCode::CONFLICT,
+                Json(
+                    json!({"error":message.message, "outcome":"uncertain", "requestId": input.request_id}),
+                ),
+            )),
+        };
+    }
+    if let Err(error) = result {
+        if error.uncertain {
+            return Ok((
+                StatusCode::CONFLICT,
+                Json(json!({"error": error.message, "outcome": "uncertain"})),
+            ));
+        }
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: error.message,
+        });
+    }
+    Ok((StatusCode::ACCEPTED, Json(json!({"status":"accepted"}))))
 }
 
+#[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+async fn send_supervised_input(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path(id): Path<String>,
+    Json(input): Json<StructuredInputWrite>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !state.supervised_input_enabled()
+        || input.delivery_token.is_none()
+        || input.request_id.is_none()
+        || input.fallback_to_message != Some(false)
+        || authority.is_none()
+    {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: "A supervised raw input request and token are required".into(),
+        });
+    }
+    send_structured_input(
+        State(state),
+        Extension(user),
+        authority,
+        None,
+        Path(id),
+        Json(input),
+    )
+    .await
+}
+
+#[cfg(unix)]
+async fn require_input_recovery(state: &AppState, local: bool) -> Result<(), ApiError> {
+    if !local {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Input recovery unavailable".into(),
+        });
+    }
+    let state = state.clone();
+    let installed = tokio::task::spawn_blocking(move || state.input_installation_active())
+        .await
+        .map_err(|_| ApiError::internal("Input recovery unavailable"))?
+        .map_err(ApiError::internal)?;
+    if !installed {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Input recovery unavailable".into(),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn supervised_input_capabilities(
+    State(state): State<AppState>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+) -> Result<Json<Value>, ApiError> {
+    if authority.is_none() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Supervised input unavailable".into(),
+        });
+    }
+    require_input_recovery(&state, authority.is_some()).await?;
+    #[cfg(any(test, feature = "supervised-input-preview"))]
+    let enabled = state.supervised_input_enabled();
+    #[cfg(not(any(test, feature = "supervised-input-preview")))]
+    let enabled = false;
+    Ok(Json(json!({"protocol":1, "enabled":enabled})))
+}
+
+#[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+async fn supervised_input_session_capabilities(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !state.supervised_input_enabled() || authority.is_none() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Supervised input unavailable".into(),
+        });
+    }
+    let eligible = state
+        .structured_session_manager()
+        .supervised_input_session_eligible(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    if eligible != Some(true) {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Supervised input unavailable for this session".into(),
+        });
+    }
+    Ok(Json(json!({"protocol":1})))
+}
+
+#[cfg(unix)]
+async fn supervised_input_watermark(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+) -> Result<Json<Value>, ApiError> {
+    require_input_recovery(&state, authority.is_some()).await?;
+    let authority = authority
+        .ok_or_else(|| ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Local authority required".into(),
+        })?
+        .0;
+    let cutoff =
+        tokio::task::spawn_blocking(move || state.input_watermark(&user.user_id, &authority))
+            .await
+            .map_err(|_| ApiError::internal("Input watermark unavailable"))?
+            .map_err(|message| ApiError {
+                status: StatusCode::CONFLICT,
+                message,
+            })?;
+    Ok(Json(json!({"protocol":1, "rejectBefore": cutoff})))
+}
+
+#[cfg(unix)]
+async fn get_supervised_input_receipt(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path((session, operation)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    require_input_recovery(&state, authority.is_some()).await?;
+    let status = state
+        .input_receipt(&user.user_id, &session, &operation)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Input receipt unavailable".into(),
+        })?;
+    Ok(Json(
+        json!({"sessionId":session, "requestId":operation, "status":status}),
+    ))
+}
+
+#[cfg(unix)]
+async fn list_supervised_input_receipts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    require_input_recovery(&state, authority.is_some()).await?;
+    state
+        .structured_session_manager()
+        .get_session(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Session not found".into(),
+        })?;
+    let receipts = state
+        .list_input_receipts(&user.user_id, &id)
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        json!({"receipts": receipts.into_iter().map(|(request_id, status)| json!({"requestId": request_id, "status": status})).collect::<Vec<_>>() }),
+    ))
+}
+
+#[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+async fn issue_supervised_input_operation(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    if !state.supervised_input_enabled() {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Supervised input unavailable".into(),
+        });
+    }
+    let (incarnation, generation) = state
+        .structured_session_manager()
+        .supervised_input_target(&user.user_id, &id)
+        .await
+        .map_err(|message| ApiError {
+            status: StatusCode::CONFLICT,
+            message,
+        })?;
+    let authority = authority
+        .ok_or_else(|| ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Local authority required".into(),
+        })?
+        .0;
+    let (operation, token) = tokio::task::spawn_blocking(move || {
+        state.issue_input_operation(&user.user_id, &authority, &id, &incarnation, generation)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Input issuance unavailable"))?
+    .map_err(|message| ApiError {
+        status: StatusCode::CONFLICT,
+        message,
+    })?;
+    Ok(Json(
+        json!({"requestId":operation, "deliveryToken":token, "protocol":1}),
+    ))
+}
+
+#[cfg(unix)]
+#[derive(Deserialize)]
+struct InputReceiptQuery {
+    after: Option<i64>,
+}
+
+#[cfg(unix)]
+async fn list_unresolved_input_receipts(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Query(query): Query<InputReceiptQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_input_recovery(&state, authority.is_some()).await?;
+    let after = query.after.unwrap_or(0);
+    if after < 0 {
+        return Err(ApiError::bad_request("Invalid input receipt cursor"));
+    }
+    let (receipts, next_cursor) = state
+        .list_unresolved_input_receipts(&user.user_id, after)
+        .map_err(ApiError::internal)?;
+    Ok(Json(
+        json!({"receipts": receipts.into_iter().map(|(session_id, request_id, status)| json!({"sessionId": session_id, "requestId": request_id, "status": status})).collect::<Vec<_>>(), "nextCursor": next_cursor }),
+    ))
+}
+
+#[cfg(unix)]
+async fn review_supervised_input_receipt(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    Path((session, operation)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    require_input_recovery(&state, authority.is_some()).await?;
+    let authority = authority
+        .ok_or_else(|| ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Local authority required".into(),
+        })?
+        .0;
+    let reviewed_session = session.clone();
+    let reviewed_operation = operation.clone();
+    let status = tokio::task::spawn_blocking(move || {
+        state.review_input_receipt(&user.user_id, &authority, &session, &operation)
+    })
+    .await
+    .map_err(|_| ApiError::internal("Input review unavailable"))?
+    .map_err(|message| ApiError {
+        status: StatusCode::CONFLICT,
+        message,
+    })?;
+    Ok(Json(
+        json!({"sessionId":reviewed_session, "requestId":reviewed_operation, "status":status}),
+    ))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StructuredCompactInput {
+    request_id: String,
+    instructions: Option<String>,
+    expected_revision: Option<String>,
+}
+async fn compact_structured_session(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+    Json(input): Json<StructuredCompactInput>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let receipt = state
+        .structured_session_manager()
+        .compact(
+            &user.user_id,
+            &id,
+            &input.request_id,
+            input.instructions.as_deref(),
+            input.expected_revision.as_deref(),
+        )
+        .await
+        .map_err(structured_control_error)?;
+    Ok((StatusCode::ACCEPTED, Json(json!(receipt))))
+}
+async fn get_structured_request_receipt(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((id, request_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    state
+        .structured_session_manager()
+        .request_receipt(&user.user_id, &id, &request_id)
+        .await
+        .map_err(structured_control_error)?
+        .map(|receipt| Json(json!(receipt)))
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "No accepted request receipt exists for this account and session".into(),
+        })
+}
+async fn get_structured_artifact(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path((id, artifact_id, format)): Path<(String, String, String)>,
+) -> Result<axum::response::Response, ApiError> {
+    let snapshot = state
+        .structured_session_manager()
+        .get_session(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .filter(|snapshot| snapshot.runtime.as_deref() == Some("v4"))
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Artifact unavailable".into(),
+        })?;
+    let mime = match format.as_str() {
+        "png" => "image/png",
+        "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => {
+            return Err(ApiError {
+                status: StatusCode::NOT_FOUND,
+                message: "Artifact unavailable".into(),
+            });
+        }
+    };
+    let session = structured::engine_session_id(&id).map_err(ApiError::internal)?;
+    let bytes = crate::v4_agent::read_artifact(
+        &state.config().data_dir,
+        &user.user_id,
+        std::path::Path::new(&snapshot.cwd),
+        &session,
+        &artifact_id,
+        mime,
+    )
+    .map_err(|_| ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "Artifact unavailable".into(),
+    })?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CACHE_CONTROL, "private, no-store"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
 async fn interrupt_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(session_id): Path<String>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let manager = state.structured_session_manager();
+    if manager
+        .get_session(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_none()
+    {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Session not found".into(),
+        });
+    }
+    #[cfg(unix)]
+    let stopped = manager
+        .interrupt_authorized(
+            &user.user_id,
+            &id,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            &state,
+        )
+        .await;
+    #[cfg(not(unix))]
+    let stopped = {
+        let _ = (authority, paired);
+        manager.interrupt(&user.user_id, &id).await
+    };
+    stopped.map_err(|message| ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message,
+    })?;
+    Ok(Json(json!({"status":"cancelled","cleanupConfirmed":true})))
+}
+async fn get_codex_approval_capability(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let (mode, outstanding) = state
+        .structured_session_manager()
+        .codex_approval_capability(&user.user_id, &id)
+        .await
+        .map_err(structured_control_error)?;
+    Ok(Json(
+        json!({"protocol":1,"mode":mode,"outstanding":outstanding}),
+    ))
+}
+async fn reserve_codex_approval(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path((id, approval_id)): Path<(String, String)>,
+) -> axum::response::Response {
+    #[cfg(unix)]
+    {
+        match state
+            .structured_session_manager()
+            .reserve_codex_approval(
+                &user.user_id,
+                &id,
+                &approval_id,
+                authority.as_ref().map(|Extension(value)| value),
+                paired.as_ref().map(|Extension(value)| value),
+                &state,
+            )
+            .await {
+            Ok((reservation_id, token)) => Json(json!({"approvalId":approval_id,"reservationId":reservation_id,"deliveryToken":token,"status":"reserved"})).into_response(),
+            Err(error) if error.code == "reservation_not_started" => (StatusCode::CONFLICT, Json(json!({"status":"not_started","error":error.message}))).into_response(),
+            Err(error) => structured_control_error(error).into_response(),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, approval_id);
+        ApiError::internal("Approval reservation is unavailable on this platform").into_response()
+    }
+}
+async fn review_codex_approval_claim(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path((id, approval_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    #[cfg(unix)]
     state
         .structured_session_manager()
-        .interrupt(&user.user_id, &session_id)
+        .review_codex_approval_claim(
+            &user.user_id,
+            &id,
+            &approval_id,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            &state,
+        )
         .await
-        .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "status": "ok" })))
+        .map_err(structured_control_error)?;
+    #[cfg(not(unix))]
+    {
+        let _ = (state, user, authority, paired, id, approval_id);
+        return Err(ApiError::internal(
+            "Approval review is unavailable on this platform",
+        ));
+    }
+    #[cfg(unix)]
+    Ok(Json(json!({"approvalId":approval_id,"status":"reviewed"})))
 }
-
 async fn approve_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(session_id): Path<String>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
+    Path(id): Path<String>,
     Json(input): Json<StructuredApprovalInput>,
 ) -> Result<Json<Value>, ApiError> {
-    state
-        .structured_session_manager()
-        .approve(&user.user_id, &session_id, input.approved)
+    let manager = state.structured_session_manager();
+    let reservation = match (
+        input.reservation_id.as_deref(),
+        input.reservation_token.as_deref(),
+    ) {
+        (None, None) => None,
+        (Some(id), Some(token)) => Some((id, token)),
+        _ => {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: "Reservation ID and token are both required".into(),
+            })
+        }
+    };
+    let receipt = manager
+        .approve_with_paired(
+            &user.user_id,
+            &id,
+            input.approval_id.as_deref(),
+            input.approved,
+            input.answers,
+            input.for_session,
+            reservation,
+            authority.as_ref().map(|Extension(value)| value),
+            paired.as_ref().map(|Extension(value)| value),
+            &state,
+        )
         .await
-        .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "status": "ok" })))
+        .map_err(structured_control_error)?;
+    Ok(Json(json!(receipt)))
 }
-
 async fn delete_structured_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
-    Path(session_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    state
-        .structured_session_manager()
-        .delete_session(&user.user_id, &session_id)
+    let manager = state.structured_session_manager();
+    if manager
+        .get_session(&user.user_id, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_none()
+    {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "Session not found".into(),
+        });
+    }
+    manager
+        .delete_session(&user.user_id, &id)
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "status": "deleted" })))
+    Ok(Json(json!({"status":"deleted"})))
 }
 
 async fn get_settings(
@@ -1129,6 +2220,8 @@ struct TerminalCreateInput {
     sandbox_mode: Option<String>,
     workspace_root: Option<String>,
     initial_command: Option<String>,
+    request_id: Option<String>,
+    companion_of: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1165,8 +2258,12 @@ struct ThreadUpdateInput {
     pinned: Option<bool>,
     archived: Option<bool>,
     project_path: Option<Option<String>>,
+    snooze_for_seconds: Option<i64>,
+    wake_snooze: Option<bool>,
+    settled: Option<bool>,
     sandbox_mode: Option<String>,
     sandbox_workspace_root: Option<Option<String>>,
+    companion_of: Option<Option<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1179,9 +2276,29 @@ struct FilesystemListQuery {
     path: Option<String>,
 }
 
+fn terminal_session_error(message: String) -> ApiError {
+    if message.starts_with("Invalid terminal working directory ") {
+        ApiError::bad_request(message)
+    } else if let Some(reason) = message.strip_prefix(terminal::TERMINAL_UNAUTHORIZED) {
+        ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: reason.to_string(),
+        }
+    } else if let Some(reason) = message.strip_prefix(terminal::TERMINAL_CONFLICT) {
+        ApiError {
+            status: StatusCode::CONFLICT,
+            message: reason.to_string(),
+        }
+    } else {
+        ApiError::internal(message)
+    }
+}
+
 async fn create_terminal_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Json(input): Json<TerminalCreateInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if let Some(title) = &input.title {
@@ -1199,12 +2316,31 @@ async fn create_terminal_session(
     if let Some(workspace_root) = &input.workspace_root {
         validate_string(workspace_root, 1, 1024, "workspaceRoot")?;
     }
+    if let Some(companion_of) = &input.companion_of {
+        validate_string(companion_of, 1, 200, "companionOf")?;
+    }
+    if input
+        .request_id
+        .as_deref()
+        .is_some_and(|request_id| !terminal::valid_create_request_id(request_id))
+    {
+        return Err(ApiError::bad_request(
+            "requestId must be 8 to 64 letters, digits or hyphens",
+        ));
+    }
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
-    let session = state
+    let admission = terminal::credential_admission(
+        &state,
+        &user.user_id,
+        authority.as_ref().map(|Extension(value)| value),
+        paired.as_ref().map(|Extension(value)| value),
+    );
+    let request_id = input.request_id.clone();
+    let creation = state
         .terminal_manager()
-        .create_session(
+        .create_session_admitted(
             &user.user_id,
             TerminalCreateOptions {
                 cwd: input.cwd,
@@ -1216,22 +2352,43 @@ async fn create_terminal_session(
                 sandbox_workspace_root: input.workspace_root,
                 initial_command: input.initial_command,
             },
+            terminal::TerminalCreateIntent {
+                request_id: input.request_id,
+                companion_of: input.companion_of.clone(),
+            },
+            Some(&admission),
         )
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(terminal_session_error)?;
+    let session = creation.session;
+
+    let cwd = state
+        .terminal_manager()
+        .get_project_info(&user.user_id, &session.id)
+        .await
+        .map_err(ApiError::internal)?
+        .map(|project| project.cwd);
 
     Ok((
-        StatusCode::CREATED,
+        if creation.replayed {
+            StatusCode::OK
+        } else {
+            StatusCode::CREATED
+        },
         Json(json!({
             "session": {
                 "id": session.id,
                 "title": session.title,
                 "shell": session.shell,
+                "cwd": cwd,
                 "createdAt": session.created_at,
                 "updatedAt": session.updated_at,
                 "usesTmux": session.uses_tmux,
-                "sandbox": session.sandbox
-            }
+                "sandbox": session.sandbox,
+                "requestId": request_id,
+                "companionOf": input.companion_of,
+            },
+            "replayed": creation.replayed
         })),
     ))
 }
@@ -1322,17 +2479,31 @@ async fn resize_terminal(
 async fn restore_terminal_session(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Path(session_id): Path<String>,
     Json(input): Json<TerminalRestoreInput>,
 ) -> Result<Json<Value>, ApiError> {
     validate_optional_terminal_size(input.cols, "cols")?;
     validate_optional_terminal_size(input.rows, "rows")?;
 
+    let admission = terminal::credential_admission(
+        &state,
+        &user.user_id,
+        authority.as_ref().map(|Extension(value)| value),
+        paired.as_ref().map(|Extension(value)| value),
+    );
     let Some(session) = state
         .terminal_manager()
-        .restore_session(&user.user_id, &session_id, input.cols, input.rows)
+        .restore_session_admitted(
+            &user.user_id,
+            &session_id,
+            input.cols,
+            input.rows,
+            Some(&admission),
+        )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(terminal_session_error)?
     else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
@@ -1456,18 +2627,23 @@ async fn get_terminal_git_branches(
         });
     };
 
-    let current_branch = state
+    let project = state
         .terminal_manager()
         .get_project_info(&user.user_id, &session_id)
         .await
-        .map_err(ApiError::internal)?
-        .and_then(|info| info.git_branch);
-    let branches = current_branch.clone().into_iter().collect::<Vec<_>>();
+        .map_err(ApiError::internal)?;
+    let branches = match project {
+        Some(project) => git::list_git_branches(&project.cwd).await,
+        None => None,
+    }
+    .unwrap_or(git::GitBranchInfo {
+        current_branch: None,
+        branches: Vec::new(),
+    });
 
-    Ok(Json(json!({
-        "branches": branches,
-        "currentBranch": current_branch
-    })))
+    Ok(Json(
+        serde_json::to_value(branches).map_err(|error| ApiError::internal(error.to_string()))?,
+    ))
 }
 
 async fn get_terminal_project_info(
@@ -1496,18 +2672,37 @@ async fn get_terminal_project_info(
 async fn update_terminal_thread(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
+    authority: Option<Extension<auth::LocalAuthority>>,
+    paired: Option<Extension<auth::PairedInputAuthority>>,
     Path(session_id): Path<String>,
     Json(input): Json<ThreadUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
+    if input.snooze_for_seconds.is_some()
+        || input.wake_snooze == Some(true)
+        || input.settled.is_some()
+    {
+        return Err(ApiError::bad_request(
+            "Snooze and settlement are available only for structured conversations",
+        ));
+    }
     if let Some(sandbox_mode) = &input.sandbox_mode {
         validate_sandbox_mode(sandbox_mode)?;
     }
     if let Some(Some(sandbox_workspace_root)) = &input.sandbox_workspace_root {
         validate_string(sandbox_workspace_root, 1, 1024, "sandboxWorkspaceRoot")?;
     }
+    if let Some(Some(companion_of)) = &input.companion_of {
+        validate_string(companion_of, 1, 200, "companionOf")?;
+    }
+    let admission = terminal::credential_admission(
+        &state,
+        &user.user_id,
+        authority.as_ref().map(|Extension(value)| value),
+        paired.as_ref().map(|Extension(value)| value),
+    );
     let Some(thread) = state
         .terminal_manager()
-        .update_thread(
+        .update_thread_admitted(
             &user.user_id,
             &session_id,
             ThreadUpdate {
@@ -1518,10 +2713,12 @@ async fn update_terminal_thread(
                 project_path: input.project_path,
                 sandbox_mode: input.sandbox_mode,
                 sandbox_workspace_root: input.sandbox_workspace_root,
+                companion_of: input.companion_of,
             },
+            Some(&admission),
         )
         .await
-        .map_err(ApiError::internal)?
+        .map_err(terminal_session_error)?
     else {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
@@ -1578,6 +2775,7 @@ async fn generate_terminal_topic(
                 project_path: None,
                 sandbox_mode: None,
                 sandbox_workspace_root: None,
+                companion_of: None,
             },
         )
         .await
@@ -1677,7 +2875,7 @@ async fn stream_terminal_session(
                 status: StatusCode::NOT_FOUND,
                 message: "Terminal session not found".to_string(),
             }
-            .into_response()
+            .into_response();
         }
         Err(e) => return ApiError::internal(e).into_response(),
     };
@@ -2062,22 +3260,23 @@ async fn list_vault_keys(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let encryption_key = vault_encryption_key();
+    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
     let entries = state.list_vault_keys(&user).map_err(ApiError::internal)?;
     let masked: Vec<Value> = entries
         .into_iter()
         .map(|e| {
-            let display_value = vault::decrypt_secret(&e.key_value, &encryption_key)
-                .map(|v| vault::mask_key(&v))
-                .unwrap_or_else(|_| vault::mask_key(&e.key_value));
-            json!({
+            let display_value = cipher
+                .decrypt(&e.key_value)
+                .map(|value| vault::mask_key(&value))?;
+            Ok(json!({
                 "id": e.id,
                 "keyName": e.key_name,
                 "keyValue": display_value,
                 "createdAt": e.created_at
-            })
+            }))
         })
-        .collect();
+        .collect::<Result<_, String>>()
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "keys": masked })))
 }
 
@@ -2095,9 +3294,10 @@ async fn add_vault_key(
 ) -> Result<Json<Value>, ApiError> {
     validate_string(&input.key_name, 1, 100, "keyName")?;
     validate_string(&input.key_value, 1, 10000, "keyValue")?;
-    let encryption_key = vault_encryption_key();
-    let encrypted =
-        vault::encrypt_secret(&input.key_value, &encryption_key).map_err(ApiError::internal)?;
+    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
+    let encrypted = cipher
+        .encrypt(&input.key_value)
+        .map_err(ApiError::internal)?;
     let id = Uuid::new_v4().to_string();
     let now = iso_timestamp();
     state
@@ -2123,9 +3323,16 @@ async fn reveal_vault_key(
             status: StatusCode::NOT_FOUND,
             message: "Key not found".to_string(),
         })?;
-    let encryption_key = vault_encryption_key();
-    let decrypted =
-        vault::decrypt_secret(&entry.key_value, &encryption_key).map_err(ApiError::internal)?;
+    let cipher = vault::VaultCipher::load(&state.config().data_dir).map_err(ApiError::internal)?;
+    let decrypted = cipher
+        .decrypt(&entry.key_value)
+        .map_err(ApiError::internal)?;
+    if !entry.key_value.starts_with("enc:v2:") {
+        let encrypted = cipher.encrypt(&decrypted).map_err(ApiError::internal)?;
+        state
+            .migrate_vault_key(&user, &entry.id, &entry.key_value, &encrypted)
+            .map_err(ApiError::internal)?;
+    }
     Ok(Json(json!({
         "id": entry.id,
         "keyName": entry.key_name,
@@ -2152,6 +3359,8 @@ async fn delete_vault_key(
     }
 }
 
+// Compatibility only for paired_environments' existing vault-key + JWT derivation.
+// Vault and provider credentials must use VaultCipher with their runtime data directory.
 fn vault_encryption_key() -> String {
     std::env::var("VAULT_ENCRYPTION_KEY")
         .unwrap_or_else(|_| "dev-vault-key-change-in-production".to_string())
@@ -2249,16 +3458,22 @@ async fn passkey_auth_begin(
         return Err(ApiError::bad_request("Username is required"));
     }
     let user = state
-        .get_user_public_by_username(username)
+        .get_passkey_user_by_identifier(username)
+        .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::bad_request("User not found"))?;
+    auth::validate_allowed_username(state.config().allowed_username.as_deref(), &user.username)
+        .map_err(|message| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message,
+        })?;
     let passkeys = {
         let conn = state.lock_db().map_err(ApiError::internal)?;
         passkey::db::list_passkeys(&conn, &user.id).map_err(ApiError::internal)?
     };
     if passkeys.is_empty() {
         return Err(ApiError::bad_request(
-            "No passkeys registered for this user",
+            "No compatible passkeys registered for this user. Sign in with your password and register a new passkey.",
         ));
     }
     let options = state
@@ -2286,11 +3501,17 @@ async fn passkey_auth_complete(
         return Err(ApiError::bad_request("Username is required"));
     }
     let user = state
-        .get_user_public_by_username(username)
+        .get_passkey_user_by_identifier(username)
+        .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             message: "User not found".to_string(),
+        })?;
+    auth::validate_allowed_username(state.config().allowed_username.as_deref(), &user.username)
+        .map_err(|message| ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message,
         })?;
     let credential: PublicKeyCredential = serde_json::from_value(input.credential)
         .map_err(|_| ApiError::bad_request("Invalid credential payload"))?;
@@ -2319,6 +3540,7 @@ async fn passkey_auth_complete(
         &iso_timestamp(),
     )
     .map_err(ApiError::internal)?;
+    drop(conn);
     let auth_result = state
         .issue_auth_result_for_public_user(user)
         .map_err(ApiError::internal)?;
@@ -2709,9 +3931,8 @@ async fn upload_screenshot(
 
     let data = file_data.ok_or_else(|| ApiError::bad_request("Missing image field"))?;
     let path = file_path.unwrap_or_else(|| {
-        let timestamp = time::OffsetDateTime::now_utc().unix_timestamp();
         let ext = screenshot_extension(detected_mime.unwrap_or("image/png"));
-        format!("~/screenshots/screenshot-{timestamp}.{ext}")
+        format!("~/screenshots/screenshot-{}.{ext}", Uuid::new_v4())
     });
 
     let _activity = file_mutation_guard(&path)?;
@@ -2719,6 +3940,65 @@ async fn upload_screenshot(
         .await
         .map_err(file_api_error)?;
     Ok(Json(json!({ "success": true, "path": path })))
+}
+
+const ATTACHMENT_LIMIT: usize = 25 * 1024 * 1024;
+
+/// A safe file name for an uploaded attachment: no folders, no hidden or control characters.
+fn attachment_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| {
+            if matches!(c, ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .take(120)
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
+    if cleaned.is_empty() {
+        "attachment".into()
+    } else {
+        cleaned
+    }
+}
+
+/// Any file attached to an agent message (PDFs, logs, documents); the agent receives its path.
+async fn upload_attachment(
+    Extension(_user): Extension<AuthenticatedUser>,
+    mut multipart: axum_extra::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(format!("Multipart error: {e}")))?
+    {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let name = attachment_name(field.file_name().unwrap_or("attachment"));
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| ApiError::bad_request(format!("Failed to read file: {e}")))?;
+        if data.len() > ATTACHMENT_LIMIT {
+            return Err(ApiError::bad_request("Attachments are limited to 25 MB"));
+        }
+        let path = format!("~/terminal-v4-uploads/{}/{name}", Uuid::new_v4());
+        let _activity = file_mutation_guard(&path)?;
+        files::write_file(&path, &data)
+            .await
+            .map_err(file_api_error)?;
+        let absolute = files::resolve_safe_path(&path).map_err(ApiError::bad_request)?;
+        return Ok(Json(
+            json!({ "path": absolute.to_string_lossy(), "name": name }),
+        ));
+    }
+    Err(ApiError::bad_request("Missing file field"))
 }
 
 async fn download_directory(
@@ -2745,7 +4025,9 @@ async fn download_directory(
 }
 
 fn file_api_error(message: String) -> ApiError {
-    let status = if message.starts_with("Access denied") {
+    let status = if message.starts_with("Destination exists:") {
+        StatusCode::CONFLICT
+    } else if message.starts_with("Access denied") {
         StatusCode::FORBIDDEN
     } else if message.starts_with("Path not found") || message.starts_with("Cannot resolve") {
         StatusCode::BAD_REQUEST
@@ -2762,12 +4044,51 @@ fn file_api_error(message: String) -> ApiError {
 struct PreviewFileQuery {
     path: String,
     file: Option<String>,
+    token: Option<String>,
+    #[serde(rename = "previewToken")]
+    preview_token: Option<String>,
 }
 
 async fn get_preview_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<PreviewFileQuery>,
 ) -> Result<axum::response::Response, ApiError> {
+    let parent = query
+        .preview_token
+        .as_deref()
+        .or(query.token.as_deref())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|header| header.to_str().ok())
+                .and_then(|header| {
+                    header
+                        .split(';')
+                        .find_map(|cookie| cookie.trim().strip_prefix("terminal_preview_token="))
+                })
+        });
+    if let Some(token) = preview::auth_urls::selected_resource_token(
+        &state,
+        &headers,
+        query.preview_token.as_deref(),
+    ) {
+        if !preview::auth_urls::resource_root_allowed(&state, &token, &query.path) {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "Preview resource credential is outside its project scope".into(),
+            });
+        }
+    }
+    let resource = parent.and_then(|token| {
+        preview::auth_urls::resource_token_for_root(
+            &state,
+            token,
+            "/api/preview",
+            Some(&query.path),
+        )
+    });
     let file = preview::static_files::load_preview_file(&query.path, query.file.as_deref())
         .await
         .map_err(|message| {
@@ -2779,12 +4100,25 @@ async fn get_preview_file(
             ApiError { status, message }
         })?;
 
+    let token = resource.as_deref().map(|token| ("previewToken", token));
+    let bytes = preview::static_rewrite::rewrite_static_content(
+        file.content_type,
+        file.bytes,
+        &query.path,
+        &file.relative_file,
+        token,
+    );
+
     Ok((
         [
             (axum::http::header::CONTENT_TYPE, file.content_type),
             (axum::http::header::CACHE_CONTROL, "no-cache"),
+            (
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                preview::DOCUMENT_SANDBOX,
+            ),
         ],
-        file.bytes,
+        bytes,
     )
         .into_response())
 }
@@ -2834,15 +4168,56 @@ async fn clear_preview_proxy_logs(
     Json(json!({ "success": true, "port": port }))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewWebSocketQuery {
+    connection_id: Option<String>,
+    direction: Option<String>,
+}
+
+async fn get_preview_websockets(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+    Query(query): Query<PreviewWebSocketQuery>,
+) -> Result<Json<preview::ws_logs::Snapshot>, ApiError> {
+    if query
+        .direction
+        .as_deref()
+        .is_some_and(|direction| !matches!(direction, "sent" | "received"))
+    {
+        return Err(ApiError::bad_request("direction must be sent or received"));
+    }
+    Ok(Json(state.preview_log_store().websockets().snapshot(
+        &user.user_id,
+        port,
+        query.connection_id.as_deref(),
+        query.direction.as_deref(),
+    )))
+}
+
+async fn clear_preview_websockets(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(port): Path<u16>,
+) -> StatusCode {
+    state
+        .preview_log_store()
+        .websockets()
+        .clear(&user.user_id, port);
+    StatusCode::NO_CONTENT
+}
+
 async fn get_preview_logs(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Query(query): Query<PreviewLogQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let logs = state
         .preview_log_store()
         .get_logs(
+            &user.user_id,
             port,
             query.log_type.as_deref(),
             query.level.as_deref(),
@@ -2864,29 +4239,36 @@ struct PreviewLogQuery {
 
 async fn ingest_preview_log(
     State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Json(entries): Json<Vec<preview::logs::PreviewLogEntry>>,
 ) -> StatusCode {
     for entry in entries {
-        state.preview_log_store().add_log(port, entry).await;
+        state
+            .preview_log_store()
+            .add_log(&user.user_id, port, entry)
+            .await;
     }
     StatusCode::OK
 }
 
 async fn clear_preview_logs(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
 ) -> StatusCode {
-    state.preview_log_store().clear_logs(port).await;
+    state
+        .preview_log_store()
+        .clear_logs(&user.user_id, port)
+        .await;
     StatusCode::NO_CONTENT
 }
 
 async fn list_preview_log_ports(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let ports = state.preview_log_store().active_ports().await;
+    let ports = state.preview_log_store().active_ports(&user.user_id).await;
     let entries: Vec<Value> = ports
         .into_iter()
         .map(|(port, count)| json!({ "port": port, "logCount": count }))
@@ -2906,6 +4288,8 @@ async fn get_active_preview_ports_scan(
 struct PreviewLogStreamQuery {
     since: Option<i64>,
     types: Option<String>,
+    #[serde(rename = "proxyAfter")]
+    proxy_after: Option<String>,
 }
 
 async fn stream_preview_logs(
@@ -2913,6 +4297,7 @@ async fn stream_preview_logs(
     Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Query(query): Query<PreviewLogStreamQuery>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     let requested_types = query
         .types
@@ -2928,6 +4313,15 @@ async fn stream_preview_logs(
         requested_types.is_empty() || requested_types.iter().any(|value| value == "server");
     let poll_ms = preview_log_stream_poll_ms();
     let initial_since = query.since.unwrap_or(0).max(0);
+    let initial_proxy_cursor = preview::request_logs::LogCursor::for_resume(
+        initial_since,
+        query.proxy_after.as_deref().or_else(|| {
+            headers
+                .get("last-event-id")
+                .and_then(|value| value.to_str().ok())
+        }),
+    )
+    .map_err(ApiError::bad_request)?;
 
     let request_log_store = state.request_log_store().clone();
     let process_manager = state.process_manager().clone();
@@ -2935,10 +4329,7 @@ async fn stream_preview_logs(
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
 
     tokio::spawn(async move {
-        let mut proxy_cursor = preview::request_logs::LogCursor {
-            timestamp: initial_since,
-            id: None,
-        };
+        let mut proxy_cursor = initial_proxy_cursor;
         let mut process_cursor = processes::LogCursor {
             timestamp: initial_since,
             id: None,
@@ -2960,9 +4351,12 @@ async fn stream_preview_logs(
                         id: Some(entry.id.clone()),
                     };
                     if tx
-                        .send(Ok(Event::default().event("proxy").data(
-                            serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string()),
-                        )))
+                        .send(Ok(Event::default()
+                            .event("proxy")
+                            .id(entry.id.clone())
+                            .data(
+                                serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string()),
+                            )))
                         .await
                         .is_err()
                     {
@@ -3018,20 +4412,88 @@ async fn stream_preview_logs(
 #[derive(Debug, Deserialize)]
 struct ExternalProxyQuery {
     url: String,
+    #[serde(rename = "previewToken")]
+    preview_token: Option<String>,
 }
 
 async fn proxy_external_url(
+    State(state): State<AppState>,
+    headers: HeaderMap,
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<ExternalProxyQuery>,
 ) -> Result<axum::response::Response, ApiError> {
+    let target =
+        preview::external_proxy::normalized_target(&query.url).map_err(ApiError::bad_request)?;
+    let selected_resource = preview::auth_urls::selected_resource_token(
+        &state,
+        &headers,
+        query.preview_token.as_deref(),
+    );
+    if let Some(token) = selected_resource.as_deref() {
+        if !preview::auth_urls::resource_root_allowed(&state, token, &target) {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "Preview resource credential is outside its URL scope".into(),
+            });
+        }
+    }
     let resp = preview::external_proxy::proxy_external(&query.url)
         .await
         .map_err(ApiError::bad_request)?;
 
+    let parent = selected_resource
+        .as_deref()
+        .or_else(|| {
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        })
+        .or(query.preview_token.as_deref())
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| {
+                    value
+                        .split(';')
+                        .find_map(|cookie| cookie.trim().strip_prefix("terminal_preview_token="))
+                })
+        });
+    let resource = parent
+        .and_then(|parent| {
+            preview::auth_urls::resource_token_for_root(
+                &state,
+                parent,
+                "/api/proxy-external",
+                Some(&target),
+            )
+        })
+        .ok_or_else(|| {
+            ApiError::bad_request("External preview requires a scoped resource credential")
+        })?;
+    let origin = request_origin(&headers).unwrap_or_else(|| {
+        std::env::var("API_ORIGIN").unwrap_or_else(|_| "http://localhost:3020".into())
+    });
+    let body = preview::external_proxy::authorize_external_dependencies(
+        &resp.content_type,
+        resp.body,
+        &resp.final_url,
+        &origin,
+        |target| preview::auth_urls::external_dependency_token(&state, &resource, target),
+    )
+    .map_err(ApiError::bad_request)?;
     Ok((
         StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY),
-        [(axum::http::header::CONTENT_TYPE, resp.content_type)],
-        resp.body,
+        [
+            (axum::http::header::CONTENT_TYPE, resp.content_type),
+            (axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".into()),
+            (
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                preview::DOCUMENT_SANDBOX.into(),
+            ),
+        ],
+        body,
     )
         .into_response())
 }
@@ -3041,24 +4503,24 @@ const EXTERNAL_LOG_PORT: u16 = 65535;
 
 async fn get_external_logs(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
     let logs = state
         .preview_log_store()
-        .get_logs(EXTERNAL_LOG_PORT, None, None, None, None)
+        .get_logs(&user.user_id, EXTERNAL_LOG_PORT, None, None, None, None)
         .await;
     Ok(Json(json!({ "logs": logs })))
 }
 
 async fn ingest_external_log(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Json(entries): Json<Vec<preview::logs::PreviewLogEntry>>,
 ) -> StatusCode {
     for entry in entries {
         state
             .preview_log_store()
-            .add_log(EXTERNAL_LOG_PORT, entry)
+            .add_log(&user.user_id, EXTERNAL_LOG_PORT, entry)
             .await;
     }
     StatusCode::OK
@@ -3066,11 +4528,11 @@ async fn ingest_external_log(
 
 async fn clear_external_logs(
     State(state): State<AppState>,
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
 ) -> StatusCode {
     state
         .preview_log_store()
-        .clear_logs(EXTERNAL_LOG_PORT)
+        .clear_logs(&user.user_id, EXTERNAL_LOG_PORT)
         .await;
     StatusCode::NO_CONTENT
 }
@@ -3104,7 +4566,8 @@ async fn dev_proxy_handler_path(
 }
 
 async fn dev_proxy_ws_handler_root(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     request: axum::extract::Request,
@@ -3114,11 +4577,12 @@ async fn dev_proxy_ws_handler_root(
         .query()
         .map(|value| format!("/?{value}"))
         .unwrap_or_else(|| "/".to_string());
-    dev_proxy_ws_inner(port, path, ws, request).await
+    dev_proxy_ws_inner(state, user.user_id, port, path, ws, request).await
 }
 
 async fn dev_proxy_ws_handler_path(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path((port, rest)): Path<(u16, String)>,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     request: axum::extract::Request,
@@ -3128,7 +4592,31 @@ async fn dev_proxy_ws_handler_path(
         .query()
         .map(|value| format!("/{rest}?{value}"))
         .unwrap_or_else(|| format!("/{rest}"));
-    dev_proxy_ws_inner(port, path, ws, request).await
+    dev_proxy_ws_inner(state, user.user_id, port, path, ws, request).await
+}
+
+async fn read_preview_request_body(body: axum::body::Body) -> Result<Vec<u8>, ApiError> {
+    axum::body::to_bytes(body, 10 * 1024 * 1024)
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|_| ApiError {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            message: "Preview request body could not be buffered within the 10 MiB limit"
+                .to_string(),
+        })
+}
+
+fn dev_proxy_forwarded_path(request: &axum::extract::Request, path: &str) -> String {
+    let path = preview::auth_urls::strip_preview_token(path);
+    if request
+        .extensions()
+        .get::<auth::QueryAccessTokenUsed>()
+        .is_some()
+    {
+        preview::auth_urls::strip_query_key(&path, "token")
+    } else {
+        path
+    }
 }
 
 async fn dev_proxy_inner(
@@ -3140,17 +4628,30 @@ async fn dev_proxy_inner(
 ) -> Result<axum::response::Response, ApiError> {
     let started_at = now_millis();
     let method = request.method().as_str().to_string();
-    let headers = request.headers().clone();
+    let path = dev_proxy_forwarded_path(&request, &path);
+    let mut headers = request.headers().clone();
     let auth_token = preview_request_token(&request);
     let ws_proxy_origin = websocket_proxy_origin(&headers);
-    let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+    for name in [
+        axum::http::header::AUTHORIZATION,
+        axum::http::header::COOKIE,
+        axum::http::header::REFERER,
+    ] {
+        headers.remove(name);
+    }
+    if let Some(cookie) = state
+        .cookie_store()
+        .get_cookie_header_for_request(user_id, port, "localhost", &path)
         .await
-        .ok()
-        .map(|b| b.to_vec());
+    {
+        if let Ok(value) = cookie.parse() {
+            headers.insert(axum::http::header::COOKIE, value);
+        }
+    }
+    let body = Some(read_preview_request_body(request.into_body()).await?);
     let request_size = body.as_ref().map(Vec::len);
 
-    let api_origin =
-        std::env::var("API_ORIGIN").unwrap_or_else(|_| "http://localhost:3020".to_string());
+    let api_origin = preview_api_origin(&headers);
 
     match preview::dev_proxy::proxy_dev_request(
         port,
@@ -3164,7 +4665,19 @@ async fn dev_proxy_inner(
     )
     .await
     {
-        Ok(resp) => {
+        Ok(mut resp) => {
+            for cookie in resp
+                .headers
+                .get_all(axum::http::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+            {
+                state
+                    .cookie_store()
+                    .store_from_set_cookie_for_request(user_id, port, "localhost", &path, cookie)
+                    .await;
+            }
+            resp.headers.remove(axum::http::header::SET_COOKIE);
             let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::BAD_GATEWAY);
             let status_text = status.canonical_reason().map(str::to_string);
             let content_type = resp
@@ -3221,18 +4734,38 @@ async fn dev_proxy_inner(
 }
 
 async fn dev_proxy_ws_inner(
+    state: AppState,
+    owner: String,
     port: u16,
     path: String,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     request: axum::extract::Request,
 ) -> Result<axum::response::Response, ApiError> {
     let ws = ws.map_err(|_| ApiError::bad_request("WebSocket upgrade required"))?;
+    let path = dev_proxy_forwarded_path(&request, &path);
+    let cookie_header = state
+        .cookie_store()
+        .get_cookie_header_for_request(&owner, port, "localhost", &path)
+        .await;
     let mut request_headers = request.headers().clone();
     request_headers.remove(axum::http::header::AUTHORIZATION);
+    let prepared = preview::ws_proxy::prepare_websocket(
+        &state.preview_log_store().websockets(),
+        &owner,
+        port,
+        &path,
+        &request_headers,
+        cookie_header.as_deref(),
+    )
+    .await
+    .map_err(|message| ApiError {
+        status: StatusCode::BAD_GATEWAY,
+        message,
+    })?;
+    let ws = ws.protocols(prepared.selected_protocol().map(str::to_owned));
     Ok(ws
         .on_upgrade(move |socket| async move {
-            let _ = preview::ws_proxy::proxy_websocket(socket, port, &path, &request_headers, None)
-                .await;
+            let _ = prepared.relay(socket).await;
         })
         .into_response())
 }
@@ -3315,12 +4848,32 @@ async fn preview_proxy_response(
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     rewrite_mode: PreviewRewriteMode,
 ) -> Result<axum::response::Response, ApiError> {
-    let preview_user = authenticate_preview_request_user(&state, &request)?;
+    let preview_user = authenticate_preview_request_user(&state, &request, port)?;
+    let resource_prefix = format!("/preview/{port}");
+    let resource = preview_request_token(&request)
+        .and_then(|token| preview::auth_urls::resource_token(&state, &token, &resource_prefix));
+    let origin =
+        request_origin(request.headers()).unwrap_or_else(|| "http://localhost:3020".into());
+    let document_url = match &rewrite_mode {
+        PreviewRewriteMode::Path => format!("{origin}{resource_prefix}{path}"),
+        PreviewRewriteMode::Subdomain { preview_origin, .. } => format!("{preview_origin}{path}"),
+    };
+    let path = preview::auth_urls::strip_preview_token(&path);
     let scope_user_id = preview_user.user_id.clone();
     let cookie_header = state
         .cookie_store()
-        .get_cookie_header(&scope_user_id, port)
+        .get_cookie_header_for_request(&scope_user_id, port, "localhost", &path)
         .await;
+    if ws.is_ok()
+        && preview_request_token(&request)
+            .as_deref()
+            .is_some_and(|token| preview::auth_urls::is_resource_token(&state, token))
+    {
+        return Err(ApiError {
+            status: StatusCode::UNAUTHORIZED,
+            message: "Resource credentials cannot control preview WebSockets".into(),
+        });
+    }
     if let Ok(ws) = ws {
         let credential = request
             .headers()
@@ -3341,12 +4894,21 @@ async fn preview_proxy_response(
         let authorization_path = preview_auth_route_path(&request).to_string();
         let mut request_headers = request.headers().clone();
         request_headers.remove(axum::http::header::AUTHORIZATION);
-        let websocket_path = path.clone();
+        let telemetry = state.preview_log_store().websockets();
+        let prepared = tokio::select! {
+            _ = wait_for_preview_revocation(&state, &credential, &authorization_path) => {
+                return Err(ApiError { status: StatusCode::UNAUTHORIZED, message: "Invalid or expired preview session".into() });
+            },
+            result = preview::ws_proxy::prepare_websocket(&telemetry, &scope_user_id, port, &path, &request_headers, cookie_header.as_deref()) => {
+                result.map_err(|message| ApiError { status: StatusCode::BAD_GATEWAY, message })?
+            },
+        };
+        let ws = ws.protocols(prepared.selected_protocol().map(str::to_owned));
         return Ok(ws
             .on_upgrade(move |socket| async move {
                 tokio::select! {
-                    _ = wait_for_preview_revocation(&state,&credential,&authorization_path)=>{},
-                    _ = preview::ws_proxy::proxy_websocket(socket,port,&websocket_path,&request_headers,cookie_header.as_deref())=>{},
+                    _ = wait_for_preview_revocation(&state, &credential, &authorization_path) => {},
+                    _ = prepared.relay(socket) => {},
                 }
             })
             .into_response());
@@ -3357,11 +4919,9 @@ async fn preview_proxy_response(
     let mut headers = request.headers().clone();
     headers.remove(axum::http::header::COOKIE);
     headers.remove(axum::http::header::AUTHORIZATION);
+    headers.remove(axum::http::header::REFERER);
     populate_forward_headers(&mut headers);
-    let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
-        .await
-        .ok()
-        .map(|bytes| bytes.to_vec());
+    let body = Some(read_preview_request_body(request.into_body()).await?);
     let request_size = body.as_ref().map(Vec::len);
 
     if let Some(cookie_header) = cookie_header {
@@ -3370,8 +4930,7 @@ async fn preview_proxy_response(
         }
     }
 
-    let api_origin =
-        std::env::var("API_ORIGIN").unwrap_or_else(|_| "http://localhost:3020".to_string());
+    let api_origin = preview_api_origin(&headers);
     let hosts = preview::proxy_hosts();
 
     match preview::proxy::proxy_request(port, &path, &method, &headers, body, &hosts).await {
@@ -3385,7 +4944,13 @@ async fn preview_proxy_response(
             for cookie in set_cookies {
                 state
                     .cookie_store()
-                    .store_from_set_cookie(&scope_user_id, port, &cookie)
+                    .store_from_set_cookie_for_request(
+                        &scope_user_id,
+                        port,
+                        "localhost",
+                        &path,
+                        &cookie,
+                    )
                     .await;
             }
             response.headers.remove(axum::http::header::SET_COOKIE);
@@ -3401,10 +4966,11 @@ async fn preview_proxy_response(
                     if let Ok(html) = String::from_utf8(response.body.clone()) {
                         let rewritten = match &rewrite_mode {
                             PreviewRewriteMode::Path => {
-                                preview::path_rewrite::rewrite_html_for_path_preview(
+                                preview::path_rewrite::rewrite_html_for_path_preview_at_path(
                                     &html,
                                     port,
                                     &api_origin,
+                                    &path,
                                 )
                             }
                             PreviewRewriteMode::Subdomain {
@@ -3418,7 +4984,14 @@ async fn preview_proxy_response(
                                 websocket_origin.as_deref(),
                             ),
                         };
-                        response.body = rewritten.into_bytes();
+                        let controller = resource.as_deref().and_then(|token| {
+                            preview::auth_urls::resource_controller(&state, token, &resource_prefix)
+                        });
+                        response.body = preview::script_inject::bind_controller(
+                            &rewritten,
+                            controller.as_ref(),
+                        )
+                        .into_bytes();
                         update_proxy_response_length(&mut response);
                     }
                 } else if is_css_content_type(content_type, &path) {
@@ -3439,26 +5012,53 @@ async fn preview_proxy_response(
                         update_proxy_response_length(&mut response);
                     }
                 } else if is_javascript_content_type(content_type, &path) {
-                    if let (
-                        PreviewRewriteMode::Subdomain {
-                            preview_origin,
-                            websocket_origin,
-                        },
-                        Ok(script),
-                    ) = (&rewrite_mode, String::from_utf8(response.body.clone()))
-                    {
-                        let rewritten = preview::host_rewrite::rewrite_script_for_subdomain_preview(
-                            &script,
-                            port,
-                            preview_origin,
-                            websocket_origin.as_deref(),
-                        );
+                    if let Ok(script) = String::from_utf8(response.body.clone()) {
+                        let rewritten = match &rewrite_mode {
+                            PreviewRewriteMode::Path => {
+                                preview::path_rewrite::rewrite_script_for_path_preview(
+                                    &script, port,
+                                )
+                            }
+                            PreviewRewriteMode::Subdomain {
+                                preview_origin,
+                                websocket_origin,
+                            } => preview::host_rewrite::rewrite_script_for_subdomain_preview(
+                                &script,
+                                port,
+                                preview_origin,
+                                websocket_origin.as_deref(),
+                            ),
+                        };
                         response.body = rewritten.into_bytes();
                         update_proxy_response_length(&mut response);
                     }
                 }
             }
+            if let (Some(token), Some(content_type)) =
+                (resource.as_deref(), content_type.as_deref())
+            {
+                if let Ok(content) = std::str::from_utf8(&response.body) {
+                    let prefix = if matches!(rewrite_mode, PreviewRewriteMode::Path) {
+                        resource_prefix.as_str()
+                    } else {
+                        "/"
+                    };
+                    response.body = preview::auth_urls::authorize_resources(
+                        content,
+                        content_type,
+                        &document_url,
+                        prefix,
+                        token,
+                    )
+                    .into_bytes();
+                    update_proxy_response_length(&mut response);
+                }
+            }
 
+            response.headers.insert(
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                axum::http::HeaderValue::from_static(preview::DOCUMENT_SANDBOX),
+            );
             let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::BAD_GATEWAY);
             state
                 .request_log_store()
@@ -3502,7 +5102,17 @@ async fn preview_proxy_response(
                     },
                 )
                 .await;
-            Err(ApiError::internal(error))
+            let wants_page = headers
+                .get(axum::http::header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|accept| accept.contains("text/html"));
+            if wants_page {
+                return Ok(preview::proxy::unreachable_page(&error));
+            }
+            Err(ApiError {
+                status: StatusCode::BAD_GATEWAY,
+                message: error,
+            })
         }
     }
 }
@@ -3517,20 +5127,87 @@ struct PreviewStorageUpdate {
     entries: Option<std::collections::HashMap<String, String>>,
 }
 
+fn preview_client_required(action: &str) -> ApiError {
+    ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        message: format!("Server-side preview {action} is unavailable. Use the loaded preview client; no operation was queued."),
+    }
+}
+
 async fn get_preview_storage(
     Extension(_user): Extension<AuthenticatedUser>,
     Path(_port): Path<u16>,
-) -> Json<Value> {
-    Json(json!({
-        "message": "Storage snapshot requested. Data will be synced via preview page."
-    }))
+) -> Result<Json<Value>, ApiError> {
+    Err(preview_client_required("storage snapshots"))
 }
 
 async fn update_preview_storage(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Json(input): Json<PreviewStorageUpdate>,
 ) -> Result<Json<Value>, ApiError> {
+    validate_preview_storage_update(&input)?;
+    if input.storage_type != "cookies" {
+        return Err(preview_client_required("browser storage changes"));
+    }
+
+    if input.storage_type == "cookies" {
+        let validate = |name: &str, value: &str| {
+            preview::cookie_jar::validate_cookie_entry(name, value).map_err(ApiError::bad_request)
+        };
+        match input.operation.as_str() {
+            "set" => {
+                let key = input.key.as_deref().unwrap_or_default();
+                let value = input.value.as_deref().unwrap_or_default();
+                validate(key, value)?;
+                state
+                    .cookie_store()
+                    .set_cookie(&user.user_id, port, key, value)
+                    .await;
+            }
+            "remove" => {
+                let key = input.key.as_deref().unwrap_or_default();
+                validate(key, "")?;
+                state
+                    .cookie_store()
+                    .remove_cookie(&user.user_id, port, key)
+                    .await;
+            }
+            "clear" => {
+                state
+                    .cookie_store()
+                    .clear_cookies(&user.user_id, port)
+                    .await
+            }
+            "import" => {
+                let entries = input
+                    .entries
+                    .as_ref()
+                    .expect("import entries validated above");
+                for (key, value) in entries {
+                    validate(key, value)?;
+                }
+                for (key, value) in entries {
+                    state
+                        .cookie_store()
+                        .set_cookie(&user.user_id, port, key, value)
+                        .await;
+                }
+            }
+            _ => unreachable!("operation validated above"),
+        }
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "port": port,
+        "type": input.storage_type,
+        "operation": input.operation
+    })))
+}
+
+fn validate_preview_storage_update(input: &PreviewStorageUpdate) -> Result<(), ApiError> {
     let valid_types = ["localStorage", "sessionStorage", "cookies"];
     let valid_operations = ["set", "remove", "clear", "import"];
 
@@ -3576,12 +5253,53 @@ async fn update_preview_storage(
         }
     }
 
-    Ok(Json(json!({
-        "success": true,
-        "port": port,
-        "type": input.storage_type,
-        "operation": input.operation
-    })))
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum PreviewClientOperation {
+    Evaluate { expression: String },
+    Storage { storage: PreviewStorageUpdate },
+}
+
+async fn authorize_preview_client_operation(
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(_port): Path<u16>,
+    Json(input): Json<PreviewClientOperation>,
+) -> Result<Json<Value>, ApiError> {
+    match input {
+        PreviewClientOperation::Evaluate { expression } => {
+            if !preview_eval_enabled() {
+                return Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: "Preview eval endpoint is disabled".into(),
+                });
+            }
+            validate_preview_expression(&expression)?;
+        }
+        PreviewClientOperation::Storage { storage } => {
+            validate_preview_storage_update(&storage)?;
+            if storage.storage_type == "cookies" {
+                return Err(ApiError::bad_request(
+                    "Use the server cookie storage endpoint for cookies",
+                ));
+            }
+        }
+    }
+    Ok(Json(
+        json!({"authorized":true,"executed":false,"delivery":"preview-client"}),
+    ))
+}
+
+fn validate_preview_expression(expression: &str) -> Result<(), ApiError> {
+    if expression.trim().is_empty() {
+        return Err(ApiError::bad_request("Invalid expression"));
+    }
+    if expression.len() > 10_000 {
+        return Err(ApiError::bad_request("Expression too long (max 10KB)"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -3590,31 +5308,12 @@ struct PreviewEvaluateInput {
 }
 
 async fn evaluate_preview(
-    Extension(user): Extension<AuthenticatedUser>,
-    Path(port): Path<u16>,
+    Extension(_user): Extension<AuthenticatedUser>,
+    Path(_port): Path<u16>,
     Json(input): Json<PreviewEvaluateInput>,
 ) -> Result<Json<Value>, ApiError> {
-    if !preview_eval_enabled() {
-        return Err(ApiError {
-            status: StatusCode::FORBIDDEN,
-            message: "Preview eval endpoint is disabled".to_string(),
-        });
-    }
-
-    if input.expression.trim().is_empty() {
-        return Err(ApiError::bad_request("Invalid expression"));
-    }
-    if input.expression.len() > 10_000 {
-        return Err(ApiError::bad_request("Expression too long (max 10KB)"));
-    }
-
-    let client_id = user.user_id;
-    Ok(Json(json!({
-        "success": true,
-        "clientId": client_id,
-        "port": port,
-        "message": "Evaluation request queued. Result will be sent via preview console logs."
-    })))
+    validate_preview_expression(&input.expression)?;
+    Err(preview_client_required("JavaScript evaluation"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -3679,7 +5378,14 @@ async fn get_webcontainer_files(
     Extension(_user): Extension<AuthenticatedUser>,
     Query(query): Query<WebContainerQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let tree = webcontainer::get_file_tree(&query.path)
+    let root = files::resolve_existing_contained_path(&query.path).map_err(|_| ApiError {
+        status: StatusCode::FORBIDDEN,
+        message: "Project root is unavailable or outside allowed file roots".into(),
+    })?;
+    let path = root
+        .to_str()
+        .ok_or_else(|| ApiError::bad_request("Project root is not valid UTF-8"))?;
+    let tree = webcontainer::get_file_tree(path)
         .await
         .map_err(ApiError::bad_request)?;
     Ok(Json(tree))
@@ -3689,23 +5395,65 @@ async fn get_webcontainer_files(
 
 #[derive(Debug, Deserialize)]
 struct TranscribeHealthQuery {
-    provider: Option<String>,
+    provider: Option<TranscribeProvider>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TranscribeProvider {
+    Local,
+    Groq,
+}
+
+impl TranscribeProvider {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Local => "local",
+            Self::Groq => "groq",
+        }
+    }
 }
 
 async fn transcribe_health(
-    Extension(_user): Extension<AuthenticatedUser>,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
     Query(query): Query<TranscribeHealthQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let health = transcribe::health_check(query.provider.as_deref())
-        .await
+    let api_key = state
+        .transcription_api_key(&user)
         .map_err(ApiError::internal)?;
+    let health = transcribe::health_check(
+        query.provider.as_ref().map(TranscribeProvider::as_str),
+        api_key.as_deref(),
+    )
+    .await
+    .map_err(ApiError::internal)?;
     Ok(Json(serde_json::to_value(health).unwrap_or_default()))
 }
 
 async fn transcribe_audio(
-    Extension(_user): Extension<AuthenticatedUser>,
-    mut multipart: axum_extra::extract::Multipart,
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<TranscribeHealthQuery>,
+    multipart: axum_extra::extract::Multipart,
 ) -> Result<Json<Value>, ApiError> {
+    let (data, filename) = read_transcription_audio(multipart).await?;
+    let api_key = state
+        .transcription_api_key(&user)
+        .map_err(ApiError::internal)?;
+    let result = transcribe::transcribe(
+        data,
+        &filename,
+        api_key.as_deref(),
+        query.provider.as_ref().map(TranscribeProvider::as_str),
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+}
+async fn read_transcription_audio(
+    mut multipart: axum_extra::extract::Multipart,
+) -> Result<(Vec<u8>, String), ApiError> {
     let mut audio_data = None;
     let mut filename = "audio.webm".to_string();
 
@@ -3731,10 +5479,106 @@ async fn transcribe_audio(
     }
 
     let data = audio_data.ok_or_else(|| ApiError::bad_request("No audio file provided"))?;
-    let result = transcribe::transcribe(data, &filename, None)
-        .await
-        .map_err(ApiError::internal)?;
-    Ok(Json(serde_json::to_value(result).unwrap_or_default()))
+    Ok((data, filename))
+}
+
+#[cfg(test)]
+mod transcription_contract_tests {
+    use super::*;
+    use axum::body::Body;
+    use http_body_util::BodyExt;
+    use terminal_v4_core::AppConfig;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn transcription_multipart_accepts_the_canonical_file_part() {
+        let router = Router::new().route(
+            "/",
+            post(|multipart: axum_extra::extract::Multipart| async {
+                let (data, filename) = read_transcription_audio(multipart).await?;
+                Ok::<_, ApiError>(Json(
+                    json!({ "filename": filename, "audio": String::from_utf8(data).unwrap() }),
+                ))
+            }),
+        );
+        for (part, expected_status) in
+            [("file", StatusCode::OK), ("audio", StatusCode::BAD_REQUEST)]
+        {
+            let request = axum::http::Request::builder().method("POST").uri("/")
+                .header("Content-Type", "multipart/form-data; boundary=fixture")
+                .body(Body::from(format!("--fixture\r\nContent-Disposition: form-data; name=\"{part}\"; filename=\"fixture.webm\"\r\nContent-Type: audio/webm\r\n\r\nsynthetic-audio\r\n--fixture--\r\n"))).unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), expected_status);
+            if part == "file" {
+                let bytes = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap(),
+                    json!({ "filename": "fixture.webm", "audio": "synthetic-audio" })
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn transcription_health_uses_only_the_authenticated_users_saved_key() {
+        let folder = tempfile::tempdir().unwrap();
+        let state = AppState::new_with_external_auth(
+            AppConfig {
+                data_dir: folder.path().to_path_buf(),
+                jwt_secret: "synthetic-transcription-secret".into(),
+                ..AppConfig::default()
+            },
+            None,
+        )
+        .unwrap();
+        let owner = AuthenticatedUser {
+            user_id: "transcription-owner".into(),
+            username: "synthetic-owner".into(),
+        };
+        let other = AuthenticatedUser {
+            user_id: "transcription-other".into(),
+            username: "synthetic-other".into(),
+        };
+        state
+            .update_settings(
+                &owner,
+                state::SettingsPatch {
+                    groq_api_key: state::FieldPatch::Value("synthetic-saved-key".into()),
+                    ..state::SettingsPatch::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            state.transcription_api_key(&owner).unwrap().as_deref(),
+            Some("synthetic-saved-key")
+        );
+        assert_eq!(state.transcription_api_key(&other).unwrap(), None);
+        assert_ne!(
+            state.get_settings(&owner).unwrap().groq_api_key.as_deref(),
+            Some("synthetic-saved-key")
+        );
+        let router = Router::new()
+            .route("/api/transcribe/health", get(transcribe_health))
+            .layer(Extension(owner))
+            .with_state(state);
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/transcribe/health?provider=groq")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            payload,
+            json!({ "available": true, "provider": "groq", "message": "OK" })
+        );
+        assert!(!String::from_utf8_lossy(&body).contains("synthetic-saved-key"));
+    }
 }
 
 // --- Screenshot handlers ---
@@ -3756,12 +5600,13 @@ struct RecordingInput {
 }
 
 async fn take_preview_screenshot(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Json(input): Json<ScreenshotInput>,
 ) -> Result<Json<Value>, ApiError> {
     let url = format!("http://localhost:{port}");
     let result = screenshots::take_screenshot(
+        &user.user_id,
         &url,
         input.selector.as_deref(),
         input.full_page.unwrap_or(false),
@@ -3774,7 +5619,7 @@ async fn take_preview_screenshot(
 }
 
 async fn take_element_screenshot(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Json(input): Json<ScreenshotInput>,
 ) -> Result<Json<Value>, ApiError> {
@@ -3782,20 +5627,26 @@ async fn take_element_screenshot(
         .selector
         .ok_or_else(|| ApiError::bad_request("selector is required"))?;
     let url = format!("http://localhost:{port}");
-    let result =
-        screenshots::take_screenshot(&url, Some(&selector), false, input.width, input.height)
-            .await
-            .map_err(ApiError::internal)?;
+    let result = screenshots::take_screenshot(
+        &user.user_id,
+        &url,
+        Some(&selector),
+        false,
+        input.width,
+        input.height,
+    )
+    .await
+    .map_err(ApiError::internal)?;
     Ok(Json(serde_json::to_value(result).unwrap_or_default()))
 }
 
 async fn start_preview_recording(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(port): Path<u16>,
     Json(input): Json<RecordingInput>,
 ) -> Result<Json<Value>, ApiError> {
     let url = format!("http://localhost:{port}");
-    let result = screenshots::start_recording(&url, input.width, input.height)
+    let result = screenshots::start_recording(&user.user_id, &url, input.width, input.height)
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(json!({
@@ -3806,10 +5657,10 @@ async fn start_preview_recording(
 }
 
 async fn stop_preview_recording(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(recording_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let Some(result) = screenshots::stop_recording(&recording_id)
+    let Some(result) = screenshots::stop_recording(&user.user_id, &recording_id)
         .await
         .map_err(ApiError::internal)?
     else {
@@ -3826,19 +5677,19 @@ async fn stop_preview_recording(
 }
 
 async fn list_screenshots_handler(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let list = screenshots::list_screenshots()
+    let list = screenshots::list_screenshots(&user.user_id)
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(json!({ "screenshots": list })))
 }
 
 async fn get_screenshot_handler(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(filename): Path<String>,
 ) -> Result<axum::response::Response, ApiError> {
-    let data = screenshots::get_screenshot(&filename)
+    let data = screenshots::get_screenshot(&user.user_id, &filename)
         .await
         .map_err(|e| ApiError {
             status: StatusCode::NOT_FOUND,
@@ -3848,10 +5699,10 @@ async fn get_screenshot_handler(
 }
 
 async fn delete_screenshot_handler(
-    Extension(_user): Extension<AuthenticatedUser>,
+    Extension(user): Extension<AuthenticatedUser>,
     Path(filename): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = screenshots::delete_screenshot(&filename)
+    let deleted = screenshots::delete_screenshot(&user.user_id, &filename)
         .await
         .map_err(ApiError::internal)?;
     if deleted {
@@ -4122,7 +5973,7 @@ async fn get_system_stats(
     State(state): State<AppState>,
     Extension(_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let stats = state.stats_collector().get_current().await;
+    let stats = state.stats_collector().get_current_with_processes().await;
     Ok(Json(json!({ "stats": stats })))
 }
 
@@ -4137,19 +5988,35 @@ async fn get_stats_history(
     Query(query): Query<StatsHistoryQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let range = query.range.as_deref().unwrap_or("24h");
-    let history = state.stats_collector().get_history(range).await;
-    Ok(Json(json!({ "history": history })))
+    let collector = state.stats_collector();
+    let history = collector.get_history(range).await;
+    let mut response = json!({ "history": history });
+    let health = collector.history_health();
+    if let Some(error) = health.error {
+        response["historyError"] = json!(error);
+        response["historyPersistenceEnabled"] = json!(health.persistence_enabled);
+    }
+    Ok(Json(response))
 }
 
 async fn trigger_rebuild(
     Extension(_user): Extension<AuthenticatedUser>,
 ) -> Result<Json<Value>, ApiError> {
-    let output = tokio::process::Command::new(if cfg!(windows) { "powershell" } else { "bash" })
-        .args(if cfg!(windows) {
-            vec!["-File", "rebuild.ps1"]
-        } else {
-            vec!["rebuild.sh"]
-        })
+    // Running host build scripts is off unless the server owner opts in; there is no admin role.
+    if std::env::var("TERMINAL_V4_ALLOW_REBUILD").as_deref() != Ok("1") {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: "Rebuilding from the browser is turned off. Start the server with TERMINAL_V4_ALLOW_REBUILD=1 to allow it.".into(),
+        });
+    }
+    let command = system_rebuild::RebuildConfig::from_env()
+        .command(cfg!(windows))
+        .map_err(ApiError::internal)?;
+    let output = tokio::process::Command::new(command.program)
+        .args(command.args)
+        .current_dir(&command.project_root)
+        .env("REBUILD_PROJECT_ROOT", &command.project_root)
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|e| ApiError::internal(format!("Rebuild failed: {e}")))?;
@@ -4491,21 +6358,24 @@ async fn connect_structured_ws(
         .or(query.token.clone())
         .unwrap_or_default();
     let last_seq = query.last_seq;
-    Ok(ws.on_upgrade(move |socket| {
-        handle_structured_ws(
-            socket,
-            StructuredWsConnection {
-                state,
-                runtime_token,
-                structured_manager,
-                user,
-                session_id,
-                history,
-                subscription,
-                last_seq,
-            },
-        )
-    }))
+    Ok(ws
+        .max_message_size(131072)
+        .max_frame_size(131072)
+        .on_upgrade(move |socket| {
+            handle_structured_ws(
+                socket,
+                StructuredWsConnection {
+                    state,
+                    runtime_token,
+                    structured_manager,
+                    user,
+                    session_id,
+                    history,
+                    subscription,
+                    last_seq,
+                },
+            )
+        }))
 }
 
 struct StructuredWsConnection {
@@ -4620,30 +6490,43 @@ async fn handle_structured_ws(mut socket: WebSocket, connection: StructuredWsCon
                         };
                         let kind=value.get("type").and_then(Value::as_str).unwrap_or("");
                         if !auth::runtime_message_allowed(&state,&runtime_token,true,kind){let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4403,reason:"Agent control is not permitted".into()}))).await;break;}
-                        match value.get("type").and_then(Value::as_str) {
-                            Some("message") => {
-                                if let Some(text) = value.get("text").and_then(Value::as_str) {
-                                    let _ = structured_manager
-                                        .send_message(&user.user_id, &session_id, text)
-                                        .await;
-                                }
-                            }
-                            Some("interrupt") => {
-                                let _ = structured_manager
-                                    .interrupt(&user.user_id, &session_id)
-                                    .await;
-                            }
-                            Some("approve") => {
-                                let approved = value
-                                    .get("approved")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false);
-                                let _ = structured_manager
-                                    .approve(&user.user_id, &session_id, approved)
-                                    .await;
-                            }
-                            _ => {}
-                        }
+                        let request_id=value.get("requestId").and_then(Value::as_str);
+                        let authority = match auth::authenticate_runtime_with_authority(&state, &runtime_token, "GET", &format!("/api/structured/sessions/{session_id}/ws")) {
+                            Ok((verified, authority)) if verified.user_id == user.user_id => authority,
+                            _ => { let _=socket.send(Message::Close(Some(axum::extract::ws::CloseFrame{code:4401,reason:"Session access expired or was revoked".into()}))).await; break; }
+                        };
+                        let paired = runtime_token.starts_with("tv4pair.").then(|| auth::PairedInputAuthority {
+                            token: runtime_token.clone(), path: format!("/api/structured/sessions/{session_id}/ws"), method: "GET".into(),
+                        });
+                        let result:Result<Value,structured::StructuredControlError>=match kind {
+                            "message" if value.get("attachments").is_some()=>Err(structured::StructuredControlError{code:"invalid",message:"Image attachments require the dedicated image send route".into()}),
+                            "message"=>match value.get("text").and_then(Value::as_str) {
+                                Some(text) if text.chars().count()<=100_000 && !text.contains('\0')=>structured_manager.submit_message_with_paired(&user.user_id,&session_id,text,request_id,authority.as_ref(),paired.as_ref(),&state).await.map(|receipt|json!(receipt)),
+                                _=>Err(structured::StructuredControlError {code:"invalid",message:"Message text is missing or exceeds its limit".into()}),
+                            },
+                            "approve"=>match value.get("approved").and_then(Value::as_bool) {
+                                Some(approved)=>match (value.get("reservationId"), value.get("reservationToken")) {
+                                    (None, None) => structured_manager.approve_with_paired(&user.user_id,&session_id,value.get("approvalId").and_then(Value::as_str),approved,value.get("answers").cloned(),false,None,authority.as_ref(),paired.as_ref(),&state).await.map(|receipt|json!(receipt)),
+                                    (Some(id), Some(token)) if id.is_string() && token.is_string() => structured_manager.approve_with_paired(&user.user_id,&session_id,value.get("approvalId").and_then(Value::as_str),approved,value.get("answers").cloned(),false,Some((id.as_str().unwrap(), token.as_str().unwrap())),authority.as_ref(),paired.as_ref(),&state).await.map(|receipt|json!(receipt)),
+                                    _ => Err(structured::StructuredControlError {code:"invalid",message:"Reservation ID and token are both required".into()}),
+                                },
+                                None=>Err(structured::StructuredControlError {code:"invalid",message:"Approval decision must be a boolean".into()}),
+                            },
+                            "interrupt"=>{
+                                #[cfg(unix)]
+                                let stopped = structured_manager.interrupt_authorized(&user.user_id,&session_id,authority.as_ref(),paired.as_ref(),&state).await;
+                                #[cfg(not(unix))]
+                                let stopped = structured_manager.interrupt(&user.user_id,&session_id).await;
+                                stopped.map(|_|json!({"status":"cancelled","cleanupConfirmed":true})).map_err(|message|structured::StructuredControlError {code:"cleanup_failed",message})
+                            },
+                            _=>Err(structured::StructuredControlError {code:"invalid",message:"Unsupported structured command".into()}),
+                        };
+                        let response=match result {
+                            Ok(receipt)=>json!({"__terminal_meta":true,"type":"command_receipt","requestId":request_id,"receipt":receipt}),
+                            Err(error)=>json!({"__terminal_meta":true,"type":"command_rejected","requestId":request_id,"error":{"code":error.code,"message":error.message}}),
+                        };
+                        if socket.send(Message::Text(response.to_string().into())).await.is_err(){break;}
+
                     }
                     Some(Err(_)) | None => break,
                 }
@@ -4797,6 +6680,9 @@ fn is_javascript_content_type(content_type: &str, path: &str) -> bool {
 }
 
 fn update_proxy_response_length(response: &mut preview::proxy::ProxyResponse) {
+    response
+        .headers
+        .remove(axum::http::header::TRANSFER_ENCODING);
     if let Ok(length) = axum::http::HeaderValue::from_str(&response.body.len().to_string()) {
         response
             .headers
@@ -4821,6 +6707,23 @@ fn websocket_proxy_origin(headers: &axum::http::HeaderMap) -> Option<String> {
 fn request_origin(headers: &axum::http::HeaderMap) -> Option<String> {
     let host = request_host(headers)?;
     Some(format!("{}://{host}", request_scheme(headers)))
+}
+
+/// API origin as the browser sees it, for scripts injected into previews opened
+/// in their own tab. Subdomain previews proxy every path to the app, so the API
+/// is on the base host.
+fn preview_api_origin(headers: &axum::http::HeaderMap) -> String {
+    if let Ok(origin) = std::env::var("API_ORIGIN") {
+        return origin;
+    }
+    let Some(host) = request_host(headers) else {
+        return "http://localhost:3020".to_string();
+    };
+    format!(
+        "{}://{}",
+        request_scheme(headers),
+        preview::strip_preview_subdomain(&host)
+    )
 }
 
 fn preview_subdomain_port(headers: &axum::http::HeaderMap) -> Option<u16> {
@@ -4907,13 +6810,7 @@ fn authenticate_runtime_websocket(
     } else {
         query_token
             .ok_or_else(|| "Missing session token".to_string())
-            .and_then(|token| {
-                authenticate_token(
-                    &state.config().jwt_secret,
-                    state.config().allowed_username.as_deref(),
-                    token,
-                )
-            })
+            .and_then(|token| crate::auth::authenticate_local_token(&state, token))
     };
     result.map_err(|_| ApiError {
         status: StatusCode::UNAUTHORIZED,
@@ -4926,13 +6823,7 @@ async fn wait_for_preview_revocation(state: &AppState, token: &str, path: &str) 
     loop {
         interval.tick().await;
         if auth::authenticate_runtime_request(state, token, "GET", path).is_err()
-            && authenticate_preview_token(
-                &state.config().jwt_secret,
-                state.config().allowed_username.as_deref(),
-                token,
-                path,
-            )
-            .is_err()
+            && crate::auth::authenticate_runtime_preview_token(&state, token, path).is_err()
         {
             return;
         }
@@ -4942,6 +6833,7 @@ async fn wait_for_preview_revocation(state: &AppState, token: &str, path: &str) 
 fn authenticate_preview_request_user(
     state: &AppState,
     request: &axum::extract::Request,
+    port: u16,
 ) -> Result<AuthenticatedUser, ApiError> {
     if let Some(token) = request
         .headers()
@@ -4965,12 +6857,24 @@ fn authenticate_preview_request_user(
         message: "Missing preview session".to_string(),
     })?;
 
-    authenticate_preview_token(
-        &state.config().jwt_secret,
-        state.config().allowed_username.as_deref(),
+    crate::auth::authenticate_runtime_preview_token(
+        &state,
         &token,
         preview_auth_route_path(request),
     )
+    .or_else(|_| {
+        let path = if preview_subdomain_port(request.headers()).is_some() {
+            format!("/preview/{port}{}", request.uri().path())
+        } else {
+            request.uri().path().into()
+        };
+        preview::auth_urls::authenticate_resource_token(
+            state,
+            &token,
+            request.method().as_str(),
+            &path,
+        )
+    })
     .map_err(|_| ApiError {
         status: StatusCode::UNAUTHORIZED,
         message: "Invalid or expired preview session".to_string(),
@@ -5072,11 +6976,9 @@ async fn preview_proxy_logs_after_cursor_for_user(
     port: u16,
     cursor: preview::request_logs::LogCursor,
 ) -> Vec<preview::request_logs::ProxyLogEntry> {
-    let mut entries = request_log_store
-        .get_logs_after_cursor(user_id, port, cursor.clone())
-        .await;
-    sort_proxy_logs(&mut entries);
-    entries
+    request_log_store
+        .get_logs_after_cursor(user_id, port, cursor)
+        .await
 }
 
 fn sort_proxy_logs(entries: &mut Vec<preview::request_logs::ProxyLogEntry>) {
@@ -5090,6 +6992,7 @@ fn sort_proxy_logs(entries: &mut Vec<preview::request_logs::ProxyLogEntry>) {
 #[derive(Debug, Deserialize, Default)]
 struct TerminalWsQuery {
     framed: Option<String>,
+    history: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5106,7 +7009,10 @@ async fn connect_terminal_ws(
     Query(query): Query<TerminalWsQuery>,
 ) -> impl IntoResponse {
     let framed = matches!(query.framed.as_deref(), Some("1" | "true" | "yes"));
-    ws.on_upgrade(move |socket| handle_terminal_ws(socket, state, session_id, framed))
+    let replay_history = !matches!(query.history.as_deref(), Some("0" | "false" | "no"));
+    ws.on_upgrade(move |socket| {
+        handle_terminal_ws(socket, state, session_id, framed, replay_history)
+    })
 }
 
 async fn handle_terminal_ws(
@@ -5114,6 +7020,7 @@ async fn handle_terminal_ws(
     state: AppState,
     session_id: String,
     framed: bool,
+    replay_history: bool,
 ) {
     let first_message =
         match tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await {
@@ -5170,28 +7077,40 @@ async fn handle_terminal_ws(
         return;
     }
 
-    // Replay recent history so the terminal isn't blank on connect
-    if let Ok(Some(snapshot)) = terminal_manager
-        .get_session_history(
-            &user.user_id,
-            &session_id,
-            &crate::state::HistoryQuery {
-                max_history_events: Some(200),
-                max_history_chars: Some(200_000),
-                before_ts: None,
-                after_ts: None,
-                before_seq: None,
-                after_seq: None,
-            },
-        )
-        .await
-    {
-        for event in &snapshot.history {
-            if send_ws_output(&mut socket, framed, &event.text)
-                .await
-                .is_err()
-            {
-                return;
+    let mut last_sequence = None;
+    if replay_history {
+        if let Ok(Some(snapshot)) = terminal_manager
+            .get_session_history(
+                &user.user_id,
+                &session_id,
+                &crate::state::HistoryQuery {
+                    max_history_events: Some(200),
+                    max_history_chars: Some(200_000),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            for event in &snapshot.history {
+                if let Some(seq) = event.seq {
+                    if send_ws_meta(
+                        &mut socket,
+                        framed,
+                        json!({"type":"serverCursor","seq":seq}),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    last_sequence = Some(seq);
+                }
+                if send_ws_output(&mut socket, framed, &event.text)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
             }
         }
     }
@@ -5217,6 +7136,12 @@ async fn handle_terminal_ws(
             event = subscription.recv() => {
                 match event {
                     Ok(TerminalSubscriptionEvent::Output(output)) => {
+                        if output.seq.zip(last_sequence).is_some_and(|(next, previous)| next <= previous) {
+                            continue;
+                        }
+                        if let Some(sequence) = output.seq {
+                            last_sequence = Some(sequence);
+                        }
                         // Backpressure: if buffered bytes exceed the limit,
                         // drop output and suggest a resync instead.
                         let msg_len = output.text.len();
@@ -5360,6 +7285,36 @@ async fn send_ws_output(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preview_api_origin_follows_the_browser_facing_host() {
+        let headers = |pairs: &[(&'static str, &str)]| {
+            let mut map = axum::http::HeaderMap::new();
+            for (name, value) in pairs {
+                map.insert(*name, value.parse().unwrap());
+            }
+            map
+        };
+        let origins = [
+            super::preview_api_origin(&headers(&[("host", "localhost:3041")])),
+            super::preview_api_origin(&headers(&[
+                ("host", "mac.tail.ts.net"),
+                ("x-forwarded-proto", "https"),
+            ])),
+            super::preview_api_origin(&headers(&[(
+                "host",
+                "preview-8799.192.168.1.5.nip.io:3020",
+            )])),
+        ];
+        assert_eq!(
+            origins,
+            [
+                "http://localhost:3041",
+                "https://mac.tail.ts.net",
+                "http://192.168.1.5.nip.io:3020"
+            ]
+        );
+    }
+
     use super::{
         app, client_build_assets, client_build_info, normalize_filesystem_path,
         resolve_frontend_dir_with_current_dir, validate_sandbox_mode, ApiState,
@@ -5401,6 +7356,247 @@ mod tests {
     #[cfg(unix)]
     static ENV_LOCK: LazyLock<StdMutex<()>> = LazyLock::new(|| StdMutex::new(()));
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn webcontainer_export_enforces_existing_file_roots_before_traversal() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        struct RestoreRoots(Option<std::ffi::OsString>);
+        impl Drop for RestoreRoots {
+            fn drop(&mut self) {
+                unsafe {
+                    match &self.0 {
+                        Some(value) => std::env::set_var("TERMINAL_V4_ALLOWED_FILE_ROOTS", value),
+                        None => std::env::remove_var("TERMINAL_V4_ALLOWED_FILE_ROOTS"),
+                    }
+                }
+            }
+        }
+        let cwd = std::env::current_dir().unwrap();
+        let allowed = tempfile::Builder::new()
+            .prefix(".wc-contained-test-")
+            .tempdir_in(&cwd)
+            .unwrap();
+        let outside = tempdir().unwrap();
+        let project = allowed.path().join("project");
+        fs::create_dir(&project).unwrap();
+        for directory in [&project, &outside.path().to_path_buf()] {
+            fs::write(
+                directory.join("package.json"),
+                r#"{"name":"owned-synthetic-project"}"#,
+            )
+            .unwrap();
+            fs::write(directory.join("marker.txt"), "OWNED_SYNTHETIC_MARKER").unwrap();
+        }
+        let _restore = RestoreRoots(std::env::var_os("TERMINAL_V4_ALLOWED_FILE_ROOTS"));
+        unsafe {
+            std::env::set_var("TERMINAL_V4_ALLOWED_FILE_ROOTS", allowed.path());
+        }
+        std::os::unix::fs::symlink(outside.path(), allowed.path().join("outside-link")).unwrap();
+        std::os::unix::fs::symlink(&project, allowed.path().join("inside-link")).unwrap();
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "wc-containment", "synthetic");
+        for (path, authorized, expected) in [
+            (
+                outside.path().to_path_buf(),
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (outside.path().to_path_buf(), true, StatusCode::FORBIDDEN),
+            (
+                allowed.path().join("outside-link"),
+                true,
+                StatusCode::FORBIDDEN,
+            ),
+            (project.clone(), true, StatusCode::OK),
+            (
+                project.strip_prefix(&cwd).unwrap().to_path_buf(),
+                true,
+                StatusCode::OK,
+            ),
+            (allowed.path().join("inside-link"), true, StatusCode::OK),
+        ] {
+            let uri = format!(
+                "/api/webcontainer/files?path={}",
+                url::form_urlencoded::byte_serialize(path.to_str().unwrap().as_bytes())
+                    .collect::<String>()
+            );
+            let mut request = Request::builder().uri(uri);
+            if authorized {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            let response = app(state.clone())
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(status, expected, "{}: {body}", path.display());
+            if expected == StatusCode::OK {
+                assert_eq!(
+                    body["files"]["marker.txt"]["file"]["contents"],
+                    "OWNED_SYNTHETIC_MARKER"
+                );
+            } else {
+                assert!(body.get("files").is_none());
+                assert!(!String::from_utf8_lossy(&bytes).contains("OWNED_SYNTHETIC_MARKER"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_followup_branch_inventory_includes_alternate_refs_and_keeps_owner_gate() {
+        let directory = tempdir().unwrap();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=Synthetic Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "fixture",
+            ],
+            vec!["branch", "feature/second"],
+        ] {
+            let result = std::process::Command::new("git")
+                .args(args)
+                .current_dir(directory.path())
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let state = test_state();
+        let owner = "branch-inventory-fixture";
+        let id = "branch-inventory-terminal";
+        let sessions = state
+            .config()
+            .data_dir
+            .join("users")
+            .join(owner)
+            .join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(
+            sessions.join(format!("{id}.json")),
+            json!({
+                "id":id,"title":"Synthetic branch fixture","shell":"/bin/sh","cwd":directory.path(),
+                "createdAt":"2026-10-23T00:00:00Z","updatedAt":"2026-10-23T00:00:00Z","history":[]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for (user, expected) in [
+            (owner, StatusCode::OK),
+            ("different-owner", StatusCode::NOT_FOUND),
+        ] {
+            let token = issue_access_token(&state.config().jwt_secret, user, "synthetic");
+            let response = app(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/api/terminal/{id}/git-branches"))
+                        .header("authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(status, expected, "{body}");
+            if expected == StatusCode::OK {
+                assert_eq!(
+                    body,
+                    json!({"branches":["feature/second","main"],"currentBranch":"main"})
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn repair_followup_preview_body_limit_never_forwards_an_empty_replacement() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let observed = count.clone();
+        let upstream = axum::Router::new().route(
+            "/{*path}",
+            axum::routing::any(move |request: axum::extract::Request| {
+                let observed = observed.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024 + 1)
+                        .await
+                        .unwrap();
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({"bytes":body.len()}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let state = test_state();
+        let token = issue_access_token(
+            &state.config().jwt_secret,
+            "preview-body-fixture",
+            "synthetic",
+        );
+        for (route, limit) in [
+            (format!("/preview/{port}/owned-upload"), 10 * 1024 * 1024),
+            (
+                format!("/api/dev-proxy/{port}/owned-upload"),
+                10 * 1024 * 1024,
+            ),
+        ] {
+            for size in [64, limit, limit + 1] {
+                let before = count.load(Ordering::SeqCst);
+                let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(
+                    axum::body::Bytes::from(vec![b'x'; size]),
+                )]);
+                let response = app(state.clone())
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(&route)
+                            .header("authorization", format!("Bearer {token}"))
+                            .header("transfer-encoding", "chunked")
+                            .body(Body::from_stream(stream))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let body: Value = serde_json::from_slice(
+                    &response.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                if size <= limit {
+                    assert_eq!(
+                        (status, body, count.load(Ordering::SeqCst)),
+                        (StatusCode::OK, json!({"bytes":size}), before + 1),
+                        "{route}"
+                    );
+                } else {
+                    assert_eq!(
+                        (status, count.load(Ordering::SeqCst)),
+                        (StatusCode::PAYLOAD_TOO_LARGE, before),
+                        "{route}: {body}"
+                    );
+                }
+            }
+        }
+        server.abort();
+    }
+
     #[test]
     fn validate_sandbox_mode_rejects_unenforced_modes() {
         assert!(validate_sandbox_mode("off").is_ok());
@@ -5416,6 +7612,101 @@ mod tests {
         let read_only =
             validate_sandbox_mode("read-only").expect_err("read-only should stay disabled");
         assert_eq!(read_only.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn terminal_websocket_respects_history_opt_out_and_sequences_replay() {
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+        let state = test_state();
+        let token = issue_access_token(&state.config().jwt_secret, "ws-replay-owner", "fixture");
+        let (port, server) = spawn_router(app(state.clone())).await;
+        let client = reqwest::Client::new();
+        let base = format!("http://127.0.0.1:{port}");
+        let created: Value = client.post(format!("{base}/api/terminal"))
+            .bearer_auth(&token)
+            .json(&json!({"shell": if cfg!(windows) { "cmd.exe" } else { "/bin/sh" }, "title":"Replay fixture"}))
+            .send().await.unwrap().json().await.unwrap();
+        let id = created["session"]["id"].as_str().unwrap();
+        let command = if cfg!(windows) {
+            "echo SAVED_WS_FIXTURE\r"
+        } else {
+            "printf 'SAVED_WS_FIXTURE\\n'\r"
+        };
+        state
+            .terminal_manager()
+            .write("ws-replay-owner", id, command)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let history = state
+                    .terminal_manager()
+                    .get_session_history("ws-replay-owner", id, &Default::default())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                if history
+                    .history
+                    .iter()
+                    .any(|event| event.text.contains("SAVED_WS_FIXTURE"))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for replay in [false, true] {
+            let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+                "ws://127.0.0.1:{port}/api/terminal/{id}/ws?history={}",
+                if replay { 1 } else { 0 }
+            ))
+            .await
+            .unwrap();
+            socket
+                .send(WsMessage::Text(
+                    json!({"type":"auth","token":token}).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            let mut output = String::new();
+            let mut cursor_count = 0;
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while let Some(frame) = socket.next().await {
+                    let text = frame.unwrap().into_text().unwrap();
+                    if let Ok(meta) = serde_json::from_str::<Value>(&text) {
+                        if meta["type"] == "serverCursor" {
+                            cursor_count += 1;
+                        }
+                        if meta["type"] == "serverPing" {
+                            break;
+                        }
+                    } else {
+                        output.push_str(&text);
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                output.contains("SAVED_WS_FIXTURE"),
+                replay,
+                "history opt-out must avoid duplicate HTTP/WebSocket output"
+            );
+            assert_eq!(
+                cursor_count > 0,
+                replay,
+                "replayed output must carry sequence cursors"
+            );
+            socket.close(None).await.unwrap();
+        }
+        state
+            .terminal_manager()
+            .close("ws-replay-owner", id)
+            .await
+            .unwrap();
+        server.abort();
     }
 
     #[tokio::test]
@@ -5454,6 +7745,7 @@ mod tests {
         let resolved = resolve_frontend_dir_with_current_dir(
             std::path::Path::new("unused/data-dir"),
             Some(&repo_root),
+            None,
         );
 
         assert_eq!(resolved, repo_frontend_dist);
@@ -5471,9 +7763,26 @@ mod tests {
         let resolved = resolve_frontend_dir_with_current_dir(
             std::path::Path::new("unused/data-dir"),
             Some(&desktop_workdir),
+            None,
         );
 
         assert_eq!(resolved, repo_frontend_dist);
+    }
+
+    #[test]
+    fn resolve_frontend_dir_prefers_packaged_override_without_a_checkout() {
+        let root = tempdir().unwrap();
+        let assets = root.path().join("V4.app/Contents/Resources/frontend/dist");
+        fs::create_dir_all(&assets).unwrap();
+        fs::write(assets.join("index.html"), "<div id=\"root\"></div>").unwrap();
+        assert_eq!(
+            resolve_frontend_dir_with_current_dir(
+                &root.path().join("user-data"),
+                Some(root.path()),
+                Some(&assets),
+            ),
+            assets
+        );
     }
 
     #[tokio::test]
@@ -5727,6 +8036,10 @@ mod tests {
             .expect("rotated refresh token should be a string")
             .to_string();
         assert_ne!(rotated_refresh, "");
+        let rotated_access = refresh_payload["tokens"]["accessToken"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let logout_response = app
             .clone()
@@ -5741,6 +8054,21 @@ mod tests {
             .await
             .expect("router should respond");
         assert_eq!(logout_response.status(), StatusCode::OK);
+
+        for token in [&access_token, &rotated_access] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/auth/me")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
 
         let invalid_refresh = app
             .oneshot(
@@ -6111,6 +8439,214 @@ mod tests {
         assert_eq!(history[1]["text"], "three");
         assert_eq!(payload["nextCursor"], 3000);
         assert_eq!(payload["nextSeq"], 3);
+    }
+
+    #[tokio::test]
+    async fn terminal_create_rejects_invalid_working_directories_without_starting_a_session() {
+        let state = test_state();
+        let user_id = "invalid-terminal-cwd";
+        let token = issue_access_token(&state.config().jwt_secret, user_id, "synthetic-user");
+        let folder = tempfile::tempdir().expect("test folder should exist");
+        let file = folder.path().join("regular-file");
+        fs::write(&file, "not a directory").expect("test file should exist");
+        let router = app(state.clone());
+
+        for cwd in [
+            folder.path().join("missing").to_string_lossy().into_owned(),
+            file.to_string_lossy().into_owned(),
+            String::new(),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/terminal")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(json!({ "cwd": cwd }).to_string()))
+                        .expect("request should build"),
+                )
+                .await
+                .expect("router should respond");
+            let status = response.status();
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body should collect")
+                .to_bytes();
+            let payload: Value = serde_json::from_slice(&body).expect("payload should deserialize");
+            if let Some(id) = payload["session"]["id"].as_str() {
+                state
+                    .terminal_manager()
+                    .close(user_id, id)
+                    .await
+                    .expect("unexpected session should close");
+            }
+            assert_eq!(status, StatusCode::BAD_REQUEST, "invalid cwd: {cwd:?}");
+            assert!(payload["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("working directory")));
+            assert!(state
+                .terminal_manager()
+                .list_sessions(user_id)
+                .await
+                .expect("sessions should list")
+                .is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_restore_rejects_a_missing_directory_and_preserves_history_for_retry() {
+        let state = test_state();
+        let user_id = "restore-missing-terminal-cwd";
+        let token = issue_access_token(&state.config().jwt_secret, user_id, "synthetic-user");
+        let folder = tempfile::tempdir().expect("test folder should exist");
+        let cwd = folder.path().join("removed-workspace");
+        write_terminal_session_fixture(
+            &state,
+            user_id,
+            "missing-workspace",
+            json!({
+                "id": "missing-workspace", "title": "Saved terminal",
+                "shell": if cfg!(windows) { "C:\\Windows\\System32\\cmd.exe" } else { "/bin/sh" },
+                "cwd": cwd.to_string_lossy(),
+                "createdAt": "2026-04-05T14:00:00Z", "updatedAt": "2026-04-05T14:30:00Z",
+                "history": [{ "text": "retained output", "ts": 1000, "seq": 1 }]
+            }),
+        );
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/terminal/missing-workspace/restore")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let status = response.status();
+        if status.is_success() {
+            state
+                .terminal_manager()
+                .close(user_id, "missing-workspace")
+                .await
+                .expect("unexpected session should close");
+        }
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let saved = state
+            .terminal_manager()
+            .get_session_history(user_id, "missing-workspace", &Default::default())
+            .await
+            .expect("saved history should load")
+            .expect("saved terminal should remain");
+        assert_eq!(
+            saved
+                .history
+                .iter()
+                .map(|event| event.text.as_str())
+                .collect::<Vec<_>>(),
+            ["retained output"]
+        );
+        let sessions = state
+            .terminal_manager()
+            .list_sessions(user_id)
+            .await
+            .expect("sessions should list");
+        assert!(!sessions[0].is_active);
+
+        fs::create_dir(&cwd).expect("restored workspace should exist");
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/terminal/missing-workspace/restore")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from("{}"))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let status = response.status();
+        state
+            .terminal_manager()
+            .close(user_id, "missing-workspace")
+            .await
+            .expect("restored terminal should close");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "restoring should succeed when its workspace exists again"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_create_returns_resolved_cwd_matching_inventory_for_directory_symlinks() {
+        let state = test_state();
+        let user_id = "terminal-symlink-cwd";
+        let token = issue_access_token(&state.config().jwt_secret, user_id, "synthetic-user");
+        let folder = tempfile::tempdir().expect("test folder should exist");
+        let workspace = folder.path().join("workspace");
+        let alias = folder.path().join("workspace-alias");
+        fs::create_dir(&workspace).expect("workspace should exist");
+        std::os::unix::fs::symlink(&workspace, &alias).expect("workspace alias should exist");
+        let router = app(state.clone());
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/terminal")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        json!({ "cwd": alias, "shell": "/bin/sh" }).to_string(),
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+        let create_status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let created: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = created["session"]["id"].as_str().unwrap();
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/terminal")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let inventory_status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let inventory: Value = serde_json::from_slice(&body).unwrap();
+        state
+            .terminal_manager()
+            .close(user_id, session_id)
+            .await
+            .expect("synthetic shell should close before assertions");
+
+        assert_eq!(create_status, StatusCode::CREATED);
+        assert_eq!(inventory_status, StatusCode::OK);
+        assert_eq!(inventory["sessions"][0]["id"], session_id);
+        assert_eq!(created["session"]["cwd"], inventory["sessions"][0]["cwd"]);
+        let returned_cwd = created["session"]["cwd"].as_str().unwrap();
+        assert_ne!(returned_cwd, alias.to_str().unwrap());
+        assert_eq!(
+            fs::canonicalize(returned_cwd).unwrap(),
+            fs::canonicalize(&workspace).unwrap()
+        );
     }
 
     #[cfg(not(windows))]
@@ -6553,7 +9089,10 @@ mod tests {
             serde_json::from_slice(&state_body).expect("state payload should deserialize");
         assert_eq!(
             state_payload["projectInfo"]["cwd"],
-            repo_path.to_string_lossy().to_string()
+            fs::canonicalize(&repo_path)
+                .expect("workspace should resolve")
+                .to_string_lossy()
+                .to_string()
         );
         assert_eq!(state_payload["projectInfo"]["projectType"], "rust");
         assert_eq!(state_payload["projectInfo"]["startCommand"], "cargo run");
@@ -6603,7 +9142,7 @@ mod tests {
             serde_json::from_slice(&get_thread_body).expect("thread payload should deserialize");
         assert_eq!(
             get_thread_payload["thread"]["projectPath"],
-            repo_path.to_string_lossy().to_string()
+            normalize_filesystem_path(&repo_path)
         );
 
         let delete_response = app
@@ -7096,7 +9635,9 @@ mod tests {
             .await
             .expect("body should collect")
             .to_bytes();
-        assert_eq!(preview_body.as_ref(), b"<h1>Rust Preview</h1>");
+        let preview_html = std::str::from_utf8(&preview_body).expect("preview should remain UTF-8");
+        assert!(preview_html.starts_with("<h1>Rust Preview</h1>"));
+        assert!(preview_html.contains("data-preview-inspector=\"true\""));
 
         let proxy_logs_response = app
             .clone()
@@ -7131,7 +9672,7 @@ mod tests {
             )
             .await
             .expect("router should respond");
-        assert_eq!(storage_response.status(), StatusCode::OK);
+        assert_eq!(storage_response.status(), StatusCode::NOT_IMPLEMENTED);
 
         let invalid_storage_response = app
             .oneshot(
@@ -7283,11 +9824,14 @@ mod tests {
             &bin_path,
             r#"#!/bin/sh
 mkdir -p "$TERMINAL_V4_RECORDING_OUTPUT_DIR"
-trap 'touch "$TERMINAL_V4_RECORDING_OUTPUT_DIR/test-recording.webm"; exit 0' TERM INT HUP
 echo READY
-while true; do
-  sleep 1
+while IFS= read -r command; do
+  if [ "$command" = STOP ]; then
+    touch "$TERMINAL_V4_RECORDING_OUTPUT_DIR/test-recording.webm"
+    exit 0
+  fi
 done
+exit 1
 "#,
         )
         .expect("fake node script should write");
@@ -7400,10 +9944,16 @@ done
             String::from_utf8(preview_body.to_vec()).expect("html response should be utf-8");
         assert!(preview_html.contains("data-preview-debug"));
         assert!(preview_html.contains(&format!(r#"<base href="/preview/{port}/">"#)));
-        assert!(preview_html.contains(&format!(r#"href="/preview/{port}/styles.css""#)));
-        assert!(preview_html.contains(&format!(r#"src="/preview/{port}/main.js""#)));
-        assert!(preview_html.contains(&format!(r#"from "/preview/{port}/@react-refresh""#)));
-        assert!(preview_html.contains(&format!(r#"import("/preview/{port}/src/main.jsx")"#)));
+        assert!(preview_html.contains(&format!(
+            r#"href="/preview/{port}/styles.css?previewToken="#
+        )));
+        assert!(preview_html.contains(&format!(r#"src="/preview/{port}/main.js?previewToken="#)));
+        assert!(preview_html.contains(&format!(
+            r#"from "/preview/{port}/@react-refresh?previewToken="#
+        )));
+        assert!(preview_html.contains(&format!(
+            r#"import("/preview/{port}/src/main.jsx?previewToken="#
+        )));
 
         let css_response = app
             .clone()
@@ -7424,7 +9974,9 @@ done
             .expect("body should collect")
             .to_bytes();
         let css_text = String::from_utf8(css_body.to_vec()).expect("css should be utf-8");
-        assert!(css_text.contains(&format!(r#"url("/preview/{port}/assets/bg.png")"#)));
+        assert!(css_text.contains(&format!(
+            r#"url("/preview/{port}/assets/bg.png?previewToken="#
+        )));
 
         let cookies_response = app
             .clone()
@@ -7510,8 +10062,8 @@ done
         assert_eq!(response.status(), reqwest::StatusCode::OK);
         let body = response.text().await.expect("response body should read");
         assert!(body.contains("data-preview-debug"));
-        assert!(body.contains(r#"href="/styles.css""#));
-        assert!(body.contains(r#"src="/main.js""#));
+        assert!(body.contains(r#"href="/styles.css?previewToken="#));
+        assert!(body.contains(r#"src="/main.js?previewToken="#));
 
         app_handle.abort();
         upstream_handle.abort();
@@ -7635,6 +10187,97 @@ done
         );
 
         let _ = socket.close(None).await;
+        app_handle.abort();
+        upstream_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn dev_proxy_forwarding_removes_consumed_credentials_and_keeps_business_tokens() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let upstream = axum::Router::new().route(
+            "/owned",
+            axum::routing::get(
+                |uri: axum::http::Uri, headers: axum::http::HeaderMap, ws: WebSocketUpgrade| async move {
+                    let payload = json!({"query":uri.query().unwrap_or(""),
+                    "authorization":headers.get("authorization").and_then(|v|v.to_str().ok()),
+                    "cookie":headers.get("cookie").and_then(|v|v.to_str().ok()),
+                    "referer":headers.get("referer").and_then(|v|v.to_str().ok())});
+                    ws.on_upgrade(move |mut socket| async move {
+                        let _ = socket
+                            .send(axum::extract::ws::Message::Text(payload.to_string().into()))
+                            .await;
+                        let _ = socket.recv().await;
+                    })
+                },
+            ),
+        );
+        let (upstream_port, upstream_handle) = spawn_router(upstream).await;
+        let state = test_state();
+        let token = issue_access_token(
+            &state.config().jwt_secret,
+            "dev-credential-fixture",
+            "synthetic",
+        );
+        let (app_port, app_handle) = spawn_router(app(state)).await;
+        for (query, bearer, expected) in [
+            (
+                format!("token={token}&previewToken=reserved&topic=owned"),
+                false,
+                vec![("topic", "owned")],
+            ),
+            (
+                "token=business&previewToken=reserved&topic=owned".into(),
+                true,
+                vec![("token", "business"), ("topic", "owned")],
+            ),
+            (
+                format!("token={token}&token=business&topic=owned"),
+                false,
+                vec![("topic", "owned")],
+            ),
+        ] {
+            let url =
+                format!("ws://127.0.0.1:{app_port}/api/dev-proxy-ws/{upstream_port}/owned?{query}");
+            let mut request = url.into_client_request().unwrap();
+            if bearer {
+                request
+                    .headers_mut()
+                    .insert("authorization", format!("Bearer {token}").parse().unwrap());
+            }
+            request
+                .headers_mut()
+                .insert("cookie", "private=synthetic".parse().unwrap());
+            request
+                .headers_mut()
+                .insert("referer", "http://fixture.invalid/private".parse().unwrap());
+            let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+            let message = tokio::time::timeout(Duration::from_secs(3), socket.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let payload: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            let pairs: Vec<_> =
+                url::form_urlencoded::parse(payload["query"].as_str().unwrap().as_bytes())
+                    .into_owned()
+                    .collect();
+            assert_eq!(
+                pairs,
+                expected
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                (
+                    &payload["authorization"],
+                    &payload["cookie"],
+                    &payload["referer"]
+                ),
+                (&Value::Null, &Value::Null, &Value::Null)
+            );
+            socket.close(None).await.unwrap();
+        }
         app_handle.abort();
         upstream_handle.abort();
     }
@@ -7815,6 +10458,175 @@ done
     }
 
     #[tokio::test]
+    async fn structured_inventory_omits_transcripts_and_preserves_owned_metadata_and_detail_routes()
+    {
+        let state =
+            test_state_with_structured_provider(Arc::new(FakeStructuredProvider::new(false)));
+        let manager = state.structured_session_manager();
+        let workspace = state.config().data_dir.canonicalize().unwrap();
+        let cwd = workspace.to_str().unwrap();
+        let owner = "inventory-owner";
+        let other = "inventory-other";
+        let session = manager
+            .create_session(
+                owner,
+                cwd,
+                Some("claude"),
+                Some("sonnet"),
+                Some("Inventory fixture"),
+            )
+            .await
+            .unwrap();
+        let other_session = manager
+            .create_session(other, cwd, Some("claude"), None, Some("Other fixture"))
+            .await
+            .unwrap();
+        manager
+            .send_message(owner, &session.id, "Inventory event fixture")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if manager
+                    .get_session(owner, &session.id)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .events
+                    .last()
+                    .is_some_and(|event| matches!(event, StructuredSessionEvent::SessionEnded { reason, .. } if reason == "completed"))
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let router = app(state.clone());
+        let owner_token = issue_access_token(&state.config().jwt_secret, owner, "fixture");
+        let other_token = issue_access_token(&state.config().jwt_secret, other, "fixture");
+        for (token, expected_id, expected_seq) in [
+            (&owner_token, &session.id, 4),
+            (&other_token, &other_session.id, 0),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/structured/sessions?view=inventory")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let inventory: Value = serde_json::from_slice(&body).unwrap();
+            let entries = inventory.as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0]["id"], *expected_id);
+            assert_eq!(entries[0]["provider"], "claude");
+            assert_eq!(entries[0]["status"], "idle");
+            if expected_id == &session.id {
+                assert_eq!(
+                    (entries[0]["title"].as_str(), entries[0]["model"].as_str()),
+                    (Some("Inventory fixture"), Some("sonnet"))
+                );
+            }
+            assert_eq!(
+                (
+                    entries[0]["latestSeq"].as_i64(),
+                    entries[0]["statusSeq"].as_i64()
+                ),
+                (Some(expected_seq), Some(expected_seq))
+            );
+            assert!(
+                entries[0].get("events").is_none(),
+                "Inventory must not transport transcript bodies"
+            );
+            assert_eq!(
+                (
+                    entries[0]["cwd"].as_str(),
+                    entries[0]["thread"]["projectPath"].as_str()
+                ),
+                (Some(cwd), Some(cwd))
+            );
+        }
+        for uri in [
+            "/api/structured/sessions".to_string(),
+            format!("/api/structured/sessions/{}", session.id),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("Authorization", format!("Bearer {owner_token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let payload: Value = serde_json::from_slice(&body).unwrap();
+            let detail = if payload.is_array() {
+                &payload[0]
+            } else {
+                &payload
+            };
+            assert_eq!(
+                (
+                    detail["id"].as_str(),
+                    detail["title"].as_str(),
+                    detail["provider"].as_str(),
+                    detail["model"].as_str()
+                ),
+                (
+                    Some(session.id.as_str()),
+                    Some("Inventory fixture"),
+                    Some("claude"),
+                    Some("sonnet")
+                )
+            );
+            let events = detail["events"].as_array().unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|event| (event["type"].as_str(), event["seq"].as_i64()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (Some("message_completed"), Some(1)),
+                    (Some("session_started"), Some(2)),
+                    (Some("status"), Some(3)),
+                    (Some("session_ended"), Some(4)),
+                ]
+            );
+            assert_eq!(
+                (events[0]["role"].as_str(), events[0]["content"].as_str()),
+                (Some("user"), Some("Inventory event fixture"))
+            );
+            assert!(events[0]["messageId"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty()));
+            assert_eq!(events[3]["reason"], "completed");
+        }
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/api/structured/sessions?view=unknown")
+                    .header("Authorization", format!("Bearer {owner_token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn structured_session_routes_support_crud() {
         let provider = Arc::new(FakeStructuredProvider::new(false));
         let state = test_state_with_structured_provider(provider);
@@ -7983,6 +10795,106 @@ done
         assert_eq!(get_thread_payload["thread"]["topic"], "Review Rust rewrite");
         assert_eq!(get_thread_payload["thread"]["pinned"], true);
 
+        for payload in [
+            json!({"snoozeForSeconds": 0}),
+            json!({"snoozeForSeconds": 60, "wakeSnooze": true}),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(format!("/api/structured/sessions/{session_id}/thread"))
+                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let snooze_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/structured/sessions/{session_id}/thread"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({"snoozeForSeconds": 3600}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(snooze_response.status(), StatusCode::OK);
+        let snooze_payload: Value = serde_json::from_slice(
+            &snooze_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(snooze_payload["threadLifecycleVersion"], 1);
+        assert!(snooze_payload["thread"]["snooze"]["untilMs"]
+            .as_i64()
+            .is_some());
+
+        let inventory_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/structured/sessions?view=inventory")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(inventory_response.status(), StatusCode::OK);
+        let inventory_payload: Value = serde_json::from_slice(
+            &inventory_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(inventory_payload[0]["threadLifecycle"]["snoozed"], true);
+        assert_eq!(
+            inventory_payload[0]["threadLifecycle"]["requiresAttention"],
+            false
+        );
+
+        let wake_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/structured/sessions/{session_id}/thread"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(json!({"wakeSnooze": true}).to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(wake_response.status(), StatusCode::OK);
+        let wake_payload: Value = serde_json::from_slice(
+            &wake_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes(),
+        )
+        .unwrap();
+        assert!(wake_payload["thread"].get("snooze").is_none());
+
         let delete_response = app
             .clone()
             .oneshot(
@@ -8005,6 +10917,86 @@ done
         let delete_payload: Value =
             serde_json::from_slice(&delete_body).expect("delete payload should deserialize");
         assert_eq!(delete_payload, json!({ "status": "deleted" }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn structured_settlement_routes_require_owner_and_publish_lifecycle() {
+        let data = tempfile::tempdir().unwrap();
+        let state = crate::state::AppState::new_runtime(AppConfig {
+            data_dir: data.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let owner = "settlement-owner";
+        let token = issue_access_token(&state.config().jwt_secret, owner, "owner");
+        let foreign = issue_access_token(&state.config().jwt_secret, "other-owner", "other");
+        let workspace = state.config().data_dir.join("settlement-workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let session = state
+            .structured_session_manager()
+            .create_session(
+                owner,
+                workspace.to_str().unwrap(),
+                Some("deepseek"),
+                Some("deepseek-chat"),
+                None,
+            )
+            .await
+            .unwrap();
+        let app = app(state.clone());
+        let patch = |token: &str, value: bool| {
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/structured/sessions/{}/thread", session.id))
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(json!({"settled":value}).to_string()))
+                .unwrap()
+        };
+        assert_eq!(
+            app.clone()
+                .oneshot(patch(&foreign, true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = app.clone().oneshot(patch(&token, true)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["threadSettlementVersion"], 1);
+        assert_eq!(
+            body["thread"]["settlement"]["queueFingerprint"]
+                .as_str()
+                .unwrap()
+                .len(),
+            64
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/structured/sessions?view=inventory")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let inventory: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(inventory[0]["threadLifecycle"]["settled"], true);
+        let response = app.oneshot(patch(&token, false)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert!(body["thread"].get("settlement").is_none());
+        state.structured_session_manager().shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -8619,6 +11611,188 @@ done
             .unwrap();
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn structured_create_accepts_canonical_saved_profile_ids_beyond_static_provider_limit() {
+        use crate::v4_agent::profile::Binding;
+        use terminal_v4_provider_connections::Transport;
+        let state = test_state();
+        let workspace = state.config().data_dir.join("own-profile-workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let token = issue_access_token("test-secret", "own-profile-owner", "own-profile-owner");
+        let app = app(state.clone());
+        let request = |uri: &str, method: &str, body: Value| {
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        for (provider, transport) in [
+            ("lmstudio", Transport::OpenAiChat),
+            ("actual", Transport::OpenAiResponses),
+        ] {
+            let profile = uuid::Uuid::new_v4().to_string();
+            let saved = app.clone().oneshot(request(
+                &format!("/api/agent/connections/{profile}"), "PUT",
+                json!({"operationId":uuid::Uuid::new_v4(),"expectedRevision":null,"provider":provider,"mode":"local","baseUrl":"http://127.0.0.1:9/v1","auth":{"type":"none"}}),
+            )).await.unwrap();
+            assert_eq!(saved.status(), StatusCode::OK);
+            let saved: Value =
+                serde_json::from_slice(&saved.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            let id = Binding::provider_id(
+                &profile,
+                saved["savedRevision"].as_str().unwrap(),
+                transport,
+            );
+            assert!(id.len() > 80);
+            let response = app.clone().oneshot(request(
+                "/api/structured/sessions", "POST",
+                json!({"cwd":workspace,"provider":id,"model":"own-model","title":"Own saved connection"}),
+            )).await.unwrap();
+            let status = response.status();
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            assert_eq!(status, StatusCode::CREATED, "{body}");
+            assert_eq!(body["provider"], id);
+            assert_eq!(body["model"], "own-model");
+            assert_eq!(body["runtime"], "v4");
+            for invalid in [id.to_uppercase(), format!("{id}:extra"), "x".repeat(81)] {
+                let response = app
+                    .clone()
+                    .oneshot(request(
+                        "/api/structured/sessions",
+                        "POST",
+                        json!({"cwd":workspace,"provider":invalid,"model":"own-model"}),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            }
+        }
+        state.structured_session_manager().shutdown().await.unwrap();
+        assert!(state.provider_connections().shutdown().await);
+    }
+
+    #[tokio::test]
+    async fn codex_selection_route_updates_owned_idle_chat_and_rejects_invalid_or_other_owner() {
+        let state = test_state();
+        let owner = "selection-route-owner";
+        let session = state
+            .structured_session_manager()
+            .create_with_selection(
+                owner,
+                state.config().data_dir.to_str().unwrap(),
+                Some("codex"),
+                Some("old-model"),
+                Some("low"),
+                Some("Keep this chat"),
+            )
+            .await
+            .unwrap();
+        let router = app(state.clone());
+        let owner_token = issue_access_token(&state.config().jwt_secret, owner, "fixture");
+        let other_token = issue_access_token(
+            &state.config().jwt_secret,
+            "selection-route-other",
+            "fixture",
+        );
+        for (token, body, status) in [
+            (
+                Some(&owner_token),
+                json!({ "model": "new-model", "reasoning": "high", "serviceTier": "fast" }),
+                StatusCode::OK,
+            ),
+            (
+                Some(&owner_token),
+                json!({ "model": "", "reasoning": "high" }),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some(&owner_token),
+                json!({ "model": "new-model", "reasoning": "high", "serviceTier": "invalid" }),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                Some(&other_token),
+                json!({ "model": "other-model", "reasoning": "low" }),
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                None,
+                json!({ "model": "other-model" }),
+                StatusCode::UNAUTHORIZED,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/structured/sessions/{}/selection", session.id))
+                .header("Content-Type", "application/json");
+            if let Some(token) = token {
+                request = request.header("Authorization", format!("Bearer {token}"));
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(Body::from(body.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            if status == StatusCode::OK {
+                let body: Value = serde_json::from_slice(
+                    &response.into_body().collect().await.unwrap().to_bytes(),
+                )
+                .unwrap();
+                assert_eq!(body["serviceTier"], "fast");
+                assert_eq!(
+                    (
+                        body["id"].as_str(),
+                        body["model"].as_str(),
+                        body["reasoning"].as_str(),
+                        body["title"].as_str()
+                    ),
+                    (
+                        Some(session.id.as_str()),
+                        Some("new-model"),
+                        Some("high"),
+                        Some("Keep this chat")
+                    )
+                );
+            }
+        }
+        let reset_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/structured/sessions/{}/selection", session.id))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", format!("Bearer {owner_token}"))
+                    .body(Body::from(
+                        json!({"model":"new-model","reasoning":"high","serviceTier":null})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reset_response.status(), StatusCode::OK);
+        let unchanged = state
+            .structured_session_manager()
+            .get_session(owner, &session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.service_tier, None);
+        assert_eq!(
+            (unchanged.model.as_deref(), unchanged.reasoning.as_deref()),
+            (Some("new-model"), Some("high"))
+        );
+    }
+
     fn test_state() -> ApiState {
         test_state_with_external_auth(None)
     }
@@ -8928,6 +12102,27 @@ done
             Ok(())
         }
 
+        #[cfg(unix)]
+        async fn send_input_before_expiry(
+            &self,
+            text: &str,
+            expires_at_ms: i64,
+        ) -> Result<(), String> {
+            let tx = self.tx.lock().await;
+            if crate::v4_agent::interaction::now_ms() >= expires_at_ms {
+                return Err("Credential expired before stdin delivery".into());
+            }
+            self.input_hits.fetch_add(1, Ordering::SeqCst);
+            if let Some(tx) = tx.as_ref() {
+                let _ = tx.send(StructuredSessionEvent::Status {
+                    ts: 4,
+                    seq: next_fake_seq(&self.sequence),
+                    status: format!("input:{}", text.replace('\r', "\\r").replace('\n', "\\n")),
+                });
+            }
+            Ok(())
+        }
+
         async fn send_approval(&self, approved: bool) -> Result<(), String> {
             self.approval_hits.fetch_add(1, Ordering::SeqCst);
             if let Some(tx) = self.tx.lock().await.as_ref() {
@@ -8942,6 +12137,39 @@ done
                 });
             }
             Ok(())
+        }
+
+        #[cfg(unix)]
+        async fn send_paired_decision(
+            &self,
+            id: Option<&str>,
+            approved: bool,
+            answers: Option<Value>,
+            for_session: bool,
+            context: Arc<crate::structured::PairedDecisionContext>,
+        ) -> Result<crate::v4_agent::interaction::DecisionReceipt, String> {
+            if answers.is_some() || for_session {
+                return Err("Fixture does not support that approval".into());
+            }
+            let tx = self.tx.lock().await;
+            context.check_for_test()?;
+            self.approval_hits.fetch_add(1, Ordering::SeqCst);
+            if let Some(tx) = tx.as_ref() {
+                let _ = tx.send(StructuredSessionEvent::Status {
+                    ts: 4,
+                    seq: next_fake_seq(&self.sequence),
+                    status: if approved {
+                        "approved".into()
+                    } else {
+                        "rejected".into()
+                    },
+                });
+            }
+            Ok(crate::v4_agent::interaction::DecisionReceipt {
+                status: "accepted".into(),
+                approval_id: id.unwrap_or("").into(),
+                approved,
+            })
         }
 
         async fn interrupt(&self) -> Result<(), String> {
@@ -9118,5 +12346,374 @@ mod file_mutation_rewind_tests {
         assert_eq!(std::fs::read_to_string(&existing).unwrap(), "original");
         assert!(!checkout.join("new-directory").exists());
         assert!(!checkout.join("renamed.txt").exists());
+    }
+}
+
+#[cfg(test)]
+mod preview_framing_regression {
+    #[test]
+    fn rewritten_preview_has_one_valid_body_length_and_no_upstream_transfer_encoding() {
+        let mut response = crate::preview::proxy::ProxyResponse {
+            status: 200,
+            headers: axum::http::HeaderMap::new(),
+            body: b"rewritten html".to_vec(),
+        };
+        response.headers.insert(
+            axum::http::header::TRANSFER_ENCODING,
+            "chunked".parse().unwrap(),
+        );
+        super::update_proxy_response_length(&mut response);
+        assert!(!response
+            .headers
+            .contains_key(axum::http::header::TRANSFER_ENCODING));
+        assert_eq!(response.headers[axum::http::header::CONTENT_LENGTH], "14");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod browser_checked_cleanup_api_red {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+    async fn setup() -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        AppState,
+        String,
+        crate::v4_agent::browser::CleanupProbe,
+    ) {
+        let data = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let state = AppState::new(terminal_v4_core::AppConfig {
+            data_dir: data.path().into(),
+            jwt_secret: "checked-browser-api".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let id = state
+            .structured_session_manager()
+            .create_session(
+                "checked-owner",
+                workspace.path().to_str().unwrap(),
+                Some("deepseek"),
+                Some("deepseek-v4-pro"),
+                None,
+            )
+            .await
+            .unwrap()
+            .id;
+        let probe = state
+            .structured_session_manager()
+            .seed_browser_cleanup_test_client("checked-owner", &id)
+            .await;
+        (data, workspace, state, id, probe)
+    }
+    fn request(method: &str, path: &str, owner: &str, body: Value) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .header(
+                "authorization",
+                format!(
+                    "Bearer {}",
+                    crate::auth::issue_access_token("checked-browser-api", owner, owner)
+                ),
+            )
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+    async fn value(response: axum::response::Response) -> Value {
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap()
+    }
+    #[tokio::test]
+    async fn browser_checked_cleanup_stop_never_confirms_failed_profile_and_explicit_retry_succeeds(
+    ) {
+        let (_data, _workspace, state, id, probe) = setup().await;
+        let router = app(state.clone());
+        probe.fail(Some(crate::v4_agent::browser::CleanupPhase::Profile));
+        let response = router
+            .clone()
+            .oneshot(request(
+                "POST",
+                &format!("/api/structured/sessions/{id}/interrupt"),
+                "checked-owner",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert!(
+            probe.calls(crate::v4_agent::browser::CleanupPhase::Profile) > 0,
+            "Stop must attempt checked browser profile cleanup"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Stop must not acknowledge unconfirmed browser cleanup"
+        );
+        let body = value(response).await;
+        assert_ne!(body["cleanupConfirmed"], true);
+        assert!(probe.profile().exists());
+        let snapshot = state
+            .structured_session_manager()
+            .get_session("checked-owner", &id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot.status.as_deref(), Some("cleanup_required"));
+        let response=router.clone().oneshot(request("POST",&format!("/api/structured/sessions/{id}/input"),"checked-owner",json!({"requestId":uuid::Uuid::new_v4(),"text":"must remain blocked","fallbackToMessage":true}))).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        probe.fail(None);
+        let response = router
+            .oneshot(request(
+                "POST",
+                &format!("/api/structured/sessions/{id}/interrupt"),
+                "checked-owner",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            value(response).await,
+            json!({"status":"cancelled","cleanupConfirmed":true})
+        );
+        assert!(!probe.profile().exists());
+        assert_eq!(probe.spawns(), 1);
+    }
+    #[tokio::test]
+    async fn browser_checked_cleanup_config_saved_but_failed_cleanup_is503_and_same_save_retries() {
+        let (data, _workspace, state, id, probe) = setup().await;
+        let router = app(state.clone());
+        probe.fail(Some(crate::v4_agent::browser::CleanupPhase::Profile));
+        let foreign = router
+            .clone()
+            .oneshot(request(
+                "PUT",
+                "/api/agent/browser",
+                "checked-foreign",
+                json!({"enabled":false}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::OK);
+        assert!(probe.profile().exists());
+        let response = router
+            .clone()
+            .oneshot(request(
+                "PUT",
+                "/api/agent/browser",
+                "checked-owner",
+                json!({"enabled":false}),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            probe.calls(crate::v4_agent::browser::CleanupPhase::Profile) > 0,
+            "Config PUT must attempt checked browser profile cleanup"
+        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = value(response).await;
+        assert_eq!(body["settingsSaved"], true);
+        assert_eq!(body["cleanupConfirmed"], false);
+        assert_eq!(body["config"]["enabled"], false);
+        assert!(
+            !crate::v4_agent::browser::load_config(data.path(), "checked-owner")
+                .unwrap()
+                .enabled
+        );
+        assert!(probe.profile().exists());
+        assert_eq!(
+            state
+                .structured_session_manager()
+                .get_session("checked-owner", &id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status
+                .as_deref(),
+            Some("cleanup_required")
+        );
+        probe.fail(None);
+        let response = router
+            .oneshot(request(
+                "PUT",
+                "/api/agent/browser",
+                "checked-owner",
+                json!({"enabled":false}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(value(response).await["enabled"], false);
+        assert!(!probe.profile().exists());
+        assert_eq!(probe.spawns(), 1);
+    }
+    #[tokio::test]
+    async fn browser_checked_cleanup_delete_failure_preserves_session_and_retained_profile_until_delete_retry(
+    ) {
+        let (_data, _workspace, state, id, probe) = setup().await;
+        let router = app(state.clone());
+        let profile = probe.profile();
+        probe.fail(Some(crate::v4_agent::browser::CleanupPhase::Profile));
+        let response = router
+            .clone()
+            .oneshot(request(
+                "DELETE",
+                &format!("/api/structured/sessions/{id}"),
+                "checked-owner",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = value(response).await;
+        let retained = state
+            .structured_session_manager()
+            .get_session("checked-owner", &id)
+            .await
+            .unwrap();
+        let profile_retained = profile.exists();
+        let intake=router.clone().oneshot(request("POST",&format!("/api/structured/sessions/{id}/input"),"checked-owner",json!({"requestId":uuid::Uuid::new_v4(),"text":"deletion cleanup remains blocked","fallbackToMessage":true}))).await.unwrap();
+        probe.fail(None);
+        let retry = router
+            .oneshot(request(
+                "DELETE",
+                &format!("/api/structured/sessions/{id}"),
+                "checked-owner",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        let gone = probe.owned_processes_gone().await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Existing Delete error contract must not acknowledge failed cleanup: {body}"
+        );
+        assert!(
+            retained.is_some() && profile_retained,
+            "Failed Delete removed session/profile ownership"
+        );
+        assert_eq!(intake.status(), StatusCode::CONFLICT);
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(value(retry).await, json!({"status":"deleted"}));
+        assert!(state
+            .structured_session_manager()
+            .get_session("checked-owner", &id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!profile.exists() && gone);
+        assert_eq!(probe.spawns(), 1);
+    }
+
+    #[tokio::test]
+    async fn browser_checked_cleanup_shutdown_propagates_profile_error_and_retains_owner_for_retry()
+    {
+        let (_data, _workspace, state, id, probe) = setup().await;
+        let profile = probe.profile();
+        probe.fail(Some(crate::v4_agent::browser::CleanupPhase::Profile));
+        let first = state.structured_session_manager().shutdown().await;
+        let error = first.as_ref().err().cloned().unwrap_or_default();
+        let snapshot = state
+            .structured_session_manager()
+            .get_session("checked-owner", &id)
+            .await
+            .unwrap();
+        let retained = profile.exists();
+        probe.fail(None);
+        let retry = state.structured_session_manager().shutdown().await;
+        let gone = probe.owned_processes_gone().await;
+        assert!(
+            first.is_err() && error.contains("synthetic browser profile failure"),
+            "Shutdown omitted browser failure: {error}"
+        );
+        assert!(
+            snapshot.is_some_and(|snapshot| snapshot.status.as_deref() == Some("cleanup_required"))
+                && retained
+        );
+        assert!(retry.is_ok() && !profile.exists() && gone);
+        assert_eq!(probe.spawns(), 1);
+    }
+
+    #[tokio::test]
+    async fn browser_checked_cleanup_cancelled_http_stop_waiter_keeps_owned_cleanup_running() {
+        let (_data, _workspace, state, id, probe) = setup().await;
+        let router = app(state.clone());
+        let profile = probe.profile();
+        let gate = probe.hold(crate::v4_agent::browser::CleanupPhase::Profile);
+        let path = format!("/api/structured/sessions/{id}/interrupt");
+        let waiting = tokio::spawn(async move {
+            router
+                .oneshot(request("POST", &path, "checked-owner", Value::Null))
+                .await
+        });
+        let entered = gate.wait_entered().await;
+        waiting.abort();
+        let _ = waiting.await;
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            state
+                .structured_session_manager()
+                .get_session("checked-owner", &id),
+        )
+        .await;
+        let retained_profile = profile.exists();
+        let active = gate.active();
+        gate.release();
+        let finished = gate.wait_finished().await;
+        let retry = app(state.clone())
+            .oneshot(request(
+                "POST",
+                &format!("/api/structured/sessions/{id}/interrupt"),
+                "checked-owner",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        let gone = probe.owned_processes_gone().await;
+        assert!(entered && finished && gone);
+        assert!(retained_profile && active == 1);
+        assert!(
+            matches!(pending,Ok(Ok(Some(snapshot))) if snapshot.status.as_deref()==Some("cleanup_required")),
+            "Pending Stop must remain readable without holding its state lock"
+        );
+        assert_eq!(retry.status(), StatusCode::OK);
+        assert_eq!(
+            value(retry).await,
+            json!({"status":"cancelled","cleanupConfirmed":true})
+        );
+        assert!(!profile.exists());
+        assert_eq!(gate.entered(), 1);
+        assert_eq!(gate.peak(), 1);
+        assert_eq!(probe.spawns(), 1);
+    }
+}
+
+#[cfg(test)]
+mod attachment_name_tests {
+    #[test]
+    fn attachment_names_keep_only_a_plain_file_name() {
+        assert_eq!(
+            [
+                super::attachment_name("../../etc/passwd"),
+                super::attachment_name("C:\\Users\\me\\report.pdf"),
+                super::attachment_name(".env"),
+                super::attachment_name(""),
+                super::attachment_name("notes: draft?.md"),
+            ],
+            [
+                "passwd",
+                "report.pdf",
+                "env",
+                "attachment",
+                "notes_ draft_.md"
+            ]
+        );
     }
 }

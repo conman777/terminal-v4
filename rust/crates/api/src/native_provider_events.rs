@@ -13,6 +13,9 @@ pub(crate) fn provider_failed(provider: &str, stdout: &str) -> bool {
             }
             ("codex", Some("error" | "turn.failed")) => failed = true,
             ("codex", Some("turn.completed")) => failed = false,
+            (_, Some("v4.result")) if crate::v4_agent::supports(provider) => {
+                failed = event["is_error"] == true
+            }
             _ => {}
         }
     }

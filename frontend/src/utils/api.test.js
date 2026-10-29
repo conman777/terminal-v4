@@ -5,7 +5,9 @@ vi.mock('./auth', () => ({
   getAccessToken: vi.fn(() => 'token-1'),
   clearTokens: vi.fn(),
   refreshTokens: vi.fn(async () => ({ accessToken: 'token-2' })),
-  getAuthInitializing: vi.fn(() => false)
+  getAuthInitializing: vi.fn(() => false),
+  captureAuthScope: vi.fn(() => 'fixture-auth-scope'),
+  isAuthScopeCurrent: vi.fn(() => true)
 }));
 
 import { apiFetch } from './api';

@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
+import { PreviewIcon } from './PreviewIcon';
+import './PreviewPanel.css';
 
 function isGenericRuntimeProcess(processName) {
   if (!processName || typeof processName !== 'string') return true;
@@ -45,6 +47,8 @@ function Tooltip({ children, text, shortcut }) {
       className="tooltip-wrapper"
       onMouseEnter={() => setShow(true)}
       onMouseLeave={() => setShow(false)}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
     >
       {children}
       {show && (
@@ -62,6 +66,8 @@ export function PreviewUrlBar({
   onInputUrlChange,
   activePorts,
   activePreviewScope,
+  previewLoaded = false,
+  hasTerminalSessions = true,
   previewPort,
   showPortDropdown,
   onTogglePortDropdown,
@@ -103,9 +109,14 @@ export function PreviewUrlBar({
   onClose,
 }) {
   const [portSearch, setPortSearch] = useState('');
+  const portButtonRef = useRef(null);
+  const toolsButtonRef = useRef(null);
+  const portPickerId = useId();
+  const toolsId = useId();
+  const scopeLabel = previewLoaded ? 'Active app' : 'Project';
   const activePreviewScopeTitle = useMemo(() => {
     if (!activePreviewScope?.appLabel) return '';
-    const parts = [`Active app: ${activePreviewScope.appLabel}`];
+    const parts = [`${scopeLabel}: ${activePreviewScope.appLabel}`];
     if (activePreviewScope.sessionLabel) {
       parts.push(`Session: ${activePreviewScope.sessionLabel}`);
     }
@@ -113,7 +124,7 @@ export function PreviewUrlBar({
       parts.push(activePreviewScope.cwd);
     }
     return parts.join(' | ');
-  }, [activePreviewScope]);
+  }, [activePreviewScope, scopeLabel]);
 
   const selectablePorts = useMemo(() => {
     const bestByApp = new Map();
@@ -156,22 +167,26 @@ export function PreviewUrlBar({
       });
   }, [selectablePorts, portSearch, previewPort]);
 
-  const rightControlsStyle =
-    alignTerminalControls && Number.isFinite(terminalAlignedWidth) && terminalAlignedWidth > 0
-      ? { width: `${terminalAlignedWidth}px` }
-      : undefined;
-
   return (
     <>
     <div className={`preview-header${alignTerminalControls ? ' align-terminal' : ''}`}>
       <div className="preview-header-left">
         {/* Port selector */}
-        <div className="preview-port-selector" ref={portDropdownRef}>
+        <div className="preview-port-selector" ref={portDropdownRef} onKeyDown={event => {
+          if (event.key === 'Escape' && showPortDropdown) {
+            event.preventDefault(); event.stopPropagation();
+            onTogglePortDropdown(); portButtonRef.current?.focus();
+          }
+        }}>
         <button
+          ref={portButtonRef}
           type="button"
           className={`preview-port-btn ${showPortDropdown ? 'active' : ''}`}
           onClick={onTogglePortDropdown}
           title="Select active port"
+          aria-label="Select active port"
+          aria-expanded={showPortDropdown}
+          aria-controls={portPickerId}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <rect x="2" y="3" width="20" height="14" rx="2" />
@@ -183,7 +198,7 @@ export function PreviewUrlBar({
           )}
         </button>
         {showPortDropdown && (
-          <div className="preview-port-dropdown">
+          <div id={portPickerId} className="preview-port-dropdown">
             <div className="preview-port-dropdown-header">
               <span>Active Ports</span>
               <span className="preview-port-dropdown-count">{selectablePorts.length}</span>
@@ -201,7 +216,7 @@ export function PreviewUrlBar({
               </div>
             )}
             {visiblePorts.length === 0 ? (
-              <div className="preview-port-dropdown-empty">No frontend ports found</div>
+              <div className="preview-port-dropdown-empty" role="status">{portSearch.trim() ? `No ports match “${portSearch.trim()}”` : 'No frontend ports found'}</div>
             ) : (
               <div className="preview-port-dropdown-list">
                 {visiblePorts.map(({ port, process, cwd, frontendLikely, reachable, probeStatus }) => {
@@ -218,6 +233,7 @@ export function PreviewUrlBar({
                     type="button"
                     className={`preview-port-item ${port === previewPort ? 'current' : ''}${hasMeta ? '' : ' no-meta'}`}
                     onClick={() => onSelectPort(port)}
+                    aria-pressed={port === previewPort}
                   >
                     <div className="preview-port-info">
                       <div className="preview-port-header">
@@ -262,16 +278,19 @@ export function PreviewUrlBar({
             onChange={(e) => onInputUrlChange(e.target.value)}
             placeholder="localhost:3000"
             aria-label="Preview URL"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
           />
         </form>
         {activePreviewScope?.appLabel && (
           <div
             className="preview-active-app-badge"
             title={activePreviewScopeTitle}
-            aria-label={`Active app: ${activePreviewScope.appLabel}`}
+            aria-label={`${scopeLabel}: ${activePreviewScope.appLabel}`}
           >
-            <span className="preview-active-app-dot" />
-            <span className="preview-active-app-prefix">Active app</span>
+            {previewLoaded && <span className="preview-active-app-dot" />}
+            <span className="preview-active-app-prefix">{scopeLabel}</span>
             <span className="preview-active-app-value">{activePreviewScope.appLabel}</span>
           </div>
         )}
@@ -287,7 +306,7 @@ export function PreviewUrlBar({
         )}
       </div>
 
-      <div className="preview-header-right" style={rightControlsStyle}>
+      <div className="preview-header-right">
         {/* Navigation buttons */}
         <div className="preview-nav-group">
         <Tooltip text="Go back">
@@ -298,7 +317,7 @@ export function PreviewUrlBar({
             disabled={historyIndex <= 0}
             aria-label="Go back"
           >
-            {'\u2190'}
+            <PreviewIcon name="back" />
           </button>
         </Tooltip>
         <Tooltip text="Go forward">
@@ -309,7 +328,7 @@ export function PreviewUrlBar({
             disabled={historyIndex >= historyStackLength - 1}
             aria-label="Go forward"
           >
-            {'\u2192'}
+            <PreviewIcon name="forward" />
           </button>
         </Tooltip>
         <Tooltip text="Reload" shortcut={'\u2318R'}>
@@ -320,7 +339,7 @@ export function PreviewUrlBar({
             disabled={!iframeSrc}
             aria-label="Reload preview"
           >
-            {isLoading ? '\u22EF' : '\u21BB'}
+            <PreviewIcon name="reload" />
           </button>
         </Tooltip>
         <Tooltip text="Open in New Tab">
@@ -361,6 +380,7 @@ export function PreviewUrlBar({
             onClick={() => onToggleMobileViewport?.()}
             aria-label={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}
             title={mobileViewportEnabled ? 'Use desktop viewport' : 'Use mobile viewport'}
+            aria-pressed={mobileViewportEnabled}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="7" y="2" width="10" height="20" rx="2" />
@@ -376,6 +396,7 @@ export function PreviewUrlBar({
             disabled={!iframeSrc}
             aria-label={inspectMode ? 'Exit inspect element' : 'Inspect element'}
             title={inspectMode ? 'Exit inspect element' : 'Inspect element'}
+            aria-pressed={inspectMode}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M14 4l6 6" />
@@ -393,6 +414,7 @@ export function PreviewUrlBar({
           className={`preview-layout-chip ${desktopLayoutMode === 'preview' ? 'active' : ''}`}
           onClick={() => onSetDesktopLayout?.('preview')}
           title="Preview only"
+          aria-pressed={desktopLayoutMode === 'preview'}
         >
           Preview
         </button>
@@ -400,7 +422,9 @@ export function PreviewUrlBar({
           type="button"
           className={`preview-layout-chip ${desktopLayoutMode === 'split' ? 'active' : ''}`}
           onClick={() => onSetDesktopLayout?.('split')}
+          disabled={!hasTerminalSessions}
           title="Preview + terminal"
+          aria-pressed={desktopLayoutMode === 'split'}
         >
           Split
         </button>
@@ -408,7 +432,8 @@ export function PreviewUrlBar({
           type="button"
           className={`preview-layout-chip ${desktopLayoutMode === 'debug' ? 'active' : ''}`}
           onClick={() => onSetDesktopLayout?.('debug')}
-          title="Preview + terminal + DevTools"
+          title={hasTerminalSessions ? 'Preview + terminal + DevTools' : 'Preview + DevTools'}
+          aria-pressed={desktopLayoutMode === 'debug'}
         >
           Debug
           {logCount > 0 && <span className="preview-log-badge-sm">{logCount}</span>}
@@ -416,13 +441,21 @@ export function PreviewUrlBar({
         </div>
 
         {/* Tools overflow menu */}
-        <div className="preview-tools-menu-wrap" ref={toolsMenuRef}>
+        <div className="preview-tools-menu-wrap" ref={toolsMenuRef} onKeyDown={event => {
+          if (event.key === 'Escape' && showToolsMenu) {
+            event.preventDefault(); event.stopPropagation();
+            onToggleToolsMenu(); toolsButtonRef.current?.focus();
+          }
+        }}>
         <button
+          ref={toolsButtonRef}
           type="button"
           className={`preview-action-btn ${showToolsMenu ? 'active' : ''}`}
           onClick={onToggleToolsMenu}
           aria-label="More browser tools"
           title="More browser tools"
+          aria-expanded={showToolsMenu}
+          aria-controls={toolsId}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="1.5" />
@@ -431,7 +464,7 @@ export function PreviewUrlBar({
           </svg>
         </button>
         {showToolsMenu && (
-          <div className="preview-tools-menu">
+          <div id={toolsId} className="preview-tools-menu">
             <button
               type="button"
               className={`preview-tools-menu-item ${inspectMode ? 'active' : ''}`}
@@ -453,7 +486,7 @@ export function PreviewUrlBar({
               disabled={!webContainerSupported?.supported && !useWebContainer}
               title={!webContainerSupported?.supported ? webContainerSupported?.reason : undefined}
             >
-              {useWebContainer ? 'Use Proxy Mode' : 'Use WebContainer'}
+              Open WebContainer window
             </button>
             <button
               type="button"
@@ -513,7 +546,7 @@ export function PreviewUrlBar({
           title="Close browser"
           aria-label="Close browser"
         >
-          {'\u00D7'}
+          <PreviewIcon name="close" />
         </button>
       </div>
     </div>

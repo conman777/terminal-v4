@@ -1,3 +1,4 @@
+import './UtilityDialogs.css';
 import { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../utils/api';
 
@@ -139,18 +140,18 @@ export function ProcessManagerModal({ isOpen, onClose, projects }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="process-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="process-modal ui-utility-dialog" role="dialog" aria-modal="true" aria-labelledby="process-manager-title" onClick={(e) => e.stopPropagation()}>
         <div className="process-modal-header">
-          <h2>Process Manager</h2>
+          <h2 id="process-manager-title">Process Manager</h2>
           <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
-        {error && <div className="process-error">{error}</div>}
+        {error && <div role="alert" className="process-error">{error}</div>}
 
         <div className="process-modal-body">
-          {loading && repos.length === 0 && <div className="process-loading">Loading...</div>}
+          {loading && repos.length === 0 && <div role="status" className="process-loading">Loading...</div>}
 
           {!loading && repos.length === 0 && (
             <div className="process-empty">No projects found. Add some projects to the sidebar first.</div>

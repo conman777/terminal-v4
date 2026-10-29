@@ -26,7 +26,13 @@ pub async fn proxy_dev_request(
 
     if script_inject::is_html_content_type(&content_type) {
         if let Ok(html) = String::from_utf8(response.body.clone()) {
-            let injected = script_inject::inject_debug_script(&html, port, api_origin);
+            let injected = script_inject::inject_debug_script_for_document(
+                &html,
+                port,
+                api_origin,
+                Some(&format!("/api/dev-proxy/{port}")),
+                path,
+            );
             let rewritten = rewrite_dev_urls(&injected, port, websocket_proxy_origin, auth_token);
             response.body = rewritten.into_bytes();
 
@@ -147,11 +153,36 @@ fn build_dev_websocket_proxy_url(
     let trailing = &suffix[split_at..];
 
     let mut rewritten = format!("{websocket_proxy_origin}/api/dev-proxy-ws/{port}{path_suffix}");
+    let (query, fragment) = trailing.split_once('#').unwrap_or((trailing, ""));
+    rewritten.push_str(query);
     if let Some(token) = auth_token {
-        rewritten.push(if trailing.contains('?') { '&' } else { '?' });
-        rewritten.push_str("token=");
-        rewritten.push_str(token);
+        rewritten.push(if query.contains('?') { '&' } else { '?' });
+        rewritten.push_str(
+            &url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("token", token)
+                .finish(),
+        );
     }
-    rewritten.push_str(trailing);
+    if trailing.contains('#') {
+        rewritten.push('#');
+        rewritten.push_str(fragment);
+    }
     rewritten
+}
+
+#[cfg(test)]
+mod query_regressions {
+    use super::*;
+    #[test]
+    fn query_and_fragment_precede_encoded_auth() {
+        assert_eq!(
+            build_dev_websocket_proxy_url(
+                "wss://fixture.test",
+                5173,
+                "/hmr?app=kept#part",
+                Some("a&b")
+            ),
+            "wss://fixture.test/api/dev-proxy-ws/5173/hmr?app=kept&token=a%26b#part"
+        );
+    }
 }

@@ -1,0 +1,18 @@
+.account-knowledge-panel { min-width: 0; color: var(--text-primary, #f4eee6); }
+.account-knowledge-panel h3 { font-size: 16px; }
+.account-knowledge-panel p, .account-knowledge-panel small { font-size: 12px; color: var(--text-secondary, #c1b8ad); }
+.account-knowledge-panel fieldset { border: 0; padding: 0; margin: 16px 0; min-width: 0; }
+.account-knowledge-panel label { display: block; margin-bottom: 6px; font-size: 13px; }
+.account-knowledge-panel textarea, .account-knowledge-panel input:not([type=checkbox]) {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--border-color, #3b3733); border-radius: 6px;
+  color: inherit; background: var(--bg-secondary, #25211c); padding: 10px; font: inherit; font-size: 13px;
+}
+.account-knowledge-panel textarea { resize: vertical; }
+.account-knowledge-panel button { border: 1px solid var(--border-color, #3b3733); border-radius: 6px; color: inherit; background: var(--bg-secondary, #25211c); padding: 8px 10px; cursor: pointer; }
+.account-knowledge-panel button:disabled { opacity: .5; cursor: default; }
+.account-knowledge-panel footer { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.account-knowledge-panel footer span { flex: 1; font-size: 12px; }
+.account-knowledge-panel .workspace-profile-error { color: #ff9d92; }
+.account-knowledge-conflict { border: 1px solid var(--border-color, #3b3733); border-radius: 6px; padding: 10px; }
+
+@media (max-width: 600px) { .account-knowledge-panel button { min-height: 44px; } }

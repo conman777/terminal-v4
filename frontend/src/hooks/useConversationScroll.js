@@ -35,9 +35,11 @@ export function useConversationScroll({
   }, [onViewportStateChange]);
 
   const scrollToBottom = useCallback((behavior = followBehavior) => {
-    const element = bottomRef.current;
-    if (!element || typeof element.scrollIntoView !== 'function') return;
-    element.scrollIntoView({ behavior });
+    const container = containerRef.current;
+    if (!container) return;
+    const top = Math.max(0, container.scrollHeight - container.clientHeight);
+    if (typeof container.scrollTo === 'function') container.scrollTo({ top, behavior });
+    else container.scrollTop = top;
   }, [followBehavior]);
 
   const markShouldStickToBottom = useCallback(() => {

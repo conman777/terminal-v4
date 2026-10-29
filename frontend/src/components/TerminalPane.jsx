@@ -1,29 +1,58 @@
 import { environmentAllows } from '../utils/runtimePermissions';
-import { getActiveEnvironment, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { captureAuthScope, isAuthScopeCurrent } from '../utils/auth';
 import { resolveAgentLaunchCommand } from '../utils/agentLauncher';
-import { useRef, useState, useCallback, useEffect, useMemo, memo, useSyncExternalStore } from 'react';
+import { useRef, useState, useCallback, useEffect, useMemo, useId, memo, useSyncExternalStore } from 'react';
+import './TerminalPane.css';
 import { LazyTerminalChat } from './LazyTerminalChat';
-import { WorkspaceToolsButton } from './WorkspaceToolsButton';
-import { latestWorkspaceResponse } from '../utils/workspaceResponse';
-import { WorkspaceProfileButton } from './WorkspaceProfileButton';
+import { AgentModelPicker } from './AgentModelPicker';
+import { serviceTierEntry } from '../utils/agentServiceTier';
+import { ComposerPicker } from './ComposerPicker';
+import { FollowupQueueButton } from './FollowupQueueButton';
+import { ConversationContextButton } from './ConversationContextButton';
 import { DesktopStatusBar } from './DesktopStatusBar';
+import { latestWorkspaceResponse } from '../utils/workspaceResponse';
 import { useMobileChatTurns } from '../hooks/useMobileChatTurns';
 import { useStructuredSession } from '../hooks/useStructuredSession';
+import { useSessionBrowserApprovals } from '../hooks/useSessionBrowserApprovals';
+import { useComposerDraft } from '../hooks/useComposerDraft';
+import { useComposerFileAttachments } from '../hooks/useComposerFileAttachments';
+import AttachmentDraftStatus from './AttachmentDraftStatus';
+import { useSupervisedInputCapability } from '../hooks/useSupervisedInputCapability';
+import { supervisedInputQueue } from '../utils/supervisedRawInputQueue';
+import { useUserImageComposer } from '../hooks/useUserImageComposer';
 import { LazyDesktopConversationView } from './LazyDesktopConversationView';
 import { shouldFallbackToTerminalView } from '../utils/conversationMode';
 import { getAiInitialCommand, getAiTypeOptions, inferSessionAiType } from '../utils/aiProviders';
+import { useReadyAiOptions } from '../hooks/useReadyAiOptions';
 import { getPreferredSessionTopic, isMeaningfulSessionTopic } from '../utils/sessionTopic';
-import { isStructuredSessionId } from '../utils/structuredSessions';
-import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
+import { isStructuredSessionId, getStructuredAgentLabel, getComposerPlaceholder } from '../utils/structuredSessions';
+import { parseTerminalRuntimeInfo, resolveForegroundAiType } from '../utils/terminalRuntimeInfo';
+import { ProjectBadge } from './ProjectBadge';
+import { ThreadDetailsCard } from './ThreadDetailsCard';
+import { withAttachedFiles } from '../utils/attachedFiles';
+import { PLAN_MARKER } from '../utils/planMode';
+import { notifyAgent } from '../utils/agentNotifications';
+import { loadStash, stashDraft, takeStashed } from '../utils/draftStash';
+import { getNativeFollowupQueue, newNativeFollowup } from '../utils/nativeFollowupQueue';
+import { dismissLearningNudge, shouldNudgeLearning } from '../utils/learningNudge';
+import { contextMeter } from '../utils/contextUsage';
+import { OpenInEditorRow, PullRequestStatus, ThreadGitActions } from './ThreadCardActions';
+import { ProjectScripts } from './ProjectScripts';
+import { WorkspaceToolsButton } from './WorkspaceToolsButton';
+import { useWorkspaceGitStatus } from '../hooks/useWorkspaceGitStatus';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useInstalledSkills } from '../hooks/useInstalledSkills';
+import { useThreadDrawerTerminal } from '../hooks/useThreadDrawerTerminal';
+import { isCompanionSession } from '../utils/sidebarSessionScope';
+import { projectNameFromPath } from '../utils/projectBadge';
 import { useTerminalSession } from '../contexts/TerminalSessionContext';
 
 const ANSI_ESCAPE_RE = /\x1b\[[0-?]*[ -/]*[@-~]/g;
-const SANDBOX_PERMISSION_OPTIONS = [
-  {
-    mode: 'off',
-    label: 'Full access',
-    description: 'Host shell'
-  }
+const ACCESS_OPTIONS = [
+  { value: 'supervised', label: 'Supervised', description: 'Ask before editing files or running commands' },
+  { value: 'auto-edit', label: 'Auto-edit', description: "Edit files in the thread's folder without asking" },
+  { value: 'full', label: 'Full access', description: 'Edit and run anything without asking' },
 ];
 
 function extractTerminalPreviewLines(chunk) {
@@ -63,6 +92,14 @@ function getPaneSessionLabel(session) {
   return getPreferredSessionTopic(session.thread?.topic, session.title || 'New session');
 }
 
+const THREAD_DETAILS_KEY = 'tv4ThreadDetailsOpen';
+function readThreadDetailsPreference() {
+  try { return localStorage.getItem(THREAD_DETAILS_KEY) !== 'false'; } catch { return true; }
+}
+function writeThreadDetailsPreference(open) {
+  try { localStorage.setItem(THREAD_DETAILS_KEY, String(open)); } catch { /* preference is optional */ }
+}
+
 export const TerminalPane = memo(function TerminalPane({
   pane,
   isActive,
@@ -76,6 +113,11 @@ export const TerminalPane = memo(function TerminalPane({
   onFocus,
   onFullscreen,
   showPreview,
+  showBrowser = false,
+  onToggleBrowser,
+  onOpenFiles,
+  onFindInThread,
+  onStartThreadWithPrompt,
   onMinimizeMainTerminal,
   keybarOpen,
   viewportHeight,
@@ -89,7 +131,11 @@ export const TerminalPane = memo(function TerminalPane({
   onSetSessionAiType,
   onAddCustomAiProvider,
   onStartWorkspaceTask,
+  onStartProjectChat,
+  projects = [],
+  recentFolders = [],
   onSelectHistorySession,
+  onWorkspaceResponseChange,
   desktopAllowTerminalInput = false,
   onCwdChange,
   onSessionBusyChange,
@@ -102,16 +148,25 @@ export const TerminalPane = memo(function TerminalPane({
   const paneRef = useRef(null);
   const imageInputRef = useRef(null);
   const menuRef = useRef(null);
+  const sessionTriggerRef = useRef(null);
+  const sessionMenuId = useId();
   const [isDragOver, setIsDragOver] = useState(false);
   const [isHeaderDragging, setIsHeaderDragging] = useState(false);
   const [showSessionMenu, setShowSessionMenu] = useState(false);
+  const [threadAction, setThreadAction] = useState(null);
+  const [threadRename, setThreadRename] = useState(null);
+  const threadActionsRef = useRef(new Map());
   const [connectionState, setConnectionState] = useState('connecting');
-  const [currentCwd, setCurrentCwd] = useState(null);
+  const [cwdSnapshot, setCwdSnapshot] = useState(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [isSessionBusy, setIsSessionBusy] = useState(false);
   const [launchQueued, setLaunchQueued] = useState(false);
-  const [composerValue, setComposerValue] = useState('');
-  const [composerAttachments, setComposerAttachments] = useState([]);
+  const { value: composerValue, setValue: setComposerValue, revision: composerDraftRevision, clearIfUnchanged: clearComposerDraft, error: composerDraftError, store: composerStore } = useComposerDraft(pane.sessionId);
+  const [composerAttachments, setComposerAttachments, attachmentDraftError, retryAttachmentDraft, restoredAttachments, attachmentConflict, useSavedAttachments, validateAttachmentDraft, getAttachmentSelectionToken, isAttachmentSelectionTokenCurrent] = useComposerFileAttachments(pane.sessionId);
+  const [composerSubmitting, setComposerSubmitting] = useState(false);
+  const composerRequestRef = useRef(null);
+  const [modelUpdate, setModelUpdate] = useState(null);
+  const modelRequestRef = useRef(null);
   const [viewModeNotice, setViewModeNotice] = useState('');
   const [isNoticePersistent, setIsNoticePersistent] = useState(false);
   const [terminalPreview, setTerminalPreview] = useState('');
@@ -126,7 +181,6 @@ export const TerminalPane = memo(function TerminalPane({
   const [gitBranchInfo, setGitBranchInfo] = useState(null);
   const [isLoadingGitBranches, setIsLoadingGitBranches] = useState(false);
   const [isSwitchingGitBranch, setIsSwitchingGitBranch] = useState(false);
-  const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
   const conversationFallbackRef = useRef(false);
   const interactivePromptRef = useRef(null);
   const outputProbeRef = useRef('');
@@ -144,32 +198,66 @@ export const TerminalPane = memo(function TerminalPane({
     });
   }, []);
 
-  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession, updateThreadMetadata } = useTerminalSession();
+  const { listSessionGitBranches, checkoutSessionGitBranch, sendToSession, sendRawToSession, renameSession, updateThreadMetadata, updateStructuredSessionSelection, updateStructuredSessionAccess, createSession, restoreSession } = useTerminalSession();
 
   const selectableSessions = useMemo(
-    () => sessions.filter((session) => !session.thread?.archived),
+    () => sessions.filter((session) => !session.thread?.archived && !isCompanionSession(session)),
     [sessions]
   );
   const currentSession = selectableSessions.find(s => s.id === pane.sessionId);
-  const effectiveSandboxMode = currentSession?.sandbox?.mode ?? 'off';
-  const requestedSandboxMode = currentSession?.thread?.sandboxMode ?? effectiveSandboxMode;
-  const isSandboxRequested = requestedSandboxMode !== 'off';
-  const sandboxChangePending = requestedSandboxMode !== effectiveSandboxMode;
+  const isV4Session = isStructuredSessionId(pane.sessionId) && currentSession?.runtime === 'v4';
+  const isCodexSession = currentSession?.runtime === 'codex';
+  const isManagedConversation = isV4Session || isCodexSession;
   const shouldHighlightActiveChrome = isActive && selectableSessions.length > 1;
-  const inferredAiType = sessionAiTypes?.[pane.sessionId] ?? inferSessionAiType(currentSession);
+  const inferredAiType = isManagedConversation ? inferSessionAiType(currentSession) : sessionAiTypes?.[pane.sessionId] ?? inferSessionAiType(currentSession);
   const rawTopic = currentSession?.thread?.topic || null;
   const useTopic = isReasonablePaneSummary(rawTopic, currentSession?.thread?.topicAutoGenerated);
   const paneSummaryText = (useTopic ? rawTopic : null) || currentSession?.title || null;
   const currentSessionLabel = getPaneSessionLabel(currentSession);
+  const paneProjectName = projectNameFromPath(currentSession?.thread?.projectPath || currentSession?.cwd);
   const runtimeInfo = useMemo(
     () => parseTerminalRuntimeInfo(terminalScreenSnapshot || terminalPreview, inferredAiType),
     [inferredAiType, terminalPreview, terminalScreenSnapshot]
   );
-  const currentAiType = inferredAiType ?? runtimeInfo?.providerId ?? null;
+  const currentAiType = isManagedConversation ? inferredAiType : resolveForegroundAiType(inferredAiType, runtimeInfo, terminalScreenSnapshot);
   const launchCommand = getAiInitialCommand(currentAiType, customAiProviders);
-  const aiOptions = getAiTypeOptions(customAiProviders);
-  const showSessionSelector = canClose && selectableSessions.length > 0;
+  const allAiOptions = useMemo(() => getAiTypeOptions(customAiProviders), [customAiProviders]);
+  const aiOptions = useReadyAiOptions(allAiOptions, currentAiType);
+  const showSessionSelector = Boolean(currentSession);
   const isStructuredSession = isStructuredSessionId(pane.sessionId);
+  const rawInputMode = useSupervisedInputCapability(isStructuredSession, pane.sessionId);
+  const isClaudeChat = isStructuredSession && !isManagedConversation && currentSession?.aiType === 'claude';
+  const cwdSession = useRef({ id: pane.sessionId, generation: 0 });
+  if (cwdSession.current.id !== pane.sessionId) cwdSession.current = { id: pane.sessionId, generation: cwdSession.current.generation + 1 };
+  const cwdGeneration = cwdSession.current.generation;
+  const currentCwd = cwdSnapshot?.sessionId === pane.sessionId && cwdSnapshot?.generation === cwdGeneration ? cwdSnapshot.cwd : null;
+
+  const sessionCwd = isStructuredSession ? currentSession?.cwd || ''
+    : currentCwd || currentSession?.cwd || (isActive ? projectInfo?.cwd : '') || '';
+  const matchingProjectInfo = !isStructuredSession && sessionCwd && projectInfo?.cwd === sessionCwd ? projectInfo : null;
+  const [detailsOpen, setDetailsOpen] = useState(() => readThreadDetailsPreference());
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Wide windows dock the card beside the conversation; narrower ones open it over the content on request.
+  const installedSkills = useInstalledSkills(isStructuredSession ? sessionCwd : '');
+  const [planMode, setPlanMode] = useState(false);
+  const nativeQueue = useMemo(() => getNativeFollowupQueue(pane.sessionId), [pane.sessionId, composerStore]);
+  const { items: queuedMessages, error: queueError } = useSyncExternalStore(nativeQueue.subscribe, nativeQueue.getSnapshot);
+  const [stashed, setStashed] = useState(loadStash);
+  useEffect(() => { setPlanMode(false); }, [pane.sessionId]);
+  const detailsDocked = useMediaQuery('(min-width: 1280px)');
+  const [floatingDetailsOpen, setFloatingDetailsOpen] = useState(false);
+  const toggleDetails = useCallback(() => {
+    if (!detailsDocked) { setFloatingDetailsOpen(open => !open); return; }
+    setDetailsOpen(open => { writeThreadDetailsPreference(!open); return !open; });
+  }, [detailsDocked]);
+  const detailsVisible = Boolean(pane.sessionId) && isActive && (detailsDocked ? detailsOpen : floatingDetailsOpen);
+  const threadGit = useWorkspaceGitStatus(sessionCwd, { enabled: detailsVisible });
+  const drawerTerminal = useThreadDrawerTerminal({
+    threadId: isStructuredSession ? pane.sessionId : null, cwd: sessionCwd, open: drawerOpen && terminalInputAllowed, enabled: terminalInputAllowed,
+    sessions, createSession, updateThreadMetadata, restoreSession,
+  });
+  const sessionGitBranchInfo = gitBranchInfo?.sessionId === pane.sessionId ? gitBranchInfo : null;
+
   const sessionInputAllowed = isStructuredSession ? agentExecutionAllowed : terminalInputAllowed;
   const isTerminalBackedSession = Boolean(pane.sessionId) && !isStructuredSession;
   // Terminal v4 stable: terminal-backed sessions are always full-bleed PTY.
@@ -177,8 +265,8 @@ export const TerminalPane = memo(function TerminalPane({
   const useConversationFirstLayout = isStructuredSession;
   const useTerminalFirstLayout = isTerminalBackedSession;
   const shouldForcePromptDock = false;
-  const isTerminalDockVisible = useTerminalFirstLayout || isTerminalPanelOpen;
-  const shouldRenderTerminalRuntime = (
+  const isTerminalDockVisible = !isManagedConversation && (useTerminalFirstLayout || isTerminalPanelOpen);
+  const shouldRenderTerminalRuntime = !isManagedConversation && (
     isTerminalBackedSession
     || isTerminalPanelOpen
     || terminalRuntimeLatched
@@ -210,14 +298,68 @@ export const TerminalPane = memo(function TerminalPane({
     pendingApproval,
     isStreaming: structuredIsStreaming,
     connectionState: structuredConnectionState,
+    reconnect: structuredReconnect,
+    isHistoryOnly: structuredHistoryOnly,
     sendMessage: structuredSendMessage,
+    checkPendingMessage: structuredCheckPendingMessage,
+    retryPendingMessage: structuredRetryPendingMessage,
     interrupt: structuredInterrupt,
     approve: structuredApprove,
+    reviewApproval: structuredReviewApproval,
+    isSending: structuredIsSending,
+    isApproving: structuredIsApproving,
+    isInterrupting: structuredIsInterrupting,
+    requiresCleanup: structuredRequiresCleanup,
+    actionError: structuredActionError,
+    controlState: structuredControlState,
+    contextUsage: structuredContextUsage,
+    controlError: structuredControlError,
   } = useStructuredSession({
     sessionId: isStructuredSession ? pane.sessionId : null,
     active: isStructuredSession,
+    ...(isV4Session ? { aiType: currentSession.aiType, model: currentSession.model } : {}),
+    ...(currentSession?.runtime ? { runtime: currentSession.runtime } : {}),
+    ...(currentSession?.status ? { status: currentSession.status, statusSeq: currentSession.statusSeq } : {}),
   });
+  const latestResponse = latestWorkspaceResponse(isStructuredSession ? structuredMessages : turns, isStructuredSession ? structuredIsStreaming : isSessionBusy);
+  const composerContext = contextMeter(structuredContextUsage);
+  const userTurns = isStructuredSession ? structuredMessages.filter(message => message.role === 'user').length : 0;
+  const [learningNudgeHidden, setLearningNudgeHidden] = useState(0);
+  const showLearningNudge = isStructuredSession && !structuredIsStreaming && sessionInputAllowed && Boolean(sessionCwd)
+    && learningNudgeHidden !== userTurns && shouldNudgeLearning(pane.sessionId, userTurns);
+  useEffect(() => { onWorkspaceResponseChange?.(pane.sessionId, latestResponse); }, [pane.sessionId, latestResponse, onWorkspaceResponseChange]);
+  const canReviewBrowser = sessionInputAllowed && agentExecutionAllowed && !structuredIsInterrupting
+    && !structuredRequiresCleanup && !structuredHistoryOnly && structuredConnectionState === 'online';
+  const browserReview = useSessionBrowserApprovals({
+    sessionId: pane.sessionId, enabled: isStructuredSession && !isV4Session, canDecide: canReviewBrowser,
+  });
+  const { userImages, sendDraft: sendImageDraft } = useUserImageComposer({
+    session: isV4Session ? currentSession : null, active: isStructuredSession,
+    store: composerStore, sendMessage: structuredSendMessage,
+    checkPendingMessage: structuredCheckPendingMessage, retryPendingMessage: structuredRetryPendingMessage,
+    conversationBusy: Boolean(structuredIsStreaming || ['accepted', 'running'].includes(currentSession?.status)),
+    requiresCleanup: structuredRequiresCleanup, readOnly: !sessionInputAllowed,
+  });
+  const pendingApprovalKey = pendingApproval ? pendingApproval.approvalId || pendingApproval.seq || 'pending' : null;
+  useEffect(() => { if (pendingApprovalKey) notifyAgent('approval', currentSession?.title); }, [pendingApprovalKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const resolvedConnectionState = isStructuredSession ? structuredConnectionState : connectionState;
+  const headerStatus = !pane.sessionId ? 'No session'
+    : resolvedConnectionState === 'unavailable' ? 'Unavailable'
+    : resolvedConnectionState === 'offline' ? 'Offline'
+    : resolvedConnectionState !== 'online' ? 'Connecting'
+    : isStructuredSession && structuredIsInterrupting ? 'Stopping…'
+    : isStructuredSession && structuredRequiresCleanup ? 'Needs attention'
+    : isStructuredSession && pendingApproval?.toolName === 'ask_user' ? 'Waiting for your answer'
+    : isStructuredSession && (pendingApproval || browserReview.requests.length > 0) ? 'Waiting for approval'
+    : (isStructuredSession ? structuredIsStreaming : isSessionBusy) ? 'Working'
+    : isStructuredSession ? 'Ready' : 'Connected';
+  const headerStatusState = ['Needs attention', 'Waiting for approval', 'Waiting for your answer'].includes(headerStatus) ? 'attention'
+    : ['Working', 'Stopping…'].includes(headerStatus) ? 'working'
+    : resolvedConnectionState === 'online' ? 'ready' : resolvedConnectionState;
+
+  useEffect(() => {
+    if (isStructuredSession && pane.sessionId && structuredConnectionState === 'online') onSessionBusyChange?.(pane.sessionId, Boolean(structuredIsStreaming || structuredRequiresCleanup));
+  }, [pane.sessionId, isStructuredSession, structuredConnectionState, structuredIsStreaming, structuredRequiresCleanup, onSessionBusyChange]);
 
   useEffect(() => {
     if (!viewModeNotice || isNoticePersistent) return;
@@ -227,12 +369,15 @@ export const TerminalPane = memo(function TerminalPane({
 
   useEffect(() => {
     setIsSessionBusy(false);
+    setShowSessionMenu(false);
+    setThreadRename(null);
+    setThreadAction(threadActionsRef.current.has(pane.sessionId) ? { sessionId: pane.sessionId, pending: true } : null);
     setIsTerminalPanelOpen(false);
     setTerminalRuntimeLatched(false);
     setConnectionState('connecting');
     setLaunchQueued(false);
-    setComposerValue('');
-    setComposerAttachments([]);
+    setComposerSubmitting(false); composerRequestRef.current = null;
+    setModelUpdate(null); modelRequestRef.current = null;
     setTerminalPreview('');
     setTerminalScreenSnapshot('');
     setInteractivePromptEvent(null);
@@ -246,6 +391,7 @@ export const TerminalPane = memo(function TerminalPane({
     focusTerminalRef.current = null;
     outputProbeRef.current = '';
     hasConnectedOnceRef.current = false;
+    return () => { composerRequestRef.current = null; modelRequestRef.current = null; };
   }, [pane.sessionId]);
 
   useEffect(() => {
@@ -294,7 +440,7 @@ export const TerminalPane = memo(function TerminalPane({
     listSessionGitBranches(pane.sessionId)
       .then((data) => {
         if (!cancelled) {
-          setGitBranchInfo(data);
+          setGitBranchInfo({ ...data, sessionId: pane.sessionId });
         }
       })
       .finally(() => {
@@ -309,17 +455,17 @@ export const TerminalPane = memo(function TerminalPane({
   }, [isStructuredSession, listSessionGitBranches, pane.sessionId, projectInfo?.gitBranch]);
 
   const handleSelectGitBranch = useCallback(async (nextBranch) => {
-    if (!pane.sessionId || !nextBranch || nextBranch === gitBranchInfo?.currentBranch) return;
+    if (!pane.sessionId || !nextBranch || nextBranch === sessionGitBranchInfo?.currentBranch) return;
     setIsSwitchingGitBranch(true);
     try {
       const result = await checkoutSessionGitBranch(pane.sessionId, nextBranch);
       if (result) {
-        setGitBranchInfo(result);
+        setGitBranchInfo({ ...result, sessionId: pane.sessionId });
       }
     } finally {
       setIsSwitchingGitBranch(false);
     }
-  }, [checkoutSessionGitBranch, gitBranchInfo?.currentBranch, pane.sessionId]);
+  }, [checkoutSessionGitBranch, sessionGitBranchInfo?.currentBranch, pane.sessionId]);
 
   const handlePaneClick = (e) => {
     if (!e.target.closest('.ph-controls') && !e.target.closest('.ph-session-menu')) {
@@ -355,6 +501,46 @@ export const TerminalPane = memo(function TerminalPane({
     onSessionSelect(pane.id, sessionId);
     setShowSessionMenu(false);
   }, [pane.id, onSessionSelect]);
+
+  const handlePinThread = useCallback(async () => {
+    if (!currentSession || threadActionsRef.current.has(currentSession.id)) return;
+    const request = { sessionId: currentSession.id };
+    threadActionsRef.current.set(request.sessionId, request);
+    setThreadAction({ ...request, pending: true });
+    try {
+      await updateThreadMetadata(request.sessionId, { pinned: !currentSession.thread?.pinned });
+      if (cwdSession.current.id === request.sessionId) { setThreadAction(null); setShowSessionMenu(false); }
+    } catch (error) {
+      if (cwdSession.current.id === request.sessionId) setThreadAction({ ...request, error: error.message || 'Unable to update thread.' });
+    } finally {
+      if (threadActionsRef.current.get(request.sessionId) === request) threadActionsRef.current.delete(request.sessionId);
+    }
+  }, [currentSession, updateThreadMetadata]);
+
+  const handleRenameThread = useCallback(async (event) => {
+    event.preventDefault();
+    if (!currentSession || threadActionsRef.current.has(currentSession.id) || threadRename?.sessionId !== currentSession.id) return;
+    const title = threadRename.value.trim();
+    if (!title) return;
+    const request = { sessionId: currentSession.id };
+    const auth = captureAuthScope();
+    const signal = getEnvironmentSignal();
+    threadActionsRef.current.set(request.sessionId, request);
+    setThreadAction({ ...request, pending: true });
+    try {
+      const result = await renameSession(request.sessionId, title);
+      if (result?.ok === false) throw result.error || new Error('Unable to rename thread.');
+      if (signal.aborted || signal !== getEnvironmentSignal() || !isAuthScopeCurrent(auth)) {
+        throw new Error('The account or environment changed. Check the original thread before trying again.');
+      }
+      await updateThreadMetadata(request.sessionId, { topic: title, topicAutoGenerated: false });
+      if (cwdSession.current.id === request.sessionId) { setThreadAction(null); setThreadRename(null); setShowSessionMenu(false); }
+    } catch (error) {
+      if (cwdSession.current.id === request.sessionId) setThreadAction({ ...request, error: error.message || 'Unable to rename thread.' });
+    } finally {
+      if (threadActionsRef.current.get(request.sessionId) === request) threadActionsRef.current.delete(request.sessionId);
+    }
+  }, [currentSession, renameSession, threadRename, updateThreadMetadata]);
 
   const handleImageUpload = useCallback(() => {
     imageInputRef.current?.click();
@@ -485,41 +671,85 @@ export const TerminalPane = memo(function TerminalPane({
     launchAiType(currentAiType);
   }, [currentAiType, launchAiType]);
 
-  const handleComposerSubmit = useCallback((text) => {
-    if (!pane.sessionId || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
+  const handleComposerSubmit = useCallback(async (text) => {
+    if (attachmentDraftError || !validateAttachmentDraft()) return;
+    if (!pane.sessionId || composerRequestRef.current || !environmentAllows(getActiveEnvironment(), isStructuredSession ? 'agentExecute' : 'terminalInput')) return;
+    if ((isClaudeChat || isCodexSession) && queueError && !queueError.startsWith('The follow-up queue could not be saved')) return;
+    if (queuedMessages.some(item => item.status === 'editing')) return;
     const trimmed = typeof text === 'string' ? text.trim() : '';
-    const attachmentPaths = composerAttachments
-      .map((attachment) => attachment?.path)
-      .filter((path) => typeof path === 'string' && path.trim());
-    if (!trimmed && attachmentPaths.length === 0) return;
-
-    const payload = [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
-    if (!payload) return;
-
-    if (isStructuredSession) {
-      structuredSendMessage(payload);
-      setComposerValue('');
-      setComposerAttachments([]);
+    const submittedAttachments = composerAttachments;
+    const submittedDraftRevision = composerDraftRevision;
+    const attachmentPaths = submittedAttachments.map(attachment => attachment?.path).filter(path => typeof path === 'string' && path.trim());
+    const payload = isV4Session && userImages ? withAttachedFiles(typeof text === 'string' ? text : '', attachmentPaths)
+      : isStructuredSession ? `${planMode && (isClaudeChat || isCodexSession) ? PLAN_MARKER : ''}${withAttachedFiles(trimmed, attachmentPaths)}`
+        : [attachmentPaths.join(' '), trimmed].filter(Boolean).join(' ').trim();
+    if (!payload.trim() && !(isV4Session && userImages?.items.length)) return;
+    if ((isClaudeChat || isCodexSession) && (structuredIsStreaming || queuedMessages.length)) {
+      if (composerDraftError && queuedMessages.some(item => item.text === payload)) return;
+      const item = newNativeFollowup(payload);
+      if (!nativeQueue.update(current => [...current, item])) return;
+      if (!composerDraftError) clearComposerDraft(submittedDraftRevision, trimmed);
+      setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
       return;
     }
-
-    const result = handleChatSend(payload);
-    setComposerValue('');
-    setComposerAttachments([]);
-
-    if (result?.queued) {
-      setIsNoticePersistent(false);
-      setViewModeNotice('Terminal is still connecting. Command queued.');
-    } else if (viewModeNotice) {
-      setIsNoticePersistent(false);
-      setViewModeNotice('');
+    const request = {};
+    composerRequestRef.current = request;
+    setComposerSubmitting(true);
+    try {
+      const result = isV4Session && userImages ? await sendImageDraft(payload)
+        : isStructuredSession ? await structuredSendMessage(payload) : handleChatSend(payload);
+      if (result?.completion) await result.completion;
+      if (composerRequestRef.current !== request) return;
+      if (isStructuredSession && result?.accepted !== true) {
+        setIsNoticePersistent(true); setViewModeNotice('Message was not accepted. Your draft was kept.');
+        return;
+      }
+      if (!result?.draftManaged) {
+        clearComposerDraft(submittedDraftRevision, trimmed);
+        setComposerAttachments(current => current.filter(attachment => !submittedAttachments.includes(attachment)));
+      }
+      setIsNoticePersistent(false); setViewModeNotice(result?.queued ? 'Terminal is still connecting. Command queued.' : '');
+    } catch (error) {
+      if (composerRequestRef.current === request) { setIsNoticePersistent(true); setViewModeNotice(error.message || 'Send failed. Your draft was kept.'); }
+    } finally {
+      if (composerRequestRef.current === request) { composerRequestRef.current = null; setComposerSubmitting(false); }
     }
-  }, [composerAttachments, handleChatSend, isStructuredSession, pane.sessionId, structuredSendMessage, viewModeNotice]);
+  }, [attachmentDraftError, validateAttachmentDraft, composerAttachments, composerDraftError, composerDraftRevision, clearComposerDraft, handleChatSend, isClaudeChat, isCodexSession, isStructuredSession, isV4Session, nativeQueue, pane.sessionId, planMode, queueError, queuedMessages, structuredIsStreaming, structuredSendMessage, userImages, sendImageDraft, setComposerAttachments]);
 
-  const handleStructuredRawSend = useCallback((data) => {
+  const modelUpdatePending = modelUpdate?.sessionId === pane.sessionId && modelUpdate.pending;
+  const modelUpdateError = modelUpdate?.sessionId === pane.sessionId ? modelUpdate.error : '';
+  const modelChangeDisabled = !sessionInputAllowed || modelUpdatePending || composerSubmitting
+    || Boolean(structuredIsStreaming || structuredIsSending || structuredIsInterrupting || structuredRequiresCleanup)
+    || structuredConnectionState !== 'online';
+
+  const handleSelectModel = useCallback(async (next) => {
+    const sessionId = pane.sessionId;
+    if (!(isCodexSession || isClaudeChat) || !sessionId || modelChangeDisabled || modelRequestRef.current || !next?.model) return;
+    const serviceTierChanged = next.serviceTier !== undefined && (next.serviceTier ?? null) !== (currentSession?.serviceTier ?? null);
+    if (next.model === currentSession?.model && (next.reasoning || '') === (currentSession?.reasoning || '') && !serviceTierChanged) return;
+    const request = {};
+    modelRequestRef.current = request;
+    setModelUpdate({ sessionId, pending: true, error: '' });
+    try {
+      await updateStructuredSessionSelection(sessionId, { model: next.model, reasoning: next.reasoning || null, ...(serviceTierChanged ? { serviceTier: next.serviceTier } : {}) });
+      if (modelRequestRef.current === request) setModelUpdate(null);
+    } catch (error) {
+      if (modelRequestRef.current === request) setModelUpdate({ sessionId, pending: false, error: error.message || 'Unable to change the model. The previous model is still selected.' });
+    } finally {
+      if (modelRequestRef.current === request) modelRequestRef.current = null;
+    }
+  }, [currentSession?.model, currentSession?.reasoning, currentSession?.serviceTier, isClaudeChat, isCodexSession, modelChangeDisabled, pane.sessionId, updateStructuredSessionSelection]);
+
+  const projectPaths = [...new Set([sessionCwd, ...projects.map(project => project.path), ...recentFolders].filter(Boolean))];
+
+  const handleStructuredRawSend = useCallback(async (data) => {
     if (!pane.sessionId) return undefined;
-    return sendToSession(pane.sessionId, data);
-  }, [pane.sessionId, sendToSession]);
+    if (!['legacy', 'supervised'].includes(rawInputMode)) { setIsNoticePersistent(true); setViewModeNotice('Terminal input is unavailable or still being checked.'); return undefined; }
+    const sessionId = pane.sessionId;
+    const options = rawInputMode === 'supervised' ? { requireSupervision: true } : { requireLegacy: true };
+    supervisedInputQueue(sessionId, text => sendRawToSession ? sendRawToSession(sessionId, text, options) : sendToSession(sessionId, text), rawInputMode).enqueue(data);
+    return undefined;
+  }, [pane.sessionId, sendToSession, sendRawToSession, rawInputMode]);
 
   const handleComposerAttachmentAdd = useCallback((attachment) => {
     if (!attachment?.path) return;
@@ -527,11 +757,11 @@ export const TerminalPane = memo(function TerminalPane({
       if (current.some((item) => item.path === attachment.path)) return current;
       return [...current, attachment];
     });
-  }, []);
+  }, [setComposerAttachments]);
 
   const handleComposerAttachmentRemove = useCallback((pathToRemove) => {
     setComposerAttachments((current) => current.filter((attachment) => attachment.path !== pathToRemove));
-  }, []);
+  }, [setComposerAttachments]);
 
   const handleRegisterImageUploadTrigger = useCallback((trigger) => {
     imageInputRef.current = { click: trigger };
@@ -557,41 +787,78 @@ export const TerminalPane = memo(function TerminalPane({
     launchAiType(provider.id, provider.initialCommand);
   }, [launchAiType, onAddCustomAiProvider, onSetSessionAiType, pane.sessionId]);
 
-  const selectedPermission = SANDBOX_PERMISSION_OPTIONS.find((option) => option.mode === requestedSandboxMode)
-    ?? SANDBOX_PERMISSION_OPTIONS[0];
+  useEffect(() => {
+    const head = queuedMessages[0];
+    if (!head) return;
+    if (structuredIsStreaming && head.status === 'waiting') {
+      nativeQueue.update(current => current.map(item => item.id === head.id ? { ...item, status: 'queued' } : item));
+      return;
+    }
+    if (!(isClaudeChat || isCodexSession) || !sessionInputAllowed || structuredHistoryOnly || structuredRequiresCleanup || structuredConnectionState !== 'online') return;
+    if (structuredIsStreaming || head.status !== 'queued') return;
+    if (!nativeQueue.update(current => current[0]?.id === head.id && current[0].status === 'queued'
+      ? current.map(item => item.id === head.id ? { ...item, status: 'sending' } : item) : current)) return;
+    (async () => {
+      let accepted = false;
+      try { accepted = (await structuredSendMessage(head.text))?.accepted === true; } catch { /* Keep an unconfirmed send for review. */ }
+      const saved = nativeQueue.update(current => {
+        const index = current.findIndex(item => item.id === head.id && item.status === 'sending');
+        if (index < 0) return current;
+        const updated = [...current];
+        if (accepted) {
+          updated.splice(index, 1);
+          if (index === 0 && updated[0]?.status === 'queued') updated[0] = { ...updated[0], status: 'waiting' };
+        } else updated[index] = { ...updated[index], status: 'held' };
+        return updated;
+      });
+      if (!saved) nativeQueue.holdLocal(head.id);
+    })();
+  }, [isClaudeChat, isCodexSession, nativeQueue, queuedMessages, sessionInputAllowed, structuredConnectionState, structuredHistoryOnly, structuredIsStreaming, structuredRequiresCleanup, structuredSendMessage]);
+  const stashCurrentDraft = useCallback(() => {
+    if (!composerValue.trim()) return;
+    setStashed(stashDraft(composerValue));
+    setComposerValue('');
+  }, [composerValue, setComposerValue]);
+  const restoreStashed = useCallback(id => {
+    const text = takeStashed(id);
+    setStashed(loadStash());
+    if (text) setComposerValue(composerValue.trim() ? `${composerValue.trimEnd()}\n${text}` : text);
+  }, [composerValue, setComposerValue]);
 
-  const handleSelectSandboxMode = useCallback((nextMode) => {
-    if (!pane.sessionId || !currentSession) return;
+  const handleImplementPlan = useCallback(async () => {
+    setPlanMode(false);
+    const result = await structuredSendMessage('Implement the plan above.');
+    if (result?.accepted !== true) { setIsNoticePersistent(true); setViewModeNotice('The agent did not accept the request to implement the plan.'); }
+  }, [structuredSendMessage]);
+  const handleImplementPlanInNewThread = useCallback(plan => {
+    onStartThreadWithPrompt?.(`Implement this plan:\n\n${plan}`, currentSession);
+  }, [currentSession, onStartThreadWithPrompt]);
 
-    const nextWorkspaceRoot = nextMode === 'off'
-      ? null
-      : currentSession.thread?.projectPath
-        || currentSession.thread?.sandboxWorkspaceRoot
-        || currentSession.sandbox?.workspaceRoot
-        || currentSession.cwd
-        || projectInfo?.cwd
-        || null;
+  const handleRunScript = useCallback(script => {
+    createSession?.({ cwd: sessionCwd, title: script.name, initialCommand: script.command })
+      .catch(error => { setIsNoticePersistent(true); setViewModeNotice(error.message || `Could not run ${script.name}.`); });
+  }, [createSession, sessionCwd]);
 
-    updateThreadMetadata?.(pane.sessionId, {
-      sandboxMode: nextMode,
-      sandboxWorkspaceRoot: nextWorkspaceRoot
-    });
-    setIsPermissionMenuOpen(false);
-  }, [
-    currentSession,
-    pane.sessionId,
-    projectInfo?.cwd,
-    updateThreadMetadata
-  ]);
+  const handleSelectAccess = useCallback(async (mode) => {
+    const sessionId = pane.sessionId;
+    if (!sessionId || mode === (currentSession?.accessMode || 'auto-edit')) return;
+    try {
+      await updateStructuredSessionAccess(sessionId, mode);
+    } catch (error) {
+      setModelUpdate({ sessionId, pending: false, error: error.message || 'Unable to change access. The previous setting is still in use.' });
+    }
+  }, [currentSession?.accessMode, pane.sessionId, updateStructuredSessionAccess]);
 
   const handleCwdChange = useCallback((cwd) => {
-    setCurrentCwd(cwd);
+    if (cwdSession.current.id !== pane.sessionId || cwdSession.current.generation !== cwdGeneration) return;
+    setCwdSnapshot({ sessionId: pane.sessionId, generation: cwdGeneration, cwd });
     onCwdChange?.(cwd);
-  }, [onCwdChange]);
+  }, [cwdGeneration, onCwdChange, pane.sessionId]);
 
   const handleRefreshTerminal = useCallback(() => {
+    if (isStructuredSession) { structuredReconnect?.(); return; }
     setRefreshToken((value) => value + 1);
-  }, []);
+  }, [isStructuredSession, structuredReconnect]);
 
   const handleHeaderDragStart = useCallback((e) => {
     if (!pane.sessionId) return;
@@ -611,79 +878,160 @@ export const TerminalPane = memo(function TerminalPane({
   return (
     <div
       ref={paneRef}
-      className={`split-terminal-pane ${isActive ? 'active' : ''} ${isFullscreen ? 'fullscreen' : ''} ${isDragOver ? 'drag-over' : ''}${sessionAiTypes?.[pane.sessionId] ? ` pane-ai-${sessionAiTypes[pane.sessionId]}` : ''}`}
+      className={`split-terminal-pane terminal-pane-ui ${isActive ? 'active' : ''} ${isFullscreen ? 'fullscreen' : ''} ${isDragOver ? 'drag-over' : ''}${sessionAiTypes?.[pane.sessionId] ? ` pane-ai-${sessionAiTypes[pane.sessionId]}` : ''}`}
       onClick={handlePaneClick}
+      onFocusCapture={() => { if (!isActive) onFocus?.(pane.id); }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <div
-        className={`ph-bar${isHeaderDragging ? ' is-dragging-pane' : ''}`}
+        className={`ph-bar terminal-pane-header${isHeaderDragging ? ' is-dragging-pane' : ''}`}
         draggable={Boolean(pane.sessionId)}
         onDragStart={handleHeaderDragStart}
         onDragEnd={handleHeaderDragEnd}
       >
         <div className="ph-left">
-          {/* Session selector - only in split mode with multiple sessions */}
-          {showSessionSelector && (
-            <div className="ph-session" ref={menuRef}>
-              <button
-                type="button"
-                className="ph-session-btn"
-                onClick={handleSessionClick}
-                aria-label={currentSessionLabel}
-              >
-                <span className="ph-session-dot" />
-                <span className="ph-session-name">
-                  {currentSessionLabel}
-                </span>
-                <svg className="ph-session-chevron" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
-              </button>
+          <div className="ph-identity">
+            {paneProjectName && <span className="ph-project" title={sessionCwd || paneProjectName}>
+              {onOpenFiles && sessionCwd ? <button type="button" className="ph-project-btn" aria-label="Open project in Files" onClick={event => { event.stopPropagation(); if (!isActive) onFocus?.(pane.id); onOpenFiles(sessionCwd); }}>
+                <ProjectBadge name={paneProjectName} /><span className="ph-project-name">{paneProjectName}</span>
+              </button> : <><ProjectBadge name={paneProjectName} /><span className="ph-project-name">{paneProjectName}</span></>}
+              <span className="ph-crumb-sep" aria-hidden="true">/</span>
+            </span>}
+            {!showSessionSelector && <span className="ph-title" title={currentSessionLabel}>{currentSessionLabel}</span>}
+            {!isStructuredSession && sessionCwd && <span className="ph-cwd" title={sessionCwd}>{sessionCwd}</span>}
+            {showSessionSelector && (
+              <div className="ph-session" ref={menuRef} onKeyDown={event => {
+                if (event.key === 'Escape' && showSessionMenu) {
+                  event.preventDefault(); event.stopPropagation();
+                  setShowSessionMenu(false);
+                  sessionTriggerRef.current?.focus();
+                }
+              }}>
+                <button
+                  ref={sessionTriggerRef}
+                  type="button"
+                  className="ph-session-btn"
+                  onClick={handleSessionClick}
+                  aria-label={currentSessionLabel}
+                  title={currentSessionLabel}
+                  aria-expanded={showSessionMenu}
+                  aria-controls={showSessionMenu ? sessionMenuId : undefined}
+                >
+                  <span className="ph-session-name">
+                    {currentSessionLabel}
+                  </span>
+                  <svg aria-hidden="true" className="ph-session-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="6 9 12 15 18 9" />
+                  </svg>
+                </button>
 
-              {showSessionMenu && (
-                <div className="ph-session-menu">
-                  <div className="ph-menu-label">Switch session</div>
-                  {selectableSessions.map(session => {
-                    const hasUnread = sessionActivity?.[session.id]?.hasUnread;
-                    const isCurrentSession = session.id === pane.sessionId;
-                    const sessionLabel = getPaneSessionLabel(session);
-                    return (
-                      <button
-                        key={session.id}
-                        type="button"
-                        className={`ph-menu-item ${isCurrentSession ? 'active' : ''}`}
-                        onClick={() => handleSessionSelect(session.id)}
-                      >
-                        {hasUnread && <span className="ph-menu-dot" />}
-                        <span className="ph-menu-title">{sessionLabel}</span>
-                        {isCurrentSession && (
-                          <svg className="ph-menu-check" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                        )}
-                      </button>
-                    );
-                  })}
-                  {selectableSessions.length === 0 && (
-                    <div className="ph-menu-empty">No sessions available</div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
+                {showSessionMenu && (
+                  <div className="ph-session-menu" id={sessionMenuId} role="group" aria-label="Switch session">
+                    <div className="ph-menu-label">Thread</div>
+                    {threadRename?.sessionId === pane.sessionId ? <form className="ph-rename-form" onSubmit={handleRenameThread}>
+                      <input autoFocus aria-label="Thread title" value={threadRename.value}
+                        disabled={threadAction?.sessionId === pane.sessionId && threadAction.pending}
+                        onChange={event => setThreadRename({ sessionId: pane.sessionId, value: event.target.value })} />
+                      <button type="submit" className="ph-menu-item" disabled={!threadRename.value.trim() || (threadAction?.sessionId === pane.sessionId && threadAction.pending)}>Save thread title</button>
+                      <button type="button" className="ph-menu-item" disabled={threadAction?.sessionId === pane.sessionId && threadAction.pending} onClick={() => { setThreadRename(null); setThreadAction(null); }}>Cancel</button>
+                    </form> : <button type="button" className="ph-menu-item" disabled={!renameSession || (threadAction?.sessionId === pane.sessionId && threadAction.pending)}
+                      onClick={() => { setThreadAction(null); setThreadRename({ sessionId: pane.sessionId, value: currentSessionLabel }); }}>Rename thread</button>}
+                    <button type="button" className="ph-menu-item" disabled={threadAction?.sessionId === pane.sessionId && threadAction.pending} onClick={handlePinThread}>
+                      {currentSession?.thread?.pinned ? 'Unpin thread' : 'Pin thread'}
+                    </button>
+                    {threadAction?.sessionId === pane.sessionId && threadAction.error && <div role="alert" className="ph-menu-error">{threadAction.error}</div>}
+                    <div className="ph-menu-label">Switch session</div>
+                    {selectableSessions.map(session => {
+                      const hasUnread = sessionActivity?.[session.id]?.hasUnread;
+                      const isCurrentSession = session.id === pane.sessionId;
+                      const sessionLabel = getPaneSessionLabel(session);
+                      return (
+                        <button
+                          key={session.id}
+                          type="button"
+                          className={`ph-menu-item ${isCurrentSession ? 'active' : ''}`}
+                          aria-current={isCurrentSession ? 'true' : undefined}
+                          onClick={() => handleSessionSelect(session.id)}
+                        >
+                          {hasUnread && <span className="ph-menu-dot" />}
+                          <span className="ph-menu-title">{sessionLabel}</span>
+                          {isCurrentSession && (
+                            <svg aria-hidden="true" className="ph-menu-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {selectableSessions.length === 0 && (
+                      <div className="ph-menu-empty">No sessions available</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <span className="ph-status" role="status" data-state={headerStatusState}>{headerStatus}</span>
         </div>
 
-        <div className="ph-controls">
+        <div className="ph-controls" role="group" aria-label="Pane controls">
+          {isStructuredSession && onFindInThread && <button
+            type="button"
+            className="ph-btn"
+            aria-label="Find in thread"
+            title="Find in thread"
+            onClick={event => {
+              event.stopPropagation();
+              const opener = event.currentTarget;
+              opener.focus({ preventScroll: true });
+              if (!isActive) onFocus?.(pane.id);
+              onFindInThread(pane.id, pane.sessionId, opener);
+            }}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 4 4" /></svg>
+          </button>}
+          {pane.sessionId && <button
+            type="button"
+            className="ph-btn"
+            aria-label="Toggle thread details panel"
+            aria-pressed={detailsVisible}
+            title="Thread details"
+            onClick={event => { event.stopPropagation(); toggleDetails(); }}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 9h10M7 13h10M7 17h6" /></svg>
+          </button>}
+          {isStructuredSession && <button
+            type="button"
+            className="ph-btn"
+            aria-label="Toggle terminal drawer"
+            aria-pressed={drawerOpen}
+            title="Terminal drawer"
+            onClick={event => { event.stopPropagation(); setDrawerOpen(open => !open); }}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 15h18" /></svg>
+          </button>}
+          {onToggleBrowser && <button
+            type="button"
+            className="ph-btn ph-browser-btn"
+            aria-label="Toggle browser pane"
+            aria-pressed={showBrowser}
+            title="Browser"
+            onClick={event => { event.stopPropagation(); onToggleBrowser(); }}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>
+          </button>}
+          <span className="ph-divider" />
           {/* Reconnect */}
           <button
+            type="button"
             className="ph-btn"
             onClick={(e) => { e.stopPropagation(); handleRefreshTerminal(); }}
             title="Reconnect terminal"
+            aria-label="Reconnect terminal"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
               <polyline points="21 3 21 9 15 9" />
             </svg>
@@ -694,21 +1042,25 @@ export const TerminalPane = memo(function TerminalPane({
             <>
 
               <button
+                type="button"
                 className="ph-btn"
                 onClick={(e) => { e.stopPropagation(); onSplit(pane.id, 'horizontal'); }}
-                title="Split horizontally"
+                title="Split side by side"
+                aria-label="Split horizontally"
               >
-                <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <rect x="1.5" y="2" width="11" height="10" rx="1.5" />
                   <line x1="7" y1="2" x2="7" y2="12" />
                 </svg>
               </button>
               <button
+                type="button"
                 className="ph-btn"
                 onClick={(e) => { e.stopPropagation(); onSplit(pane.id, 'vertical'); }}
-                title="Split vertically"
+                title="Split top and bottom"
+                aria-label="Split vertically"
               >
-                <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
                   <rect x="1.5" y="2" width="11" height="10" rx="1.5" />
                   <line x1="1.5" y1="7" x2="12.5" y2="7" />
                 </svg>
@@ -721,11 +1073,13 @@ export const TerminalPane = memo(function TerminalPane({
             <>
 
               <button
+                type="button"
                 className="ph-btn"
                 onClick={(e) => { e.stopPropagation(); onMinimizeMainTerminal(); }}
                 title="Minimize terminal (show browser)"
+                aria-label="Minimize terminal"
               >
-                <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <svg aria-hidden="true" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="1" y="2" width="6" height="10" rx="1" />
                   <polyline points="8 5 11 7 8 9" />
                 </svg>
@@ -738,19 +1092,21 @@ export const TerminalPane = memo(function TerminalPane({
             <>
               <span className="ph-divider" />
               <button
+                type="button"
                 className="ph-btn"
                 onClick={(e) => { e.stopPropagation(); onFullscreen(pane.id); }}
                 title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
               >
                 {isFullscreen ? (
-                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <svg aria-hidden="true" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <polyline points="5 1.5 1.5 1.5 1.5 5" />
                     <polyline points="9 12.5 12.5 12.5 12.5 9" />
                     <line x1="1.5" y1="1.5" x2="5.5" y2="5.5" />
                     <line x1="8.5" y1="8.5" x2="12.5" y2="12.5" />
                   </svg>
                 ) : (
-                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <svg aria-hidden="true" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <polyline points="8.5 1.5 12.5 1.5 12.5 5.5" />
                     <polyline points="5.5 12.5 1.5 12.5 1.5 8.5" />
                     <line x1="12.5" y1="1.5" x2="8.5" y2="5.5" />
@@ -764,11 +1120,13 @@ export const TerminalPane = memo(function TerminalPane({
           {/* Close pane */}
           {canClose && !isFullscreen && (
             <button
+              type="button"
               className="ph-btn ph-btn-close"
               onClick={(e) => { e.stopPropagation(); onClose(pane.id); }}
               title="Close pane"
+              aria-label="Close pane"
             >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18" />
                 <line x1="6" y1="6" x2="18" y2="18" />
               </svg>
@@ -778,7 +1136,27 @@ export const TerminalPane = memo(function TerminalPane({
       </div>
 
       <div className="pane-content">
+        {isStructuredSession && structuredHistoryOnly && <p role="status" aria-label="Connection recovery" className="remote-readonly-notice">{structuredActionError}</p>}
+        {composerDraftError && composerDraftError !== structuredActionError && <p role="alert" className="remote-readonly-notice">{composerDraftError}</p>}
+        {attachmentDraftError && <AttachmentDraftStatus error={attachmentDraftError} conflict={attachmentConflict} currentItems={composerAttachments} onRetry={retryAttachmentDraft} onUseSaved={useSavedAttachments} />}
+        {restoredAttachments && !attachmentDraftError && <p role="status" className="remote-readonly-notice">Restored file selections. Check the files before sending; they may have changed.</p>}
+        {modelUpdateError && <p role="alert" className="remote-readonly-notice">{modelUpdateError}</p>}
+        {modelUpdatePending && <p role="status" className="remote-readonly-notice">Updating model for the next turn…</p>}
         {!sessionInputAllowed && <p role="status" className="remote-readonly-notice">Read-only access: this device can view this session. Ask its owner to grant input permission.</p>}
+        {detailsVisible && <ThreadDetailsCard
+          floating={!detailsDocked}
+          machine={environment?.label || environment?.url || 'This server'}
+          cwd={sessionCwd}
+          git={threadGit}
+          onOpenFiles={onOpenFiles}
+          renderChanges={({ icon, label }) => <WorkspaceToolsButton initialTool="git" ariaLabel="Review changes" icon={icon} label={label}
+            workspacePath={sessionCwd} currentSessionId={pane.sessionId} onStartTask={onStartWorkspaceTask} />}
+          editorAction={<OpenInEditorRow cwd={sessionCwd} />}
+          scriptsAction={sessionCwd && environmentAllows(environment, 'terminalInput') ? <ProjectScripts cwd={sessionCwd} onRun={handleRunScript} /> : null}
+        >
+          {threadGit.branch && <ThreadGitActions cwd={sessionCwd} branch={threadGit.branch} files={threadGit.files} onChanged={threadGit.refresh} />}
+          {threadGit.branch && <PullRequestStatus cwd={sessionCwd} branch={threadGit.branch} />}
+        </ThreadDetailsCard>}
         {pane.sessionId ? (
           <div className={`terminal-with-status${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
             <div className={`desktop-terminal-stack${isTerminalPanelOpen ? ' terminal-panel-open' : ''}${useTerminalFirstLayout ? ' terminal-first' : ''}`}>
@@ -786,14 +1164,16 @@ export const TerminalPane = memo(function TerminalPane({
               {!useTerminalFirstLayout && useConversationFirstLayout && (
                 <div className="desktop-conversation-surface">
                   <LazyDesktopConversationView
+                    showHeader={!isStructuredSession}
                     turns={turns}
                     isStreaming={isStructuredSession ? structuredIsStreaming : isSessionBusy}
                     isLoadingHistory={!isStructuredSession && isConversationHistoryLoading}
                     onSend={sessionInputAllowed ? (isStructuredSession ? structuredSendMessage : handleChatSend) : undefined}
-                    onSendRaw={sessionInputAllowed ? (isStructuredSession ? handleStructuredRawSend : handleRawSend) : undefined}
+                    onSendRaw={!isManagedConversation && sessionInputAllowed ? (isStructuredSession ? handleStructuredRawSend : handleRawSend) : undefined}
                     onInterrupt={sessionInputAllowed ? (isStructuredSession ? structuredInterrupt : handleInterrupt) : undefined}
-                    onImageUpload={sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
+                    onImageUpload={!isV4Session && sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
                     sessionId={pane.sessionId}
+                    workspacePath={isStructuredSession ? sessionCwd : ''}
                     aiType={currentAiType}
                     connectionState={resolvedConnectionState}
                     isSendReady={isStructuredSession ? structuredConnectionState === 'online' : isSendReady}
@@ -802,7 +1182,7 @@ export const TerminalPane = memo(function TerminalPane({
                     launchCommand={isStructuredSession ? '' : launchCommand}
                     launchQueued={launchQueued}
                     onLaunchAgent={!isStructuredSession && terminalInputAllowed && agentExecutionAllowed ? handleLaunchAgent : undefined}
-                    onOpenTerminal={isStructuredSession ? handleOpenTerminalPanel : undefined}
+                    onOpenTerminal={isStructuredSession && !isManagedConversation ? handleOpenTerminalPanel : undefined}
                     conversationNotice={viewModeNotice}
                     showTerminalMirror={Boolean(interactivePromptEvent) || isNoticePersistent}
                     interactivePromptEvent={interactivePromptEvent}
@@ -811,8 +1191,23 @@ export const TerminalPane = memo(function TerminalPane({
                     structuredMessages={structuredMessages}
                     structuredToolCalls={structuredToolCalls}
                     pendingApproval={pendingApproval}
+                    browserApprovals={browserReview.requests}
+                    onBrowserApprove={canReviewBrowser ? browserReview.decide : undefined}
+                    isBrowserApproving={browserReview.isDeciding}
+                    browserApprovalError={browserReview.error}
+                    isApproving={structuredIsApproving}
+                    isInterrupting={structuredIsInterrupting}
+                    requiresCleanup={structuredRequiresCleanup}
+                    actionError={structuredActionError}
                     onApprove={agentExecutionAllowed ? structuredApprove : undefined}
-                    allowPromptKeyboardCapture={terminalInputAllowed && desktopAllowTerminalInput === true}
+                    onReviewApproval={agentExecutionAllowed ? structuredReviewApproval : undefined}
+                    allowApprovalForSession={isCodexSession || isClaudeChat}
+                    onImplementPlan={(isCodexSession || isClaudeChat) && sessionInputAllowed ? handleImplementPlan : undefined}
+                    onImplementPlanInNewThread={(isCodexSession || isClaudeChat) && onStartThreadWithPrompt ? handleImplementPlanInNewThread : undefined}
+                    onEditMessage={isStructuredSession && sessionInputAllowed ? setComposerValue : undefined}
+                    onDiffComment={isStructuredSession && sessionInputAllowed ? note => setComposerValue(`${composerValue.trimEnd() ? `${composerValue.trimEnd()}\n` : ''}${note}`) : undefined}
+                    onForkFromMessage={(isCodexSession || isClaudeChat) && onStartThreadWithPrompt ? prompt => onStartThreadWithPrompt(prompt, currentSession) : undefined}
+                    allowPromptKeyboardCapture={terminalInputAllowed && desktopAllowTerminalInput === true && (!isStructuredSession || ['legacy', 'supervised'].includes(rawInputMode))}
                   />
                 </div>
               )}
@@ -851,17 +1246,50 @@ export const TerminalPane = memo(function TerminalPane({
                   ) : null}
                 </div>
               </div>
+              {useTerminalFirstLayout && viewModeNotice && <div role="alert" className="terminal-input-error">{viewModeNotice}</div>}
+              {showLearningNudge && <div className="session-queued-message session-learning-nudge" role="status" aria-label="Save what was learned">
+                <span className="session-queued-text">Worth remembering anything from this conversation for next time?</span>
+                <WorkspaceToolsButton initialTool="learning" label="Review what to remember" workspacePath={sessionCwd} currentSessionId={pane.sessionId}
+                  latestAssistantText={latestResponse?.text || ''} onInsertPrompt={text => setComposerValue(text)} onStartTask={onStartWorkspaceTask} />
+                <button type="button" onClick={() => { dismissLearningNudge(pane.sessionId, userTurns); setLearningNudgeHidden(userTurns); }}>Not now</button>
+              </div>}
+              {queueError && <div role="alert" className="terminal-input-error">{queueError}</div>}
+              {queuedMessages.map(item => <div key={item.id} className="session-queued-message" role="status" aria-label="Queued message">
+                <span className="session-queued-label">{item.status === 'held' ? 'Send unconfirmed' : item.status === 'sending' ? 'Sending' : item.status === 'editing' ? 'Original retained' : item.status === 'recovered' ? 'Restored for review' : item.status === 'waiting' ? 'Waiting for previous response' : 'Queued'}</span>
+                <span className="session-queued-text">{item.text}</span>
+                {item.status === 'held' && <span>Check the conversation before removing this message; it may have been sent.</span>}
+                {item.status === 'recovered' && <span>Check the conversation before resuming; another tab may have sent this message.</span>}
+                {item.status === 'editing' && <span>Remove this copy before sending your edited draft.</span>}
+                {(item.status === 'recovered' || item.status === 'waiting' && !structuredIsStreaming) && <button type="button" onClick={() => {
+                  nativeQueue.update(current => current.map(queued => queued.id === item.id ? { ...queued, status: 'queued' } : queued));
+                }}>Resume queue</button>}
+                {item.status === 'queued' && <button type="button" onClick={() => structuredInterrupt?.()} disabled={structuredIsInterrupting || !structuredIsStreaming}>Send now</button>}
+                {(item.status === 'queued' || item.status === 'recovered') && <button type="button" onClick={() => {
+                  if (nativeQueue.update(current => current.map(queued => queued.id === item.id ? { ...queued, status: 'editing' } : queued)))
+                    setComposerValue(current => current ? `${current}\n\n${item.text}` : item.text);
+                }}>Edit</button>}
+                {(item.status === 'editing' || item.status === 'held') && <button type="button" onClick={() => {
+                  nativeQueue.update(current => current.filter(queued => queued.id !== item.id));
+                }}>Remove queued copy</button>}
+              </div>)}
               <DesktopStatusBar
+                compactConversation={isStructuredSession}
+                showTopRow={isStructuredSession ? false : undefined}
+                composerSubmitLabel={isStructuredSession ? 'Send message' : 'Send to terminal'}
+                isStreaming={isStructuredSession && structuredIsStreaming}
+                isInterrupting={isStructuredSession && structuredIsInterrupting}
+                requiresCleanup={isStructuredSession && structuredRequiresCleanup}
+                onInterrupt={isStructuredSession && sessionInputAllowed ? structuredInterrupt : undefined}
                 sessionId={pane.sessionId}
                 sessionTitle={currentSession?.title}
                 sessionSummary={paneSummaryText}
-                cwd={currentCwd || projectInfo?.cwd}
-                gitBranch={projectInfo?.gitBranch}
+                cwd={sessionCwd}
+                gitBranch={isStructuredSession ? undefined : sessionGitBranchInfo?.currentBranch || matchingProjectInfo?.gitBranch}
                 isActive={shouldHighlightActiveChrome}
-                onImageUpload={sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
+                onImageUpload={!isV4Session && sessionInputAllowed && environmentAllows(environment, 'fileWrite') && environmentAllows(environment, 'transfer') ? handleImageUpload : undefined}
                 isTerminalPanelOpen={!useTerminalFirstLayout && isTerminalDockVisible}
-                showTerminalToggle={!useTerminalFirstLayout && isStructuredSession}
-                onToggleTerminalPanel={!useTerminalFirstLayout && isStructuredSession ? handleToggleTerminalPanel : undefined}
+                showTerminalToggle={!useTerminalFirstLayout && isStructuredSession && !isManagedConversation}
+                onToggleTerminalPanel={!useTerminalFirstLayout && isStructuredSession && !isManagedConversation ? handleToggleTerminalPanel : undefined}
                 terminalViewMode="terminal"
                 showTerminalViewModeToggle={false}
                 onToggleTerminalViewMode={undefined}
@@ -869,74 +1297,116 @@ export const TerminalPane = memo(function TerminalPane({
                 aiType={currentAiType}
                 aiOptions={aiOptions}
                 customAiProviders={customAiProviders}
-                onSelectAiType={handleSelectAiType}
+                onSelectAiType={!isManagedConversation ? handleSelectAiType : undefined}
+                showAiSelector={!isManagedConversation && !isStructuredSession}
                 onAddCustomAiCommand={handleAddCustomAiCommand}
                 onLaunchAi={handleLaunchAgent}
                 composerValue={composerValue}
                 composerAttachments={composerAttachments}
+                attachmentsEnabled
+                skills={installedSkills}
+                mentionRoot={isStructuredSession ? sessionCwd : ''}
+                allowAnyFile={isStructuredSession && !isV4Session}
+                showImageButton
+                userImages={isV4Session ? userImages : undefined}
                 onComposerChange={setComposerValue}
                 onComposerSubmit={handleComposerSubmit}
                 onComposerAttachmentAdd={handleComposerAttachmentAdd}
                 onComposerAttachmentRemove={handleComposerAttachmentRemove}
-                composerPlaceholder={sessionInputAllowed ? "Ask V4 anything" : "Read-only remote session"}
-                composerDisabled={!pane.sessionId || !sessionInputAllowed}
-                runtimeInfo={runtimeInfo}
-                gitBranches={gitBranchInfo?.branches || []}
-                currentGitBranch={gitBranchInfo?.currentBranch || projectInfo?.gitBranch || null}
+                getAttachmentSelectionToken={getAttachmentSelectionToken}
+                isAttachmentSelectionTokenCurrent={isAttachmentSelectionTokenCurrent}
+                composerPlaceholder={sessionInputAllowed ? getComposerPlaceholder({ isStructuredSession, session: currentSession, foregroundAiType: currentAiType, customProviders: customAiProviders }) : "Read-only remote session"}
+                composerSubmitDisabled={Boolean(attachmentDraftError) || (isStructuredSession && structuredHistoryOnly) || queuedMessages.some(item => item.status === 'editing')}
+                composerDisabled={!pane.sessionId || !sessionInputAllowed || composerSubmitting || modelUpdatePending || (isStructuredSession && (structuredIsSending || structuredIsInterrupting))}
+                runtimeInfo={isStructuredSession ? { label: `${getStructuredAgentLabel(currentSession)}${currentSession?.model ? ` · ${currentSession.model}` : ''}` } : runtimeInfo}
+                gitBranches={sessionGitBranchInfo?.branches || []}
+                currentGitBranch={isStructuredSession ? null : sessionGitBranchInfo?.currentBranch || matchingProjectInfo?.gitBranch || null}
                 isLoadingGitBranches={isLoadingGitBranches}
                 isSwitchingGitBranch={isSwitchingGitBranch}
                 onSelectGitBranch={environmentAllows(environment, 'fileWrite') ? handleSelectGitBranch : undefined}
                 composerSecondaryAction={(
                   <div className="status-permission-picker">
-                    <WorkspaceToolsButton
-                      workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
-                      currentSessionId={pane.sessionId}
-                      latestAssistantText={latestWorkspaceResponse(isStructuredSession ? structuredMessages : turns, isStructuredSession ? structuredIsStreaming : isSessionBusy)}
-                      onStartTask={onStartWorkspaceTask}
-                      onSelectSession={onSelectHistorySession ? id => onSelectHistorySession(id, pane.id) : undefined}
-                      onInsertPrompt={currentAiType || isStructuredSession ? prompt => setComposerValue(prompt) : undefined}
-                    />
-                    <WorkspaceProfileButton
-                      workspacePath={currentSession?.thread?.projectPath || currentSession?.cwd || currentCwd || projectInfo?.cwd}
-                      aiOptions={aiOptions}
-                      onInsertContext={currentAiType || isStructuredSession ? context => setComposerValue(value =>
-                        context + (value.trim() ? '\n\nTask:\n' + value : '')) : undefined}
-                    />
-                    <button
-                      type="button"
-                      className={`status-sandbox-toggle ${isSandboxRequested ? 'active' : ''}${sandboxChangePending ? ' pending' : ''}`}
-                      onClick={() => setIsPermissionMenuOpen((isOpen) => !isOpen)}
-                      title="Sandbox modes are unavailable until runtime isolation is enforced"
-                      aria-label="Launch permissions unavailable"
-                      aria-haspopup="menu"
-                      aria-expanded={isPermissionMenuOpen}
-                      disabled
-                    >
-                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                        <path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" />
-                      </svg>
-                      <span>Full access</span>
-                    </button>
-                    {isPermissionMenuOpen && (
-                      <div className="status-permission-menu" role="menu" aria-label="Launch permissions">
-                        {SANDBOX_PERMISSION_OPTIONS.map((option) => (
-                          <button
-                            key={option.mode}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={requestedSandboxMode === option.mode}
-                            className={`status-permission-option ${requestedSandboxMode === option.mode ? 'active' : ''}`}
-                            onClick={() => handleSelectSandboxMode(option.mode)}
-                          >
-                            <span>{option.label}</span>
-                            <small>{option.description}</small>
-                          </button>
-                        ))}
+                    {isCodexSession ? <>
+                      <ComposerPicker label="Project" menuTitle="New chat in project" value={sessionCwd} placeholder="Choose project"
+                        className="workspace-start-project-picker" disabled={!onStartProjectChat}
+                        icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>}
+                        options={projectPaths.map(path => ({ value: path, label: projects.find(project => project.path === path)?.name || path.split(/[\\/]/).filter(Boolean).pop() || path, description: path === sessionCwd ? 'Current conversation' : `Start a new chat in ${path}` }))}
+                        onChange={path => { if (path !== sessionCwd) onStartProjectChat?.(path); }}
+                        action={onStartProjectChat ? { label: 'Browse for project folder', text: 'New chat in another folder…', onClick: () => onStartProjectChat(null) } : undefined} />
+                      <div className="workspace-start-model" aria-busy={modelUpdatePending ? 'true' : undefined}>
+                        <AgentModelPicker compact agentId="codex" syncSelection={false} disabled={modelChangeDisabled}
+                          value={currentSession?.model ? { model: currentSession.model, reasoning: currentSession.reasoning || '', ...serviceTierEntry(currentSession.serviceTier) } : null}
+                          onChange={handleSelectModel} />
                       </div>
-                    )}
+                    </> : isClaudeChat ? <div className="workspace-start-model" aria-busy={modelUpdatePending ? 'true' : undefined}>
+                        <AgentModelPicker compact agentId="claude" syncSelection={false} disabled={modelChangeDisabled}
+                          value={currentSession?.model ? { model: currentSession.model, reasoning: currentSession.reasoning || '' } : null}
+                          onChange={handleSelectModel} />
+                      </div> : isStructuredSession && <span className="session-composer-context">{getStructuredAgentLabel(currentSession)}{currentSession?.model ? ` · ${currentSession.model}` : ''}</span>}
+                    <div className="session-composer-actions">
+                    {isV4Session && <FollowupQueueButton sessionId={pane.sessionId} />}
+                    {isV4Session && <ConversationContextButton
+                      sessionId={pane.sessionId} active={true}
+                      controlState={structuredControlState}
+                      onStopConversation={sessionInputAllowed ? structuredInterrupt : undefined}
+                      isStopping={structuredIsInterrupting} stopError={structuredControlError}
+                      requiresCleanup={structuredRequiresCleanup}
+                      conversationBusy={Boolean(structuredIsStreaming || ['accepted', 'running'].includes(currentSession?.status))}
+                      readOnly={!sessionInputAllowed}
+                    />}
+                    {isStructuredSession && <ComposerPicker label="Stashed drafts" menuTitle="Stashed drafts" className="session-stash-picker" placeholder={stashed.length ? `Stash (${stashed.length})` : 'Stash'}
+                      value="" disabled={!stashed.length && !composerValue.trim()}
+                      options={stashed.map(item => ({ value: item.id, label: item.text.slice(0, 60), description: new Date(item.at).toLocaleString() }))}
+                      onChange={restoreStashed}
+                      action={composerValue.trim() ? { label: 'Stash this draft', text: 'Stash this draft', onClick: stashCurrentDraft } : undefined} />}
+                    {(isClaudeChat || isCodexSession) && composerContext && <span className="session-context-meter" role="img" aria-label={`${composerContext.label}: ${composerContext.detail}`} title={composerContext.detail}>
+                      <svg width="14" height="14" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--border-default)" strokeWidth="4" /><circle cx="18" cy="18" r="15" fill="none" stroke={composerContext.percent > 85 ? 'var(--error)' : 'var(--accent-primary)'} strokeWidth="4" strokeDasharray={`${composerContext.percent * 0.9425} 94.25`} transform="rotate(-90 18 18)" /></svg>
+                      <span>{composerContext.percent}%</span>
+                    </span>}
+                    {(isClaudeChat || isCodexSession) && <button type="button" className={`session-plan-toggle${planMode ? ' active' : ''}`}
+                      aria-label="Plan mode" aria-pressed={planMode} title="Plan first: the agent proposes a plan without changing anything"
+                      onClick={() => setPlanMode(value => !value)}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" /></svg>
+                      <span>Plan</span>
+                    </button>}
+                    {(isClaudeChat || isCodexSession) && <ComposerPicker label="Access" menuTitle="Access" className="session-access-picker"
+                      value={currentSession?.accessMode || 'auto-edit'} options={ACCESS_OPTIONS}
+                      disabled={modelChangeDisabled} onChange={handleSelectAccess}
+                      icon={<svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0 1.75 2.5v4.16c0 4.09 2.56 7.8 6.25 9.34 3.69-1.54 6.25-5.25 6.25-9.34V2.5L8 0Zm4.75 6.66c0 3.26-1.93 6.22-4.75 7.62-2.82-1.4-4.75-4.36-4.75-7.62V3.52L8 1.63l4.75 1.89v3.14Z" /></svg>} />}
+                    </div>
                   </div>
                 )}
               />
+              {isStructuredSession && drawerOpen && <section className="thread-terminal-drawer" aria-label="Thread terminal">
+                {drawerTerminal.terminals.length > 0 && <div className="thread-terminal-tabs" role="tablist" aria-label="Thread terminals">
+                  {drawerTerminal.terminals.map((terminal, index) => <button key={terminal.id} type="button" role="tab"
+                    aria-selected={terminal.id === drawerTerminal.terminalId} onClick={() => drawerTerminal.select(terminal.id)}>
+                    {`Terminal ${index + 1}`}
+                  </button>)}
+                  <button type="button" className="thread-terminal-add" aria-label="New terminal in this thread" onClick={() => drawerTerminal.addTerminal()}>+</button>
+                </div>}
+                {drawerTerminal.createError && <div className="thread-terminal-drawer-error"><p role="alert">{drawerTerminal.createError}</p>
+                  {drawerTerminal.canRetryCreate && <button type="button" aria-label="Retry adding terminal" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.retryCreate()}>Retry</button>}
+                  <button type="button" aria-label="Dismiss terminal error" onClick={() => drawerTerminal.dismissCreateError()}>Dismiss</button>
+                  {drawerTerminal.canStartAgainAfterReview && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.startAgainAfterReview()}>I checked the list; start another</button>}
+                </div>}
+                {!terminalInputAllowed ? <p role="status" className="thread-terminal-drawer-status">Terminal access is unavailable for this environment.</p>
+                  : !sessionCwd ? <p role="status" className="thread-terminal-drawer-status">This conversation has no workspace folder for a terminal.</p>
+                  : drawerTerminal.error ? <div className="thread-terminal-drawer-error"><p role="alert">{drawerTerminal.error}</p>
+                  {drawerTerminal.canRetry && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.retry()}>Retry opening terminal</button>}
+                  {!drawerTerminal.terminalId && drawerTerminal.canStartAgainAfterReview && <button type="button" disabled={!terminalInputAllowed} onClick={() => drawerTerminal.startAgainAfterReview()}>I checked the list; start another</button>}</div>
+                  : drawerTerminal.terminalId ? <LazyTerminalChat
+                    key={drawerTerminal.terminalId}
+                    surface="desktop"
+                    sessionId={drawerTerminal.terminalId}
+                    fontSize={fontSize}
+                    webglEnabled={webglEnabled}
+                    viewMode="terminal"
+                    inputEnabled={terminalInputAllowed}
+                    isPrimary={isActive}
+                    fitSignal={fitSignal}
+                  /> : <p role="status" className="thread-terminal-drawer-status">Opening a terminal in this thread's folder…</p>}
+              </section>}
             </div>
           </div>
         ) : (
@@ -949,267 +1419,6 @@ export const TerminalPane = memo(function TerminalPane({
           </div>
         )}
       </div>
-
-      <style>{`
-        /* ── Pane header bar ── */
-        .ph-bar {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          height: 36px;
-          padding: 0 6px 0 12px;
-          background: var(--terminal-chrome-bg, #1a1713);
-          border-bottom: none;
-          flex-shrink: 0;
-          z-index: 1;
-        }
-
-        .ph-bar[draggable=true] { cursor: grab; }
-        .ph-bar.is-dragging-pane { opacity: 0.5; cursor: grabbing; }
-
-        .ph-left {
-          display: flex;
-          align-items: center;
-          min-width: 0;
-          flex: 1;
-        }
-
-        /* ── Topic summary ── */
-        .ph-topic-sep {
-          color: var(--text-muted);
-          opacity: 0.5;
-          padding: 0 6px;
-          flex-shrink: 0;
-          font-size: 12px;
-        }
-
-        .ph-topic {
-          font-size: 11px;
-          color: var(--text-muted);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          max-width: 220px;
-          flex-shrink: 1;
-        }
-
-        /* ── Session selector ── */
-        .ph-session {
-          position: relative;
-        }
-
-        .ph-session-btn {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 4px 8px 4px 8px;
-          background: var(--bg-elevated);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-sm, 4px);
-          color: var(--text-secondary);
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-          transition: all var(--transition-fast, 0.15s ease);
-        }
-
-        .ph-session-btn:hover {
-          border-color: var(--accent-primary);
-          color: var(--accent-primary);
-        }
-
-        .ph-session-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--accent-primary);
-          opacity: 0.7;
-          flex-shrink: 0;
-        }
-
-        .ph-session-name {
-          max-width: 140px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .ph-session-chevron {
-          opacity: 0.5;
-          flex-shrink: 0;
-        }
-
-        .pane-home {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          min-height: 100%;
-          padding: 32px;
-          background:
-            radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 32%),
-            linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
-        }
-
-        .pane-home-copy {
-          max-width: 420px;
-          text-align: center;
-        }
-
-        .pane-home-kicker {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 4px 10px;
-          border-radius: 999px;
-          border: 1px solid rgba(56, 189, 248, 0.18);
-          background: rgba(56, 189, 248, 0.08);
-          color: rgba(147, 197, 253, 0.88);
-          font-size: 11px;
-          font-weight: 600;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          margin-bottom: 14px;
-        }
-
-        .pane-home h2 {
-          margin: 0 0 10px;
-          font-size: 24px;
-          line-height: 1.1;
-          color: var(--text-primary);
-        }
-
-        .pane-home p {
-          margin: 0;
-          color: var(--text-secondary);
-          font-size: 14px;
-          line-height: 1.6;
-        }
-
-        /* ── Session dropdown menu ── */
-        .ph-session-menu {
-          position: absolute;
-          top: calc(100% + 4px);
-          left: 0;
-          min-width: 200px;
-          max-height: 260px;
-          overflow-y: auto;
-          background: var(--bg-elevated);
-          border: 1px solid var(--border-default);
-          border-radius: var(--radius-md, 8px);
-          box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.5));
-          z-index: 1000;
-          padding: 4px;
-        }
-
-        .ph-menu-label {
-          padding: 6px 10px 4px;
-          font-size: 10px;
-          font-weight: 650;
-          text-transform: uppercase;
-          letter-spacing: 0.4px;
-          color: var(--text-muted);
-        }
-
-        .ph-menu-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          width: 100%;
-          padding: 6px 10px;
-          background: transparent;
-          border: none;
-          border-radius: var(--radius-sm, 4px);
-          color: var(--text-secondary);
-          font-size: 12px;
-          text-align: left;
-          cursor: pointer;
-          transition: all var(--transition-fast, 0.15s ease);
-        }
-
-        .ph-menu-item:hover {
-          background: var(--bg-surface);
-          color: var(--text-primary);
-        }
-
-        .ph-menu-item.active {
-          background: var(--accent-primary-dim);
-          color: var(--accent-primary);
-        }
-
-        .ph-menu-dot {
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          background: var(--accent-primary);
-          flex-shrink: 0;
-        }
-
-        .ph-menu-title {
-          flex: 1;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .ph-menu-check {
-          flex-shrink: 0;
-          opacity: 0.8;
-          color: var(--accent-primary);
-        }
-
-        .ph-menu-empty {
-          padding: 12px 10px;
-          font-size: 11px;
-          color: var(--text-muted);
-          text-align: center;
-        }
-
-        /* ── Control buttons ── */
-        .ph-controls {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          flex-shrink: 0;
-        }
-
-        .ph-btn {
-          background: var(--bg-elevated);
-          border: 1px solid var(--border-subtle);
-          border-radius: var(--radius-sm, 4px);
-          padding: 5px;
-          color: var(--text-muted);
-          cursor: pointer;
-          transition: all var(--transition-fast, 0.15s ease);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          line-height: 1;
-        }
-
-        .ph-btn svg {
-          display: block;
-        }
-
-        .ph-btn:hover {
-          background: var(--bg-surface);
-          border-color: var(--accent-primary);
-          color: var(--accent-primary);
-        }
-
-        .ph-btn-close:hover {
-          background: rgba(244, 63, 94, 0.1);
-          border-color: var(--error);
-          color: var(--error);
-        }
-
-        @media (max-width: 768px) {
-          .ph-btn {
-            min-width: 44px;
-            min-height: 44px;
-            padding: 10px;
-          }
-        }
-      `}</style>
     </div>
   );
 });

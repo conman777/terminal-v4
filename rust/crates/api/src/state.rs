@@ -13,7 +13,9 @@ use terminal_v4_core::{
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use uuid::Uuid;
 
-use crate::auth::{issue_access_token, AuthenticatedUser};
+#[cfg(test)]
+use crate::auth::issue_access_token;
+use crate::auth::{issue_access_token_for_generation, AuthenticatedUser};
 use crate::external_auth::{ExternalAuthProvider, ExternalAuthUser, PostgresExternalAuthProvider};
 use crate::structured::StructuredSessionManager;
 use crate::terminal::TerminalManager;
@@ -22,6 +24,22 @@ const EXTERNAL_AUTH_MIRROR_PASSWORD_HASH: &str = "!external-auth-mirror!";
 const REFRESH_TOKEN_TTL_DAYS: i64 = 30;
 const MOBILE_KEYBOARD_DEBUG_ENTRY_LIMIT: usize = 200;
 
+#[cfg(unix)]
+mod auth_admission;
+#[cfg(test)]
+mod auth_policy_tests;
+#[cfg(unix)]
+#[cfg_attr(not(any(test, feature = "supervised-input-preview")), allow(dead_code))]
+pub(crate) mod owner_input;
+#[cfg(test)]
+mod passkey_tests;
+#[cfg(test)]
+mod refresh_tests;
+#[cfg(test)]
+mod schema_tests;
+#[cfg(test)]
+mod utility_persistence_tests;
+
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<AppStateInner>,
@@ -29,11 +47,19 @@ pub struct AppState {
 
 struct AppStateInner {
     config: AppConfig,
-    db: Mutex<Connection>,
+    db: Arc<Mutex<Connection>>,
+    #[cfg(unix)]
+    auth_admission: std::sync::OnceLock<Arc<auth_admission::AuthAdmission>>,
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    supervised_input: std::sync::atomic::AtomicBool,
+    #[cfg(all(test, unix))]
+    logout_marker_pause:
+        std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     file_lock: Mutex<()>,
     external_auth: Option<Arc<dyn ExternalAuthProvider>>,
     terminal_manager: TerminalManager,
     structured_session_manager: StructuredSessionManager,
+    provider_connections: crate::provider_connections::ProviderConnectionManager,
     process_manager: crate::processes::ProcessManager,
     stats_collector: Arc<crate::system_stats::SystemStatsCollector>,
     passkey_service: crate::passkey::PasskeyService,
@@ -42,6 +68,81 @@ struct AppStateInner {
     preview_log_store: crate::preview::logs::PreviewLogStore,
     preview_performance_store: crate::preview::performance::PerformanceStore,
     request_log_store: crate::preview::request_logs::RequestLogStore,
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+pub(crate) struct LocalAdmission {
+    root: PathBuf,
+    db: Arc<Mutex<Connection>>,
+    fence: Arc<auth_admission::AuthAdmission>,
+}
+
+#[cfg(unix)]
+impl LocalAdmission {
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(crate) fn accept<T, E>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        let _fence = self.fence.acquire()?;
+        let mut connection = self
+            .db
+            .lock()
+            .map_err(|_| "Authentication database unavailable")?;
+        self.fence.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        let check = || {
+            self.fence.validate(&tx)?;
+            let installed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='background_ledger_installation')", [], |row| row.get(0)).map_err(|_| "Background installation unavailable")?;
+            if installed {
+                let state: Option<String> = tx
+                    .query_row(
+                        "SELECT state FROM background_ledger_installation WHERE id=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|_| "Background installation unavailable")?;
+                if state.as_deref() != Some("ready") {
+                    return Err("Background installation is incomplete".into());
+                }
+                let held: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM background_owner_holds WHERE owner=?1)",
+                        [owner],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| "Background owner hold unavailable")?;
+                if held {
+                    return Err("Owner cleanup is in progress".into());
+                }
+            } else {
+                match std::fs::symlink_metadata(self.root.join("background-processes")) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    _ => return Err("Background installation identity is unavailable".into()),
+                }
+            }
+            let current = AppState::auth_generation(&tx, owner)?;
+            let (generation, _) = authority
+                .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                .ok_or("Credential is invalid or expired")?;
+            if generation != current {
+                return Err("Credential has been revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = accept(&check);
+        Ok((result, tx.commit().is_ok()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +221,7 @@ pub enum ChangePasswordResult {
     Changed,
     InvalidCurrentPassword,
     ExternallyManaged,
+    LocalTesting,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -149,6 +251,59 @@ pub struct HistoryQuery {
 }
 
 impl AppState {
+    /// Construct the server state with exclusive structured-session ownership.
+    /// On non-Unix platforms the existing session behavior is retained.
+    pub fn new_runtime(config: AppConfig) -> Result<Self, String> {
+        let state = Self::new(config)?;
+        #[cfg(unix)]
+        {
+            let manager = state.structured_session_manager();
+            manager.bind_live_ownership()?;
+            manager.bind_local_admission(state.local_admission()?)?;
+            let installed = state.owner_cleanup_installed()?;
+            let supervisor = if installed {
+                crate::v4_agent::delegation_outbox::open_existing_supervisor(
+                    &state.config().data_dir,
+                )
+            } else {
+                crate::v4_agent::delegation_outbox::provision_supervisor(&state.config().data_dir)
+            };
+            match supervisor {
+                Ok(supervisor) => manager.bind_delegation_supervisor(supervisor)?,
+                Err(error) if !installed => {
+                    return Err(format!(
+                        "Cannot initialize owner cleanup delegation supervisor: {error}"
+                    ))
+                }
+                Err(error) => tracing::warn!(%error, "Background delegation is unavailable"),
+            }
+            let cleanup = state.provision_owner_cleanup()?;
+            manager.bind_owner_cleanup(cleanup)?;
+            match state.open_existing_background() {
+                Ok(
+                    crate::v4_agent::background_process::bootstrap::ExistingInstallation::Available(
+                        background,
+                    ),
+                ) => {
+                    manager.bind_background_processes(Arc::new(background))?;
+                }
+                Ok(
+                    crate::v4_agent::background_process::bootstrap::ExistingInstallation::Absent,
+                ) => {}
+                Ok(crate::v4_agent::background_process::bootstrap::ExistingInstallation::Busy) => {
+                    manager.mark_background_unavailable();
+                    tracing::warn!("Background process manager is owned by another server");
+                }
+                Err(error) => {
+                    manager.mark_background_unavailable();
+                    tracing::warn!(%error, "Background process manager is unavailable");
+                }
+            }
+            manager.start_owner_cleanup_workers()?;
+        }
+        Ok(state)
+    }
+
     pub fn new(config: AppConfig) -> Result<Self, String> {
         let external_auth = config
             .storage_database_url
@@ -172,34 +327,232 @@ impl AppState {
         structured_session_manager: StructuredSessionManager,
     ) -> Result<Self, String> {
         fs::create_dir_all(&config.data_dir).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        let auth_database = auth_admission::open_database(&config.data_dir)?;
+        #[cfg(unix)]
+        let connection = Connection::open_with_flags(
+            config.data_dir.join("terminal.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+        )
+        .map_err(|error| error.to_string())?;
+        #[cfg(not(unix))]
         let connection = Connection::open(config.data_dir.join("terminal.db"))
             .map_err(|error| error.to_string())?;
         let passkey_service = crate::passkey::PasskeyService::new(&config)?;
+        let provider_connections =
+            crate::provider_connections::ProviderConnectionManager::new(&config.data_dir)?;
+        structured_session_manager.bind_provider_connections(provider_connections.clone())?;
 
         let state = Self {
             inner: Arc::new(AppStateInner {
                 terminal_manager: TerminalManager::new(config.clone()),
                 structured_session_manager,
                 process_manager: crate::processes::ProcessManager::new(),
-                stats_collector: Arc::new(crate::system_stats::SystemStatsCollector::new()),
+                stats_collector: Arc::new(crate::system_stats::SystemStatsCollector::new(
+                    &config.data_dir,
+                )),
                 passkey_service,
                 cookie_store: crate::preview::cookie_jar::CookieStore::new(),
                 port_scanner: crate::preview::port_scan::PortScanner::new(),
                 preview_log_store: crate::preview::logs::PreviewLogStore::new(),
                 preview_performance_store: crate::preview::performance::PerformanceStore::new(),
                 request_log_store: crate::preview::request_logs::RequestLogStore::new(),
+                provider_connections,
                 config,
-                db: Mutex::new(connection),
+                db: Arc::new(Mutex::new(connection)),
+                #[cfg(unix)]
+                auth_admission: std::sync::OnceLock::new(),
+                #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+                supervised_input: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(all(test, unix))]
+                logout_marker_pause: Default::default(),
                 file_lock: Mutex::new(()),
                 external_auth,
             }),
         };
+        #[cfg(unix)]
+        {
+            let mut connection = state.lock_db()?;
+            let admission = auth_admission::AuthAdmission::bind(
+                &state.config().data_dir,
+                auth_database,
+                &mut connection,
+            )?;
+            state
+                .inner
+                .auth_admission
+                .set(Arc::new(admission))
+                .map_err(|_| "Authentication admission is already bound")?;
+        }
         state.initialize_schema()?;
         Ok(state)
     }
 
+    pub(crate) fn provider_connections(
+        &self,
+    ) -> &crate::provider_connections::ProviderConnectionManager {
+        &self.inner.provider_connections
+    }
+
     pub fn config(&self) -> &AppConfig {
         &self.inner.config
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn local_admission(&self) -> Result<LocalAdmission, String> {
+        Ok(LocalAdmission {
+            root: self
+                .config()
+                .data_dir
+                .canonicalize()
+                .map_err(|_| "Authentication root unavailable")?,
+            db: self.inner.db.clone(),
+            fence: self
+                .inner
+                .auth_admission
+                .get()
+                .ok_or("Authentication admission unavailable")?
+                .clone(),
+        })
+    }
+
+    #[cfg(unix)]
+    fn open_existing_background(
+        &self,
+    ) -> Result<crate::v4_agent::background_process::bootstrap::ExistingInstallation, String> {
+        let fence = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _guard = fence.acquire()?;
+        let db = self.lock_db()?;
+        fence.validate(&db)?;
+        let result = crate::v4_agent::background_process::bootstrap::open_existing(
+            &self.config().data_dir,
+            &db,
+        )?;
+        fence.validate(&db)?;
+        Ok(result)
+    }
+
+    #[cfg(unix)]
+    fn owner_cleanup_installed(&self) -> Result<bool, String> {
+        let fence = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _guard = fence.acquire()?;
+        let db = self.lock_db()?;
+        fence.validate(&db)?;
+        let exists: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('auth_admission_identity') WHERE name='structured_cleanup_version')", [], |row| row.get(0))
+            .map_err(|_| "Owner cleanup installation unavailable")?;
+        if !exists {
+            return Ok(false);
+        }
+        match db
+            .query_row(
+                "SELECT structured_cleanup_version FROM auth_admission_identity WHERE id=1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| "Owner cleanup installation unavailable")?
+        {
+            0 => Ok(false),
+            1 | 2 | 3 | 4 => Ok(true),
+            _ => Err("Unsupported owner cleanup installation".into()),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn provision_owner_cleanup(
+        &self,
+    ) -> Result<Arc<crate::structured::owner_cleanup::OwnerCleanup>, String> {
+        let fence = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .clone();
+        {
+            let _guard = fence.acquire()?;
+            let mut db = self.lock_db()?;
+            fence.validate(&db)?;
+            let tx = db
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|_| "Owner cleanup installation unavailable")?;
+            let has_version: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('auth_admission_identity') WHERE name='structured_cleanup_version')", [], |row| row.get(0)).map_err(|_| "Owner cleanup installation unavailable")?;
+            if !has_version {
+                tx.execute_batch("ALTER TABLE auth_admission_identity ADD COLUMN structured_cleanup_version INTEGER NOT NULL DEFAULT 0").map_err(|_| "Cannot reserve owner cleanup installation")?;
+            }
+            let version: i64 = tx
+                .query_row(
+                    "SELECT structured_cleanup_version FROM auth_admission_identity WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|_| "Owner cleanup installation unavailable")?;
+            if version == 0 {
+                let existing: i64 = tx.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('structured_owner_holds','structured_owner_cleanup_receipts','structured_owner_delegation_receipts','structured_owner_cleanup_issues','structured_owner_background_reviews','structured_owner_delegation_reviews')", [], |row| row.get(0)).map_err(|_| "Owner cleanup installation unavailable")?;
+                if existing != 0 {
+                    return Err("Owner cleanup installation is incomplete".into());
+                }
+                tx.execute_batch("CREATE TABLE structured_owner_holds(owner TEXT PRIMARY KEY,request TEXT NOT NULL); CREATE TABLE structured_owner_cleanup_receipts(owner TEXT PRIMARY KEY,request TEXT NOT NULL,lease_epoch TEXT NOT NULL); CREATE TABLE structured_owner_delegation_receipts(owner TEXT PRIMARY KEY,request TEXT NOT NULL,supervisor_instance TEXT NOT NULL,outbox_identity TEXT NOT NULL)").map_err(|_| "Cannot initialize owner cleanup")?;
+            } else if version != 1 && version != 2 && version != 3 && version != 4 {
+                return Err("Unsupported owner cleanup installation".into());
+            }
+            tx.prepare("SELECT owner,request FROM structured_owner_holds LIMIT 0")
+                .map_err(|_| "Owner cleanup holds are unavailable")?;
+            tx.prepare(
+                "SELECT owner,request,lease_epoch FROM structured_owner_cleanup_receipts LIMIT 0",
+            )
+            .map_err(|_| "Owner cleanup receipts are unavailable")?;
+            tx.prepare("SELECT owner,request,supervisor_instance,outbox_identity FROM structured_owner_delegation_receipts LIMIT 0").map_err(|_| "Delegation cleanup receipts are unavailable")?;
+            if version <= 1 {
+                tx.execute_batch("CREATE TABLE structured_owner_cleanup_issues(owner TEXT NOT NULL,request TEXT NOT NULL,resource TEXT NOT NULL,code TEXT NOT NULL,PRIMARY KEY(owner,request,resource))")
+                    .map_err(|_| "Cannot migrate owner cleanup diagnostics")?;
+            }
+            tx.prepare(
+                "SELECT owner,request,resource,code FROM structured_owner_cleanup_issues LIMIT 0",
+            )
+            .map_err(|_| "Owner cleanup diagnostics are unavailable")?;
+            if version <= 2 {
+                tx.execute_batch("CREATE TABLE structured_owner_background_reviews(owner TEXT NOT NULL,request TEXT NOT NULL,operation TEXT NOT NULL,count INTEGER NOT NULL,ledger_binding BLOB NOT NULL,PRIMARY KEY(owner,operation))")
+                    .map_err(|_| "Cannot migrate background review audit")?;
+            }
+            tx.prepare("SELECT owner,request,operation,count,ledger_binding FROM structured_owner_background_reviews LIMIT 0")
+                .map_err(|_| "Background review audit is unavailable")?;
+            if version <= 3 {
+                tx.execute_batch("CREATE TABLE structured_owner_delegation_reviews(owner TEXT NOT NULL,request TEXT NOT NULL,operation TEXT NOT NULL,child_operation TEXT NOT NULL,task TEXT NOT NULL,child_session TEXT NOT NULL,outbox_identity TEXT NOT NULL,PRIMARY KEY(owner,operation),UNIQUE(owner,request,child_operation)); UPDATE auth_admission_identity SET structured_cleanup_version=4 WHERE id=1")
+                    .map_err(|_| "Cannot migrate delegation review audit")?;
+            }
+            tx.prepare("SELECT owner,request,operation,child_operation,task,child_session,outbox_identity FROM structured_owner_delegation_reviews LIMIT 0")
+                .map_err(|_| "Delegation review audit is unavailable")?;
+            fence.validate(&tx)?;
+            tx.commit()
+                .map_err(|_| "Cannot commit owner cleanup installation")?;
+        }
+        let acquire_fence = fence.clone();
+        let validate_fence = fence;
+        let acquire: crate::structured::owner_cleanup::FenceAcquire = Arc::new(move || {
+            Ok(Box::new(acquire_fence.acquire()?) as crate::structured::owner_cleanup::FenceGuard)
+        });
+        let validate: crate::structured::owner_cleanup::FenceValidate =
+            Arc::new(move |db| validate_fence.validate(db));
+        let root = self
+            .config()
+            .data_dir
+            .canonicalize()
+            .map_err(|_| "Authentication root unavailable")?;
+        Ok(Arc::new(
+            crate::structured::owner_cleanup::OwnerCleanup::bind_shared(
+                root,
+                self.inner.db.clone(),
+                acquire,
+                validate,
+            )?,
+        ))
     }
 
     pub fn terminal_manager(&self) -> TerminalManager {
@@ -260,13 +613,59 @@ impl AppState {
         if is_external_auth_mirror_user(&user) {
             return self.login_external(identifier, password).await;
         }
+        if user.password_hash == crate::local_testing::PASSWORD_MARKER {
+            return Ok(None);
+        }
 
         let is_valid = verify(password, &user.password_hash).map_err(|error| error.to_string())?;
         if !is_valid {
             return Ok(None);
         }
 
+        if crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            &to_public_user(&user).username,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
         self.issue_auth_result(&user).map(Some)
+    }
+
+    pub(crate) fn login_local_testing(&self, username: &str) -> Result<AuthResult, String> {
+        if !crate::local_testing::enabled(self) {
+            return Err("Local testing is disabled".into());
+        }
+        crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            username,
+        )?;
+        if let Some(user) = self.get_user_by_username(username)? {
+            if user.password_hash == crate::local_testing::PASSWORD_MARKER
+                && user.id.starts_with(crate::local_testing::ACCOUNT_PREFIX)
+            {
+                return self.issue_auth_result(&user);
+            }
+        }
+        let stored_username = format!("{}{username}", crate::local_testing::USERNAME_PREFIX);
+        {
+            let connection = self.lock_db()?;
+            let now = iso_timestamp();
+            connection.execute(
+                "INSERT INTO users (id,username,password_hash,created_at,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(username) DO NOTHING",
+                params![format!("{}{}",crate::local_testing::ACCOUNT_PREFIX,Uuid::new_v4()),stored_username,crate::local_testing::PASSWORD_MARKER,now,now],
+            ).map_err(|error| error.to_string())?;
+        }
+        let user = self
+            .get_user_by_username(&stored_username)?
+            .ok_or("Could not open this testing account")?;
+        if user.password_hash != crate::local_testing::PASSWORD_MARKER
+            || !user.id.starts_with(crate::local_testing::ACCOUNT_PREFIX)
+        {
+            return Err("This testing profile could not be opened safely".into());
+        }
+        self.issue_auth_result(&user)
     }
 
     pub async fn refresh_auth(&self, refresh_token: &str) -> Result<Option<AuthResult>, String> {
@@ -288,20 +687,639 @@ impl AppState {
         if is_external_auth_mirror_user(&user) {
             return self.refresh_external(stored_token).await;
         }
+        if user.password_hash == crate::local_testing::PASSWORD_MARKER
+            && !crate::local_testing::enabled(self)
+        {
+            return Ok(None);
+        }
 
-        let result = self.issue_auth_result(&user)?;
-        self.delete_refresh_token(&stored_token.id)?;
-        Ok(Some(result))
+        self.rotate_refresh_token(&stored_token, to_public_user(&user))
     }
 
     pub fn logout_user(&self, user_id: &str) -> Result<(), String> {
-        let connection = self.lock_db()?;
-        connection
+        #[cfg(unix)]
+        {
+            let owner_guard = owner_input::acquire(
+                &self.inner.config.data_dir,
+                user_id,
+                std::time::Duration::from_secs(3),
+            )?;
+            self.logout_user_with_guard(user_id, Some(&owner_guard))
+                .map(|_| ())
+        }
+        #[cfg(not(unix))]
+        {
+            self.logout_user_with_guard(user_id).map(|_| ())
+        }
+    }
+
+    fn logout_user_with_guard(
+        &self,
+        user_id: &str,
+        #[cfg(unix)] owner_guard: Option<&owner_input::OwnerInputGuard>,
+    ) -> Result<bool, String> {
+        #[cfg(unix)]
+        let _fence = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .acquire()?;
+        let mut connection = self.lock_db()?;
+        #[cfg(unix)]
+        self.inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .validate(&connection)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            let installed = owner_input::installed(&transaction)?;
+            #[cfg(test)]
+            let pause = self.inner.logout_marker_pause.lock().unwrap().take();
+            #[cfg(test)]
+            if let Some((entered, release)) = pause {
+                let _ = entered.send(());
+                let _ = release.recv();
+            }
+            if installed && owner_guard.is_none() {
+                return Ok(false);
+            }
+            if installed {
+                owner_guard
+                    .ok_or("Input owner lock unavailable")?
+                    .bind(&transaction)?;
+            }
+        }
+        #[cfg(unix)]
+        {
+            let has_version: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('auth_admission_identity') WHERE name='structured_cleanup_version')",
+                [],
+                |row| row.get(0),
+            ).map_err(|_| "Owner cleanup installation unavailable")?;
+            let version: i64 = if has_version {
+                transaction
+                    .query_row(
+                        "SELECT structured_cleanup_version FROM auth_admission_identity WHERE id=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|_| "Owner cleanup installation unavailable")?
+            } else {
+                0
+            };
+            if version == 2 || version == 3 || version == 4 {
+                let request = uuid::Uuid::new_v4();
+                crate::v4_agent::background_owner_gate::hold_logout_if_installed_with_request(
+                    &transaction,
+                    user_id,
+                    &request.to_string(),
+                )?;
+                crate::structured::owner_cleanup::OwnerCleanup::hold_in_transaction(
+                    &transaction,
+                    user_id,
+                    request,
+                )?;
+            } else if version == 0 {
+                crate::v4_agent::background_owner_gate::hold_logout_if_installed(
+                    &transaction,
+                    user_id,
+                )?;
+            } else {
+                return Err("Unsupported owner cleanup installation".into());
+            }
+        }
+        transaction
             .execute(
                 "DELETE FROM refresh_tokens WHERE user_id = ?",
                 params![user_id],
             )
-            .map(|_| ())
+            .map_err(|error| error.to_string())?;
+        transaction.execute("INSERT INTO auth_generations (user_id, generation) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET generation = generation + 1", params![user_id]).map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        self.inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?
+            .validate(&transaction)?;
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(true)
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn enable_supervised_input_for_test(&self) {
+        self.install_owner_input_protocol()
+            .expect("Cannot initialize supervised input fixture");
+        self.inner
+            .supervised_input
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn pause_logout_marker_for_test(
+        &self,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (entered, wait_entered) = std::sync::mpsc::channel();
+        let (release, wait_release) = std::sync::mpsc::channel();
+        *self.inner.logout_marker_pause.lock().unwrap() = Some((entered, wait_release));
+        (wait_entered, release)
+    }
+
+    #[cfg(all(unix, feature = "supervised-input-preview"))]
+    pub fn enable_supervised_input_loopback_fixture(&self) -> Result<(), String> {
+        if !crate::local_testing::enabled(self) {
+            return Err("Supervised input fixture requires loopback local-testing mode".into());
+        }
+        self.install_owner_input_protocol()?;
+        self.inner
+            .supervised_input
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    fn install_owner_input_protocol(&self) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        owner_input::install(&tx)?;
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input admission installation unavailable".into())
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    pub(crate) fn supervised_input_enabled(&self) -> bool {
+        self.inner
+            .supervised_input
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn input_installation_active(&self) -> Result<bool, String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction()
+            .map_err(|_| "Authentication admission unavailable")?;
+        let installed = owner_input::installed(&tx)?;
+        admission.validate(&tx)?;
+        Ok(installed)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn verify_owner_input_guard(
+        &self,
+        guard: &owner_input::OwnerInputGuard,
+    ) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        if owner_input::installed(&tx)? {
+            guard.bind(&tx)?;
+        }
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input admission unavailable".to_string())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn prepare_legacy_input_guard(
+        &self,
+        owner: &str,
+        authority: Option<&crate::auth::LocalAuthority>,
+        guard: &owner_input::OwnerInputGuard,
+        session: &str,
+    ) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        if let Some(authority) = authority {
+            let current = Self::auth_generation(&tx, owner)?;
+            let (generation, _) = authority
+                .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                .ok_or("Credential is invalid or expired")?;
+            if generation != current {
+                return Err("Credential has been revoked".into());
+            }
+        }
+        if owner_input::installed(&tx)? {
+            guard.bind(&tx)?;
+            if guard.has_unresolved(&tx, session)? {
+                return Err(
+                    "An earlier input operation needs review before sending more input".into(),
+                );
+            }
+        }
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input admission unavailable".to_string())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn acquire_input_guard(
+        &self,
+        owner: &str,
+    ) -> Result<owner_input::OwnerInputGuard, String> {
+        owner_input::acquire(
+            &self.inner.config.data_dir,
+            owner,
+            std::time::Duration::from_secs(3),
+        )
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn try_acquire_input_guard(
+        &self,
+        owner: &str,
+    ) -> Result<owner_input::OwnerInputGuard, String> {
+        owner_input::acquire(
+            &self.inner.config.data_dir,
+            owner,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    pub(crate) fn validate_input_guard(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        guard: &owner_input::OwnerInputGuard,
+        session: &str,
+        operation: &str,
+        reserved: bool,
+    ) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        let current = Self::auth_generation(&tx, owner)?;
+        let (generation, _) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if generation != current {
+            return Err("Credential has been revoked".into());
+        }
+        let now = crate::v4_agent::interaction::now_ms();
+        if reserved {
+            guard.activate(&tx, session, operation, now)?;
+        } else {
+            guard.claim(&tx, session, operation, now)?;
+        }
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Authentication admission unavailable".into())
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    pub(crate) fn validate_native_owner_guard(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        guard: &owner_input::OwnerInputGuard,
+    ) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        let current = Self::auth_generation(&tx, owner)?;
+        let (generation, _) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if generation != current {
+            return Err("Credential has been revoked".into());
+        }
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Authentication admission unavailable".into())
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    pub(crate) fn issue_input_operation(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        session: &str,
+        incarnation: &str,
+        generation: u64,
+    ) -> Result<(String, String), String> {
+        let guard = self.acquire_input_guard(owner)?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        let current = Self::auth_generation(&tx, owner)?;
+        let (credential_generation, _) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if credential_generation != current {
+            return Err("Credential has been revoked".into());
+        }
+        let now = crate::v4_agent::interaction::now_ms();
+        let (operation, token) = owner_input::issue(
+            &self.inner.config.jwt_secret,
+            owner,
+            session,
+            incarnation,
+            generation,
+            now,
+        )?;
+        guard.reserve(&tx, session, &operation, now)?;
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input issuance is uncertain".to_string())?;
+        Ok((operation, token))
+    }
+
+    #[cfg(all(unix, any(test, feature = "supervised-input-preview")))]
+    pub(crate) fn finish_input_guard(
+        &self,
+        guard: &owner_input::OwnerInputGuard,
+        session: &str,
+        operation: &str,
+        delivered: bool,
+        legacy: bool,
+    ) -> Result<(), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        guard.finish(
+            &tx,
+            session,
+            operation,
+            if delivered && legacy {
+                "acknowledged"
+            } else if delivered {
+                "delivered"
+            } else {
+                "uncertain"
+            },
+        )?;
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input receipt outcome is uncertain".into())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn input_receipt(
+        &self,
+        owner: &str,
+        session: &str,
+        operation: &str,
+    ) -> Result<Option<String>, String> {
+        let connection = self.lock_db()?;
+        owner_input::receipt(&connection, owner, session, operation)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn list_input_receipts(
+        &self,
+        owner: &str,
+        session: &str,
+    ) -> Result<Vec<(String, String)>, String> {
+        let connection = self.lock_db()?;
+        owner_input::receipts(&connection, owner, session)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn list_unresolved_input_receipts(
+        &self,
+        owner: &str,
+        after: i64,
+    ) -> Result<(Vec<(String, String, String)>, Option<i64>), String> {
+        let connection = self.lock_db()?;
+        owner_input::unresolved_receipts(&connection, owner, after)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn input_watermark(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+    ) -> Result<i64, String> {
+        let guard = self.acquire_input_guard(owner)?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        let current = Self::auth_generation(&tx, owner)?;
+        let (generation, _) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if generation != current {
+            return Err("Credential has been revoked".into());
+        }
+        let cutoff = guard.advance_watermark(&tx, crate::v4_agent::interaction::now_ms())?;
+        admission.validate(&tx)?;
+        tx.commit().map_err(|_| "Input watermark is uncertain")?;
+        Ok(cutoff)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn review_input_receipt(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        session: &str,
+        operation: &str,
+    ) -> Result<String, String> {
+        let guard = self.acquire_input_guard(owner)?;
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        guard.bind(&tx)?;
+        let current = Self::auth_generation(&tx, owner)?;
+        let (generation, _) = authority
+            .valid_for(owner, crate::v4_agent::interaction::now_ms())
+            .ok_or("Credential is invalid or expired")?;
+        if generation != current {
+            return Err("Credential has been revoked".into());
+        }
+        let status = guard.review(&tx, session, operation)?;
+        admission.validate(&tx)?;
+        tx.commit()
+            .map_err(|_| "Input receipt review is uncertain".to_string())?;
+        Ok(status)
+    }
+
+    pub(crate) fn validate_auth_generation(
+        &self,
+        user_id: &str,
+        generation: i64,
+    ) -> Result<(), String> {
+        let connection = self.lock_db()?;
+        let current = Self::auth_generation(&connection, user_id)?;
+        if current != generation {
+            return Err("Token has been revoked".into());
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn accept_with_local_authority<T, E>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        accept: impl FnOnce(&dyn Fn() -> Result<(), String>) -> Result<T, E>,
+    ) -> Result<(Result<T, E>, bool), String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut connection = self.lock_db()?;
+        admission.validate(&connection)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        let check = || {
+            admission.validate(&transaction)?;
+            let current = Self::auth_generation(&transaction, owner)?;
+            let (generation, _) = authority
+                .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                .ok_or("Credential is invalid or expired")?;
+            if generation != current {
+                return Err("Credential has been revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = accept(&check);
+        let committed = transaction.commit().is_ok();
+        Ok((result, committed))
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_owner_review<T>(
+        &self,
+        owner: &str,
+        authority: &crate::auth::LocalAuthority,
+        review: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &dyn Fn() -> Result<(), String>,
+        ) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let admission = self
+            .inner
+            .auth_admission
+            .get()
+            .ok_or("Authentication admission unavailable")?;
+        let _fence = admission.acquire()?;
+        let mut db = self.lock_db()?;
+        admission.validate(&db)?;
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|_| "Authentication admission unavailable")?;
+        let check = || {
+            admission.validate(&tx)?;
+            let current = Self::auth_generation(&tx, owner)?;
+            let (generation, _) = authority
+                .valid_for(owner, crate::v4_agent::interaction::now_ms())
+                .ok_or("Credential is invalid or expired")?;
+            if generation != current {
+                return Err("Credential has been revoked".into());
+            }
+            Ok(())
+        };
+        check()?;
+        let result = review(&tx, &check)?;
+        tx.commit()
+            .map_err(|_| "Owner review outcome is uncertain")?;
+        Ok(result)
+    }
+
+    fn auth_generation(connection: &Connection, user_id: &str) -> Result<i64, String> {
+        connection
+            .query_row(
+                "SELECT COALESCE((SELECT generation FROM auth_generations WHERE user_id = ?), 0)",
+                params![user_id],
+                |row| row.get(0),
+            )
             .map_err(|error| error.to_string())
     }
 
@@ -316,6 +1334,9 @@ impl AppState {
         };
         if is_external_auth_mirror_user(&stored_user) {
             return Ok(ChangePasswordResult::ExternallyManaged);
+        }
+        if stored_user.password_hash == crate::local_testing::PASSWORD_MARKER {
+            return Ok(ChangePasswordResult::LocalTesting);
         }
 
         let is_valid = verify(current_password, &stored_user.password_hash)
@@ -369,6 +1390,21 @@ impl AppState {
             )
             .map_err(|error| error.to_string())?;
         Ok(to_public_user(&user))
+    }
+
+    pub(crate) fn transcription_api_key(
+        &self,
+        user: &AuthenticatedUser,
+    ) -> Result<Option<String>, String> {
+        self.lock_db()?
+            .query_row(
+                "SELECT groq_api_key FROM user_settings WHERE user_id = ?",
+                params![user.user_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(|error| error.to_string())
     }
 
     pub fn get_settings(&self, user: &AuthenticatedUser) -> Result<UserSettings, String> {
@@ -555,19 +1591,8 @@ impl AppState {
     pub fn list_bookmarks(&self, user: &AuthenticatedUser) -> Result<Vec<Bookmark>, String> {
         let _file_lock = self.lock_files()?;
         let path = self.bookmarks_path(&user.user_id)?;
-        let mut bookmarks = if path.exists() {
-            read_json_file::<Vec<Bookmark>>(&path).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        if !bookmarks
-            .iter()
-            .any(|bookmark| bookmark.command == "claude --dangerously-skip-permissions")
-        {
-            bookmarks.push(default_bookmark());
-            write_json_file(&path, &bookmarks)?;
-        } else if !path.exists() {
+        let bookmarks = load_bookmarks_from_path(&path)?;
+        if !path.try_exists().map_err(|error| error.to_string())? {
             write_json_file(&path, &bookmarks)?;
         }
 
@@ -583,11 +1608,7 @@ impl AppState {
     ) -> Result<Bookmark, String> {
         let _file_lock = self.lock_files()?;
         let path = self.bookmarks_path(&user.user_id)?;
-        let mut bookmarks = if path.exists() {
-            read_json_file::<Vec<Bookmark>>(&path).unwrap_or_default()
-        } else {
-            vec![default_bookmark()]
-        };
+        let mut bookmarks = load_bookmarks_from_path(&path)?;
 
         let bookmark = Bookmark {
             id: Uuid::new_v4().to_string(),
@@ -610,13 +1631,7 @@ impl AppState {
     ) -> Result<Option<Bookmark>, String> {
         let _file_lock = self.lock_files()?;
         let path = self.bookmarks_path(&user.user_id)?;
-        let mut bookmarks = load_bookmarks_from_path(&path);
-        if !bookmarks
-            .iter()
-            .any(|bookmark| bookmark.command == "claude --dangerously-skip-permissions")
-        {
-            bookmarks.push(default_bookmark());
-        }
+        let mut bookmarks = load_bookmarks_from_path(&path)?;
         let Some(bookmark) = bookmarks
             .iter_mut()
             .find(|bookmark| bookmark.id == bookmark_id)
@@ -646,13 +1661,7 @@ impl AppState {
     ) -> Result<bool, String> {
         let _file_lock = self.lock_files()?;
         let path = self.bookmarks_path(&user.user_id)?;
-        let mut bookmarks = load_bookmarks_from_path(&path);
-        if !bookmarks
-            .iter()
-            .any(|bookmark| bookmark.command == "claude --dangerously-skip-permissions")
-        {
-            bookmarks.push(default_bookmark());
-        }
+        let bookmarks = load_bookmarks_from_path(&path)?;
         let original_len = bookmarks.len();
         let filtered: Vec<Bookmark> = bookmarks
             .into_iter()
@@ -668,11 +1677,11 @@ impl AppState {
     pub fn list_notes(&self, user: &AuthenticatedUser) -> Result<Vec<Note>, String> {
         let _file_lock = self.lock_files()?;
         let path = self.notes_path(&user.user_id)?;
-        if !path.exists() {
-            write_json_file(&path, &Vec::<Note>::new())?;
-            return Ok(Vec::new());
+        let notes = load_notes_from_path(&path)?;
+        if !path.try_exists().map_err(|error| error.to_string())? {
+            write_json_file(&path, &notes)?;
         }
-        Ok(read_json_file::<Vec<Note>>(&path).unwrap_or_default())
+        Ok(notes)
     }
 
     pub fn create_note(
@@ -684,7 +1693,7 @@ impl AppState {
     ) -> Result<Note, String> {
         let _file_lock = self.lock_files()?;
         let path = self.notes_path(&user.user_id)?;
-        let mut notes = load_notes_from_path(&path);
+        let mut notes = load_notes_from_path(&path)?;
         let note = Note {
             id: Uuid::new_v4().to_string(),
             title,
@@ -706,7 +1715,7 @@ impl AppState {
     ) -> Result<Option<Note>, String> {
         let _file_lock = self.lock_files()?;
         let path = self.notes_path(&user.user_id)?;
-        let mut notes = load_notes_from_path(&path);
+        let mut notes = load_notes_from_path(&path)?;
         let Some(note) = notes.iter_mut().find(|note| note.id == note_id) else {
             return Ok(None);
         };
@@ -729,7 +1738,7 @@ impl AppState {
     pub fn delete_note(&self, user: &AuthenticatedUser, note_id: &str) -> Result<bool, String> {
         let _file_lock = self.lock_files()?;
         let path = self.notes_path(&user.user_id)?;
-        let notes = load_notes_from_path(&path);
+        let notes = load_notes_from_path(&path)?;
         let original_len = notes.len();
         let filtered: Vec<Note> = notes
             .into_iter()
@@ -868,6 +1877,20 @@ impl AppState {
         Ok(result)
     }
 
+    pub fn migrate_vault_key(
+        &self,
+        user: &AuthenticatedUser,
+        key_id: &str,
+        original: &str,
+        encrypted: &str,
+    ) -> Result<(), String> {
+        self.lock_db()?.execute(
+            "UPDATE api_key_vault SET key_value = ?1 WHERE id = ?2 AND user_id = ?3 AND key_value = ?4",
+            params![encrypted, key_id, user.user_id, original],
+        ).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn delete_vault_key(&self, user: &AuthenticatedUser, key_id: &str) -> Result<bool, String> {
         let connection = self.lock_db()?;
         let count = connection
@@ -981,8 +2004,11 @@ impl AppState {
     }
 
     fn initialize_schema(&self) -> Result<(), String> {
-        let connection = self.lock_db()?;
-        connection
+        let mut connection = self.lock_db()?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        transaction
             .execute_batch(
                 "
                 CREATE TABLE IF NOT EXISTS users (
@@ -1000,6 +2026,11 @@ impl AppState {
                     expires_at TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS auth_generations (
+                    user_id TEXT PRIMARY KEY,
+                    generation INTEGER NOT NULL CHECK(generation >= 0)
                 );
 
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -1050,7 +2081,43 @@ impl AppState {
                 );
                 ",
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        let columns = {
+            let mut statement = transaction
+                .prepare("PRAGMA table_info(user_settings)")
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|error| error.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?
+        };
+        for (name, definition) in [
+            ("groq_api_key", "TEXT"),
+            ("preview_url", "TEXT"),
+            ("terminal_font_size", "INTEGER DEFAULT NULL"),
+            ("sidebar_collapsed", "INTEGER DEFAULT 0"),
+            ("terminal_webgl_enabled", "INTEGER DEFAULT NULL"),
+            ("theme", "TEXT DEFAULT 'dark'"),
+            ("tab_order", "TEXT"),
+            ("sandbox_default_mode", "TEXT DEFAULT 'off'"),
+            ("desktop_allow_terminal_input", "INTEGER DEFAULT 0"),
+            ("recent_folders", "TEXT"),
+            ("pinned_folders", "TEXT"),
+            ("sidebar_projects", "TEXT"),
+        ] {
+            if !columns
+                .iter()
+                .any(|column| column.eq_ignore_ascii_case(name))
+            {
+                transaction
+                    .execute_batch(&format!(
+                        "ALTER TABLE user_settings ADD COLUMN {name} {definition};"
+                    ))
+                    .map_err(|error| format!("Failed to migrate user_settings.{name}: {error}"))?;
+            }
+        }
+        transaction.commit().map_err(|error| error.to_string())
     }
 
     fn ensure_user_row(&self, user: &AuthenticatedUser) -> Result<(), String> {
@@ -1123,18 +2190,72 @@ impl AppState {
         &self,
         user: UserPublic,
     ) -> Result<AuthResult, String> {
-        let refresh_token = self.create_refresh_token(&user.id)?;
-        Ok(AuthResult {
+        crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            &user.username,
+        )?;
+        let mut connection = self.lock_db()?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let refresh_token = Self::insert_refresh_token(&transaction, &user.id)?;
+        let generation = Self::auth_generation(&transaction, &user.id)?;
+        let result = self.auth_result_for_user(user, refresh_token, generation);
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(result)
+    }
+
+    fn auth_result_for_user(
+        &self,
+        user: UserPublic,
+        refresh_token: String,
+        generation: i64,
+    ) -> AuthResult {
+        AuthResult {
             user: user.clone(),
             tokens: TokenPair {
-                access_token: issue_access_token(
+                access_token: issue_access_token_for_generation(
                     &self.inner.config.jwt_secret,
                     &user.id,
                     &user.username,
+                    generation,
                 ),
                 refresh_token,
             },
-        })
+        }
+    }
+
+    fn rotate_refresh_token(
+        &self,
+        stored_token: &StoredRefreshToken,
+        user: UserPublic,
+    ) -> Result<Option<AuthResult>, String> {
+        if crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            &user.username,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
+        let mut connection = self.lock_db()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| error.to_string())?;
+        let consumed = transaction
+            .execute(
+                "DELETE FROM refresh_tokens WHERE id = ? AND user_id = ? AND expires_at >= ?",
+                params![stored_token.id, user.id, iso_timestamp()],
+            )
+            .map_err(|error| error.to_string())?;
+        if consumed == 0 {
+            return Ok(None);
+        }
+        let refresh_token = Self::insert_refresh_token(&transaction, &user.id)?;
+        let generation = Self::auth_generation(&transaction, &user.id)?;
+        let result = self.auth_result_for_user(user, refresh_token, generation);
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(Some(result))
     }
 
     async fn login_external(
@@ -1150,6 +2271,14 @@ impl AppState {
         };
         let is_valid = verify(password, &user.password_hash).map_err(|error| error.to_string())?;
         if !is_valid {
+            return Ok(None);
+        }
+        if crate::auth::validate_allowed_username(
+            self.config().allowed_username.as_deref(),
+            &user.resolved_username(),
+        )
+        .is_err()
+        {
             return Ok(None);
         }
         self.upsert_external_auth_mirror_user(&user.id)?;
@@ -1169,9 +2298,15 @@ impl AppState {
             return Ok(None);
         };
         self.upsert_external_auth_mirror_user(&user.id)?;
-        let result = self.issue_auth_result_for_external_user(user)?;
-        self.delete_refresh_token(&stored_token.id)?;
-        Ok(Some(result))
+        let username = user.resolved_username();
+        self.rotate_refresh_token(
+            &stored_token,
+            UserPublic {
+                id: user.id,
+                username,
+                created_at: user.created_at,
+            },
+        )
     }
 
     fn issue_auth_result_for_external_user(
@@ -1186,12 +2321,29 @@ impl AppState {
         })
     }
 
-    pub(crate) fn get_user_public_by_username(
+    pub(crate) async fn get_passkey_user_by_identifier(
         &self,
-        username: &str,
+        identifier: &str,
     ) -> Result<Option<UserPublic>, String> {
-        self.get_user_by_username(username)
-            .map(|value| value.map(|user| to_public_user(&user)))
+        if let Some(user) = self.get_user_by_username(identifier)? {
+            if !is_external_auth_mirror_user(&user) {
+                return Ok(Some(to_public_user(&user)));
+            }
+        }
+        let Some(provider) = self.inner.external_auth.clone() else {
+            return Ok(None);
+        };
+        let Some(user) = provider.get_user_by_identifier(identifier).await? else {
+            return Ok(None);
+        };
+        // Passkeys are owned by the local mirror's stable external user id.
+        self.upsert_external_auth_mirror_user(&user.id)?;
+        let username = user.resolved_username();
+        Ok(Some(UserPublic {
+            id: user.id,
+            username,
+            created_at: user.created_at,
+        }))
     }
 
     pub(crate) fn get_user_public_by_id(
@@ -1202,11 +2354,10 @@ impl AppState {
             .map(|value| value.map(|user| to_public_user(&user)))
     }
 
-    fn create_refresh_token(&self, user_id: &str) -> Result<String, String> {
+    fn insert_refresh_token(connection: &Connection, user_id: &str) -> Result<String, String> {
         let token = Uuid::new_v4().to_string();
         let token_hash = hash_token(&token);
         let expires_at = OffsetDateTime::now_utc() + time::Duration::days(REFRESH_TOKEN_TTL_DAYS);
-        let connection = self.lock_db()?;
         connection
             .execute(
                 "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -1519,19 +2670,36 @@ fn default_bookmark() -> Bookmark {
 }
 
 fn to_public_user(user: &StoredUser) -> UserPublic {
+    let username = if user.password_hash == crate::local_testing::PASSWORD_MARKER
+        && user.id.starts_with(crate::local_testing::ACCOUNT_PREFIX)
+    {
+        user.username
+            .strip_prefix(crate::local_testing::USERNAME_PREFIX)
+            .unwrap_or(&user.username)
+    } else {
+        &user.username
+    };
     UserPublic {
         id: user.id.clone(),
-        username: user.username.clone(),
+        username: username.to_owned(),
         created_at: user.created_at.clone(),
     }
 }
 
-fn load_bookmarks_from_path(path: &Path) -> Vec<Bookmark> {
-    read_json_file::<Vec<Bookmark>>(path).unwrap_or_default()
+fn load_bookmarks_from_path(path: &Path) -> Result<Vec<Bookmark>, String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(vec![default_bookmark()]),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
-fn load_notes_from_path(path: &Path) -> Vec<Note> {
-    read_json_file::<Vec<Note>>(path).unwrap_or_default()
+fn load_notes_from_path(path: &Path) -> Result<Vec<Note>, String> {
+    match fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
@@ -1540,8 +2708,20 @@ fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Stri
 }
 
 fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    use std::io::Write;
     let contents = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
-    fs::write(path, contents).map_err(|error| error.to_string())
+    let parent = path.parent().ok_or("Missing data directory")?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+    temporary
+        .write_all(&contents)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary.persist(path).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn iso_timestamp() -> String {

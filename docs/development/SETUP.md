@@ -4,7 +4,7 @@ This guide covers local setup for the Terminal v4 project (web terminal + Claude
 
 ## Prerequisites
 
-- Node.js 18+ (Node 22 recommended for node-pty prebuilt binaries)
+- Node.js 20.19+ or 22.12+ (Node.js 22 recommended)
 - Claude Code CLI installed locally and available on `PATH` (or set `CLAUDE_BIN`)
 - pnpm or npm (examples below use npm)
 
@@ -13,15 +13,22 @@ This guide covers local setup for the Terminal v4 project (web terminal + Claude
 ```bash
 # From project root
 npm install
-
-cd frontend
-npm install
+npm --prefix frontend install
+npm run browser:install
 ```
+
+`browser:install` prepares the app-owned browser runtime described under
+[Workspace browser](#workspace-browser). The development Node prerequisite above
+is separate from the pinned Node shipped inside that runtime.
 
 ## Environment Variables
 
 Backend configuration (set in your shell, or in the environment used to launch
 the Rust API):
+
+Direct `npm run api:dev` and Rust binary startup do not load a `.env` file.
+Export the variables in that shell or use your service manager's environment
+configuration. Desktop startup separately reads `backend/.env`.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -38,6 +45,7 @@ the Rust API):
 | `OPENAI_API_KEY` | Fallback API key for OpenAI routes | *(unset)* |
 | `GROQ_API_KEY` | Fallback API key for voice transcription | *(unset)* |
 | `JWT_SECRET` | JWT signing secret | *(dev default only allowed on loopback binds)* |
+| `VAULT_ENCRYPTION_KEY` | Private stable vault key override; preserve it when moving existing data | protected random key at `<data_dir>/vault-encryption.key` |
 | `REFRESH_SECRET` | Refresh token signing secret | *(dev default if unset)* |
 | `ALLOWED_USERNAME` | Restrict logins to a single username | *(unset)* |
 | `STORAGE_DATABASE_URL` | External Postgres users database for login | *(required for live login)* |
@@ -53,18 +61,41 @@ Notes:
 - Set `TERMINAL_DATA_DIR` explicitly if you want repo-local data during dev or
   a custom persistent location in production.
 
-## Production Service (systemd)
+Vault and provider API keys use AES-GCM `enc:v2` ciphertext. With no explicit
+private vault key, the runtime atomically creates a random installation key in
+its data directory (0600 on Unix), reuses it across restarts, and refuses malformed
+or unprotected key files. Back up `vault-encryption.key` together with the database;
+keep any existing explicit `VAULT_ENCRYPTION_KEY` unchanged when migrating.
+The former public development key is accepted only to read old `enc:v1` data;
+setting that literal now selects the protected installation key for new writes.
+Both old Rust hex and Fastify base64 `enc:v1` records remain readable. A successful
+vault reveal migrates the row to `enc:v2` using a guarded update after decryption;
+failed decrypts preserve the original row. Paired-device credentials retain their
+existing separate JWT-derived key contract.
 
-To keep tmux-backed terminals alive across `rebuild.sh` restarts, the service
-should avoid killing child processes. The recommended unit file:
+Notes and bookmarks live under `<data_dir>/users/<id>/`. The bookmark seed is
+created only when the file is absent, so deletion and repurposing persist. A
+read/parse failure is returned to the caller and leaves the original file intact;
+saves use a temporary file plus atomic replacement. System stats history is
+`<data_dir>/stats-history.json`, collected initially and every five minutes by
+`start_services`, and stopped by `shutdown_services` or collector disposal.
+
+## Production Service (Linux, systemd)
+
+This section applies to a Linux host; on macOS run the release binary directly
+(see "Restarting the Server" in `CLAUDE.md`). Replace `youruser` and the paths
+with your own. The rebuild scripts build the frontend and Rust runtime, then leave the running
+service unchanged. Restart the owning service explicitly after a successful build.
+To keep tmux-backed terminals alive across those restarts, the service should
+avoid killing child processes. The recommended unit file:
 
 ```
 [Service]
 Type=simple
-User=conor
-WorkingDirectory=/home/conor/terminal-v4/backend
-EnvironmentFile=/home/conor/terminal-v4/backend/.env
-ExecStart=/usr/bin/node --enable-source-maps /home/conor/terminal-v4/backend/dist/index.js
+User=youruser
+WorkingDirectory=/home/youruser/terminal-v4
+EnvironmentFile=/home/youruser/terminal-v4/.env
+ExecStart=/home/youruser/terminal-v4/rust/target/release/terminal-v4-api
 KillMode=process
 Restart=always
 RestartSec=10
@@ -82,9 +113,11 @@ Frontend configuration (set in `frontend/.env` or your shell):
 | Variable | Description | Default |
 | --- | --- | --- |
 | `VITE_API_URL` | API base URL for the frontend | *(empty = same origin)* |
+| `TERMINAL_V4_API_PROXY_TARGET` | Vite dev-server upstream, set in its launch shell for a custom API port | `http://127.0.0.1:3020` |
 
 Notes:
 - In local browser development, loopback `VITE_API_URL` values are normalized to the current page origin so Vite can proxy `/api/*` and `/preview/*` to the backend even if the configured loopback port is stale.
+- The Rust API serves HTTP. For an API on port 3030, launch Vite with `TERMINAL_V4_API_PROXY_TARGET=http://127.0.0.1:3030 npm run frontend:dev` on macOS/Linux; set that variable in the launch environment on Windows.
 
 ## Authentication Setup
 
@@ -123,9 +156,16 @@ npm run api:dev
 npm run app:verify
 ```
 
-Open `http://127.0.0.1:3020` for this path. The Rust API serves
+Open `http://localhost:3020` for this path. The Rust API serves
 `frontend/dist`, which matches the desktop/native app serving model and avoids
 Vite request-time transforms.
+
+For UI work, keep shared visual primitives in `frontend/src/WorkspaceUI.css`,
+shell geometry in `WorkspaceShell.css`, and surface-specific rules beside their
+components. Verify both themes, keyboard focus, desktop controls and 44px touch
+targets in the built web interface. Use the isolated UI fixture described in
+`TESTING_GUIDE.md` for realistic conversation, terminal and auxiliary-screen checks;
+it does not require paid provider calls or existing user data.
 
 Fast local health check:
 
@@ -139,6 +179,30 @@ This checks Node/npm/Cargo, the Rust API health endpoint, the production UI on
 If login fails with a network error or "Failed to fetch", first verify the Rust
 API is running on `127.0.0.1:3020`. The Vite dev server proxies auth and API
 requests there.
+
+## Running the macOS Desktop App (Tauri)
+
+Install Node.js, a stable Rust toolchain and the Xcode command line tools, then run
+`npm run desktop:build` from the repository root. The install step prepares the
+root runtime dependencies, frontend build tools and desktop CLI. The macOS
+configuration creates `desktop/tauri/src-tauri/target/release/bundle/macos/V4.app`.
+
+The app bundles its Rust API, built frontend, original provider rewind helpers,
+and the pinned Claude SDK with its runtime dependencies. Hermes Agent and T3 Code
+source/runtime packages are not bundled. Native provider CLIs are discovered on
+the host. The desktop adds existing user `.local/bin`, `.cargo/bin`, Homebrew and
+`/usr/local/bin` directories to its inherited PATH for Finder launches.
+
+The desktop sets `TERMINAL_V4_FRONTEND_DIR` and `TERMINAL_V4_RUNTIME_ROOT` to its
+packaged resources, so startup does not require a source checkout or a particular
+working directory. A standalone API can also use these explicit paths. Normal
+Quit sends SIGTERM to the owned Unix backend and allows five seconds for task
+cleanup before forced termination. Attach mode leaves the external backend running.
+
+Local macOS builds use ad-hoc signing and seal bundle resources. They are not
+Developer ID signed or notarized. Authentication still requires an existing local
+account or the configured external identity database; packaging does not create
+an account or configure provider credentials.
 
 ## Running the Windows Desktop App (Tauri)
 
@@ -156,11 +220,10 @@ Desktop scripts:
 - `npm run desktop:install` - install desktop wrapper dependencies
 - `npm run desktop:predev` - build the frontend bundle consumed by the desktop shell
 - `npm run desktop:dev` - launch native desktop app in development mode
-- `npm run desktop:build` - create desktop build artifacts (bundle disabled in current phase)
+- `npm run desktop:build` - create desktop artifacts (including a macOS app bundle)
 
 Notes:
-- Phase 1 desktop mode forces local-only backend binding (`127.0.0.1:3020`).
-- Network share mode is intentionally not enabled yet.
+- Desktop mode binds to `127.0.0.1:3020` by default. Set `TERMINAL_V4_SHARE_MODE=lan` to share it on your local network (see the README).
 - Desktop shell source lives in `desktop/tauri/src-tauri`.
 
 ## Rust Backend Rewrite Workspace
@@ -224,7 +287,7 @@ If the preview only shows the background or a blank page:
 - If using `BrowserRouter`, set `basename` when `window.location.pathname`
   starts with `/preview/{port}` so routing works inside the preview iframe.
 - The preview proxy rewrites HTML/CSS/JS and inline module scripts in
-  `backend/src/routes/preview-subdomain-routes.ts`; keep that logic in sync
+  `rust/crates/api/src/preview/` and the Rust preview handlers; keep that logic in sync
   with any framework-specific module paths (e.g., `@vite`, `@react-refresh`).
 
 ## Project Structure
@@ -263,23 +326,18 @@ not run the legacy Fastify backend tests by default; use
 2. Follow `docs/development/TESTING_GUIDE.md` before pushing changes.
 
 
-## Optional Hermes runtime
+## V4 provider runtime
 
-Terminal v4 can launch the real Hermes agent alongside native coding agents.
-See [Hermes runtime setup](../features/HERMES_RUNTIME.md) for the isolated
-Windows installer, verified executable override, and Linux/macOS source setup.
+API-key agents use V4's own Rust provider loop and workspace tools. Configure a
+provider key in Settings and select its model when opening a thread. No Hermes
+installation is required. See [V4 runtime](../features/V4_RUNTIME.md) for supported
+protocols, command approval, session storage and current feature boundaries.
 
-Set HERMES_EXECUTABLE in the environment that starts the Rust host, then restart
-that host to refresh its catalog. Native Hermes configuration belongs to the
-server operator. App-managed API-provider credentials belong to the current
-app account and remain in the encrypted vault. Loading a catalog does not
-perform a provider login or model call.
-
-The workspace task worker starts with the Rust API. It supports three distinct
-workspace paths concurrently; use managed worktrees for parallel changes to one
-repository. Graceful Ctrl+C/SIGTERM shutdown stops child process trees and saves
-interrupted status. Scheduling depends on the server remaining running.
-
+The task worker supports three distinct workspace paths concurrently. Use managed
+worktrees for concurrent changes to one repository. Graceful shutdown stops task
+process trees and saves interrupted status. Scheduling requires the server to
+remain running. V4 unattended tasks allow bounded workspace file tools and deny
+shell commands that would require interactive approval.
 
 ## Optional paired hosts and rewind runtimes
 
@@ -293,10 +351,9 @@ for switching an already paired environment.
 Coordinated rewind needs a managed Git worktree and existing files checkpoint.
 Install the native provider and its supported SDK/runtime on the server where the
 conversation lives. Run `npm install` at the repository root to install the pinned
-Claude Agent SDK. Codex uses its app-server protocol; Hermes uses its configured
-Python runtime and native SessionDB. Set `HERMES_PYTHON` to the absolute Python
-executable in the Hermes environment, or set `HERMES_EXECUTABLE` so the adjacent
-Python executable can be resolved. Hermes history uses `HERMES_HOME/state.db`.
+Claude Agent SDK. Codex uses its app-server protocol. V4 conversations use owned
+local history and independent visible-prefix forks. Existing Hermes history may
+be imported read-only from `HERMES_HOME/state.db`; it is not an execution runtime.
 
 A packaged server must include the `scripts/provider-rewind-*` runtime helpers
 and the root Node dependencies. Set `TERMINAL_V4_RUNTIME_ROOT` to that application
@@ -304,6 +361,50 @@ directory when it differs from the source checkout. Native provider binaries,
 credentials and histories must be configured on the owning host.
 Provider-specific failures remain visible and do not spend model tokens during
 source discovery or planning. See [pairing and rewind workflow](../features/PAIRED_ENVIRONMENTS_AND_REWIND.md).
+
+## Username only local testing accounts
+
+Set `TERMINAL_V4_LOCAL_TESTING=1` on the backend to use only a username while
+testing locally. For the production-style development build:
+
+```bash
+TERMINAL_V4_LOCAL_TESTING=1 HOST=127.0.0.1 PORT=3030 rust/target/debug/terminal-v4-api
+```
+
+Open `http://127.0.0.1:3030`, enter a name, and choose **Open workspace**. The
+account is created on first use and reused thereafter, including after a restart.
+Names are case-insensitive ASCII letters, numbers, dots, underscores or hyphens,
+up to 48 characters. Different names have separate owned settings and histories.
+Testing profiles use a separate internal username namespace, so a name such as
+`Conor` can be used even if a password account already has that name. The testing
+profile has its own identity and data; it cannot open the password account.
+Existing testing profiles from the earlier format keep their original identity.
+
+The backend must remain running while testing; an open browser tab alone does
+not keep it alive. Connection errors report the actual configured app address,
+including a custom port such as 3030.
+
+This opt-in mode requires a loopback bind and local account storage. It refuses
+non-loopback hosting and external auth storage. Removing the flag restores
+password/passkey access and rejects testing-account access, refresh, preview and
+WebSocket credentials. Testing account data remains saved for later testing.
+
+For current resource findings and the proposed optimization sequence, see
+[Resource efficiency audit](RESOURCE_EFFICIENCY_AUDIT.md).
+
+## Local Codex conversations
+
+Install Codex on the computer running the Rust backend and run `codex login`
+there once. Open a workspace, choose **New terminal**, select **Codex**, then
+**Open here**. This opens the conversation UI. The app uses that installation's
+sign-in and configuration; no separate API key is required in app Settings.
+
+Codex must be discoverable on the backend's PATH. `CODEX_BIN` can point to a
+specific executable; `CODEX_HOME` selects its native configuration/history root.
+Restart the backend after changing these environment variables. A signed-out or
+incompatible installation produces a visible conversation error. The initial
+integration supports text, streamed assistant/tool results, native approvals,
+Stop and saved-thread continuation. See [Local Codex](../features/LOCAL_CODEX.md).
 
 ## Remote workspace setup
 
@@ -322,3 +423,182 @@ broker requires trusted HTTPS hosting; no relay is deployed by these changes.
 See [Remote workspace](../features/REMOTE_WORKSPACE.md),
 [Background host](../features/BACKGROUND_HOST.md), and
 [Device relay](../features/DEVICE_RELAY.md) for setup commands and limits.
+
+## Screenshot and preview runtime requirements
+
+The production runtime includes the pinned Playwright package. Install its Chromium
+browser (`npx playwright install chromium`) before screenshot/recording use, or set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to an installed compatible executable.
+Packaged runtimes resolve the module from `TERMINAL_V4_RUNTIME_ROOT`, with the
+legacy backend directory retained as a checkout fallback. An unavailable package
+or browser reports an actionable error instead of using an unsupported CLI option.
+
+Static file previews preserve authenticated dependent HTML/CSS/module asset URLs.
+Applications generating arbitrary relative `fetch()` URLs at runtime should use a
+local dev server preview; query-based file previews are not a general website host.
+The resources dashboard opens through Settings → Processes → Open System Resources.
+Use Back to workspace to return without closing the active conversation.
+
+## Workspace layout
+
+The desktop workspace keeps navigation, conversation, and optional tools in
+separate regions. Drag the navigation or browser edge to resize it; focused resize
+handles also support arrow keys, Home and End. Double-click an edge to restore its
+default width. Width preferences survive closing and reopening panels.
+
+Conversation content and its composer share a centered reading rail. Browser
+expand/restore keeps the conversation mounted. At 980px and below the browser
+opens as a dismissible sheet; at 768px and below navigation uses the mobile menu,
+including on touch devices. Closing the browser returns focus to its opener and
+retains its tabs and the current conversation draft.
+Browser entry points restore the workspace from fullscreen or System Resources.
+Pending browser requests remain visible whenever the browser pane is hidden.
+
+## Workspace browser
+
+Use **Browser** beside the session name, in the desktop sidebar, or in the mobile header menu to open an
+interactive Chromium session alongside the terminal. It runs on the home API
+server and sends its viewport through authenticated app requests, so it also
+works through Tailscale. The address bar accepts websites, local development
+server URLs, and searches. Preview remains the separate development inspector.
+The address selects its contents on focus; Escape restores the current page
+address. Desktop page typing controls expand from **Typing**. Touch layouts keep
+those controls available. **Browser actions → Reset** clears tabs and sign-ins.
+
+From the repository root, run:
+
+```bash
+npm run browser:install
+npm run browser:verify
+```
+
+The app owns Node **22.23.1**, Playwright **1.64.1**, and its Chromium revision
+**1248**, staged together in `.runtime/browser`. `app:build`, desktop install,
+desktop predev and Tauri build/bundle hooks prepare this runtime; desktop resources
+include it as `browser-runtime/`. No separately installed Chrome is required.
+The installer may copy the matching Chromium revision from a Playwright cache as
+a build input, or download it, but the running shared browser never resolves an
+installed Chrome, a global Node/Playwright package, or a shared browser cache.
+`PLAYWRIGHT_NODE_BIN`, `WORKSPACE_BROWSER_BIN` and
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` do not select this shared browser's engine.
+The preceding preview screenshot/recording requirements describe a separate path.
+
+Runtime lookup checks an explicit `TERMINAL_V4_BROWSER_RUNTIME_DIR` first, then
+`TERMINAL_V4_RUNTIME_ROOT/browser-runtime`, an executable-sibling
+`browser-runtime`, and the checkout's `.runtime/browser`. An invalid explicit
+directory or first existing candidate fails rather than silently using another
+candidate. Manifest, platform/architecture, pinned package versions and contained
+executable paths are validated. A missing runtime reports install/repair guidance.
+
+Preparation supports native macOS arm64/x64, Linux arm64/x64 and Windows x64;
+cross-compilation is rejected. A newly staged runtime gets a local data-page smoke
+check; `browser:verify` also checks an existing runtime by launching bundled
+Chromium, filling/clicking and taking a screenshot with an empty `PATH` and fresh
+home/cache directories. Reusing an already valid runtime during `browser:install`
+does not repeat that smoke check. These checks are evidence for the current host,
+not portable proof that every packaged target or clean machine works; Chromium's
+OS libraries, sandbox support and packaged resources still need verification.
+
+There is one temporary browser context per authenticated account and data
+directory, shared by the human pane, native Codex, native Claude and in-app V4
+conversations across workspaces. Personal browser profiles are never attached or
+imported. Tabs, cookies and sign-ins remain for this session; Reset, logout, server
+shutdown, or 30 minutes without browser requests ends it. Closing the pane keeps
+the session available until that timeout. File uploads, downloads and persistent
+auth-state import/export are unavailable. Sites that reject automated Chromium
+may not work. The headless engine remains visible remotely through app frames.
+
+To allow agents, enable **Settings → Agent browser** and add exact
+`allowedOrigins`, including each needed resource origin and port. The shared
+engine always uses its bundled executable and headless frame transport; the
+saved executable/headless fields apply to standalone V4, not the shared engine.
+Human browsing is not restricted by the agent origin list. Native Codex/Claude
+receive a scoped, expiring `terminal_v4_browser` MCP capability; each browser
+action needs its own decision in the Browser pane (release-control is exempt).
+Codex's native tool approval may also appear. V4 uses its own exact-action
+conversation approvals and denies unattended browser work. Shared-browser errors
+are returned; they never trigger a standalone browser fallback.
+
+**Take control** cancels pending native browser actions and blocks agent mutations;
+**Let agents control** permits fresh requests. Approved reads of allowed pages can
+still occur while the human controls the browser. Claude's browser-only transport
+allow-list does not enable ordinary native tools: print mode retains native
+permission restrictions and cannot turn a generic confirmation into an exact
+tool grant. Email content and metadata always require explicit consent for the
+current task and the exact email address before access; an allowed origin or tool
+approval alone does not supply that consent. See
+[V4 agent browser tools](../features/V4_AGENT_BROWSER.md) for limits.
+
+The account-owned `/api/workspace-browser/sessions` endpoints provide session
+creation, frames, navigation, tabs, keyboard, pointer input, and dialogs. They do
+not expose CDP or arbitrary JavaScript evaluation to the human HTTP client;
+agents have a separately approved `browser_evaluate` tool. Browser sessions stay
+on the home server when a paired environment is selected.
+
+Run `node --test scripts/workspace-browser.test.cjs` for real Chromium checks and
+`cargo test --manifest-path rust/Cargo.toml -p terminal-v4-api workspace_browser`
+for authenticated API route checks.
+
+## Private Tailscale access for username-only testing
+
+Keep the API on loopback. `scripts/tailscale-local-proxy.mjs` provides an owner-only
+gateway for private Tailscale Serve while preserving the API's local-origin login
+checks. Set `TAILSCALE_ALLOWED_LOGIN` to the exact Tailscale owner login,
+`TAILSCALE_EXTERNAL_HOST` to this device's `.ts.net` name, and
+`TAILSCALE_UPSTREAM_PORT` to the API port (default3030). The gateway binds
+`127.0.0.1:3040` and checks identity, authority and browser origin before forwarding
+HTTP or WebSockets. Direct LAN/tailnet binding and Funnel are unsupported.
+
+The preferred `TAILSCALE_APP_ORIGIN` is `https://<device>.ts.net`, with
+`tailscale serve --bg --https=443 http://127.0.0.1:3040`. HTTPS can require one-time
+Tailscale account setup. The explicit private fallback origin is
+`http://<device>.ts.net:8080`, with
+`tailscale serve --bg --http=8080 http://127.0.0.1:3040`. HTTP lacks a browser secure
+context; use HTTPS for microphone and other APIs requiring it. Preserve unrelated
+Serve routes when changing this configuration.
+
+Login refresh uses Web Locks when available. On HTTP, it serializes refreshes
+with a dedicated IndexedDB transaction instead. Keep first-party storage enabled;
+unavailable coordination preserves credentials and reports a refresh error rather
+than sending competing rotations.
+
+Opaque preview reads have a narrow exception: one scoped resource ticket, known
+preview routes and GET/HEAD only. Broad headers and credential query values are
+removed; the API verifies the resource signature and scope. Run
+`node --test scripts/tailscale-local-proxy.test.mjs scripts/tailscale-local-proxy.adversarial.test.mjs`.
+The optional browser check is
+`TAILSCALE_GATEWAY_BROWSER_TEST=1 node --test scripts/tailscale-local-proxy.browser.test.mjs`;
+it uses an isolated runtime and synthetic data.
+
+## WebContainer window
+
+From a home-environment Node project, open the preview tools menu and choose
+**Open WebContainer window**. Chrome/Edge needs a secure UI origin (HTTPS, or
+trustworthy localhost). The new tab displays the pinned project and start
+command; click Run, review any private-file omissions, then run the exported
+files. Run/Retry, Stop, and Return to normal app operate independently of the
+normal preview. The ordinary app can remain non-isolated and need not expose
+SharedArrayBuffer.
+
+Production hosting must serve the existing app HTML at exactly `/webcontainer`
+and `/webcontainer/` with COOP `same-origin`, COEP `require-corp`, and no-store.
+The Rust handler provides this scoped policy; reverse proxies must preserve it
+without applying it to other documents. Vite mirrors the exact-path policy in
+development. Missing isolation headers produce a visible prerequisite error;
+there is no guard bypass or trial-token workaround. The SDK and its runtime
+origins need normal public network/service-worker access.
+
+Launching uses the current same-origin account and a two-minute, one-use random
+fragment ID. No token or project tree goes through the URL or an opener bridge.
+A `noopener` open may return null even when successful: use the displayed real
+link if a tab did not appear. An expired, consumed, reloaded or wrong-account
+launch must be opened again from the normal app. Web Locks/storage must be
+available; unsupported locking fails visibly. Paired-host projects are blocked
+rather than replaced by a home project.
+
+Known private configuration and key files are omitted, while example files and
+public assets remain. Required omitted configuration may make a project
+unsuitable for WebContainer; use the ordinary proxy in that case. This is a
+conservative filename policy, not a guarantee that arbitrary source contains no
+secrets. Binary transport can expand JSON beyond the 64 MiB decoded response
+budget even below the 50 MiB raw-content limit; this produces an explicit error.

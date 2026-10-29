@@ -10,6 +10,7 @@ let pollTimer = null;
 let visibilityListenerAttached = false;
 let windowActive = true;
 let unsubscribeWindowActivity = null;
+let pendingRequest = null;
 
 function notifySubscribers(value) {
   subscribers.forEach((listener) => {
@@ -22,23 +23,43 @@ function notifySubscribers(value) {
 }
 
 async function pollSystemStats() {
-  if (!windowActive) {
+  if (!windowActive || subscribers.size === 0 || pendingRequest) {
     return;
   }
+  const request = new AbortController();
+  pendingRequest = request;
   try {
-    const stats = await apiGet('/api/system/stats');
+    const { stats } = await apiGet('/api/system/stats', { signal: request.signal });
+    if (pendingRequest !== request || request.signal.aborted) return;
     latestStats = stats;
     notifySubscribers(stats);
   } catch {
     // Ignore transient failures.
+  } finally {
+    if (pendingRequest === request) {
+      pendingRequest = null;
+      if (windowActive && subscribers.size > 0) {
+        pollTimer = setTimeout(() => {
+          pollTimer = null;
+          void pollSystemStats();
+        }, POLL_INTERVAL_MS);
+      }
+    }
   }
 }
 
-function stopPolling() {
+function pausePolling() {
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
+  pendingRequest?.abort();
+  pendingRequest = null;
+}
+
+function stopPolling() {
+  pausePolling();
+  latestStats = null;
   if (visibilityListenerAttached) {
     unsubscribeWindowActivity?.();
     unsubscribeWindowActivity = null;
@@ -52,22 +73,17 @@ function ensurePolling() {
     unsubscribeWindowActivity = subscribeWindowActivity(handleVisibilityChange);
     visibilityListenerAttached = true;
   }
-  if (pollTimer || subscribers.size === 0 || !windowActive) return;
-  pollSystemStats();
-  pollTimer = setInterval(pollSystemStats, POLL_INTERVAL_MS);
+  if (pollTimer || pendingRequest || subscribers.size === 0 || !windowActive) return;
+  void pollSystemStats();
 }
 
 function handleVisibilityChange() {
   windowActive = isWindowActive();
   if (!windowActive) {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
+    pausePolling();
     return;
   }
   if (subscribers.size > 0) {
-    void pollSystemStats();
     ensurePolling();
   }
 }

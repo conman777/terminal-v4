@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { WorkspaceTasksPanel } from './WorkspaceTasksPanel';
 
 const apiFetch = vi.fn();
 vi.mock('../utils/api', () => ({ apiFetch: (...args) => apiFetch(...args) }));
 const path = 'C:/projects/demo';
-const task = { id: 'task-one', provider: 'hermes', prompt: 'Review', status: 'completed', result: 'Review finished.', output: 'Review finished.', createdAt: 1000, events: [], parentSessionId: 'ss-parent' };
+const task = { id: 'task-one', provider: 'codex', prompt: 'Review', status: 'completed', result: 'Review finished.', output: 'Review finished.', createdAt: 1000, events: [], parentSessionId: 'ss-parent' };
 const schedule = { id: 'schedule-one', name: 'Morning review', provider: 'claude', enabled: false, intervalSeconds: 3600 };
 describe('WorkspaceTasksPanel', () => {
   beforeEach(() => { apiFetch.mockReset(); apiFetch.mockResolvedValue({ ok: true, json: async () => ({ tasks: [], schedules: [] }) }); });
@@ -14,9 +14,9 @@ describe('WorkspaceTasksPanel', () => {
     render(<WorkspaceTasksPanel workspacePath={path} currentSessionId="ss-parent" />);
     await screen.findByText('No tasks yet.');
     fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Check build' } });
-    fireEvent.change(screen.getByLabelText('Task agent'), { target: { value: 'hermes' } });
+    fireEvent.change(screen.getByLabelText('Task agent'), { target: { value: 'codex' } });
     fireEvent.click(screen.getByRole('button', { name: 'Queue task' }));
-    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/tasks', { method: 'POST', body: { workspacePath: path, provider: 'hermes', prompt: 'Check build', model: null, parentSessionId: 'ss-parent', parentTaskId: null } }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/tasks', { method: 'POST', body: { workspacePath: path, provider: 'codex', prompt: 'Check build', model: null, parentSessionId: 'ss-parent', parentTaskId: null } }));
   });
 
   it('creates disabled recurring schedules until the user explicitly enables one', async () => {
@@ -34,9 +34,21 @@ describe('WorkspaceTasksPanel', () => {
     render(<WorkspaceTasksPanel workspacePath={path} onInsertPrompt={onInsertPrompt} />);
     expect(await screen.findByText('Review finished.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Add result to prompt' }));
-    expect(onInsertPrompt).toHaveBeenCalledWith('Task result (hermes):\nReview finished.');
+    expect(onInsertPrompt).toHaveBeenCalledWith('Task result (codex):\nReview finished.');
     fireEvent.click(screen.getByRole('button', { name: 'Enable Morning review' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/schedule-one', { method: 'PATCH', body: { enabled: true } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Run Morning review now' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/schedule-one/run', { method: 'POST' }));
+  });
+
+  it('shows the stale one-shot enable error and retains the explicit Run now action', async () => {
+    const message = 'This one-shot time has passed. Use Run now or create a new schedule for a future time.';
+    apiFetch.mockImplementation(async (_url, options) => options?.method === 'PATCH'
+      ? { ok: false, json: async () => ({ error: message }) }
+      : { ok: true, json: async () => ({ tasks: [], schedules: [{ ...schedule, runOnceAt: 1 }] }) });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable Morning review' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
     fireEvent.click(screen.getByRole('button', { name: 'Run Morning review now' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules/schedule-one/run', { method: 'POST' }));
   });
@@ -72,5 +84,168 @@ describe('WorkspaceTasksPanel provider adapters', () => {
     await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/tasks', {
       method: 'POST', body: { workspacePath: path, provider: 'openai-api', prompt: 'Review the patch', model: null, parentSessionId: null, parentTaskId: null }
     }));
+  });
+});
+
+it('preserves text entered while an earlier task is being queued', async () => {
+  let finishQueue;
+  apiFetch.mockImplementation(async (url, options) => options?.method === 'POST'
+    ? new Promise(resolve => { finishQueue = () => resolve({ ok: true, json: async () => ({ id: 'queued' }) }); })
+    : { ok: true, json: async () => url === '/api/agent/catalog' ? { agents: [{ id: 'codex', label: 'Codex', available: true, capabilities: { durableTasks: true } }] } : { tasks: [], schedules: [] } });
+  render(<WorkspaceTasksPanel workspacePath={path} />);
+  await screen.findByText('No tasks yet.');
+  fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Submitted task' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Queue task' }));
+  fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Next unsent task' } });
+  await act(async () => finishQueue());
+  expect(screen.getByLabelText('Task prompt')).toHaveValue('Next unsent task');
+});
+
+it('explains an empty task-agent catalog and rechecks it without losing the prompt',async()=>{
+  let agents=[];
+  apiFetch.mockReset().mockImplementation(async url=>({ok:true,json:async()=>url==='/api/agent/catalog'?{agents}:{tasks:[],schedules:[]}}));
+  render(<WorkspaceTasksPanel workspacePath={path}/>);
+  await screen.findByText(/No compatible task agents/);
+  fireEvent.change(screen.getByLabelText('Task prompt'),{target:{value:'Keep unsent prompt'}});
+  expect(screen.getByRole('button',{name:'Queue task'})).toBeDisabled();
+  agents=[{id:'codex',label:'Codex',available:true,capabilities:{durableTasks:true}}];
+  fireEvent.click(screen.getByRole('button',{name:'Recheck task agents'}));
+  await waitFor(()=>expect(screen.getByRole('button',{name:'Queue task'})).toBeEnabled());
+  expect(screen.getByLabelText('Task prompt')).toHaveValue('Keep unsent prompt');
+});
+
+it('shows stale task polling and clears the recovered read error without losing a draft',async()=>{
+ vi.useFakeTimers();
+ try{
+  apiFetch.mockReset().mockImplementation(async url=>({ok:true,json:async()=>url==='/api/agent/catalog'?{agents:[]}:{tasks:[task],schedules:[]}}));
+  await act(async()=>render(<WorkspaceTasksPanel workspacePath={path}/>));
+  fireEvent.change(screen.getByLabelText('Task prompt'),{target:{value:'Unsent task'}});
+  apiFetch.mockRejectedValueOnce(new Error('Task polling disconnected'));
+  await act(async()=>vi.advanceTimersByTimeAsync(5000));
+  expect(screen.getByRole('alert')).toHaveTextContent('Task polling disconnected');
+  expect(screen.getByText(/Task list may be out of date/)).toBeInTheDocument();
+  expect(screen.getByText('Review finished.')).toBeInTheDocument();
+  await act(async()=>vi.advanceTimersByTimeAsync(5000));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Task prompt')).toHaveValue('Unsent task');
+ }finally{vi.useRealTimers();}
+});
+
+it('creates a one-shot at an explicit UTC instant and shows consumed schedules', async () => {
+  apiFetch.mockReset().mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities' ? { advancedTimingProtocolVersion: 1 } : url === '/api/agent/catalog'
+    ? { agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }
+    : { tasks: [], schedules: [{ ...schedule, runOnceAt: 1893456000000, lastTaskId: 'done' }] } }));
+  render(<WorkspaceTasksPanel workspacePath={path} />);
+  await screen.findByText('No tasks yet.');
+  expect(screen.getByText('Triggered')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Enable Morning review' })).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review once' } });
+  fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Once' } });
+  fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'once' } });
+  fireEvent.change(screen.getByLabelText('Date and time (UTC)'), { target: { value: '2035-01-01T00:00' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules', expect.objectContaining({ body: expect.objectContaining({ runOnceAt: 2051222400000, enabled: false }) })));
+});
+
+it('sends the named timezone for recurring calendar schedules', async () => {
+  apiFetch.mockReset().mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities' ? { advancedTimingProtocolVersion: 1 } : url === '/api/agent/catalog'
+    ? { agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }
+    : { tasks: [], schedules: [] } }));
+  render(<WorkspaceTasksPanel workspacePath={path} />);
+  await screen.findByText('No tasks yet.');
+  fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+  fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Morning' } });
+  fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'calendar' } });
+  fireEvent.change(screen.getByLabelText('Time zone (IANA)'), { target: { value: 'America/New_York' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+  await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/api/workspace/schedules', expect.objectContaining({ body: expect.objectContaining({ at: { hour: 9, minute: 0, weekdays: [1, 2, 3, 4, 5], timeZone: 'America/New_York' } }) })));
+});
+
+
+describe('advanced schedule capability', () => {
+  it.each([['once', false], ['once', true], ['calendar', false], ['calendar', true]])('old server rejects a %s submission (enabled: %s) after the capability check', async (timing, enabled) => {
+    let checks = 0;
+    const received = [];
+    apiFetch.mockReset().mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/schedules/capabilities') {
+        checks += 1;
+        return { ok: true, json: async () => ({ advancedTimingProtocolVersion: 1 }) };
+      }
+      if (url === '/api/agent/catalog') return { ok: true, json: async () => ({ agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }) };
+      if (url === '/api/workspace/schedules' && options?.method === 'POST') {
+        received.push(options.body);
+        // HEAD ignores unknown timing fields and accepts only intervals in this range.
+        const accepted = options.body.intervalSeconds >= 60 && options.body.intervalSeconds <= 2_592_000;
+        return { ok: accepted, json: async () => ({ error: 'Schedules repeat every 60 seconds to 30 days' }) };
+      }
+      return { ok: true, json: async () => ({ tasks: [], schedules: [] }) };
+    });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Runs'), { target: { value: timing } });
+    if (timing === 'once') fireEvent.change(screen.getByLabelText('Date and time (UTC)'), { target: { value: '2035-01-01T00:00' } });
+    if (enabled) fireEvent.click(screen.getByLabelText('Enable this schedule'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create schedule' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    await waitFor(() => expect(received).toHaveLength(1));
+    expect(checks).toBe(2);
+    expect(received[0]).toEqual(expect.objectContaining({ enabled, intervalSeconds: 0, ...(timing === 'once' ? { runOnceAt: 2051222400000 } : { at: expect.any(Object) }) }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Schedules repeat every 60 seconds to 30 days');
+  });
+
+  it.each([
+    ['old server without endpoint', async () => ({ ok: false, status: 404, json: async () => ({ error: 'Not found' }) })],
+    ['unsupported version', async () => ({ ok: true, json: async () => ({ advancedTimingProtocolVersion: 2 }) })],
+    ['missing version', async () => ({ ok: true, json: async () => ({}) })],
+    ['malformed response', async () => ({ ok: true, json: async () => { throw new Error('invalid JSON'); } })],
+    ['network error', async () => { throw new Error('offline'); }],
+  ])('blocks advanced submissions for %s while preserving legacy intervals', async (_label, capability) => {
+    const legacyAccepted = [];
+    apiFetch.mockReset().mockImplementation(async (url, options) => {
+      if (url === '/api/workspace/schedules/capabilities') return capability();
+      if (url === '/api/agent/catalog') return { ok: true, json: async () => ({ agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }) };
+      if (url === '/api/workspace/schedules' && options?.method === 'POST') {
+        // Old server ignores unknown runOnceAt/at fields and accepts intervalSeconds.
+        const { name, intervalSeconds, enabled } = options.body;
+        legacyAccepted.push({ name, intervalSeconds, enabled });
+      }
+      return { ok: true, json: async () => ({ tasks: [], schedules: [] }) };
+    });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    await screen.findByText(/Advanced scheduling is unavailable/);
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Review' } });
+    for (const timing of ['once', 'calendar']) {
+      fireEvent.change(screen.getByLabelText('Runs'), { target: { value: timing } });
+      if (timing === 'once') fireEvent.change(screen.getByLabelText('Date and time (UTC)'), { target: { value: '2035-01-01T00:00' } });
+      expect(screen.getByRole('button', { name: 'Create schedule' })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    }
+    expect(legacyAccepted).toEqual([]);
+    fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'interval' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    await waitFor(() => expect(legacyAccepted).toEqual([{ name: 'Review', intervalSeconds: 3600, enabled: false }]));
+  });
+
+  it('rechecks capability before submitting an advanced schedule', async () => {
+    let checks = 0;
+    apiFetch.mockReset().mockImplementation(async url => {
+      if (url === '/api/workspace/schedules/capabilities') return { ok: true, json: async () => ({ advancedTimingProtocolVersion: ++checks === 1 ? 1 : 2 }) };
+      if (url === '/api/agent/catalog') return { ok: true, json: async () => ({ agents: [{ id: 'claude', label: 'Claude', available: true, capabilities: { durableTasks: true } }] }) };
+      return { ok: true, json: async () => ({ tasks: [], schedules: [] }) };
+    });
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    await screen.findByText('No tasks yet.');
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Review' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Once' } });
+    fireEvent.change(screen.getByLabelText('Runs'), { target: { value: 'once' } });
+    fireEvent.change(screen.getByLabelText('Date and time (UTC)'), { target: { value: '2035-01-01T00:00' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create schedule' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
+    await screen.findByText(/Advanced scheduling is unavailable/);
+    expect(apiFetch.mock.calls.filter(([url, options]) => url === '/api/workspace/schedules' && options?.method === 'POST')).toEqual([]);
   });
 });

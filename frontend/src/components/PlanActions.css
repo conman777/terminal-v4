@@ -1,0 +1,20 @@
+.plan-actions {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  box-sizing: border-box; width: 100%; margin: 4px 0 16px; padding: 10px 12px;
+  border: 1px solid var(--border-default); border-radius: 12px; background: var(--bg-surface); font: 13px/1.4 var(--font-ui);
+}
+.plan-actions-title { color: var(--text-primary); font-weight: 500; }
+.plan-actions-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.plan-actions-buttons button {
+  padding: 6px 12px; border: 1px solid var(--border-default); border-radius: 8px; background: transparent;
+  color: var(--text-primary); font: inherit; cursor: pointer;
+}
+.plan-actions-buttons button:hover:not(:disabled) { background: var(--bg-hover); }
+.plan-actions-buttons .plan-actions-primary { border-color: transparent; background: var(--accent-fill); color: var(--accent-fill-foreground); }
+.plan-actions-buttons .plan-actions-primary:hover:not(:disabled) { background: var(--accent-fill-hover); }
+.plan-actions-buttons button:disabled { opacity: .55; cursor: default; }
+.cc-plan-chip {
+  display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: var(--accent-fill);
+  color: var(--accent-fill-foreground); font-size: 11px; font-weight: 600; line-height: 18px; vertical-align: 1px;
+}
+@media (pointer: coarse) { .plan-actions-buttons button { min-height: 44px; } }

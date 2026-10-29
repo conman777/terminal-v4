@@ -3,8 +3,8 @@ import { MobileHeader } from './MobileHeader';
 function getPathParts(cwd) {
   if (typeof cwd !== 'string' || !cwd.trim()) {
     return {
-      parentPath: '~/workspace',
-      currentName: 'term-v4'
+      parentPath: 'No workspace selected',
+      currentName: ''
     };
   }
 
@@ -55,6 +55,7 @@ export function Header({
   sessionProps,
   modalProps,
   projectInfo,
+  workspacePath,
   isSidebarCollapsed,
   onToggleSidebar,
   showPreview,
@@ -87,19 +88,20 @@ export function Header({
   } = mobileProps || {};
 
   if (!isMobile) {
-    const { parentPath, currentName } = getPathParts(projectInfo?.cwd);
+    const currentWorkspace = projectInfo?.cwd || workspacePath;
+    const { parentPath, currentName } = getPathParts(currentWorkspace);
 
     return (
       <header className="desktop-header">
         <div className="desktop-titlebar">
           <span className="desktop-workspace-label">Workspace</span>
 
-          <div className="desktop-titlebar-path" title={projectInfo?.cwd || 'Workspace'}>
+          <div className="desktop-titlebar-path" title={currentWorkspace || 'Workspace'}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
             <span className="desktop-titlebar-path-parent">{parentPath}</span>
-            <span className="desktop-titlebar-path-sep">/</span>
+            {currentName && <span className="desktop-titlebar-path-sep">/</span>}
             <span className="desktop-titlebar-path-current">{currentName}</span>
             {projectInfo?.gitBranch ? (
               <>

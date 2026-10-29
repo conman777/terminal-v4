@@ -1,0 +1,9 @@
+.command-palette-backdrop { position: fixed; inset: 0; z-index: 1200; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; background: rgb(0 0 0 / 45%); }
+.command-palette { box-sizing: border-box; width: min(560px, 100%); overflow: hidden; border: 1px solid var(--border-default); border-radius: 14px; background: var(--bg-elevated); color: var(--text-primary); box-shadow: var(--shadow-lg, var(--shadow-md)); font: 14px/1.4 var(--font-ui); }
+.command-palette input { box-sizing: border-box; width: 100%; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--text-primary); font: inherit; outline: none; }
+.command-palette ul { max-height: min(420px, 60vh); margin: 0; padding: 6px; overflow-y: auto; list-style: none; }
+.command-palette li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.command-palette li.selected { background: var(--bg-active); }
+.command-palette li small { overflow: hidden; color: var(--text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.command-palette-empty { color: var(--text-secondary); cursor: default; }
+@media (pointer: coarse) { .command-palette li { min-height: 44px; } }

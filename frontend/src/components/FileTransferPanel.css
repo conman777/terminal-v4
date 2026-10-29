@@ -1,1 +1,33 @@
-.file-transfer-panel{display:flex;flex-direction:column;gap:12px;min-width:0;padding:4px}.file-transfer-panel h3,.file-transfer-panel p{margin:0}.file-transfer-panel label{display:flex;flex-direction:column;gap:6px}.file-transfer-panel input{max-width:100%;box-sizing:border-box;min-height:36px;padding:8px;background:var(--bg-secondary,#202126);color:inherit;border:1px solid var(--border-color,#45464e);border-radius:6px}.transfer-drop{padding:14px;border:1px dashed var(--border-color,#666);border-radius:8px}.transfer-actions{display:flex;gap:8px;flex-wrap:wrap}.file-transfer-panel button{min-height:36px;padding:6px 10px;cursor:pointer}.file-transfer-panel button:disabled{opacity:.5;cursor:default}.file-transfer-panel ul{list-style:none;display:flex;flex-direction:column;gap:14px;padding:0;margin:0}.file-transfer-panel li{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border-color,#444);border-radius:8px;overflow-wrap:anywhere}.file-transfer-panel progress{width:100%}.transfer-note{font-size:12px;opacity:.8}.file-transfer-panel [role=alert]{color:#f49090}
+.file-transfer-panel { min-width: 0; color: var(--text-primary); font: 14px/1.5 var(--font-ui); }
+.file-transfer-panel :is(h3, h4) { color: var(--text-primary); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.file-transfer-panel p { color: var(--text-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.file-transfer-panel :is(small, time) { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.file-transfer-panel label { color: var(--text-secondary); font-size: 12px; }
+.file-transfer-panel :is(button, select, input:not([type=checkbox]):not([type=range]), textarea) { box-sizing: border-box; max-width: 100%; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font: 13px/1.5 var(--font-ui); }
+.file-transfer-panel button { width: fit-content; background: var(--bg-elevated); cursor: pointer; }
+.file-transfer-panel button:hover:not(:disabled) { background: var(--bg-hover); }
+.file-transfer-panel button:disabled { opacity: .5; cursor: default; }
+.file-transfer-panel :is(input, textarea)::placeholder { color: var(--text-muted); }
+.file-transfer-panel :is(button, select, input, textarea, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.file-transfer-panel input[type=checkbox] { accent-color: var(--accent-primary); width: 16px; height: 16px; flex-shrink: 0; margin: 0; }
+.file-transfer-panel summary { min-height: 32px; padding: 6px 0; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.file-transfer-panel [role=alert] { color: var(--error); }
+.file-transfer-panel { display: grid; gap: 12px; }
+.file-transfer-panel :is(h3, p) { margin: 0; }
+.file-transfer-panel label { display: grid; gap: 6px; min-width: 0; }
+.file-transfer-panel input { width: 100%; min-width: 0; }
+.file-transfer-panel input[type=file] { padding: 6px; }
+.file-transfer-panel input[type=file]::file-selector-button { min-height: 28px; margin-right: 8px; padding: 4px 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font: 13px var(--font-ui); cursor: pointer; }
+.transfer-drop { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--border-default); border-radius: 8px; overflow-wrap: anywhere; }
+.transfer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.file-transfer-panel ul { display: grid; gap: 12px; list-style: none; padding: 0; margin: 0; }
+.file-transfer-panel li { display: grid; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; overflow-wrap: anywhere; }
+.file-transfer-panel li > span { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.file-transfer-panel progress { width: 100%; height: 6px; accent-color: var(--accent-primary); }
+.file-transfer-panel .transfer-note { font-size: 12px; }
+@media (pointer: coarse) { .file-transfer-panel input[type=file]::file-selector-button { min-height: 44px; } }
+@media (pointer: coarse), (max-width: 768px) {
+  .file-transfer-panel :is(button, select, input:not([type=checkbox]):not([type=range]), summary) { min-height: 44px; }
+  .file-transfer-panel :is(select, input:not([type=checkbox]):not([type=range]), textarea) { font-size: 16px; }
+  .file-transfer-panel label:has(input[type=checkbox]) { min-height: 44px; align-items: center; }
+}

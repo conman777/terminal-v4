@@ -1,0 +1,4 @@
+.raw-input-pending, .raw-input-pending-minimized { position: fixed; z-index: 1490; left: 12px; top: max(68px, calc(env(safe-area-inset-top) + 56px)); max-width: calc(100vw - 24px); border: 1px solid var(--border-color); border-radius: 10px; background: var(--bg-secondary, #1b2326); box-shadow: 0 8px 28px #0006; }
+.raw-input-pending { width: 360px; max-height: 35vh; overflow: auto; padding: 10px; }
+.raw-input-pending p { margin: 4px 0; }
+.raw-input-pending button, .raw-input-pending-minimized { min-height: 44px; margin-right: 8px; }

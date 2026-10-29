@@ -1,0 +1,18 @@
+{
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "resources": {
+      "../../../rust/target/release/terminal-v4-api": "terminal-v4-api",
+      "../../../frontend/dist/": "frontend/dist/",
+      "../../../scripts/provider-rewind-claude.mjs": "scripts/provider-rewind-claude.mjs",
+      "../../../node_modules/": "node_modules/",
+      "../../../.runtime/browser/": "browser-runtime/"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

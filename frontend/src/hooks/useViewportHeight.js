@@ -56,11 +56,7 @@ function coerceViewportMetrics(nextSnapshot, previousMetrics, wasEditableFocused
   const visualWidth = nextSnapshot.width > 0 ? nextSnapshot.width : previousMetrics.width;
   const layoutWidth = nextSnapshot.layoutWidth > 0 ? nextSnapshot.layoutWidth : visualWidth;
   const keyboardWasOpen = wasEditableFocused || previousMetrics.offsetTop > 0;
-  const keyboardDismissed = previousMetrics.offsetTop > 0 && nextSnapshot.offsetTop === 0;
-  const shouldRestoreLayoutViewport = (
-    (!nextSnapshot.inputFocused && keyboardWasOpen)
-    || keyboardDismissed
-  )
+  const shouldRestoreLayoutViewport = !nextSnapshot.inputFocused && keyboardWasOpen
     && visualHeight > 0
     && layoutHeight > visualHeight;
   const shouldKeepPreservedLayoutViewport = preserveLayoutViewport

@@ -1,0 +1,17 @@
+.network-tab .network-request-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.network-tab .network-request-open:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.network-tab [role="alert"] { color: var(--error); margin: 8px; overflow-wrap: anywhere; }

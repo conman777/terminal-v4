@@ -1,13 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useId, useRef, useState, useSyncExternalStore } from 'react';
+import { flushSync } from 'react-dom';
 import { TerminalMicButton } from './TerminalMicButton';
-import { Dropdown } from './Dropdown';
 import { useAutocorrect } from '../contexts/AutocorrectContext';
 import { useAutocorrectInput } from '../hooks/useAutocorrectInput';
+import { useMobileDetect } from '../hooks/useMobileDetect';
 import { AI_TYPE_OPTIONS, getAiDisplayLabel } from '../utils/aiProviders';
-import { uploadScreenshot } from '../utils/api';
+import { uploadAttachment, uploadScreenshot } from '../utils/api';
 import { getImageFileFromDataTransfer } from '../utils/clipboardImage';
 import { getComposerSlashSuggestions } from '../utils/slashCommands';
+import { insertMention, mentionQuery, useFileMentions } from '../hooks/useFileMentions';
+import { captureAuthScope, isAuthScopeCurrent, subscribeAuth } from '../utils/auth';
+import { getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { ProviderAuthModal } from './ProviderAuthModal';
+import { UserImageAttachments } from './UserImageAttachments';
+import './UserImageAttachments.css';
+import './DesktopComposer.css';
 
 const IMAGE_INPUT_ACCEPT = [
   'image/*',
@@ -24,44 +31,35 @@ const IMAGE_INPUT_ACCEPT = [
   '.bmp'
 ].join(',');
 
-function formatSessionSummary(summary) {
-  if (typeof summary !== 'string') return '';
-  const text = summary.trim();
-  if (!text) return '';
+const OWNED_IMAGE_INPUT_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp,.png,.jpg,.jpeg,.gif,.webp';
+const getAuthScopeKey = () => JSON.stringify(captureAuthScope());
 
-  const pathStart = text.search(/(~[\\/]|[A-Za-z]:[\\/]|\/)/);
-  if (pathStart === -1) return text;
+function suppliedFiles(dataTransfer) {
+  const files = Array.from(dataTransfer?.files || []);
+  if (files.length) return files;
+  return Array.from(dataTransfer?.items || []).filter(item => item?.kind === 'file' && typeof item.getAsFile === 'function')
+    .map(item => item.getAsFile()).filter(Boolean);
+}
 
-  const prefix = text.slice(0, pathStart).trimEnd();
-  const rawPath = text.slice(pathStart).trim();
-  const isWindowsLike = /[A-Za-z]:[\\/]/.test(rawPath) || rawPath.startsWith('~\\') || rawPath.includes('\\');
-  const separator = isWindowsLike ? '\\' : '/';
-  const normalizedPath = rawPath.replace(/[\\/]+/g, separator);
-  const parts = normalizedPath.split(separator).filter(Boolean);
-
-  if (parts.length <= 3) return text;
-
-  let root = parts[0];
-  let tailParts = parts.slice(-2);
-  if (rawPath.startsWith('~')) {
-    root = '~';
-    tailParts = parts.slice(-2);
-  } else if (/^[A-Za-z]:$/.test(root)) {
-    tailParts = parts.slice(-2);
+// DOM textarea selection counts CRLF as one character; draft text keeps its bytes.
+function rawTextOffset(text, domOffset) {
+  let index = 0;
+  for (let count = 0; count < domOffset && index < text.length; count += 1) {
+    index += text[index] === '\r' && text[index + 1] === '\n' ? 2 : 1;
   }
-
-  const compactPath = `${root}${separator}...${separator}${tailParts.join(separator)}`;
-  return prefix ? `${prefix} ${compactPath}` : compactPath;
+  return index;
 }
 
 /**
  * Desktop status bar at the bottom of the terminal pane.
  * Shows connection status, current directory, git branch, and action buttons.
  */
+const NO_SKILLS = [];
+
 export function DesktopStatusBar({
   sessionId,
-  sessionTitle,
-  sessionSummary = '',
+  compactConversation = false,
+  compactInputOptions = false,
   cwd,
   gitBranch,
   isActive = false,
@@ -74,14 +72,23 @@ export function DesktopStatusBar({
   aiType = null,
   aiOptions = AI_TYPE_OPTIONS,
   customAiProviders = [],
+  skills = NO_SKILLS,
+  mentionRoot = '',
+  allowAnyFile = false,
+  mentionFiles: providedMentionFiles,
   onSelectAiType,
   onAddCustomAiCommand,
   composerValue = '',
   composerAttachments = [],
+  attachmentsEnabled = true,
+  attachmentsDisabledMessage = 'Attachments are not supported in this conversation yet.',
+  userImages = null,
   onComposerChange,
   onComposerSubmit,
   onComposerAttachmentAdd,
   onComposerAttachmentRemove,
+  getAttachmentSelectionToken,
+  isAttachmentSelectionTokenCurrent,
   runtimeInfo = null,
   gitBranches = [],
   currentGitBranch = null,
@@ -90,15 +97,159 @@ export function DesktopStatusBar({
   onSelectGitBranch,
   composerPlaceholder = 'Send a command or prompt',
   composerDisabled = false,
+  voiceAvailable = true,
+  composerSubmitDisabled = false,
+  composerSubmitLabel = 'Send to terminal',
+  isStreaming = false,
+  isInterrupting = false,
+  requiresCleanup = false,
+  onInterrupt,
   showTopRow = null,
   showComposerFooter = null,
   showImageButton = true,
   showAiSelector = true,
   showAutocorrectToggle = true,
   showMicButtons = true,
+  composerPrimaryAction = null,
   composerSecondaryAction = null,
 }) {
   const { autocorrectEnabled, toggleAutocorrect } = useAutocorrect();
+  const isMobile = useMobileDetect();
+  const composerInputRef = useRef(null);
+  const transcriptDraftRef = useRef(null);
+  transcriptDraftRef.current = { sessionId, composerValue, onComposerChange };
+  const contextTriggerRef = useRef(null);
+  const contextPanelRef = useRef(null);
+  const composerActionsRef = useRef(null);
+  const contextId = useId();
+  const [contextOpen, setContextOpen] = useState(false);
+  // The supplied mobile model control owns its trigger; keep its full selection in the accessible name.
+  useLayoutEffect(() => {
+    if (!compactInputOptions) return undefined;
+    const trigger = composerActionsRef.current?.querySelector('.mobile-model-trigger');
+    const model = trigger?.querySelector('span:nth-child(2)');
+    if (!trigger || !model) return undefined;
+    const originalLabel = trigger.getAttribute('aria-label');
+    const updateLabel = () => trigger.setAttribute('aria-label', `${originalLabel || 'Model settings'}: ${model.textContent}`);
+    updateLabel();
+    const observer = new MutationObserver(updateLabel);
+    observer.observe(model, { childList: true, characterData: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      if (originalLabel === null) trigger.removeAttribute('aria-label');
+      else trigger.setAttribute('aria-label', originalLabel);
+    };
+  }, [compactInputOptions, composerPrimaryAction]);
+  useLayoutEffect(() => {
+    if (!contextOpen) return undefined;
+    const panel = contextPanelRef.current;
+    const trigger = contextTriggerRef.current;
+    if (!panel || !trigger) return undefined;
+    const measure = () => {
+      const viewport = window.visualViewport;
+      const left = viewport?.offsetLeft || 0;
+      const top = viewport?.offsetTop || 0;
+      const width = viewport?.width || window.innerWidth;
+      const rect = trigger.getBoundingClientRect();
+      const panelWidth = Math.min(320, width - 24);
+      panel.style.width = `${panelWidth}px`;
+      panel.style.left = `${Math.max(left + 12, Math.min(rect.left, left + width - panelWidth - 12))}px`;
+      panel.style.maxHeight = `${Math.max(44, rect.top - top - 20)}px`;
+      panel.style.top = `${Math.max(top + 12, rect.top - panel.getBoundingClientRect().height - 8)}px`;
+    };
+    const dismissOutside = event => {
+      if (!panel.contains(event.target) && !trigger.contains(event.target)) setContextOpen(false);
+    };
+    measure();
+    panel.focus();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    window.visualViewport?.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('scroll', measure);
+    document.addEventListener('pointerdown', dismissOutside);
+    document.addEventListener('focusin', dismissOutside);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+      window.visualViewport?.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('scroll', measure);
+      document.removeEventListener('pointerdown', dismissOutside);
+      document.removeEventListener('focusin', dismissOutside);
+    };
+  }, [contextOpen]);
+  useEffect(() => { setContextOpen(false); }, [sessionId]);
+  const composerOptionsRef = useRef(null);
+  const [composerOptionsOpen, setComposerOptionsOpen] = useState(false);
+  const [voiceStates, setVoiceStates] = useState({});
+  const handleDirectVoiceState = useCallback(state => setVoiceStates(current => ({ ...current, direct: state })), []);
+  const handleLocalVoiceState = useCallback(state => setVoiceStates(current => ({ ...current, local: state })), []);
+  const handleGroqVoiceState = useCallback(state => setVoiceStates(current => ({ ...current, groq: state })), []);
+  const currentVoiceStates = showMicButtons ? Object.entries(voiceStates).filter(([key, state]) => state.sessionId === sessionId && (key !== 'direct' || compactInputOptions)) : [];
+  const activeVoice = currentVoiceStates.find(([, state]) => state.isChecking || state.isRequesting || state.isRecording || state.isTranscribing);
+  const voiceBusy = Boolean(activeVoice);
+  const [voiceInterruptions, setVoiceInterruptions] = useState({});
+  const previousVoiceOwner = useRef({ sessionId, voiceAvailable });
+  useLayoutEffect(() => {
+    const previous = previousVoiceOwner.current;
+    if ((previous.sessionId !== sessionId || (previous.voiceAvailable && !voiceAvailable))
+      && Object.values(voiceStates).some(state => state.sessionId === previous.sessionId && (state.isChecking || state.isRequesting || state.isRecording || state.isTranscribing))) {
+      setVoiceInterruptions(current => ({ ...current, [previous.sessionId]: true }));
+    }
+    previousVoiceOwner.current = { sessionId, voiceAvailable };
+  }, [sessionId, voiceAvailable, voiceStates]);
+  useLayoutEffect(() => {
+    const details = composerOptionsRef.current;
+    if (!composerOptionsOpen || !details) return undefined;
+    const measure = () => {
+      const menu = details.querySelector('.composer-input-options-menu');
+      const trigger = details.querySelector('summary');
+      if (!menu || !trigger) return;
+      const viewport = window.visualViewport;
+      const header = document.querySelector('.mobile-header');
+      const top = Math.max(viewport?.offsetTop || 0, header?.getBoundingClientRect().bottom || 0);
+      const left = viewport?.offsetLeft || 0;
+      const width = viewport?.width || window.innerWidth;
+      const rect = trigger.getBoundingClientRect();
+      const menuWidth = Math.min(280, width - 24);
+      menu.style.position = 'fixed';
+      menu.style.width = `${menuWidth}px`;
+      menu.style.bottom = 'auto';
+      menu.style.right = 'auto';
+      menu.style.left = `${Math.max(left + 12, Math.min(rect.left, left + width - menuWidth - 12))}px`;
+      menu.style.maxHeight = `${Math.max(44, Math.floor(rect.top - top - 10))}px`;
+      menu.style.top = `${Math.max(top + 8, rect.top - menu.getBoundingClientRect().height - 8)}px`;
+    };
+    const dismissOutside = event => {
+      if (!details.contains(event.target) && !event.target.closest?.('[role="dialog"], .modal-overlay')) {
+        details.open = false;
+        setComposerOptionsOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', dismissOutside);
+    document.addEventListener('focusin', dismissOutside);
+    measure();
+    const frame = requestAnimationFrame(measure);
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('scroll', measure);
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (details.parentElement) observer?.observe(details.parentElement);
+    return () => {
+      document.removeEventListener('pointerdown', dismissOutside);
+      document.removeEventListener('focusin', dismissOutside);
+      cancelAnimationFrame(frame);
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('scroll', measure);
+      observer?.disconnect();
+    };
+  }, [composerOptionsOpen]);
+  useLayoutEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 120)}px`;
+  }, [composerValue, isMobile]);
   const {
     handleKeyDown: autocorrectKeyDown,
     handleSelectionChange: handleAutocorrectSelectionChange
@@ -110,15 +261,97 @@ export function DesktopStatusBar({
   const [isAiMenuOpen, setIsAiMenuOpen] = useState(false);
   const [isProviderAuthOpen, setIsProviderAuthOpen] = useState(false);
   const [isPastingImage, setIsPastingImage] = useState(false);
+  const [isPreparingLegacyImage, setIsPreparingLegacyImage] = useState(false);
+  const legacyImageWorkRef = useRef(null);
   const [isImageDragOver, setIsImageDragOver] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [imageActionError, setImageActionError] = useState(null);
   const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
   const aiMenuRef = useRef(null);
   const imageInputRef = useRef(null);
+  const [restoreOpening, setRestoreOpening] = useState(null);
+  const pickerSequence = useRef(0);
+  const environmentSignal = useSyncExternalStore(subscribeEnvironment, getEnvironmentSignal);
+  const authScopeKey = useSyncExternalStore(subscribeAuth, getAuthScopeKey);
+  const pickerView = useMemo(() => ({}), [sessionId, userImages?.scopeKey, userImages?.generation, environmentSignal, authScopeKey]);
+  const pickerViewRef = useRef(pickerView), pickerLeaseRef = useRef(null);
+  if (pickerViewRef.current !== pickerView) { pickerLeaseRef.current = null; pickerViewRef.current = pickerView; }
+  const imageViewRef = useRef(null);
+  const mountedRef = useRef(true);
+  const compositionRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  useEffect(() => {
+    setIsPastingImage(false); setUploadError(''); setIsImageDragOver(false);
+    setIsPreparingLegacyImage(Boolean(legacyImageWorkRef.current?.view === pickerView && legacyImageWorkRef.current.pending > 0));
+    compositionRef.current = false;
+  }, [pickerView]);
+  imageViewRef.current = { userImages, sessionId, disabled: composerDisabled, attachmentsEnabled, attachmentsDisabledMessage, onComposerAttachmentAdd };
+  const pickerBinding = useMemo(() => ({}), [pickerView, userImages?.pendingPreviousSend?.requestId, userImages?.pendingPreviousSend?.originalsRevision]);
+  const pickerBindingRef = useRef(pickerBinding);
+  if (pickerBindingRef.current !== pickerBinding) { pickerLeaseRef.current = null; pickerBindingRef.current = pickerBinding; }
+  const currentRestoreOpening = restoreOpening?.binding === pickerBinding ? restoreOpening : null;
+  const imageItems = Array.isArray(userImages?.items) ? userImages.items : [];
+  let imageScopeMatches = false;
+  try { imageScopeMatches = Boolean(userImages && JSON.parse(userImages.scopeKey)?.[3] === sessionId); } catch { /* Invalid controller scope stays disabled. */ }
+  const canAddUserImages = Boolean(userImages && imageScopeMatches && !composerDisabled && userImages.canAdd
+    && userImages.admission?.state === 'allowed' && !userImages.isHydrating && !userImages.isSaving);
+  const canSendUserImages = Boolean(userImages && imageScopeMatches && userImages.canSend && !userImages.isHydrating && !userImages.isSaving
+    && !userImages.pendingPreviousSend && Array.isArray(userImages.items) && imageItems.every(item => item.status === 'ready')
+    && (!imageItems.length || userImages.admission?.state === 'allowed') && composerAttachments.length === 0);
+  const currentImageError = userImages && imageScopeMatches && imageActionError?.scopeKey === userImages.scopeKey && imageActionError?.generation === userImages.generation
+    ? imageActionError.message : '';
 
-  // Extract folder name from cwd, fall back to session title
-  const normalizedCwd = typeof cwd === 'string' ? cwd.replace(/\\/g, '/') : '';
-  const folderName = normalizedCwd ? normalizedCwd.split('/').filter(Boolean).pop() || normalizedCwd : '';
+  function sameImageView(view) {
+    const live = imageViewRef.current;
+    return Boolean(view && live.sessionId === sessionId && live.userImages?.scopeKey === view.scopeKey && live.userImages?.generation === view.generation);
+  }
+
+  function sameOriginalRow(request) {
+    const live = imageViewRef.current, previous = live.userImages?.pendingPreviousSend;
+    return Boolean(sameImageView(userImages) && !live.disabled && imageScopeMatches && previous?.originalsCanChoose
+      && previous.requestId === request?.requestId && previous.originalsRevision === request?.originalsRevision
+      && Number.isSafeInteger(request.slot) && previous.originals?.some(item => item.slot === request.slot));
+  }
+  function openOriginalPicker(request) {
+    if (!sameOriginalRow(request)) return;
+    const opening = { id: ++pickerSequence.current, view: pickerViewRef.current, binding: pickerBindingRef.current,
+      purpose: 'restore_original', request: { requestId: request.requestId, originalsRevision: request.originalsRevision, slot: request.slot }, node: null };
+    pickerLeaseRef.current = null; setImageActionError(null);
+    // Commit this opening's one connected input before click(), in the same
+    // trusted button handler. A timer/effect would lose the chooser gesture.
+    flushSync(() => setRestoreOpening(opening));
+    if (!sameOriginalRow(opening.request) || opening.view !== pickerViewRef.current || opening.binding !== pickerBindingRef.current) return;
+    opening.node = imageInputRef.current;
+    if (!opening.node?.isConnected) return;
+    pickerLeaseRef.current = opening; opening.node.click();
+  }
+
+  async function imageAction(action, ...args) {
+    if (action === 'chooseOriginalImage') { openOriginalPicker(args[0]); return; }
+    const view = userImages;
+    if (!sameImageView(view) || imageViewRef.current.disabled || !imageScopeMatches) return;
+    setImageActionError(null);
+    try {
+      if (typeof view[action] !== 'function') throw new Error('This image action is unavailable.');
+      await view[action](...args);
+    } catch (error) {
+      if (sameImageView(view)) setImageActionError({ scopeKey: view.scopeKey, generation: view.generation,
+        message: String(error?.message || 'Image action failed. Your draft was kept.').slice(0, 400) });
+    }
+  }
+
+  async function addOwnedFiles(files, source) {
+    if (!canAddUserImages || !sameImageView(userImages)) return;
+    if (!files.length) {
+      setImageActionError({ scopeKey: userImages.scopeKey, generation: userImages.generation, message: 'Choose PNG, JPEG, GIF or WebP image files to attach.' });
+      return;
+    }
+    await imageAction('addFiles', files, { source });
+  }
+
   const selectedAiOption = aiOptions.find((option) => option.id === aiType)
     ?? (aiType ? { id: aiType, label: getAiDisplayLabel(aiType), color: 'var(--accent-info)' } : null)
     ?? aiOptions[0]
@@ -131,11 +364,16 @@ export function DesktopStatusBar({
   const isRawTerminalViewMode = resolvedTerminalViewMode === 'terminal';
   const resolvedShowComposerFooter = typeof showComposerFooter === 'boolean'
     ? showComposerFooter
-    : Boolean(runtimeInfo?.label || currentGitBranch || gitBranch);
+    : Boolean(cwd || runtimeInfo?.label || currentGitBranch || gitBranch || gitBranches.length);
   const activeRuntimeProviderId = runtimeInfo?.providerId ?? aiType ?? null;
+  const activeMention = mentionRoot ? mentionQuery(composerValue) : null;
+  const fetchedMentionFiles = useFileMentions(providedMentionFiles ? '' : mentionRoot, activeMention);
+  const mentionFiles = providedMentionFiles ?? fetchedMentionFiles;
   const slashSuggestions = useMemo(
-    () => getComposerSlashSuggestions(composerValue, activeRuntimeProviderId, customAiProviders),
-    [activeRuntimeProviderId, composerValue, customAiProviders]
+    () => activeMention != null
+      ? mentionFiles.map(file => ({ cmd: `@${file}`, desc: 'File', insert: insertMention(composerValue, file) }))
+      : getComposerSlashSuggestions(composerValue, activeRuntimeProviderId, customAiProviders, skills),
+    [activeMention, activeRuntimeProviderId, composerValue, customAiProviders, mentionFiles, skills]
   );
 
   useEffect(() => {
@@ -144,6 +382,9 @@ export function DesktopStatusBar({
 
   useEffect(() => {
     if (!isAiMenuOpen) return undefined;
+    const selected = aiMenuRef.current?.querySelector('[aria-checked="true"]')
+      || aiMenuRef.current?.querySelector('[role="menuitemradio"], [role="menuitem"]');
+    selected?.focus();
 
     function handleOutsideClick(event) {
       if (aiMenuRef.current && !aiMenuRef.current.contains(event.target)) {
@@ -155,9 +396,29 @@ export function DesktopStatusBar({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [isAiMenuOpen]);
 
+  function handleAiMenuKeyDown(event) {
+    if (event.key === 'Escape' && isAiMenuOpen) {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsAiMenuOpen(false);
+      aiMenuRef.current?.querySelector('.status-ai-selector')?.focus();
+      return;
+    }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isAiMenuOpen) { setIsAiMenuOpen(true); return; }
+    const items = [...aiMenuRef.current.querySelectorAll('[role="menuitemradio"], [role="menuitem"]')];
+    const index = items.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
+  }
+
   function handleAiTypeSelect(nextAiType) {
     onSelectAiType?.(nextAiType);
     setIsAiMenuOpen(false);
+    aiMenuRef.current?.querySelector('.status-ai-selector')?.focus();
   }
 
   function handleAddCustomCommand() {
@@ -172,8 +433,16 @@ export function DesktopStatusBar({
   }
 
   function handleComposerSubmit(event, submittedValue = composerValue) {
+    if (event?.type === 'submit' && event.target !== event.currentTarget) return;
     event?.preventDefault?.();
-    if (composerDisabled) return;
+    if (composerDisabled || composerSubmitDisabled || isInterrupting || requiresCleanup || voiceBusy) return;
+    if (!userImages && (isPreparingLegacyImage || legacyImageWorkRef.current?.view === pickerViewRef.current && legacyImageWorkRef.current.pending > 0)) return;
+    if (userImages) {
+      if (!canSubmitComposer || !sameImageView(userImages)) return;
+      onComposerSubmit?.(typeof submittedValue === 'string' ? submittedValue : '');
+      return;
+    }
+    if (!attachmentsEnabled && composerAttachments.length) { setUploadError('Remove attachments before sending this conversation.'); return; }
     const nextValue = typeof submittedValue === 'string' ? submittedValue : '';
     if (!nextValue.trim() && composerAttachments.length === 0) return;
     onComposerSubmit?.(nextValue);
@@ -185,34 +454,80 @@ export function DesktopStatusBar({
   }
 
   function handleComposerTranscript(transcribedText) {
-    if (composerDisabled || typeof onComposerChange !== 'function') return;
+    const draft = transcriptDraftRef.current;
+    if (draft.sessionId !== sessionId || typeof draft.onComposerChange !== 'function') return;
     const normalizedTranscript = typeof transcribedText === 'string' ? transcribedText.trim() : '';
     if (!normalizedTranscript) return;
 
-    const needsSeparator = Boolean(composerValue) && !/\s$/.test(composerValue);
-    onComposerChange(`${composerValue}${needsSeparator ? ' ' : ''}${normalizedTranscript}`);
+    const needsSeparator = Boolean(draft.composerValue) && !/\s$/.test(draft.composerValue);
+    draft.onComposerChange(`${draft.composerValue}${needsSeparator ? ' ' : ''}${normalizedTranscript}`);
   }
 
-  async function attachImageFile(file, fallbackName = 'image.png') {
-    if (!file || composerDisabled) return;
+  function captureLegacyImageScope() {
+    return { view: pickerViewRef.current, environment: getEnvironmentSignal(), auth: captureAuthScope(),
+      selectionToken: getAttachmentSelectionToken?.(), selectionCurrent: isAttachmentSelectionTokenCurrent };
+  }
+
+  function isLegacyImageScopeCurrent(scope) {
+    return mountedRef.current && scope.view === pickerViewRef.current && !scope.environment.aborted
+      && isAuthScopeCurrent(scope.auth) && !imageViewRef.current.userImages;
+  }
+
+  function beginLegacyImageWork(scope) {
+    const work = legacyImageWorkRef.current?.view === scope.view ? legacyImageWorkRef.current : { view: scope.view, pending: 0 };
+    work.pending += 1;
+    legacyImageWorkRef.current = work;
+    setIsPreparingLegacyImage(true);
+    return work;
+  }
+
+  function finishLegacyImageWork(work) {
+    work.pending -= 1;
+    if (!mountedRef.current || legacyImageWorkRef.current !== work || work.view !== pickerViewRef.current) return;
+    setIsPreparingLegacyImage(work.pending > 0);
+  }
+
+  function rejectLegacyImageMutation(scope) {
+    if (!isLegacyImageScopeCurrent(scope)) return true;
+    if (typeof scope.selectionCurrent === 'function' && !scope.selectionCurrent(scope.selectionToken)) {
+      setUploadError('The previous attachment was not added because file selections changed. Attach it again if needed.');
+      return true;
+    }
+    const live = imageViewRef.current;
+    if (live.disabled) {
+      setUploadError('Image attachment was canceled because input is disabled. Attach it again when input is available.');
+      return true;
+    }
+    if (!live.attachmentsEnabled) {
+      setUploadError(live.attachmentsDisabledMessage);
+      return true;
+    }
+    return false;
+  }
+
+  async function attachImageFile(file, fallbackName = 'image.png', scope = captureLegacyImageScope()) {
+    if (!file || rejectLegacyImageMutation(scope)) return;
 
     setUploadError('');
     setIsPastingImage(true);
+    const work = beginLegacyImageWork(scope);
     try {
-      const path = await uploadScreenshot(file);
-      if (!path) return;
-      onComposerAttachmentAdd?.({
+      const path = allowAnyFile && !file.type?.startsWith('image/') ? await uploadAttachment(file) : await uploadScreenshot(file);
+      if (!path || rejectLegacyImageMutation(scope)) return;
+      imageViewRef.current.onComposerAttachmentAdd?.({
         name: file.name || fallbackName,
         path
       });
     } catch (error) {
+      if (!isLegacyImageScopeCurrent(scope)) return;
       const message = error instanceof Error && error.message
         ? error.message
         : 'Image upload failed';
       setUploadError(message);
       console.error('Failed to attach image from composer:', error);
     } finally {
-      setIsPastingImage(false);
+      if (mountedRef.current && legacyImageWorkRef.current === work && work.view === pickerViewRef.current) setIsPastingImage(false);
+      finishLegacyImageWork(work);
     }
   }
 
@@ -228,8 +543,11 @@ export function DesktopStatusBar({
   }
 
   function handleComposerKeyDown(event) {
+    if (compositionRef.current || event.isComposing || event.nativeEvent?.isComposing
+      || event.keyCode === 229 || event.nativeEvent?.keyCode === 229) return;
     const handled = autocorrectKeyDown(event);
     if (handled) return;
+    if (isMobile && event.key === 'Enter' && !event.metaKey && !event.ctrlKey) return;
 
     if (slashSuggestions.length > 0) {
       if (event.key === 'ArrowDown') {
@@ -246,54 +564,85 @@ export function DesktopStatusBar({
 
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        onComposerSubmit?.(slashSuggestions[selectedSlashIndex].cmd);
+        const suggestion = slashSuggestions[selectedSlashIndex];
+        if (suggestion.insert) onComposerChange?.(suggestion.insert);
+        else handleComposerSubmit(event, suggestion.cmd);
         return;
       }
 
-      if (event.key === 'Tab') {
+      if (event.key === 'Tab' && !event.shiftKey) {
         event.preventDefault();
-        onComposerChange?.(`${slashSuggestions[selectedSlashIndex].cmd} `);
+        onComposerChange?.(slashSuggestions[selectedSlashIndex].insert ?? `${slashSuggestions[selectedSlashIndex].cmd} `);
         return;
       }
     }
 
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      handleComposerSubmit(event, event.currentTarget?.value ?? composerValue);
+      handleComposerSubmit(event, userImages ? composerValue : event.currentTarget?.value ?? composerValue);
     }
   }
 
   async function handleComposerPaste(event) {
+    const scope = captureLegacyImageScope();
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
-
-    let imageFile = null;
-    try {
-      imageFile = await getImageFileFromDataTransfer(clipboardData);
-    } catch (error) {
-      console.error('Failed to inspect pasted image data for composer:', error);
+    if (userImages) {
+      const files = suppliedFiles(clipboardData);
+      if (!files.length) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!canAddUserImages || !sameImageView(userImages)) return;
+      const pasted = clipboardData.getData?.('text/plain');
+      if (pasted && typeof pasted === 'string') {
+        const start = rawTextOffset(composerValue, event.currentTarget.selectionStart ?? composerValue.length);
+        const end = rawTextOffset(composerValue, event.currentTarget.selectionEnd ?? composerValue.length);
+        onComposerChange?.(composerValue.slice(0, start) + pasted + composerValue.slice(end));
+      }
+      await addOwnedFiles(files, 'paste');
       return;
     }
 
-    if (!imageFile) return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    await attachImageFile(imageFile);
+    const work = beginLegacyImageWork(scope);
+    try {
+      const imageFile = await getImageFileFromDataTransfer(clipboardData);
+      if (!imageFile || !isLegacyImageScopeCurrent(scope)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      await attachImageFile(imageFile, 'image.png', scope);
+    } catch (error) {
+      if (isLegacyImageScopeCurrent(scope)) setUploadError(error.message || 'Unable to inspect image. Try attaching it again.');
+      console.error('Failed to inspect pasted image data for composer:', error);
+    } finally {
+      finishLegacyImageWork(work);
+    }
   }
 
   async function handleImageSelect(event) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-
-    await attachImageFile(file);
+    const node = event.currentTarget, lease = pickerLeaseRef.current;
+    const files = Array.from(node.files || []); node.value = '';
+    if (!lease || lease.node !== node || lease.view !== pickerViewRef.current) return;
+    pickerLeaseRef.current = null;
+    if (lease.purpose === 'restore_original') {
+      if (lease.binding !== pickerBindingRef.current || !sameOriginalRow(lease.request) || files.length !== 1) return;
+      await imageAction('selectOriginalImage', files[0], lease.request); return;
+    }
+    if (userImages) {
+      if (files.length) await addOwnedFiles(files, 'picker');
+      return;
+    }
+    if (files[0]) await attachImageFile(files[0], 'image.png', lease.legacyScope || captureLegacyImageScope());
   }
 
   function handleComposerDragOver(event) {
     if (!hasFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
+    if (userImages ? !canAddUserImages : !attachmentsEnabled) {
+      setIsImageDragOver(false);
+      if (!userImages) setUploadError(attachmentsDisabledMessage);
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      return;
+    }
     setUploadError('');
     setIsImageDragOver(true);
     if (event.dataTransfer) {
@@ -310,33 +659,78 @@ export function DesktopStatusBar({
   }
 
   async function handleComposerDrop(event) {
+    const scope = captureLegacyImageScope();
     if (!hasFileDrag(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     setIsImageDragOver(false);
+    if (userImages) { await addOwnedFiles(suppliedFiles(event.dataTransfer), 'drop'); return; }
 
+    const work = beginLegacyImageWork(scope);
     try {
       const imageFile = await getImageFileFromDataTransfer(event.dataTransfer);
+      if (!isLegacyImageScopeCurrent(scope)) return;
       if (!imageFile) {
         setUploadError('Drop an image file to attach it.');
         return;
       }
-      await attachImageFile(imageFile);
+      await attachImageFile(imageFile, 'image.png', scope);
     } catch (error) {
+      if (!isLegacyImageScopeCurrent(scope)) return;
       const message = error instanceof Error && error.message
         ? error.message
         : 'Image upload failed';
       setUploadError(message);
       console.error('Failed to drop image into composer:', error);
+    } finally {
+      finishLegacyImageWork(work);
     }
   }
 
   const canSubmitComposer = !composerDisabled
-    && (Boolean(composerValue.trim()) || composerAttachments.length > 0)
+    && !composerSubmitDisabled
+    && !voiceBusy
+    && !isInterrupting && !requiresCleanup
+    && (userImages || !isPreparingLegacyImage)
+    && (userImages ? canSendUserImages : attachmentsEnabled || composerAttachments.length === 0)
+    && (Boolean(composerValue.trim()) || (userImages ? imageItems.length > 0 : composerAttachments.length > 0))
     && typeof onComposerSubmit === 'function';
+  const showStop = isStreaming || isInterrupting || requiresCleanup;
+  const stopLabel = isInterrupting ? 'Stopping response' : requiresCleanup ? 'Retry cancellation' : 'Stop response';
+
+  const sessionContext = resolvedShowComposerFooter && <div className="composer-session-context" onKeyDown={event => {
+    if (event.key !== 'Escape' || !contextOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextOpen(false);
+    contextTriggerRef.current?.focus();
+  }}>
+    <button type="button" className="status-bar-btn session-context-trigger" ref={contextTriggerRef}
+      aria-label="Session context" title="Session context" aria-haspopup="dialog"
+      aria-expanded={contextOpen} aria-controls={contextOpen ? contextId : undefined}
+      onClick={() => setContextOpen(open => !open)}>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v6m0-10v1" /></svg>
+      {compactInputOptions && <span>Session context</span>}
+    </button>
+    {contextOpen && <div className="session-context-popover" ref={contextPanelRef} id={contextId}
+      role="dialog" aria-label="Session context" tabIndex={-1}>
+      <strong>Session context</strong>
+      {cwd && <div className="session-context-detail"><span>Directory</span><span>{cwd}</span></div>}
+      {runtimeInfo?.label && <div className="session-context-detail"><span>Runtime</span><span>{runtimeInfo.label}</span></div>}
+      {(gitBranches.length > 0 || currentGitBranch || gitBranch) && <div className="session-context-detail">
+        <span>Branch</span>
+        {gitBranches.length > 0 && onSelectGitBranch ? <select aria-label="Select git branch"
+          value={currentGitBranch || gitBranch || ''} disabled={isLoadingGitBranches || isSwitchingGitBranch}
+          onChange={handleGitBranchChange}>
+          {!gitBranches.includes(currentGitBranch || gitBranch || '') && <option value={currentGitBranch || gitBranch || ''}>{currentGitBranch || gitBranch || 'Select a branch'}</option>}
+          {gitBranches.map(branch => <option key={branch} value={branch}>{branch}</option>)}
+        </select> : <span>{currentGitBranch || gitBranch}</span>}
+      </div>}
+    </div>}
+  </div>;
 
   return (
-    <div className={`desktop-status-bar desktop-status-bar-shell${isActive ? ' pane-active' : ''}`}>
+    <div className={`desktop-status-bar desktop-status-bar-shell workspace-composer${isActive ? ' pane-active' : ''}${userImages ? ' user-image-composer' : ''}${compactConversation ? ' unified-conversation-composer' : ''}`}>
       <ProviderAuthModal isOpen={isProviderAuthOpen} onClose={() => setIsProviderAuthOpen(false)} sessionId={sessionId} />      {resolvedShowTopRow && (
         <div className="status-bar-meta-row">
           <div className="status-bar-left" />
@@ -391,6 +785,9 @@ export function DesktopStatusBar({
       <form
         className={`status-composer-shell${composerDisabled ? ' disabled' : ''}${isImageDragOver ? ' image-drag-over' : ''}`}
         onSubmit={handleComposerSubmit}
+        onClick={event => {
+          if (event.target === event.currentTarget && !composerDisabled) composerInputRef.current?.focus();
+        }}
         onDragOver={handleComposerDragOver}
         onDragLeave={handleComposerDragLeave}
         onDrop={handleComposerDrop}
@@ -405,21 +802,39 @@ export function DesktopStatusBar({
                   type="button"
                   className="status-composer-attachment-remove"
                   aria-label={`Remove ${attachment.name}`}
+                  disabled={composerDisabled}
                   onClick={() => onComposerAttachmentRemove?.(attachment.path)}
                 >
-                  x
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg>
                 </button>
               </div>
             ))}
           </div>
         )}
-        {uploadError && (
+        {userImages && (imageScopeMatches ? <UserImageAttachments userImages={userImages} disabled={composerDisabled} onAction={imageAction} />
+          : <p role="status">Selected image draft is loading or unavailable.</p>)}
+        {currentImageError && currentImageError !== String(userImages?.error || '').slice(0, 400)
+          && <p className="user-image-draft-error" role="alert">{currentImageError}</p>}
+        {!userImages && !attachmentsEnabled && showImageButton && <div className="status-composer-upload-error">Attachments are not supported in V4 conversations yet.</div>}
+        {!userImages && uploadError && (
           <div className="status-composer-upload-error" role="alert">
             {uploadError}
           </div>
         )}
+        {!composerOptionsOpen && (compactConversation || compactInputOptions) && showMicButtons && currentVoiceStates.filter(([key, state]) => key !== 'direct' && state.error).map(([key, state]) => (
+          <div className="status-composer-upload-error" role="alert" key={key}>{state.error}</div>
+        ))}
+        {voiceInterruptions[sessionId] && <div className="status-composer-upload-error" role="alert">
+          Voice input was cancelled before a transcript was added.
+          <button type="button" onClick={() => setVoiceInterruptions(current => ({ ...current, [sessionId]: false }))} aria-label="Dismiss voice cancellation">Dismiss</button>
+        </div>}
+        {activeVoice && <div className="status-composer-voice-status">
+          <span role="status">{activeVoice[1].isTranscribing ? 'Transcribing voice input…' : activeVoice[1].isRecording ? 'Recording voice input…' : activeVoice[1].isRequesting ? 'Requesting microphone access…' : 'Checking voice input…'}</span>
+          <button type="button" onClick={activeVoice[1].cancelRecording} aria-label="Cancel voice input">Cancel</button>
+        </div>}
+        {!userImages && isPastingImage && <p className="status-composer-upload-status" role="status">Uploading image…</p>}
         {slashSuggestions.length > 0 && (
-          <div className="status-slash-menu" role="listbox" aria-label="Slash commands">
+          <div className="status-slash-menu" role="listbox" aria-label={activeMention != null ? 'File mentions' : 'Slash commands'}>
             {slashSuggestions.map((suggestion, index) => (
               <button
                 key={suggestion.cmd}
@@ -427,7 +842,10 @@ export function DesktopStatusBar({
                 role="option"
                 aria-selected={index === selectedSlashIndex ? 'true' : 'false'}
                 className={`status-slash-option${index === selectedSlashIndex ? ' selected' : ''}`}
-                onClick={() => onComposerChange?.(`${suggestion.cmd} `)}
+                onClick={() => {
+                  onComposerChange?.(suggestion.insert ?? `${suggestion.cmd} `);
+                  composerInputRef.current?.focus();
+                }}
               >
                 <span className="status-slash-command">{suggestion.cmd}</span>
                 <span className="status-slash-description">{suggestion.desc}</span>
@@ -436,49 +854,65 @@ export function DesktopStatusBar({
           </div>
         )}
         <textarea
+          ref={composerInputRef}
           className="status-composer-input"
           value={composerValue}
           onChange={(event) => onComposerChange?.(event.target.value)}
           onKeyDown={handleComposerKeyDown}
+          onCompositionStart={() => { compositionRef.current = true; }}
+          onCompositionEnd={() => { compositionRef.current = false; }}
           onSelect={handleAutocorrectSelectionChange}
           onPaste={handleComposerPaste}
           placeholder={composerPlaceholder}
           aria-label="Command composer"
           rows={1}
+          enterKeyHint={isMobile ? 'enter' : 'send'}
           autoComplete="off"
           autoCorrect={autocorrectEnabled ? 'on' : 'off'}
           autoCapitalize={autocorrectEnabled ? 'sentences' : 'off'}
           spellCheck={autocorrectEnabled}
-          disabled={composerDisabled || isPastingImage}
+          disabled={composerDisabled || (!userImages && isPastingImage)}
         />
         <input
+          key={currentRestoreOpening ? `restore-${currentRestoreOpening.id}` : 'add'}
           ref={imageInputRef}
           type="file"
-          accept={IMAGE_INPUT_ACCEPT}
+          accept={userImages ? OWNED_IMAGE_INPUT_ACCEPT : allowAnyFile ? undefined : IMAGE_INPUT_ACCEPT}
+          multiple={Boolean(userImages) && !currentRestoreOpening}
+          aria-label={currentRestoreOpening ? 'Choose original image file' : userImages ? 'Choose images' : undefined}
           className="status-composer-image-input"
           onChange={handleImageSelect}
           tabIndex={-1}
-          aria-hidden="true"
+          aria-hidden={userImages ? undefined : true}
         />
 
-        <div className="status-bar-right">
+        <div className="status-bar-right" ref={composerActionsRef}>
         {showImageButton && (
           <button
             type="button"
-            className="status-bar-btn"
-            onClick={() => imageInputRef.current?.click()}
-            disabled={composerDisabled || isPastingImage}
-            aria-label="Add image"
-            title="Add image"
+            className="status-bar-btn status-attach-btn"
+            onClick={() => {
+              if (pickerViewRef.current !== pickerView || (userImages && (!canAddUserImages || !sameImageView(userImages)))) return;
+              const view = pickerViewRef.current; pickerLeaseRef.current = null;
+              flushSync(() => setRestoreOpening(null));
+              if (pickerViewRef.current !== view || (userImages && (!canAddUserImages || !sameImageView(userImages)))) return;
+              const node = imageInputRef.current;
+              if (!node?.isConnected) return;
+              pickerLeaseRef.current = { view, node, purpose: 'add_images', legacyScope: userImages ? null : captureLegacyImageScope() };
+              node.click();
+            }}
+            disabled={userImages ? !canAddUserImages : composerDisabled || isPastingImage || !attachmentsEnabled}
+            aria-label={allowAnyFile && !userImages ? 'Attach file' : 'Add image'}
+            title={allowAnyFile && !userImages ? 'Attach file' : 'Add image'}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <line x1="12" y1="5" x2="12" y2="19" />
-              <line x1="5" y1="12" x2="19" y2="12" />
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" />
             </svg>
           </button>
         )}
         {showAiSelector && (
-          <div className="status-ai-controls" ref={aiMenuRef}>
+          <div className="status-ai-controls" ref={aiMenuRef} onKeyDown={handleAiMenuKeyDown}
+            onBlur={event => { if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setIsAiMenuOpen(false); }}>
             <button
               type="button"
               className={`status-ai-selector ${isAiMenuOpen ? 'active' : ''}`}
@@ -488,11 +922,11 @@ export function DesktopStatusBar({
               aria-label="Choose AI coder"
               title={`Assistant: ${selectedAiOption.label}`}
             >
-              <span
+              {aiType ? <span
                 className="status-ai-swatch"
                 style={{ backgroundColor: selectedAiOption.color ?? 'var(--accent-primary)' }}
                 aria-hidden="true"
-              />
+              /> : <svg className="status-ai-cli-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m4 6 6 6-6 6m9 0h7" /></svg>}
               <span className="status-ai-selector-label">{selectedAiOption.label}</span>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <polyline points="6 9 12 15 18 9" />
@@ -531,7 +965,7 @@ export function DesktopStatusBar({
                   onClick={() => { setIsProviderAuthOpen(true); setIsAiMenuOpen(false); }}
                   role="menuitem"
                 >
-                  <span className="status-ai-menu-plus" aria-hidden="true">⚿</span>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5" /><path d="m12 12 9 9m-4-4 3-3m-6 0 3-3" /></svg>
                   <span className="status-ai-menu-label">Provider authentication</span>
                 </button>
                 <button
@@ -548,7 +982,42 @@ export function DesktopStatusBar({
           </div>
         )}
 
-        {showAutocorrectToggle && (
+        {composerPrimaryAction}
+        {compactInputOptions && showMicButtons && <div className="composer-direct-voice">
+          <TerminalMicButton
+            key={`direct-${sessionId}`}
+            sessionId={sessionId}
+            available={voiceAvailable}
+            inline
+            disabled={composerDisabled || isPastingImage || (voiceBusy && activeVoice[0] !== 'direct')}
+            onStateChange={handleDirectVoiceState}
+            onTranscript={handleComposerTranscript}
+          />
+        </div>}
+        {compactConversation || compactInputOptions ? <details className="composer-input-options" ref={composerOptionsRef} onToggle={event => setComposerOptionsOpen(event.currentTarget.open)} onKeyDown={event => {
+          if (event.key !== 'Escape') return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.currentTarget.open = false;
+          setComposerOptionsOpen(false);
+          event.currentTarget.querySelector('summary')?.focus();
+        }}>
+          <summary aria-label={compactInputOptions ? 'More composer actions' : 'Input options'} title={compactInputOptions ? 'Dictation, spelling and session actions' : 'Dictation and spelling'}
+            onClick={event => {
+              event.preventDefault();
+              const details = composerOptionsRef.current;
+              if (!details) return;
+              details.open = !details.open;
+              setComposerOptionsOpen(details.open);
+            }}>
+            {compactInputOptions ? <span aria-hidden="true">···</span> :
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <line x1="12" y1="18" x2="12" y2="21" />
+            </svg>}
+          </summary>
+          <div className="composer-input-options-menu">        {showAutocorrectToggle && (
           <button
             type="button"
             className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
@@ -556,981 +1025,110 @@ export function DesktopStatusBar({
             aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
             title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
           >
-            <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '-0.5px', lineHeight: 1 }}>ABC</span>
+            {compactInputOptions ? <span>Spelling: {autocorrectEnabled ? 'On' : 'Off'}</span> : <span className="status-spelling-label">ABC</span>}
           </button>
         )}
 
         {showMicButtons && (
           <>
             <TerminalMicButton
+              key={`local-${sessionId}`}
               sessionId={sessionId}
               provider="local"
+              available={voiceAvailable}
               inline
-              disabled={composerDisabled || isPastingImage}
+              showLabel={compactInputOptions}
+              disclosureOpen={composerOptionsOpen}
+              onStateChange={handleLocalVoiceState}
+              disabled={composerDisabled || isPastingImage || (voiceBusy && activeVoice[0] !== 'local')}
               onTranscript={handleComposerTranscript}
             />
             <TerminalMicButton
+              key={`groq-${sessionId}`}
               sessionId={sessionId}
               provider="groq"
+              available={voiceAvailable}
               inline
-              disabled={composerDisabled || isPastingImage}
+              showLabel={compactInputOptions}
+              disclosureOpen={composerOptionsOpen}
+              onStateChange={handleGroqVoiceState}
+              disabled={composerDisabled || isPastingImage || (voiceBusy && activeVoice[0] !== 'groq')}
               onTranscript={handleComposerTranscript}
             />
           </>
         )}
-        {composerSecondaryAction}
-        <button
+          {compactInputOptions && sessionContext}
+          {compactInputOptions && composerSecondaryAction}
+</div>
+        </details> : <>        {showAutocorrectToggle && (
+          <button
+            type="button"
+            className={`status-bar-btn ${autocorrectEnabled ? 'active' : ''}`}
+            onClick={toggleAutocorrect}
+            aria-label={autocorrectEnabled ? 'Disable autocorrect' : 'Enable autocorrect'}
+            title={autocorrectEnabled ? 'Autocorrect: On' : 'Autocorrect: Off'}
+          >
+            <span className="status-spelling-label">ABC</span>
+          </button>
+        )}
+
+        {showMicButtons && (
+          <>
+            <TerminalMicButton
+              key={`local-${sessionId}`}
+              sessionId={sessionId}
+              provider="local"
+              available={voiceAvailable}
+              inline
+              disabled={composerDisabled || isPastingImage || (voiceBusy && activeVoice[0] !== 'local')}
+              onStateChange={handleLocalVoiceState}
+              onTranscript={handleComposerTranscript}
+            />
+            <TerminalMicButton
+              key={`groq-${sessionId}`}
+              sessionId={sessionId}
+              provider="groq"
+              available={voiceAvailable}
+              inline
+              disabled={composerDisabled || isPastingImage || (voiceBusy && activeVoice[0] !== 'groq')}
+              onStateChange={handleGroqVoiceState}
+              onTranscript={handleComposerTranscript}
+            />
+          </>
+        )}
+</>}
+        {!compactInputOptions && composerSecondaryAction}
+        {!compactInputOptions && sessionContext}
+        <div className="status-composer-submit-actions" role="group" aria-label="Message actions">
+        {showStop && <button
+          type="button"
+          className={`status-bar-btn status-response-stop${requiresCleanup && !isInterrupting ? ' status-response-retry' : ''}`}
+          disabled={!onInterrupt || isInterrupting}
+          onClick={() => onInterrupt?.()}
+          aria-label={stopLabel}
+          title={stopLabel}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="2" />
+          </svg>
+          {requiresCleanup && !isInterrupting && <span>Retry cancellation</span>}
+        </button>}
+        {(!showStop || canSubmitComposer) && <button
           type="submit"
           className={`status-send-btn ${canSubmitComposer ? '' : 'disabled'}`}
           disabled={!canSubmitComposer}
-          aria-label="Send to terminal"
-          title="Send to terminal"
+          aria-label={composerSubmitLabel}
+          title={composerSubmitLabel}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style={{transform: 'translate(1px, -1px)'}}>
-            <path d="M3.4 20.4 21.85 12 3.4 3.6l.05 6.4 12.25 2-12.25 2-.05 6.4Z" />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 19V5m-6 6 6-6 6 6" />
           </svg>
-        </button>
+        </button>}
+        </div>
         </div>
       </form>
-      {resolvedShowComposerFooter && (
-        <div className="status-composer-footer-row" aria-label="Git context">
-          <span className="status-composer-footer-spacer" aria-hidden="true" />
-          <div className="status-runtime-meta">
-            {runtimeInfo?.label && (
-              <span className="status-runtime-chip" title={runtimeInfo.label}>
-                {runtimeInfo.label}
-              </span>
-            )}
-            {sessionSummary && (
-              <span className="status-session-summary" title={sessionSummary}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <polyline points="4 17 10 11 4 5" />
-                  <line x1="12" y1="19" x2="20" y2="19" />
-                </svg>
-                <span className="status-session-summary-label">{formatSessionSummary(sessionSummary.toLowerCase())}</span>
-              </span>
-            )}
-            {(gitBranches.length > 0 || currentGitBranch || gitBranch) && (
-              <div className="status-branch-picker" title={`Branch: ${currentGitBranch || gitBranch || ''}`}>
-                <span className="status-branch-glyph" aria-hidden="true">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="6" y1="3" x2="6" y2="15" />
-                    <circle cx="18" cy="6" r="3" />
-                    <circle cx="6" cy="18" r="3" />
-                    <path d="M18 9a9 9 0 0 1-9 9" />
-                  </svg>
-                </span>
-                {gitBranches.length > 0 && onSelectGitBranch ? (
-                  <Dropdown
-                    align="right"
-                    direction="up"
-                    className="status-branch-dropdown"
-                    trigger={(
-                      <button
-                        type="button"
-                        className="status-branch-trigger"
-                        disabled={isLoadingGitBranches || isSwitchingGitBranch}
-                        aria-label="Select git branch"
-                      >
-                        <span className="status-branch-trigger-label">
-                          {currentGitBranch || gitBranch || 'No branch'}
-                        </span>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <polyline points="6 9 12 15 18 9" />
-                        </svg>
-                      </button>
-                    )}
-                    items={gitBranches.map((branch) => ({
-                      label: branch,
-                      active: branch === (currentGitBranch || gitBranch || ''),
-                      badge: branch === (currentGitBranch || gitBranch || '') ? 'Current' : null,
-                      onClick: () => handleGitBranchChange(branch)
-                    }))}
-                  />
-                ) : (
-                  <span className="status-branch-fallback">{currentGitBranch || gitBranch || 'No branch'}</span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
-      <style>{`
-        .desktop-status-bar-shell {
-          display: flex;
-          flex-direction: column;
-          align-items: stretch;
-          justify-content: flex-start;
-          flex-shrink: 0;
-          position: relative;
-          z-index: 3;
-          gap: 3px;
-          height: auto;
-          min-height: 58px;
-          padding: 3px 12px 8px;
-          background: transparent;
-          border-top: none;
-        }
 
-        .status-bar-meta-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-          max-width: 720px;
-          width: 100%;
-          margin: 0 auto;
-          padding-bottom: 2px;
-          border-bottom: 1px solid color-mix(in srgb, var(--border-default) 20%, transparent);
-        }
-
-        .status-bar-top-actions {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-        }
-
-        .desktop-status-bar-shell .status-bar-left {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          flex: 1;
-          flex-wrap: wrap;
-          min-width: 0;
-          overflow: visible;
-        }
-
-        .status-composer-shell {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          max-width: 720px;
-          width: 100%;
-          margin: 0 auto;
-          padding: 7px 10px 6px;
-          border-radius: 12px;
-          background:
-            linear-gradient(
-              180deg,
-              color-mix(in srgb, var(--bg-surface) 92%, transparent),
-              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
-            );
-          border: 1px solid color-mix(in srgb, var(--border-default) 38%, transparent);
-          box-shadow:
-            var(--shadow-lg),
-            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
-          transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-        }
-
-        .status-composer-shell.disabled {
-          opacity: 0.7;
-        }
-
-        .status-composer-shell.image-drag-over {
-          border-color: color-mix(in srgb, var(--accent-primary) 52%, var(--border-default));
-          background:
-            linear-gradient(
-              180deg,
-              color-mix(in srgb, var(--accent-primary) 16%, var(--bg-surface)),
-              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
-            );
-          box-shadow:
-            var(--shadow-lg),
-            inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 20%, transparent),
-            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
-        }
-
-        .status-composer-footer-row {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          max-width: 720px;
-          width: 100%;
-          margin: -1px auto 0;
-          padding: 0 4px;
-        }
-
-        .status-composer-shell:focus-within {
-          border-color: color-mix(in srgb, var(--border-default) 38%, transparent);
-          box-shadow:
-            var(--shadow-lg),
-            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 6%, transparent);
-        }
-
-        .status-composer-input {
-          width: 100%;
-          min-height: 28px;
-          max-height: 104px;
-          resize: none;
-          padding: 0;
-          margin: 0;
-          border: none;
-          background: transparent;
-          color: var(--text-primary);
-          font-family: var(--font-ui);
-          font-size: 13px;
-          font-weight: 500;
-          letter-spacing: 0;
-          line-height: 1.35;
-          appearance: none;
-          -webkit-appearance: none;
-          outline: none;
-          box-shadow: none;
-        }
-
-        .status-composer-input:focus,
-        .status-composer-input:focus-visible,
-        .status-composer-input:active {
-          outline: none !important;
-          border: none !important;
-          box-shadow: none !important;
-        }
-
-        .status-composer-input::placeholder {
-          color: var(--text-placeholder, var(--text-muted));
-          font-weight: 500;
-        }
-
-        .status-composer-image-input {
-          position: absolute;
-          width: 1px;
-          height: 1px;
-          margin: -1px;
-          padding: 0;
-          border: 0;
-          opacity: 0;
-          overflow: hidden;
-          clip: rect(0 0 0 0);
-          clip-path: inset(50%);
-          white-space: nowrap;
-        }
-
-        .status-composer-input:disabled {
-          cursor: progress;
-          opacity: 0.78;
-        }
-
-        .status-composer-attachments {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-        }
-
-        .status-composer-upload-error {
-          padding: 6px 8px;
-          border-radius: 8px;
-          background: color-mix(in srgb, var(--error, #ef4444) 12%, transparent);
-          color: color-mix(in srgb, var(--error, #ef4444) 88%, var(--text-primary));
-          font-size: 11px;
-          font-weight: 650;
-          line-height: 1.35;
-        }
-
-        .status-slash-menu {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          padding: 6px;
-          border-radius: 14px;
-          background: color-mix(in srgb, var(--bg-base) 92%, transparent);
-          border: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
-        }
-
-        .status-slash-option {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 14px;
-          width: 100%;
-          padding: 10px 12px;
-          border: none;
-          border-radius: 10px;
-          background: transparent;
-          color: var(--text-secondary);
-          text-align: left;
-          cursor: pointer;
-          transition: background 0.15s ease, color 0.15s ease;
-        }
-
-        .status-slash-option:hover,
-        .status-slash-option.selected {
-          background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-slash-command {
-          font-size: 13px;
-          font-weight: 700;
-          color: var(--text-primary);
-        }
-
-        .status-slash-description {
-          flex: 1;
-          min-width: 0;
-          font-size: 12px;
-          color: var(--text-muted);
-          text-align: right;
-        }
-
-        .status-composer-attachment-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          max-width: 220px;
-          min-height: 30px;
-          padding: 0 10px;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-composer-attachment-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 999px;
-          background: color-mix(in srgb, var(--accent-primary) 82%, white 6%);
-          flex-shrink: 0;
-        }
-
-        .status-composer-attachment-name {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-size: 12px;
-          font-weight: 600;
-        }
-
-        .status-composer-attachment-remove {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 18px;
-          height: 18px;
-          padding: 0;
-          border: none;
-          border-radius: 999px;
-          background: transparent;
-          color: var(--text-muted);
-          cursor: pointer;
-          flex-shrink: 0;
-          transition: all 0.15s ease;
-        }
-
-        .status-composer-attachment-remove:hover {
-          background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-ai-controls {
-          position: relative;
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-
-        .status-permission-picker {
-          position: relative;
-          display: inline-flex;
-          align-items: center;
-        }
-
-        .status-sandbox-toggle {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          height: 23px;
-          padding: 0 7px;
-          border-radius: 7px;
-          border: 1px solid color-mix(in srgb, var(--border-default) 32%, transparent);
-          background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
-          color: color-mix(in srgb, var(--text-secondary) 94%, transparent);
-          font-size: 11px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-        }
-
-        .status-sandbox-toggle:hover {
-          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-sandbox-toggle.active {
-          border-color: color-mix(in srgb, var(--accent-primary) 42%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-sandbox-toggle.pending {
-          color: var(--accent-primary-light);
-        }
-
-        .status-permission-menu {
-          position: absolute;
-          right: 0;
-          bottom: calc(100% + 8px);
-          z-index: 20;
-          display: grid;
-          gap: 4px;
-          min-width: 190px;
-          padding: 6px;
-          border-radius: 12px;
-          border: 1px solid color-mix(in srgb, var(--border-default) 42%, transparent);
-          background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
-          box-shadow: var(--shadow-lg);
-        }
-
-        .status-permission-option {
-          display: grid;
-          gap: 2px;
-          width: 100%;
-          padding: 9px 10px;
-          border: 1px solid transparent;
-          border-radius: 9px;
-          background: transparent;
-          color: var(--text-primary);
-          text-align: left;
-          cursor: pointer;
-        }
-
-        .status-permission-option small {
-          color: var(--text-muted);
-          font-size: 10px;
-          font-weight: 600;
-        }
-
-        .status-permission-option:hover,
-        .status-permission-option.active {
-          border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        }
-
-        .status-bar-right {
-          display: flex;
-          align-items: center;
-          justify-content: flex-start;
-          gap: 5px;
-          flex-wrap: wrap;
-          padding: 4px 0 0;
-          border-top: 1px solid color-mix(in srgb, var(--border-default) 24%, transparent);
-          transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
-        }
-
-        .desktop-status-bar-shell .status-bar-btn,
-        .desktop-status-bar-shell .terminal-mic-button-inline {
-          width: 22px;
-          height: 22px;
-          border-radius: 5px;
-        }
-
-        .desktop-status-bar-shell .status-bar-btn svg,
-        .desktop-status-bar-shell .terminal-mic-button-inline svg {
-          width: 12px;
-          height: 12px;
-        }
-
-        .desktop-status-bar-shell.pane-active .status-composer-shell {
-          background:
-            linear-gradient(
-              180deg,
-              color-mix(in srgb, var(--bg-surface) 88%, var(--accent-primary) 12%),
-              color-mix(in srgb, var(--terminal-bg) 96%, transparent)
-            );
-          border-color: color-mix(in srgb, var(--accent-primary) 26%, var(--border-default));
-          box-shadow:
-            var(--shadow-lg),
-            inset 0 1px 0 color-mix(in srgb, var(--text-primary) 7%, transparent),
-            inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        }
-
-        .desktop-status-bar-shell.pane-active .status-bar-right {
-          border-top-color: color-mix(in srgb, var(--border-default) 24%, transparent);
-          background: color-mix(in srgb, var(--accent-primary) 5%, transparent);
-          border-radius: 8px;
-          padding: 4px 6px 0;
-          box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        }
-
-        .status-composer-footer {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          flex-wrap: wrap;
-          min-height: 18px;
-          color: var(--text-muted);
-        }
-
-        .status-composer-footer-spacer {
-          flex: 1 1 auto;
-          min-width: 12px;
-        }
-
-        .status-runtime-meta {
-          display: inline-flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 6px;
-          flex-wrap: wrap;
-          margin-left: auto;
-        }
-
-        .status-composer-footer .status-git-branch {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          font-size: 11px;
-          color: var(--text-muted);
-        }
-
-        .status-runtime-chip {
-          display: inline-flex;
-          align-items: center;
-          max-width: 260px;
-          padding: 0;
-          min-height: 20px;
-          border-radius: 0;
-          background: transparent;
-          border: none;
-          color: color-mix(in srgb, var(--text-secondary) 76%, transparent);
-          font-size: 11px;
-          font-weight: 600;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-
-        .status-session-summary {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          min-width: 0;
-          max-width: 320px;
-          color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
-          font-size: 11px;
-          font-weight: 500;
-        }
-
-        .status-session-summary-label {
-          min-width: 0;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .status-branch-picker {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          min-height: 20px;
-          padding: 0;
-          border-radius: 0;
-          background: transparent;
-          border: none;
-          color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
-        }
-
-        .status-branch-glyph {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 18px;
-          height: 18px;
-          color: color-mix(in srgb, var(--text-primary) 76%, transparent);
-          flex-shrink: 0;
-        }
-
-        .status-branch-select {
-          min-width: 92px;
-          max-width: 168px;
-          border: none;
-          background: transparent;
-          color: inherit;
-          font: inherit;
-          outline: none;
-          cursor: pointer;
-        }
-
-        .status-branch-select:disabled {
-          cursor: progress;
-          opacity: 0.72;
-        }
-
-        .status-branch-dropdown {
-          display: inline-flex;
-        }
-
-        .status-branch-dropdown .dropdown-menu {
-          min-width: 240px;
-          max-width: 320px;
-          padding: 6px;
-          border-radius: 12px;
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          background: linear-gradient(
-            180deg,
-            color-mix(in srgb, var(--bg-surface) 96%, transparent),
-            color-mix(in srgb, var(--bg-base) 96%, transparent)
-          );
-          box-shadow: var(--shadow-modal);
-          backdrop-filter: blur(16px);
-        }
-
-        .status-branch-dropdown .dropdown-item {
-          min-height: 34px;
-          padding: 0 10px;
-          border-radius: 8px;
-          color: color-mix(in srgb, var(--text-secondary) 92%, transparent);
-          font-size: 12px;
-          font-weight: 550;
-        }
-
-        .status-branch-dropdown .dropdown-item:hover:not(:disabled) {
-          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-branch-dropdown .dropdown-item.active {
-          background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-branch-dropdown .dropdown-item-badge {
-          color: color-mix(in srgb, var(--accent-primary) 84%, var(--text-primary));
-          font-size: 10px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-        }
-
-        .status-branch-trigger {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          min-height: 24px;
-          padding: 0 8px;
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          border-radius: 8px;
-          background: transparent;
-          color: inherit;
-          font: inherit;
-          cursor: pointer;
-          transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
-        }
-
-        .status-branch-trigger:hover:not(:disabled) {
-          border-color: color-mix(in srgb, var(--accent-primary) 38%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-branch-trigger:disabled {
-          cursor: progress;
-          opacity: 0.72;
-        }
-
-        .status-branch-trigger-label,
-        .status-branch-fallback {
-          min-width: 0;
-          max-width: 168px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .desktop-status-bar-shell .terminal-mic-inline-container {
-          display: inline-flex;
-        }
-
-        .status-ai-selector {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          height: 22px;
-          padding: 0 7px;
-          background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          border-radius: 6px;
-          color: var(--text-secondary);
-          cursor: pointer;
-          transition: all 0.15s ease;
-        }
-
-        .status-ai-selector:hover,
-        .status-ai-selector.active {
-          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
-          color: var(--text-primary);
-          background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-        }
-
-        .desktop-status-bar-shell.pane-active .status-ai-selector,
-        .desktop-status-bar-shell.pane-active .status-bar-btn,
-        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
-        .desktop-status-bar-shell.pane-active .status-sandbox-toggle,
-        .desktop-status-bar-shell.pane-active .status-send-btn {
-          border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-        }
-
-        .desktop-status-bar-shell.pane-active .status-ai-selector,
-        .desktop-status-bar-shell.pane-active .status-bar-btn,
-        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline,
-        .desktop-status-bar-shell.pane-active .status-sandbox-toggle {
-          color: color-mix(in srgb, var(--text-primary) 94%, transparent);
-        }
-
-        .desktop-status-bar-shell.pane-active .status-branch-glyph {
-          color: color-mix(in srgb, var(--text-primary) 84%, transparent);
-        }
-
-        .desktop-status-bar-shell.pane-active .status-ai-selector:hover,
-        .desktop-status-bar-shell.pane-active .status-ai-selector.active,
-        .desktop-status-bar-shell.pane-active .status-bar-btn:hover:not(:disabled),
-        .desktop-status-bar-shell.pane-active .terminal-mic-button-inline:hover:not(:disabled),
-        .desktop-status-bar-shell.pane-active .status-sandbox-toggle:hover {
-          border-color: color-mix(in srgb, var(--accent-primary) 36%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-        }
-
-        .status-ai-selector-label {
-          max-width: 78px;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          font-size: 10px;
-          font-weight: 600;
-        }
-
-        .status-ai-swatch {
-          width: 8px;
-          height: 8px;
-          border-radius: 999px;
-          flex-shrink: 0;
-          box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-primary) 16%, transparent);
-        }
-
-        .status-ai-menu {
-          position: absolute;
-          right: 0;
-          bottom: calc(100% + 8px);
-          min-width: 200px;
-          padding: 6px;
-          background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
-          border: 1px solid color-mix(in srgb, var(--border-default) 30%, transparent);
-          border-radius: 10px;
-          box-shadow: var(--shadow-modal);
-          z-index: 30;
-          backdrop-filter: blur(14px);
-        }
-
-        .status-ai-menu-item {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          width: 100%;
-          min-height: 34px;
-          padding: 0 10px;
-          background: transparent;
-          border: none;
-          border-radius: 8px;
-          color: var(--text-secondary);
-          cursor: pointer;
-          text-align: left;
-          transition: all 0.15s ease;
-        }
-
-        .status-ai-menu-item:hover,
-        .status-ai-menu-item.selected {
-          background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-          color: var(--text-primary);
-        }
-
-        .status-ai-menu-label {
-          flex: 1;
-          font-size: 12px;
-          font-weight: 550;
-        }
-
-        .status-ai-menu-add {
-          border-top: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          margin-top: 6px;
-          padding-top: 8px;
-        }
-
-        .status-view-mode-toggle {
-          display: inline-grid;
-          grid-template-columns: repeat(2, minmax(88px, 1fr));
-          align-items: center;
-          gap: 2px;
-          min-height: 28px;
-          padding: 2px;
-          border: 1px solid color-mix(in srgb, var(--border-default) 28%, transparent);
-          border-radius: 10px;
-          background: color-mix(in srgb, var(--bg-base) 88%, transparent);
-          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 4%, transparent);
-        }
-
-        .status-view-mode-option {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          min-width: 0;
-          min-height: 24px;
-          padding: 0 9px;
-          border: 1px solid transparent;
-          border-radius: 8px;
-          background: transparent;
-          color: color-mix(in srgb, var(--text-secondary) 82%, transparent);
-          font-size: 11px;
-          font-weight: 700;
-          line-height: 1;
-          white-space: nowrap;
-          cursor: pointer;
-          transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-        }
-
-        .status-view-mode-option:hover:not(:disabled) {
-          border-color: color-mix(in srgb, var(--accent-primary) 34%, var(--border-default));
-          color: var(--text-primary);
-          background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
-        }
-
-        .status-view-mode-option.active {
-          border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
-          color: var(--text-primary);
-          background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-          box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary) 8%, transparent);
-        }
-
-        .status-view-mode-option:disabled {
-          opacity: 0.45;
-          cursor: not-allowed;
-        }
-
-        .status-terminal-toggle {
-          min-height: 26px;
-          padding: 0 10px;
-          font-size: 12px;
-          font-weight: 500;
-          color: var(--text-muted);
-          border-radius: 10px;
-          background: transparent;
-          border: 1px solid color-mix(in srgb, var(--border-default) 22%, transparent);
-          cursor: pointer;
-          transition: all var(--transition-fast);
-        }
-
-        .status-terminal-toggle:hover:not(:disabled) {
-          color: var(--text-primary);
-          background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
-          border-color: color-mix(in srgb, var(--border-default) 44%, transparent);
-        }
-
-        .status-terminal-toggle.active {
-          color: var(--accent-primary);
-          background: var(--accent-primary-dim);
-          border-color: color-mix(in srgb, var(--accent-primary) 36%, transparent);
-        }
-
-        .status-ai-menu-plus {
-          width: 16px;
-          text-align: center;
-          font-size: 14px;
-          font-weight: 700;
-          color: var(--accent-primary);
-        }
-
-        .status-send-btn {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 26px;
-          height: 26px;
-          border-radius: 999px;
-          border: 1px solid color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
-          background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-elevated));
-          color: var(--text-primary);
-          cursor: pointer;
-          transition: all 0.15s ease;
-          margin-left: auto;
-          align-self: center;
-          position: relative;
-          top: -1px;
-        }
-
-        .status-send-btn svg {
-          display: block;
-        }
-
-        .status-send-btn:hover:not(:disabled) {
-          background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-elevated));
-          border-color: color-mix(in srgb, var(--accent-primary) 40%, var(--border-default));
-          transform: translateY(-1px);
-        }
-
-        .status-send-btn.disabled,
-        .status-send-btn:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-          transform: none;
-        }
-
-        .desktop-status-bar.desktop-status-bar-shell {
-          min-height: 58px !important;
-          padding: 3px 12px 8px !important;
-        }
-
-        .desktop-status-bar .status-composer-shell {
-          gap: 4px !important;
-          max-width: 720px !important;
-          padding: 7px 10px 6px !important;
-          border-radius: 12px !important;
-        }
-
-        .desktop-status-bar .status-composer-input {
-          min-height: 28px !important;
-          height: 28px;
-          max-height: 104px !important;
-          font-size: 13px !important;
-          line-height: 1.25 !important;
-        }
-
-        .desktop-status-bar .status-bar-right {
-          gap: 5px !important;
-          padding-top: 4px !important;
-        }
-
-        .desktop-status-bar .status-bar-btn,
-        .desktop-status-bar .terminal-mic-button-inline {
-          width: 22px !important;
-          height: 22px !important;
-        }
-
-        .desktop-status-bar .status-send-btn {
-          width: 26px !important;
-          height: 26px !important;
-        }
-
-        @media (max-width: 1120px) {
-          .desktop-status-bar-shell {
-            min-height: 68px;
-            padding: 3px 10px 10px;
-          }
-
-          .status-bar-meta-row,
-          .status-composer-shell {
-            max-width: none;
-          }
-
-          .status-bar-right {
-            justify-content: flex-start;
-          }
-        }
-      `}</style>
     </div>
   );
 }

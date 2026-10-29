@@ -7,6 +7,7 @@ import { useTerminalSession } from '../contexts/TerminalSessionContext';
 import { getAiInitialCommand } from '../utils/aiProviders';
 import { parseTerminalRuntimeInfo } from '../utils/terminalRuntimeInfo';
 import { isWindowActive, subscribeWindowActivity } from '../utils/windowActivity';
+import './MobileUI.css';
 
 export function MobileTerminalSurface({
   session,
@@ -313,7 +314,7 @@ export function MobileTerminalSurface({
 
   if (!session) {
     return (
-      <div className="mobile-terminal-carousel">
+      <div className="mobile-terminal-carousel mobile-ui">
         <div className="empty-state">
           <h2>Welcome to Terminal</h2>
           <p>Create a new terminal session to get started.</p>
@@ -323,7 +324,7 @@ export function MobileTerminalSurface({
   }
 
   return (
-    <div className={`mobile-terminal-carousel${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
+    <div className={`mobile-terminal-carousel mobile-ui${currentAiType ? ` pane-ai-${currentAiType}` : ''}`}>
       {connectionState === 'offline' && reconnectBannerState !== 'reconnecting' && (
         <div className="mobile-terminal-disconnected-pill" role="status" aria-live="polite">
           Disconnected

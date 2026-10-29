@@ -1,15 +1,31 @@
-.workspace-rewind-panel { display: grid; gap: 12px; min-width: 0; color: var(--text-primary, #e2e8f0); }
-.workspace-rewind-panel h3, .workspace-rewind-panel h4, .workspace-rewind-panel p { margin: 0; }
-.workspace-rewind-panel p, .workspace-rewind-panel small { font-size: 13px; color: var(--text-secondary, #a9b7c9); overflow-wrap: anywhere; }
-.workspace-rewind-panel [role=alert] { color: #fda4af; }
-.workspace-rewind-fields, .workspace-rewind-fields label { display: grid; gap: 6px; min-width: 0; }
-.workspace-rewind-fields { gap: 12px; }
-.workspace-rewind-panel button, .workspace-rewind-panel select { min-height: 38px; padding: 8px 10px; background: var(--bg-secondary, #17202d); color: inherit; border: 1px solid var(--border-color, #354154); border-radius: 6px; font: inherit; }
+.workspace-rewind-panel { min-width: 0; color: var(--text-primary); font: 14px/1.5 var(--font-ui); }
+.workspace-rewind-panel :is(h3, h4) { color: var(--text-primary); font-size: 14px; font-weight: 600; line-height: 1.4; }
+.workspace-rewind-panel p { color: var(--text-secondary); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.workspace-rewind-panel :is(small, time) { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.workspace-rewind-panel label { color: var(--text-secondary); font-size: 12px; }
+.workspace-rewind-panel :is(button, select, input:not([type=checkbox]):not([type=range]), textarea) { box-sizing: border-box; max-width: 100%; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-base); color: var(--text-primary); font: 13px/1.5 var(--font-ui); }
+.workspace-rewind-panel button { width: fit-content; background: var(--bg-elevated); cursor: pointer; }
+.workspace-rewind-panel button:hover:not(:disabled) { background: var(--bg-hover); }
+.workspace-rewind-panel button:disabled { opacity: .5; cursor: default; }
+.workspace-rewind-panel :is(input, textarea)::placeholder { color: var(--text-muted); }
+.workspace-rewind-panel :is(button, select, input, textarea, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+.workspace-rewind-panel input[type=checkbox] { accent-color: var(--accent-primary); width: 16px; height: 16px; flex-shrink: 0; margin: 0; }
+.workspace-rewind-panel summary { min-height: 32px; padding: 6px 0; color: var(--text-secondary); font-size: 13px; cursor: pointer; }
+.workspace-rewind-panel [role=alert] { color: var(--error); }
+.workspace-rewind-panel { display: grid; gap: 12px; }
+.workspace-rewind-panel :is(h3, h4, p) { margin: 0; }
+.workspace-rewind-fields { display: grid; gap: 12px; }
+.workspace-rewind-fields label { display: grid; gap: 6px; min-width: 0; }
 .workspace-rewind-panel select { width: 100%; min-width: 0; }
-.workspace-rewind-panel button:disabled { opacity: .5; }
-.workspace-rewind-panel button:focus-visible, .workspace-rewind-panel select:focus-visible { outline: 2px solid var(--accent-primary, #60a5fa); outline-offset: 2px; }
-.workspace-rewind-confirm, .workspace-rewind-operation { border: 1px solid var(--border-color, #354154); padding: 12px; border-radius: 8px; display: grid; gap: 10px; }
-.workspace-rewind-confirm blockquote { margin: 0; max-height: 160px; overflow: auto; padding: 10px; background: var(--bg-secondary, #17202d); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.workspace-rewind-row { display: flex; gap: 8px; justify-content: space-between; align-items: center; padding: 8px 0; }
+.workspace-rewind-confirm, .workspace-rewind-operation { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.workspace-rewind-confirm { border-color: var(--warning); }
+.workspace-rewind-confirm blockquote { max-height: 160px; overflow: auto; margin: 0; padding: 10px; border-left: 2px solid var(--border-default); background: var(--bg-base); white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-rewind-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); }
+.workspace-rewind-row span { min-width: 0; overflow-wrap: anywhere; }
 .workspace-rewind-operation { margin-top: 10px; }
-.workspace-rewind-operation small { display: block; }
+.workspace-rewind-operation small { display: block; overflow-wrap: anywhere; }
+@media (pointer: coarse), (max-width: 768px) {
+  .workspace-rewind-panel :is(button, select, input:not([type=checkbox]):not([type=range]), summary) { min-height: 44px; }
+  .workspace-rewind-panel :is(select, input:not([type=checkbox]):not([type=range]), textarea) { font-size: 16px; }
+  .workspace-rewind-panel label:has(input[type=checkbox]) { min-height: 44px; align-items: center; }
+}

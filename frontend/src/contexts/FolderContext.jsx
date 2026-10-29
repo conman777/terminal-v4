@@ -67,6 +67,7 @@ export function FolderProvider({ children }) {
   const remotePreferences = useMemo(() => Boolean(getActiveEnvironment()), []);
   const { isAuthenticated } = useAuth();
   const settingsHydratedRef = useRef(false);
+  const modifiedSettingsRef = useRef(new Set());
 
   // Folder state
   const [recentFolders, setRecentFolders] = useState(() => sanitizeStringList(readStoredJson(storage, 'recentFolders', []), 10));
@@ -98,6 +99,7 @@ export function FolderProvider({ children }) {
   // Add a folder to recent list (max 10, no duplicates)
   const addRecentFolder = useCallback((folder) => {
     if (!folder) return;
+    modifiedSettingsRef.current.add('recentFolders');
     setRecentFolders(prev => {
       const filtered = prev.filter(f => f.toLowerCase() !== folder.toLowerCase());
       const updated = sanitizeStringList([folder, ...filtered], 10);
@@ -110,6 +112,7 @@ export function FolderProvider({ children }) {
   // Pin a folder (max 20)
   const pinFolder = useCallback((folder) => {
     if (!folder) return;
+    modifiedSettingsRef.current.add('pinnedFolders');
     setPinnedFolders(prev => {
       if (prev.some(f => f.toLowerCase() === folder.toLowerCase())) {
         return prev;
@@ -123,6 +126,7 @@ export function FolderProvider({ children }) {
 
   // Unpin a folder
   const unpinFolder = useCallback((folder) => {
+    modifiedSettingsRef.current.add('pinnedFolders');
     setPinnedFolders(prev => {
       const updated = sanitizeStringList(
         prev.filter(f => f.toLowerCase() !== folder.toLowerCase()),
@@ -137,6 +141,7 @@ export function FolderProvider({ children }) {
   // Add a project folder to sidebar
   const addSidebarProject = useCallback((folderPath) => {
     if (!folderPath) return;
+    modifiedSettingsRef.current.add('sidebarProjects');
     setSidebarProjects(prev => {
       const updated = appendSidebarProject(prev, folderPath);
       writeStoredJson(storage, 'sidebarProjects', updated);
@@ -147,6 +152,7 @@ export function FolderProvider({ children }) {
 
   // Remove a project folder from sidebar
   const removeSidebarProject = useCallback((folderPath) => {
+    modifiedSettingsRef.current.add('sidebarProjects');
     setSidebarProjects(prev => {
       const normalizedPath = normalizeProjectPath(folderPath);
       const updated = prev.filter(p => normalizeProjectPath(p.path) !== normalizedPath);
@@ -189,6 +195,7 @@ export function FolderProvider({ children }) {
         if (data.projects) {
           setProjects(data.projects);
         }
+        modifiedSettingsRef.current.add('sidebarProjects');
         setSidebarProjects(prev => {
           const updated = appendSidebarProject(prev, normalizedPath);
           writeStoredJson(storage, 'sidebarProjects', updated);
@@ -215,66 +222,55 @@ export function FolderProvider({ children }) {
     }
   }, [syncFolderSettings]);
 
-  useEffect(() => {
-    if (!isAuthenticated || remotePreferences || getActiveEnvironment() || settingsHydratedRef.current) {
-      return;
-    }
-    settingsHydratedRef.current = true;
+  const folderSettingsRef = useRef(null);
+  folderSettingsRef.current = { recentFolders, pinnedFolders, sidebarProjects };
 
+  useEffect(() => {
+    if (!isAuthenticated || remotePreferences || getActiveEnvironment() || settingsHydratedRef.current) return;
     let cancelled = false;
+    let pending = false;
 
     const hydrateFromSettings = async () => {
+      if (pending || settingsHydratedRef.current || cancelled || getActiveEnvironment()) return;
+      pending = true;
       try {
         const response = await apiFetch('/api/settings');
-        if (!response.ok) {
-          return;
-        }
+        if (!response.ok) throw new Error(`Failed to load folder settings (${response.status})`);
         const data = await response.json();
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
 
-        const nextRecentFolders = Array.isArray(data.recentFolders)
-          ? sanitizeStringList(data.recentFolders, 10)
-          : recentFolders;
-        const nextPinnedFolders = Array.isArray(data.pinnedFolders)
-          ? sanitizeStringList(data.pinnedFolders, 20)
-          : pinnedFolders;
-        const nextSidebarProjects = Array.isArray(data.sidebarProjects)
-          ? sanitizeSidebarProjects(data.sidebarProjects)
-          : sidebarProjects;
-
-        setRecentFolders(nextRecentFolders);
-        setPinnedFolders(nextPinnedFolders);
-        setSidebarProjects(nextSidebarProjects);
-        writeStoredJson(storage, 'recentFolders', nextRecentFolders);
-        writeStoredJson(storage, 'pinnedFolders', nextPinnedFolders);
-        writeStoredJson(storage, 'sidebarProjects', nextSidebarProjects);
-
+        const setters = { recentFolders: setRecentFolders, pinnedFolders: setPinnedFolders, sidebarProjects: setSidebarProjects };
         const migrationPayload = {};
-        if (!Array.isArray(data.recentFolders) && recentFolders.length > 0) {
-          migrationPayload.recentFolders = recentFolders;
+        for (const key of Object.keys(setters)) {
+          const local = folderSettingsRef.current[key];
+          if (modifiedSettingsRef.current.has(key)) continue;
+          if (Array.isArray(data[key])) {
+            const next = key === 'sidebarProjects' ? sanitizeSidebarProjects(data[key])
+              : sanitizeStringList(data[key], key === 'recentFolders' ? 10 : 20);
+            setters[key](next);
+            writeStoredJson(storage, key, next);
+          } else if (local.length > 0) {
+            migrationPayload[key] = local;
+          }
         }
-        if (!Array.isArray(data.pinnedFolders) && pinnedFolders.length > 0) {
-          migrationPayload.pinnedFolders = pinnedFolders;
-        }
-        if (!Array.isArray(data.sidebarProjects) && sidebarProjects.length > 0) {
-          migrationPayload.sidebarProjects = sidebarProjects;
-        }
-        if (Object.keys(migrationPayload).length > 0) {
-          void syncFolderSettings(migrationPayload);
-        }
+        settingsHydratedRef.current = true;
+        if (Object.keys(migrationPayload).length > 0) void syncFolderSettings(migrationPayload);
       } catch (error) {
-        console.error('Failed to hydrate folder settings', error);
+        if (!cancelled) console.error('Failed to hydrate folder settings', error);
+      } finally {
+        pending = false;
       }
     };
 
     void hydrateFromSettings();
-
+    window.addEventListener('focus', hydrateFromSettings);
+    window.addEventListener('online', hydrateFromSettings);
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', hydrateFromSettings);
+      window.removeEventListener('online', hydrateFromSettings);
     };
-  }, [isAuthenticated, pinnedFolders, recentFolders, sidebarProjects, syncFolderSettings]);
+  }, [isAuthenticated, remotePreferences, storage, syncFolderSettings]);
 
   useEffect(() => {
     loadProjects();

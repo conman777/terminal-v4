@@ -3,7 +3,7 @@
 ## Overview
 
 Terminal v4 is a comprehensive web-based terminal and development cockpit. It combines:
-- A PTY-backed terminal (xterm.js + node-pty) with tmux support
+- A PTY-backed terminal (xterm.js + Rust `portable-pty`) with tmux support
 - Claude Code sessions (Claude CLI via PTY)
 - Preview tooling for local dev servers and external sites with DevTools
 - File management, project scanning, process control
@@ -26,6 +26,26 @@ instead of being required before the root UI can paint. The production desktop
 path should prefer `frontend/dist` served by the Rust API over Vite's
 request-time module transforms.
 
+`WorkspacePanel` coordinates navigation and browser geometry, remembered widths,
+keyboard/pointer resizing, and the narrow browser sheet. `WorkspaceShell.css`
+defines the shared header height and conversation/composer rail. Mobile selection
+uses a 768px width boundary; tool sheets begin at 980px. Sheet focus and inert
+background state are restored on dismissal, while conversation and terminal hosts
+remain mounted behind the browser. Existing Files, Preview and workspace-tool
+dialogs keep their own action lifecycles.
+Browser approval polling follows actual pane visibility, including fullscreen
+and System Resources, and every opener restores the workspace through one handler.
+
+`WorkspaceUI.css`, imported after the base stylesheet, defines the shared semantic
+palette, typography, control sizes, focus treatment and modal primitives.
+Component-local styles own their surfaces; `WorkspaceShell.css` coordinates shell
+geometry rather than restyling every dialog. Desktop controls use compact 32px
+targets; phone/coarse-pointer controls use 44px targets and 16px text inputs.
+Conversation and composer content share a 46rem rail, with a 52px header and 12px
+composer corners. Terminal fonts and colors are applied through xterm's options,
+so CSS does not invalidate its measured character grid. Fullscreen hides sibling
+panes without replacing their terminal renderers or composer drafts.
+
 Phase 1 also includes a Windows desktop wrapper (`desktop/tauri`) that launches
 the Rust backend as a local child process and hosts the same UI in a native
 window. In this phase, desktop mode is local-only (`127.0.0.1:3020`).
@@ -46,7 +66,7 @@ is now a compatibility/reference implementation rather than the desktop runtime.
 │  ┌────────────────────────────────────────────────────────────────────────┐ │
 │  │ Frontend (React + Vite)                                                 │ │
 │  │ - Terminal UI (xterm.js with split panes, reader view)                 │ │
-│  │ - Claude Code panel (SSE streaming)                                    │ │
+│  │ - Structured conversations (WebSocket streaming)                       │ │
 │  │ - Preview panel + DevTools (Console, Network, Storage, Performance)    │ │
 │  │ - File manager / process manager / settings                            │ │
 │  │ - Mobile UI (keybar, carousel, action bar, gesture support)            │ │
@@ -84,6 +104,10 @@ is now a compatibility/reference implementation rather than the desktop runtime.
 
 ## Backend Components
 
+The active runtime registers routes in `rust/crates/api/src/lib.rs`. Component
+file lists under `backend/` below identify legacy Fastify counterparts, not the
+active Rust implementation.
+
 ### Desktop Shell (Windows, Phase 1)
 - Built with Tauri (`desktop/tauri/src-tauri`).
 - Starts the Rust backend process on app setup (`terminal-v4-api`).
@@ -110,7 +134,8 @@ Key files:
 - `rust/crates/api/src/passkey.rs`
 
 ### Terminal Manager
-- Uses `@homebridge/node-pty-prebuilt-multiarch` to spawn real PTYs.
+- Uses Rust `portable-pty` to spawn real PTYs. The legacy Fastify counterpart
+  uses `@homebridge/node-pty-prebuilt-multiarch`.
 - Optional tmux integration for persistence across restarts (Linux/macOS).
 - Sessions are stored per-user as JSON for history and metadata.
 - Terminal creation currently runs only in full-access host mode. Requested
@@ -125,14 +150,17 @@ Key files:
 - Tmux sessions only persist across restarts if the OS service does not kill
   child processes (see Operations Notes below).
 
-Key files:
-- `backend/src/terminal/terminal-manager.ts`
-- `backend/src/terminal/session-store.ts`
-- `backend/src/terminal/tmux-manager.ts`
-- `backend/src/terminal/turn-detector.ts`
-- `backend/src/terminal/cli-events.ts`
+Key files (active Rust runtime):
+- `rust/crates/api/src/terminal.rs`
+- `rust/crates/api/src/tmux.rs`
+- `rust/crates/api/src/lib.rs`
 
-### Claude Code Manager
+### Legacy Claude Code Manager (Fastify)
+
+This retained PTY/SSE route family belongs to the legacy backend. The current
+frontend can launch Claude through terminal sessions; conversation-first sessions
+use the structured routes below.
+
 - Wraps the Claude CLI using PTY to keep terminal behavior consistent.
 - Events are streamed over SSE (`/api/claude-code/:id/stream`).
 - Sessions are persisted per user as JSON.
@@ -143,12 +171,13 @@ Key files:
 - `backend/src/claude-code/claude-code-store.ts`
 
 ### Structured Session Manager
-- Persists per-user structured sessions under `users/<id>/structured`.
+- Persists per-user structured sessions under
+  `<data_dir>/structured-sessions/<sha256-owner>/<session-id>.json`.
 - Exposes `POST/GET /api/structured/sessions`, `PATCH /api/structured/sessions/:id`,
   `GET/PATCH /api/structured/sessions/:id/thread`, per-session message/control
   routes, and `/api/structured/sessions/:id/ws` for canonical event streaming.
-- The Rust rewrite now mirrors this route family with a first Claude provider
-  implementation that consumes `claude -p --output-format stream-json`.
+- The active Rust runtime implements this route family. Its Claude provider
+  consumes `claude -p --output-format stream-json`.
 - Browser clients authenticate the structured WebSocket with the access token in
   the `token` query parameter.
 - In local browser development, loopback API URLs are normalized back to the
@@ -160,6 +189,19 @@ Key files:
 - Structured `ss-*` titles and sidebar thread metadata now round-trip through
   the Rust backend so rename, topic, pin, archive, and project-path state are
   no longer frontend-local only.
+- Native Codex sessions use `runtime: "codex"` and the local
+  `codex app-server --listen stdio://` protocol through
+  `rust/crates/api/src/structured/codex.rs`. Each message starts an isolated
+  app-server process and resumes the saved native thread identity. The existing
+  structured provider interface remains available for other agents.
+- Codex messages are saved before dispatch with a request UUID. The adapter maps
+  assistant/tool events into the shared conversation view, presents native
+  approvals one at a time with exact action IDs, and confirms process cleanup
+  before Stop releases a session. Restarted unfinished turns become interrupted;
+  they are never automatically replayed.
+- Codex owns its authentication, instructions, tools and native history. The app
+  uses workspace-write with on-request approvals and does not copy credentials
+  into its provider vault. See [Local Codex](../features/LOCAL_CODEX.md).
 
 ### Preview + Proxy
 Supports preview modes:
@@ -184,7 +226,8 @@ the network.
 Debug tooling:
 - Injected scripts capture console, errors, storage sync, and performance activity.
 - Logs are stored in-memory for Claude Code and the preview UI.
-- Cookie jar is persisted to disk.
+- The active Rust cookie jar is held in memory and is lost on API restart.
+  Disk-backed preview cookies belong to the legacy Fastify implementation.
 
 Key files:
 - `backend/src/routes/preview-routes.ts`
@@ -213,7 +256,7 @@ Key files:
 - `backend/src/processes/process-service.ts`
 - `backend/src/preview/process-log-store.ts`
 
-### Browser Automation
+### Legacy Browser Automation (Fastify reference)
 - Browser automation services exist under `backend/src/browser/*`.
 - Public `/api/browser/*` routes are not currently registered in `backend/src/index.ts`.
 - Preview screenshots/recording are available via screenshot routes instead.
@@ -275,7 +318,7 @@ Key files:
 - `TerminalSessionContext` handles terminal sessions, bookmarks, notes, projects, and recent folders.
 - `ClaudeCodeContext` manages Claude Code sessions and left panel mode switching.
 - `PreviewContext` owns preview URL, PiP state, and preview mode.
-- `PaneLayoutContext` stores split-pane layout, fullscreen state, and focus management.
+- `PaneLayoutContext` stores split-pane layout, fullscreen state, and focus management. Split nodes may persist normalized child `sizes`; missing or invalid sizes fall back to equal shares. Pane hosts remain flat and keyed by pane ID while their geometry follows the tree, preserving terminal renderers and drafts through resizing, split changes, and fullscreen transitions.
 
 ### Key UI Components
 
@@ -363,7 +406,7 @@ Key files:
      `user_turn`, `assistant_turn`, `prompt_required`, `status`, `error`.
 6. Sessions are persisted as JSON history snapshots.
 
-### Claude Code Sessions
+### Legacy Claude Code Sessions (Fastify)
 1. Start via `POST /api/claude-code/start`.
 2. Stream events over SSE at `/api/claude-code/:id/stream`.
 3. Persist sessions for later restore.
@@ -383,23 +426,42 @@ Key files:
 ## Persistence and Data Storage
 
 ### SQLite (terminal.db)
-Location: `backend/data/terminal.db` by default, overridden by
+Location in the active Rust runtime: `<data_dir>/terminal.db`, where `data_dir`
+defaults to the platform app data directory plus `terminal-v4`, overridden by
 `TERMINAL_DATA_DIR` or `DATA_DIR`. Stores:
 - `users`
 - `refresh_tokens`
 - `user_settings`
 
 ### File-Based Stores (JSON)
-Under `backend/data/users/<userId>/`:
+Under `<data_dir>/users/<userId>/` in the active Rust runtime:
 - `sessions/*.json` (terminal history with metadata)
-- `sessions-metadata.json` (lightweight session index for recovery)
-- `claude-code/*.json` (Claude Code session events)
 - `bookmarks.json` (command bookmarks with cwd)
 - `notes.json` (project notes)
 
+The legacy Fastify stores also include `sessions-metadata.json` (session recovery
+index) and `claude-code/*.json` (legacy Claude Code session events).
+
+Structured conversations in the active Rust runtime live in
+`AppConfig.data_dir/structured-sessions/<sha256-owner>/<session-id>.json`.
+Version 2 uses one JSON-lines file: an owner-bound checkpoint followed by ordered
+event records. Each record is synced before updating live state or broadcasting;
+streaming no longer clones and rewrites the complete transcript for each chunk.
+Metadata mutations, recovery and bounded journal compaction atomically replace
+the checkpoint. Legacy version 1 snapshots remain readable and migrate on load.
+New sessions include an inert incarnation UUID in their checkpoint; legacy
+sessions without one retain that state. Older binaries may discard the field,
+and it does not establish exclusive ownership or authorize session actions.
+Context and knowledge readers share the decoder, so appended events participate
+in history, busy-state and stale-read checks. Full history and the existing
+canonical byte/event limits remain available. Sidebar polling uses a separate
+metadata-only projection with sequence watermarks.
+
 ### Preview Cookies
-Stored in `backend/data/preview-cookies.json` by default (overridable via
-`TERMINAL_DATA_DIR` or `DATA_DIR`).
+The active Rust runtime uses an in-memory per-user/per-port cookie jar; it does
+not restore cookies after restart. The legacy Fastify implementation stores
+`preview-cookies.json` under its configured data directory (`backend/data` by
+default, overridable via `TERMINAL_DATA_DIR` or `DATA_DIR`).
 
 ### In-Memory Stores
 - Preview logs (console/network/DOM)
@@ -409,11 +471,14 @@ Stored in `backend/data/preview-cookies.json` by default (overridable via
 ## Operations Notes
 
 - **Stable data directory**: In production, set `TERMINAL_DATA_DIR` explicitly.
-  Bundled builds resolve `data` relative to `dist/`, which can otherwise flip
-  storage between `backend/data` and repo-root `data`.
-- **Tmux persistence**: `rebuild.sh` restarts the systemd service. To keep tmux
-  sessions alive across rebuilds, the service should use `KillMode=process` (or
-  run tmux outside the service cgroup). See `docs/development/SETUP.md`.
+  The active Rust runtime otherwise uses the platform app data directory plus
+  `terminal-v4`; it does not derive the data directory from `dist/`.
+- **Build and restart**: `rebuild.sh` / `rebuild.ps1` build the frontend and Rust
+  release runtime without restarting services. The authenticated rebuild endpoint
+  honors the configured project/script paths. Restart the owning application or
+  service separately. To retain tmux sessions across explicit service restarts,
+  use `KillMode=process` or run tmux outside its cgroup. See
+  `docs/development/SETUP.md`.
 
 ## Security and Sandboxing
 
@@ -471,8 +536,31 @@ encrypted in the existing owner-scoped vault.
 A single queue worker registration owns each data directory. It claims at most
 three distinct canonical workspaces, persists intent and transitions, contains
 child process trees, and recovers interrupted runs and completion receipts.
-Graceful shutdown signals workers before the server runtime exits. Separate
-worktrees allow parallel file changes without sharing one working directory.
+Graceful shutdown signals workers before the server runtime exits. Unix process
+guards retain descendant PID birth identities across process-group changes,
+request graceful termination and use a bounded forced fallback. Only confirmed
+owned descendants are signalled; command lines and credential environments are
+not read. Windows guards use kill-on-close Job Objects. Approved shell commands share
+these guards and stop tracked descendants after completion, timeout or cancellation.
+Their stdout/stderr retain at most 512 KB each while excess bytes continue to drain,
+so output limits do not block finite commands on full pipes. On Unix the native
+Codex app server starts in its own process group, allowing cleanup to find group
+members even if its leader exits before they are observed. The adapter watches
+the leader and begins cleanup if it exits while a child still holds its output
+pipe; already-written protocol messages continue through the normal reader.
+Non-tmux terminal trees
+are stopped and their retained/pending history is saved during service shutdown;
+tmux-backed sessions retain their deliberate server-side persistence while their
+app-owned clients detach. Separate worktrees allow parallel file changes without
+sharing one working directory.
+
+PID ancestry tracking is a cleanup boundary, not an OS sandbox. A process that
+double-forks and becomes an orphan before observation, or a host process killed
+without a chance to run cleanup, is not guaranteed recoverable by Unix ancestry
+tracking. Controlled cancellation freezes/discovers the known tree before
+termination; MCP/browser guards additionally own their direct subprocesses.
+Windows enrollment occurs immediately after spawn and is not an atomic suspended
+launch. Platform-specific behavior must be verified on that platform.
 
 Checkpoints use private Git indexes/hidden refs and guarded file restore; provider
 conversation state is independent. Archive retains checkout files. Imported
@@ -480,12 +568,12 @@ native transcripts are owned snapshots and portable text context, not native
 runtime sessions. Existing browser preview and developer tooling remain the
 application's inspection surface.
 
-Compatible API providers run through a same-binary agent CLI bridge. The
-interactive launcher contains only provider/model choices and an encoded owner
-identifier; it resolves the encrypted owner credential at child startup and
-injects it into an environment-cleared Hermes process. Background tasks call the
-same owner-aware command builder directly. Account/provider profile homes are
-separate from the operator's native Hermes home. Unmapped adapters stay disabled.
+Compatible API providers run in V4's own same-binary agent CLI. It reads the
+owner's encrypted vault key and calls the provider directly through original
+Anthropic Messages, OpenAI Responses or Chat Completions adapters. Its bounded
+workspace tools, per-command approvals, private conversation history and task
+result protocol are implemented in `v4_agent`. No Hermes process or profile is
+used. See [V4 runtime](../features/V4_RUNTIME.md) for verified behavior and limits.
 
 
 ## Paired hosts and native conversation rewind
@@ -498,7 +586,7 @@ is never reused as a remote login. Workspace state and client persistence are
 partitioned by environment, and switching remounts the runtime workspace.
 
 Conversation rewind coordinates existing private-index Git checkpoints with
-real Claude/Codex/Hermes native branching. An owner-scoped durable operation
+Claude/Codex native branching and V4-owned conversation forks. An owner-scoped durable operation
 journal records native boundaries, source fingerprints, selected files and
 recovery checkpoints. Managed-worktree and active-process checks run before
 mutation. Resume creates an app terminal for the native fork. Partial failures
@@ -517,4 +605,144 @@ See [remote workspace](../features/REMOTE_WORKSPACE.md), [background host](../fe
 
 ### Workspace presentation
 
-The React workspace shell uses the shared Carbon & Amber tokens in styles.css. WorkspaceShell.css coordinates environment chrome, the project/thread sidebar, the composer start view and remote/workspace dialogs. New thread and home navigation select the start view without creating a process; selecting or creating a session returns to the appropriate terminal or structured conversation surface. The existing desktop/mobile split remains in App.jsx, while backend session and permission ownership remain unchanged.
+The React workspace shell uses neutral dark/light tokens and system UI typography in styles.css. The desktop shell has one project/thread sidebar, with labelled file/preview/notes/bookmark controls, Settings in its footer, and appearance/sign-out actions in the footer menu; collapsing it restores a compact vertical toolbar. There is no duplicate desktop title/navigation row above the main canvas. WorkspaceShell.css coordinates environment chrome, the project/thread sidebar, the composer start view and remote/workspace dialogs. New thread and home navigation select the start view without creating a process; selecting or creating a session returns to the appropriate terminal or structured conversation surface. The existing desktop/mobile split remains in App.jsx, while backend session and permission ownership remain unchanged.
+
+The start view puts project, conversation agent, model and reasoning choices inside
+one composer. Existing projects switch inline; adding a folder uses a folder-only
+picker. Choosing a project does not start a process. Sending creates a structured
+conversation and delivers the prompt through the existing agent input API, including
+Codex's durable request/receipt flow. Natural-language prompts never become shell
+commands. Drafts survive launch errors, and submitting is gated independently of
+typing so users can draft before selecting a project. Desktop and phone share the
+same flow. The terminal launcher remains an explicit overflow action.
+
+The new-thread launcher presents folder browsing first, followed by compact
+agent, model and reasoning controls. Optional naming and project knowledge live
+under More options. It uses the existing project defaults, saved selections and
+launch callbacks; authentication and unavailable-runtime notices remain visible.
+Folder-only workspace selection omits agent configuration. The dialog manages
+keyboard focus and restores focus to its opener when closed.
+
+Folder navigation clears the current name filter when entering a child, going up,
+or selecting a breadcrumb. Unmatched searches are labelled separately from empty
+directories and expose a clear-search action.
+
+The desktop structured conversation uses a single pane header for its title, runtime status, cancellation, and layout controls. Its composer shares the new-task prompt styling, with project/provider/model context always visible; input utilities and project tools live in disclosure menus. Choosing a project focuses the new-task prompt and explains that sending a task starts execution. Completed tool cards expose status and a readable command preview, with keyboard-accessible details containing the full input and output. These are presentation changes; frontend reconnection continues the backend-owned session.
+
+Consecutive completed structured tool messages are presented as collapsed activity batches, with a visible action count and failure count. Expanding a batch mounts its tool rows and image results on demand; each row retains expandable full input/output. Assistant responses remain between batches in transcript order. The lightweight message renderer supports bold emphasis, named safe links, and semantic Markdown tables without loading a general Markdown runtime.
+
+Activity summaries describe recognized tool operations (reads, searches, edits, and commands). Simple shell command shapes may receive a readable label; mixed or unrecognized commands retain a neutral label. Shell wrappers are removed only from the preview, while expansion preserves the original command and separates input from output. Completed status remains available to assistive technology; running and failed states remain visually explicit.
+
+The desktop sidebar places the project/chat tree immediately after search, with Files, Preview, Notes, Bookmarks and project tools grouped above Settings. Project expansion follows arriving session inventory until the user explicitly toggles it, making existing chats discoverable without overriding manual collapse. Project headers expose expansion state, reveal action buttons on hover or keyboard focus, and let nested buttons receive their own keyboard events. The shell retains the environment selector, pane controls, and composer utilities with shared spacing and accessible labels.
+
+### Idle Codex composer selection
+
+The active desktop composer uses the existing project and agent model pickers.
+Model/effort updates go through an owned-session PATCH, preserve native thread
+identity and history, and apply on the next response. Busy sessions reject updates.
+Changing projects opens a new-task draft rather than moving the existing thread.
+Confirmed selection updates invalidate older inventory responses.
+
+### Isolated WebContainer runner
+
+WebContainer uses a separate trusted top-level `/webcontainer` document (also
+`/webcontainer/`) on the UI origin. Only that document receives COOP
+`same-origin`, COEP `require-corp`, and `Cache-Control: no-store`. `main.jsx`
+selects the runner before importing the normal App. The normal app, API, static
+assets, local/external/paired previews, and existing opaque preview sandbox keep
+their existing policies. The SDK always boots with the matching `require-corp`
+mode; the feature no longer depends on a non-isolated Chromium Origin Trial.
+
+The normal preview's **Open WebContainer window** action opens a `noopener` tab
+and leaves its proxy running. The URL carries only a random 128-bit fragment ID.
+A bounded two-minute launch record contains owner/session/Home, local project
+path and start command, never tokens or source. Creation, expiry cleanup and
+one-use claim share an exclusive Web Lock. The runner uses the existing
+AuthProvider/LoginPage and authenticated file API, rather than a file/credential
+bridge. It stays pinned to its displayed project; changing the main tab's
+project does not repoint an independent running window. Paired-host launches are
+rejected, including stored environment changes detected after the claim.
+
+The runner verifies stored auth/session/Home/environment before and after awaited
+work and on notifications/focus/resume. Revocation cancels reads, removes source,
+logs and the project iframe, and retires the runtime, including a late boot.
+Same-session token rotation can continue. Stop and Retry preserve the existing
+process-generation and raw-spawn/confirmed-exit drain barrier. A blocked drain
+fails visibly after ten seconds without releasing unsafe ownership.
+
+File exports retain binary bytes and public assets, with 1 MiB/file, 50 MiB raw
+contents, 10,000 entries and 32 directory levels. Known private environment,
+package-manager credential/configuration and key material are omitted before
+content reads. Responses contain at most 100 relative omission paths (512
+characters each), a total and a truncation flag; secret values are not returned.
+Safe example/sample/template filenames remain available. This policy is not
+universal secret detection. Scripts can access everything that is mounted, so
+omissions require visible review before execution. The runner also limits the
+decoded HTTP response to 64 MiB before JSON parsing; an over-budget export fails
+with a proxy-preview fallback instead of silently dropping imports.
+
+Project HTML runs only in the SDK's distinct HTTPS `*.local-corp.webcontainer-api.io`
+origin. The project iframe permits scripts/same-origin within that vendor origin,
+forms, modals and downloads; it has no app-origin access, top navigation, popup
+escape, or camera/microphone grant. The normal proxy's separate sandbox is not
+changed by the runner.
+
+## Interactive workspace browser
+
+`WorkspaceBrowser` provides a human-controlled Chromium viewport beside the
+desktop terminal and as a selectable mobile surface. It has independent tabs,
+an address/search bar, history, pointer/keyboard input, paste, touch scrolling,
+and a text entry field for phone keyboards. ResizeObserver matches the remote
+viewport to the pane. Development Preview and its inspector remain separate.
+
+`workspace_browser.rs` owns one browser helper per authenticated account and data
+directory, with eight total browser slots and up to eight tabs per helper. The
+embedded Node helper uses app-owned Node 22.23.1, Playwright 1.64.1 and Chromium
+revision 1248 with its sandbox enabled and a new temporary context. The generated
+`.runtime/browser` is bundled as `browser-runtime/`; `browser_runtime.rs` resolves
+and validates only app-owned runtime roots, never installed Chrome or a shared
+Playwright cache. `npm run browser:install` prepares the native-host bundle and
+`browser:verify` exercises its local launch/DOM/screenshot path; this does not
+prove portability to other machines or packaged targets. HTTP commands and JPEG
+frames use the normal authenticated API, including Tailscale; no CDP port is exposed. Arbitrary client
+JavaScript evaluation and host file URLs are unavailable. Session lookup checks
+both owner and UUID. Responses use private/no-store caching.
+
+Sessions retain their tabs and sign-ins while the pane is hidden, then expire
+after 30 minutes without browser requests. Reset, logout and shutdown close the
+owned helper/process tree; failed cleanup retains ownership for a retry. Sessions
+use the home server independently of the selected paired environment. This UI
+browser is also the browser used by native Codex, native Claude and in-app V4
+conversations: all share this account/data-directory context, tabs, cookies and
+sign-ins, including across workspaces. Personal browser profiles and auth state
+are not imported. File uploads, downloads and durable browser profile restore
+are unavailable. The engine runs headless on the API host and is visible remotely
+through the pane's frame transport.
+
+`workspace_browser_mcp.rs` exposes the app-owned `terminal_v4_browser` tools to
+native structured adapters through a loopback MCP URL and a random bearer
+capability, scoped to account, data directory and agent label. The 12-hour lease
+is revoked when its last owner is dropped; cancellation also invalidates queued
+operations. Native browser actions require an exact Browser-pane decision,
+including reads and evaluation; releasing control needs no decision. Approvals
+bind arguments, settings and the reviewed session/tab/document/control generation
+as applicable, and expire after 60 seconds. Codex also keeps native tool approvals
+enabled. Claude print mode allow-lists only these browser transport tools, whose
+execution is still held at the pane gate; ordinary native tools retain their
+native permission restrictions and generic confirmation cannot grant them exact
+tool permission. V4 dispatches directly through its own exact-action conversation
+approval gate, binding configuration and the reviewed session/tab/document/control
+target. Shared errors propagate without launching a standalone browser.
+
+Control is available, human-owned or owned by one agent label. **Take control**
+cancels pending native actions and invalidates queued work's control generation;
+agent mutations wait for **Let agents control**. Fresh approved reads of permitted
+pages remain possible during human control, without switching the human's active
+tab or installing an agent policy. `allowedOrigins` gates agent targets and
+resource requests; HTTP routing, popup policy inheritance and WebSocket/proxy
+checks enforce it, with service workers blocked. Human input mutations release
+agent policies across the session. These checks are not an OS network/filesystem sandbox.
+Page content is untrusted. Email content or metadata requires task-specific
+explicit consent and the exact address before access; origin/action approval
+does not replace consent. This is an agent policy, not automatic detection of all
+email or private content. See [V4 agent browser tools](../features/V4_AGENT_BROWSER.md).
