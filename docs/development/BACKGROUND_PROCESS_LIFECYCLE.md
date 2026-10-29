@@ -41,11 +41,11 @@ the parent's locks. This is not confirmation that a child process has stopped.
 
 Before enabling the tools, call `bootstrap::open_or_provision` at trusted
 startup (it exists, is tested for restart, crash-in-the-middle and lost-state
-refusal, and is simply not wired in yet), complete a durable cross-process session actor fence,
-define scoped completion and output handling, and provide a recovery policy that
-accounts for escaped or otherwise unconfirmed processes. Validate
-platform-specific behavior; the lifeline is implemented only on Unix, and the
-existing receipt implementation fails closed outside Unix.
+refusal), call `recover_unconfirmed` once before accepting launches, wire a
+completion consumer, and consult `session_has_outstanding` from thread
+settlement. Validate platform-specific behavior; the lifeline and the recovery
+policy are implemented only on Unix, and the existing receipt implementation
+fails closed outside Unix.
 
 The structured-session launch actor is test-only. It requests a decision
 through its bound structured approval gate and produces a private, single-use
@@ -102,13 +102,22 @@ authorized review attests it, and keeps shutdown reporting unconfirmed cleanup.
 The terminal outcome is committed once and later cancel, wait or status calls
 cannot change it. After the ledger commit, the manager publishes a
 metadata-only completion hint (scope, action ID, outcome; never the command or
-output) on a bounded broadcast channel (`subscribe_completions`). A subscriber
-may lag and miss hints, and none exists across a restart, so the ledger via
-status or wait stays authoritative; a consumer must reconcile before relying on
-delivery. Nothing in the agent loop or queue subscribes yet: a future delivery
-step must check owner, session incarnation and checkpoint before injecting a
-completion notice, and must never inject output without the reviewed-output
-action. `session_has_outstanding(owner, session)` is a read-only ledger query,
+output) on a bounded broadcast channel (`subscribe_completions`). That channel
+is lossy and per-process. For a durable path, the terminal outcome and a
+pending-completion marker (owner, session, workspace, incarnation, action ID,
+outcome; no command or output) are committed in one ledger transaction, also
+for outcomes resolved by recovery. `pending_completions()` peeks at up to 64
+markers in order; `acknowledge_completion(seq)` removes one and returns true to
+exactly one caller; `drain_pending_completions()` takes up to a page
+atomically so concurrent drainers receive disjoint markers. Markers survive
+restart. Markers are bounded by the receipt caps: pruning a finished receipt
+or retiring its session also deletes its marker, so a marker that nothing
+drained can be dropped; the ledger via status or wait stays authoritative.
+Delivery after `drain` is at most once, so a consumer that must not lose a
+notice should peek, inject, then acknowledge. Nothing in the agent loop or queue
+consumes markers yet: a future delivery step must check owner, session
+incarnation and checkpoint before injecting a completion notice, and must never
+inject output without the reviewed-output action. `session_has_outstanding(owner, session)` is a read-only ledger query,
 true while any command in the session is running or has an unreviewed outcome
 (including after a crash) or the manager has unconfirmed cleanup. It is not yet
 called by thread settlement: structured.rs must consult it next to
@@ -116,14 +125,28 @@ called by thread settlement: structured.rs must consult it next to
 (refusing settlement on true or on error) and in the inventory lifecycle
 projection where `delegation_quiet` is computed.
 
-The current owner gate holds an SQLite write transaction while invoking the
-spawn callback. Local Stop and unrelated authorization operations also need a
-write transaction on the control database, so a stalled callback can delay
-them even though cancellation admission itself fails fast. Before enabling
-background tools, redesign or bound this launch boundary without weakening
-revocation and cleanup guarantees, and verify Stop and unrelated authorization
-under a stalled launch. A focused owner-gate test demonstrates database lock
-contention; it does not demonstrate an end-to-end Stop outcome.
+Launch admission no longer holds a control-database transaction (or the gate
+connection) while the spawn callback runs. `OwnerGate::admit_launch` checks the
+owner hold and authorization generation in one short transaction, releases it,
+runs the launch, then repeats the check. A hold or generation change in
+between, or a launch that overran its budget (10 seconds), is reported as
+`Revoked`: the child is still tracked and cancelled, its receipt reaches a
+terminal `cancelled` outcome, and the manager is not poisoned. Only a failed
+second check (database error) is `Uncertain`, which keeps the existing
+fail-closed behavior (manager-wide unconfirmed). Holds cannot be acknowledged
+while the claim is unfinished, because the claim is durable before the launch
+and the acknowledgment requires every owner claim to be terminal. The short
+`admit`/`admit_generation` forms remain, for in-memory status and cancel
+closures only. A test proves that, with a launch stalled inside the callback,
+a local Stop hold, another owner's hold, an unrelated authorization check and an
+unrelated write transaction all complete in well under two seconds, and that
+the late child is then stopped and recorded as cancelled.
+
+Remaining limits: the spawn itself cannot be abandoned (the callback borrows
+the command), so an over-budget launch is detected after it returns rather than
+interrupted. The launching `start` call still holds the manager's registry
+lock, so status, cancel and owner-hold servicing on the same manager wait for
+that one launch (fail-fast actor paths return "busy; retry" instead).
 
 On Unix, deletion holds a shared provisioning lock and an exclusive hashed
 owner/session stripe until it finishes. First provisioning holds the same
@@ -132,9 +155,43 @@ another deletion waits; a stripe collision fails closed with a retry. There are
 at most 65,536 persistent stripe lock files and one provisioning lock file.
 An unsafe lock path also fails closed, and the operating system releases locks
 when their owner exits. These locks prevent the absence check from racing a new
-installation, but do not prove that a stale session actor in another process
-cannot launch after deletion. They assume a private, stable data directory, and
-older binaries do not honor them.
+installation. They assume a private, stable data directory, and older binaries
+do not honor them.
+
+A separate durable session fence (`background_session_fence.rs`, under
+`<data>/.background-session-fence/`) closes the stale-actor gap. Every launch
+takes an exclusive hashed stripe lease and checks for a tombstone before the
+claim; `retire_session` writes the tombstone (created exclusively, file and
+directory synced) after the ledger retirement and under the same lease. A
+launch in flight in any process therefore makes retirement fail with a retry,
+and after retirement no actor in any process can launch for that owner/session
+even if it still holds a stale in-memory view. The tombstone is permanent and
+capped at 4,096. It is enforced only when the ledger lives under
+`<data>/background-processes` (the provisioned layout); callers must run
+retirement as the last step of deletion and treat an error as a failed delete.
+Two-process tests cover a holder blocking retirement and a retired session
+rejecting later launches. Stripe collisions fail with a retry rather than
+waiting.
+
+Recovery of unconfirmed processes. After each spawn the ledger records the
+supervisor PID, process group and OS start time (macOS `proc_pidinfo`, Linux
+`/proc`) beside the claim, and removes the identity in the same transaction as
+the terminal outcome. Reopening still never signals anything and keeps the
+claim unknown. `recover_unconfirmed()`, run once at trusted startup before
+launching (it skips entries this manager owns), applies this policy to every
+unreviewed unknown receipt: PID alive with the same start time and process
+group, then SIGKILL the group and wait for it to vanish, record `cancelled`
+(`killed`); PID and group both absent, record `cancelled` (`group_empty`;
+the real exit status is unknown); a different start time or group
+(`identity_mismatch`), a leader that is gone while group members remain, an
+unreadable process, or a signal/wait that does not complete (`unverifiable`),
+and a receipt with no recorded identity (`no_identity`) are left unknown, are
+never signalled, and still need authorized review. The outcome is kept in a
+recovery table. Descendants that left the process group, a crash between spawn
+and the identity write, and a kernel that cannot report a start time are not
+recoverable and fall into the review path. A real-subprocess test aborts a host
+process that leaves a detached process group, then recovers it; others cover
+mismatch, missing identity, an already-stopped group, and surviving members.
 
 Session cleanup closes admission and signals the session's processes while
 holding the registry lock, then releases that lock while it waits for their

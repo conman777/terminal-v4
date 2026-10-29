@@ -36,11 +36,35 @@ directory at the same time.
 Stop the new server, restore the previous data directory backup, then start the
 old build. Do not roll back in place after the marker advanced.
 
+## Outcome durability
+
+A finished task is written to the owner store; if that fails, to a receipt
+under `workspace-tasks/completions/`; if that also fails, to the fsynced
+append-only `workspace-tasks/outcome-journal.jsonl`. The next worker replays
+journal entries into owner stores (idempotently, only for tasks still not
+terminal) and then removes the applied entries. A torn last line is ignored.
+
+## Missed runs
+
+When an enabled schedule is found overdue by more than its grace window, the
+worker does not run it. It records `missedRuns` / `lastMissedAt` on the
+schedule (visible in `list_schedules`), advances recurring schedules to the
+next future slot and disables one-shot schedules. The grace window is half the
+interval clamped to 2 minutes..2 hours; calendar and one-shot schedules use 2
+hours. A schedule whose previous task is still in flight is overlap, not a
+missed run. Both fields are absent from stored records until first used, so
+older stores load unchanged (an older build that rewrites a store drops them).
+
 ## Known limits
 
-- If both the owner-store write and every receipt write keep failing, the worker
+- If the owner store, every receipt and the journal all fail, the worker
   retries indefinitely holding ownership. If the process exits during that
-  window, the task stays `running` and is reported `interrupted` after restart
-  with its result unrecoverable.
-- Missed recurring runs coalesce into one catch-up run after downtime; there is
-  no grace window that skips stale runs.
+  window, the task stays `running` and is reported `interrupted` ("outcome
+  unknown") after restart. This is the only case where a result is lost.
+- Journal entries for an owner whose store is missing or unreadable are kept
+  until that store loads again.
+- A checkpoint already in progress at shutdown is awaited (bounded by the
+  ten-second shutdown wait); one still waiting for the lock is abandoned and
+  the task is recorded as interrupted before launch.
+- `list_schedules` reports next/last run and missed-run fields but not the last
+  task's status or error; those require the task store and remain a gap.

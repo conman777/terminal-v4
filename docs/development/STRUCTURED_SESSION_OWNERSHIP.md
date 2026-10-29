@@ -316,3 +316,53 @@ Remaining limits:
   with the same request ID returns the accepted receipt without restarting.
 - Blockers 2, 3, 4 and 6 above (scope for native providers, idle boundary,
   signed-authority binding of queue items, approval fences) are untouched.
+
+## Native Codex queue preview (off by default)
+
+Cargo feature `native-codex-queue-preview` (implies `queued-authority-preview`,
+Unix only) plus a runtime opt-in (`TERMINAL_V4_NATIVE_CODEX_QUEUE=1`) enable a
+server-owned queue for native Codex sessions. Without both, behavior is
+unchanged: `queue::scope` still rejects native providers and no queue file is
+created. Implementation: `structured/native_queue.rs` (gate, idle boundary,
+authority), `structured/queue.rs` (`scope`, `hold_*`, drain), tests in
+`structured/native_queue_tests.rs`.
+
+What changed, by blocker:
+
+- Lease (always on, not feature-gated): `acquire_lease` now also covers raw
+  `send_input` delivery, Codex approval claim/reserve/review persistence, and
+  `delete_session`. Delete holds the lease and removes the lease and native
+  request-ledger files at the end (`request_ledger::remove_session_files`); a
+  contended lease makes delete fail with a retryable error and keeps the session.
+  Provider callbacks (`record_event_generation`) still do not take the lease.
+- Scope/holds: for an opted-in Codex session `scope` uses `QueueScope::new_native`,
+  and `hold_session` (Stop/delete/logout cleanup), `hold_generation`, `drain`,
+  settlement queue state and a new `check_native_admission` (called from
+  `submit_codex` after request dedupe) cover it. A running queue with items fences
+  direct Codex sends; a restart hold with items blocks them.
+- Idle boundary: after the Codex event pump ends and `clear_generation` succeeds,
+  `native_queue::turn_finished` drains only if the last turn completed with status
+  `completed`; any other status holds the queue (Manual). Before reserving, the drain
+  skips (item stays pending, no hold) when an approval is unresolved/pending
+  (`unresolved_codex_approval`, `has_pending_request`) or a workspace-activity
+  writer is active. It never answers or bypasses an approval. A skipped drain is
+  retried only by the next idle boundary or an explicit Wake.
+- Authority: native dispatch goes through `submit_queued`; the item's signed proof is
+  verified against the stored session incarnation and the credential is
+  re-admitted atomically with the journal write via the bound `LocalAdmission`
+  (`with_native_authority` falls back to it when no `AppState` is passed). A missing
+  incarnation holds the queue (Manual) and is never recreated. In non-test builds a
+  proof-less item is refused (held as DispatchError).
+- Reconcile: the reserved item uses the durable queue `input_request_id` as the Codex
+  request id, so after a crash `receipt_from_events` yields accepted (item becomes
+  Accepted with the receipt) or absent (item returns to Pending, queue held
+  DispatchError, never auto-replayed). If the on-disk journal is ahead of the
+  manager the queue is held and the drain fails closed.
+
+Remaining limits: a drain skipped by the approval or workspace fence is not
+rescheduled when the fence clears; provider callbacks are not under the lease and
+concurrent managers on one data directory remain unsupported; no live-provider or
+separate-process verification of this path; the live owner guard is still not
+bound for ordinary loading; Claude native is not covered (its sends have a
+receipt but no idle boundary); the UI/routes were not exercised for native
+sessions beyond the existing queue routes.
