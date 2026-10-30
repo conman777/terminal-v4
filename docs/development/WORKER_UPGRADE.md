@@ -18,6 +18,30 @@ directory at the same time.
   - refuses to start (logged as an error, no retry) when the marker is newer or
     unreadable. Restore a compatible build, or review the marker before
     deleting it.
+- A refused worker does not stop the server. The HTTP API stays up so other
+  features keep working; this is deliberate. Per data directory the process
+  tracks the worker as starting, running, refused or stopped. While it is
+  refused:
+  - `GET /api/workspace/schedules/capabilities` returns `workerAvailable:
+    false` and a `workerReason` (it is `true` / `null` otherwise);
+  - queueing a task, creating, editing, resuming or running a schedule
+    (`POST /api/workspace/tasks`, `POST` and `PATCH /api/workspace/schedules`,
+    `POST .../run`) is rejected with 503, as are the agent tools
+    `create_schedule` and `manage_schedule` (resume, run, edit), which return
+    the same error instead of claiming success;
+  - listing, cancelling, deleting, pausing and removing still work;
+  - startup logs a prominent ERROR, and the Tasks panel shows a banner and
+    disables its create and run controls.
+  Nothing queued earlier will run in this process. The status is held in
+  memory and applies only to the server process that detected the marker;
+  other processes or older builds pointed at the same data directory are not
+  affected by it. Delegated sub-agent tasks are launched by the agent itself
+  rather than the worker and are not gated.
+- Recovery: stop the server, start a build whose protocol is at least the
+  marker's (the normal fix), or, if you are certain the marker is wrong or
+  corrupt, restore it from a backup or remove `worker-protocol.json` and
+  restart. The status is re-evaluated at each start; it is not cleared at
+  runtime.
 - Builds that predate the marker still honour the lock but do not read the
   marker. They can run again after a downgrade and rewrite stores without the
   newer fields, so never downgrade over a newer data directory.

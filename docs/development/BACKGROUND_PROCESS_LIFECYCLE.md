@@ -229,6 +229,38 @@ checks the tombstone and that a stale start is refused. Logout deliberately does
 not write a tombstone: the tombstone is permanent and logout is reversible, so
 logout relies on the shared owner hold, which blocks every launch until it is
 released.
+
+Tombstones are written only where they can matter. The ledger persists a durable
+`commands_ever_enabled` marker (table `ledger_flags`) the first time
+`enable_commands` runs or any action is claimed; opening an older ledger that
+already holds receipts, launched processes or tombstones sets it too. A session
+is tombstoned (ledger row and fence file) when the marker is set or the session
+has any receipt or launched process. On a data directory where commands were
+never enabled, deleting a conversation writes no tombstone but still releases
+its receipts, so the 4,096 cap cannot be consumed by ordinary deletions. The
+fence and replay protection are unchanged wherever commands have been enabled.
+
+Deletion checks capacity before anything irreversible. `delete_session` calls
+`reserve_retirement` right after taking the deletion fence and before the
+delegation retire, the native conversation delete, the receipt cleanup or the
+file removal. The reservation counts in-flight deletions, so concurrent
+deletions cannot all pass the check at 4,095. At the cap the delete fails
+with "Background retirement capacity exhausted" (or the fence equivalent) and
+the conversation, its delegation state and request ledger are untouched, so
+the same delete can be retried after capacity is freed. Tombstones are never
+pruned automatically, because removing one re-opens replay and stale-launch
+protection for that conversation.
+
+Operator recovery at the cap: the retired-session records only matter for
+conversations that no longer exist. Stop the server, back up the data
+directory, then either delete rows from `retired_sessions` in
+`<data>/background-processes/receipts.sqlite3` and the matching
+`<data>/.background-session-fence/retired-*` files, whichever is at the cap
+(the two use different hashes and cannot be matched one-to-one; the oldest
+rows by `rowid` and files by modification time are the best candidates), or
+delete fewer conversations. This weakens the stale-launch refusal for the
+removed records, so remove only records of conversations that no client can
+still address. Restart and retry the delete.
 Two-process tests cover a holder blocking retirement and a retired session
 rejecting later launches. Stripe collisions fail with a retry rather than
 waiting.

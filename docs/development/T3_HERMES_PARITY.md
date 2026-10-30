@@ -58,6 +58,15 @@ Nothing here has run against a real provider, a real Docker daemon, a real Teleg
 - **Queues and sharing:** the composer uses the server-owned queue when one exists, with edit, reorder, run-next, pause and optimistic rows. One-use, 24-hour, read-only conversation guest links use a separate narrow credential; guest messages are suggestions the owner must approve. Redaction is a regex filter and shares are not auto-revoked on owner sign-out.
 - **Known pre-existing clippy errors** in `preview/proxy.rs` and `system_stats.rs` test targets were not introduced by this work.
 
+## Audit follow-up fixes
+
+- Stashed composer drafts are stored per account and environment; entries written under the old unscoped key are ignored, never adopted. A stash that cannot be saved keeps the draft in the composer and says so.
+- A queue snapshot that already holds an enqueued item no longer shows a duplicate optimistic row.
+- A terminal-close answer that arrives after the drawer was removed or switched to another thread no longer reopens that thread's drawer.
+- Deleting a conversation checks background-retirement capacity before any irreversible step. A retirement record is written only once background commands have ever been enabled for the data directory (a durable marker), or the session has a background claim, so installs that never enable them can no longer exhaust the 4096-record limit. Installs that do enable them still stop at the limit, early and without partial deletion; recovery is an operator action described in the lifecycle guide.
+- A refused task worker (newer data directory marker) is now reported: schedule capabilities carry `workerAvailable`, scheduling operations return 503, and the panel shows a banner. Status is per server process.
+- Not addressed here: the file-preview defects (literal `?`, `#`, `%` filenames; empty-file paging) concern `ProjectFilePreview.jsx`, which exists only in an uncommitted checkout elsewhere and is not in this branch.
+
 ## Release evidence
 
 - Verify the current source on a stable snapshot with the full frontend and Rust
