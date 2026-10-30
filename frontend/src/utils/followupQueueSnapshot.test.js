@@ -25,6 +25,13 @@ describe('applyOptimistic', () => {
     const view = applyOptimistic(snapshot, { kind: 'pause' });
     expect({ order: view.order, saving: view.saving.size }).toEqual({ order: [A, B], saving: 0 });
   });
+
+  it('does not duplicate an enqueue the refreshed snapshot already holds', () => {
+    const committed = { ...snapshot, revision: 3, items: [...snapshot.items, item(C, 'c', 22)], order: [A, B, C] };
+    const view = applyOptimistic(committed, { kind: 'enqueue', itemId: C, text: 'c' });
+    expect({ ids: view.items.map(entry => entry.itemId), order: view.order, saving: [...view.saving] })
+      .toEqual({ ids: [A, B, C], order: [A, B, C], saving: [] });
+  });
 });
 
 describe('validateSnapshot', () => {

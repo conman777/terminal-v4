@@ -7,13 +7,15 @@ const terminalStatuses = new Set(['completed', 'failed', 'cancelled', 'interrupt
 
 const advancedUnavailable = 'Advanced scheduling is unavailable on this server. Update the server to create one-time or calendar schedules. Interval schedules are still available.';
 
-async function supportsAdvancedTiming(signal) {
+const workerUnavailableMessage = 'Scheduled tasks are unavailable: this data directory was written by a newer version. See the upgrade guide.';
+
+async function loadCapabilities(signal) {
   try {
     const response = await apiFetch('/api/workspace/schedules/capabilities', { signal });
-    if (!response.ok) return false;
+    if (!response.ok) return { advanced: false, workerAvailable: true };
     const data = await response.json();
-    return data?.advancedTimingProtocolVersion === 1;
-  } catch { return false; }
+    return { advanced: data?.advancedTimingProtocolVersion === 1, workerAvailable: data?.workerAvailable !== false };
+  } catch { return { advanced: false, workerAvailable: true }; }
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -52,6 +54,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [schedules, setSchedules] = useState([]);
   const [advancedTiming, setAdvancedTiming] = useState(null);
+  const [workerAvailable, setWorkerAvailable] = useState(true);
   const [capabilityRefresh, setCapabilityRefresh] = useState(0);
   const [prompt, setPrompt] = useState('');
   const [provider, setProvider] = useState('claude');
@@ -92,8 +95,10 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
   useEffect(() => {
     const controller = new AbortController();
     setAdvancedTiming(null);
-    supportsAdvancedTiming(controller.signal).then(supported => {
-      if (!controller.signal.aborted) setAdvancedTiming(supported);
+    loadCapabilities(controller.signal).then(capabilities => {
+      if (controller.signal.aborted) return;
+      setAdvancedTiming(capabilities.advanced);
+      setWorkerAvailable(capabilities.workerAvailable);
     });
     return () => controller.abort();
   }, [workspacePath, capabilityRefresh]);
@@ -134,7 +139,7 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
     setError('');
     try {
       if (advanced) {
-        const supported = await supportsAdvancedTiming();
+        const supported = (await loadCapabilities()).advanced;
         if (version !== generation.current) return;
         if (!supported) { setAdvancedTiming(false); return; }
       }
@@ -156,10 +161,11 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
   const selectedAgent = agentChoices.find(agent => agent.id === provider);
   const onceTimestamp = Date.parse(onceAt + 'Z');
   const validOnce = Number.isFinite(onceTimestamp) && onceTimestamp > Date.now() && new Date(onceTimestamp).toISOString().slice(0, 16) === onceAt;
-  const canQueue = loaded && !catalogLoading && workspacePath && prompt.trim() && !pending && selectedAgent && selectedAgent.available !== false;
+  const canQueue = workerAvailable && loaded && !catalogLoading && workspacePath && prompt.trim() && !pending && selectedAgent && selectedAgent.available !== false;
   return (
     <section className="workspace-tasks" aria-label="Workspace tasks and schedules">
       <header><h3>Tasks & schedules</h3><p>Run an agent in this workspace and keep its result with your conversation.</p></header>
+      {!workerAvailable && <p role="alert" className="workspace-tasks-worker-banner">{workerUnavailableMessage}</p>}
       {catalogError && <p role="status">{catalogError}</p>}
       {agents?.length === 0 && <p role="status">No compatible task agents are available. Install or enable an agent that supports durable tasks, then recheck.</p>}
       {(catalogError || agents?.length === 0) && <button type="button" disabled={catalogLoading || pending} onClick={() => setCatalogRefresh(value => value + 1)}>Recheck task agents</button>}
@@ -231,10 +237,10 @@ export function WorkspaceTasksPanel({ workspacePath = '', currentSessionId, onIn
             {schedule.nextRunAt && <small>Next run: {new Date(schedule.nextRunAt).toLocaleString()}</small>}
             {(() => { const last = describeLastRun(schedule, tasks); return <><small className="workspace-schedule-last">{last.text}</small>{last.error && <p className="workspace-task-error">Last error: {last.error}</p>}</>; })()}
             {schedule.missedRuns > 0 && <small className="workspace-schedule-missed">{`Missed ${schedule.missedRuns} scheduled ${schedule.missedRuns === 1 ? 'run' : 'runs'} while the app server was not running${schedule.lastMissedAt ? ` (latest ${new Date(schedule.lastMissedAt).toLocaleString()})` : ''}.`}</small>}
-            <label className="workspace-schedule-checkbox"><input type="checkbox" disabled={pending} checked={schedule.deliverTo === 'telegram'} aria-label={'Send ' + schedule.name + ' results to Telegram'} onChange={(event) => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { deliverTo: event.target.checked ? 'telegram' : null } })} />Send results to Telegram</label>
+            <label className="workspace-schedule-checkbox"><input type="checkbox" disabled={pending || !workerAvailable} checked={schedule.deliverTo === 'telegram'} aria-label={'Send ' + schedule.name + ' results to Telegram'} onChange={(event) => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { deliverTo: event.target.checked ? 'telegram' : null } })} />Send results to Telegram</label>
             <div className="workspace-task-actions">
-              {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={(schedule.enabled ? 'Pause ' : 'Enable ') + schedule.name} onClick={() => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { enabled: !schedule.enabled } })}>{schedule.enabled ? 'Pause' : 'Enable'}</button>}
-              {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending} aria-label={'Run ' + schedule.name + ' now'} onClick={() => mutate('/api/workspace/schedules/' + schedule.id + '/run', { method: 'POST' })}>Run now</button>}
+              {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending || (!schedule.enabled && !workerAvailable)} aria-label={(schedule.enabled ? 'Pause ' : 'Enable ') + schedule.name} onClick={() => mutate('/api/workspace/schedules/' + schedule.id, { method: 'PATCH', body: { enabled: !schedule.enabled } })}>{schedule.enabled ? 'Pause' : 'Enable'}</button>}
+              {!(schedule.runOnceAt != null && schedule.lastTaskId) && <button type="button" disabled={pending || !workerAvailable} aria-label={'Run ' + schedule.name + ' now'} onClick={() => mutate('/api/workspace/schedules/' + schedule.id + '/run', { method: 'POST' })}>Run now</button>}
               <button type="button" disabled={pending} aria-label={'Remove ' + schedule.name} onClick={() => mutate('/api/workspace/schedules/' + schedule.id, { method: 'DELETE' })}>Remove schedule</button>
             </div>
           </article>

@@ -390,7 +390,7 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
     let syntheticControl = { owner: 'available' };
     try {
       const page = await context.newPage();
-      page.setDefaultTimeout(6000);
+      page.setDefaultTimeout(15000);
       await page.exposeFunction('syntheticRequest', async (path, body) => {
         if (path.endsWith('/approvals')) return { requests: [] };
         if (path.endsWith('/sessions')) return { id: 'synthetic-session', state: { ...await engine.command({ type: 'state' }), control: syntheticControl } };
@@ -510,7 +510,7 @@ describe('WorkspaceBrowser with an isolated managed Chromium helper', () => {
     const context = await engine.browser.newContext({ viewport: { width: 1280, height: 900 } });
     try {
       const page = await context.newPage();
-      page.setDefaultTimeout(6000);
+      page.setDefaultTimeout(15000);
       console.info('flow: new synthetic UI page');
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));

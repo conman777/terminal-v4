@@ -1,5 +1,5 @@
 import { environmentAllows } from '../utils/runtimePermissions';
-import { getActiveEnvironment, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
+import { getActiveEnvironment, getEnvironmentCacheScope, getEnvironmentSignal, subscribeEnvironment } from '../utils/remoteEnvironments';
 import { captureAuthScope, isAuthScopeCurrent } from '../utils/auth';
 import { resolveAgentLaunchCommand } from '../utils/agentLauncher';
 import { useRef, useState, useCallback, useEffect, useMemo, useId, memo, useSyncExternalStore } from 'react';
@@ -252,6 +252,9 @@ export const TerminalPane = memo(function TerminalPane({
   const { items: queuedMessages, error: queueError } = useSyncExternalStore(nativeQueue.subscribe, nativeQueue.getSnapshot);
   const serverQueue = useServerFollowupQueue(isClaudeChat || isCodexSession ? pane.sessionId : null);
   const [stashed, setStashed] = useState(loadStash);
+  const [stashError, setStashError] = useState('');
+  const stashScope = useSyncExternalStore(subscribeEnvironment, () => { const scope = getEnvironmentCacheScope(); return `${scope.identity}|${scope.environment}`; });
+  useEffect(() => { setStashed(loadStash()); setStashError(''); }, [stashScope]);
   useEffect(() => { setPlanMode(false); }, [pane.sessionId]);
   const detailsDocked = useMediaQuery('(min-width: 1280px)');
   const [floatingDetailsOpen, setFloatingDetailsOpen] = useState(false);
@@ -853,7 +856,13 @@ export const TerminalPane = memo(function TerminalPane({
   }, [isClaudeChat, isCodexSession, nativeQueue, queuedMessages, serverQueue.status, sessionInputAllowed, structuredConnectionState, structuredHistoryOnly, structuredIsStreaming, structuredRequiresCleanup, structuredSendMessage]);
   const stashCurrentDraft = useCallback(() => {
     if (!composerValue.trim()) return;
-    setStashed(stashDraft(composerValue));
+    const result = stashDraft(composerValue);
+    if (!result.ok) {
+      setStashError('This draft could not be stashed on this device, so it was kept in the composer. Free local storage and try again.');
+      return;
+    }
+    setStashError('');
+    setStashed(result.items);
     setComposerValue('');
   }, [composerValue, setComposerValue]);
   const restoreStashed = useCallback(id => {
@@ -1400,6 +1409,7 @@ export const TerminalPane = memo(function TerminalPane({
                       options={stashed.map(item => ({ value: item.id, label: item.text.slice(0, 60), description: new Date(item.at).toLocaleString() }))}
                       onChange={restoreStashed}
                       action={composerValue.trim() ? { label: 'Stash this draft', text: 'Stash this draft', onClick: stashCurrentDraft } : undefined} />}
+                    {isStructuredSession && stashError && <span className="session-stash-error" role="alert">{stashError}</span>}
                     {(isClaudeChat || isCodexSession) && composerContext && <span className="session-context-meter" role="img" aria-label={`${composerContext.label}: ${composerContext.detail}`} title={composerContext.detail}>
                       <svg width="14" height="14" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" fill="none" stroke="var(--border-default)" strokeWidth="4" /><circle cx="18" cy="18" r="15" fill="none" stroke={composerContext.percent > 85 ? 'var(--error)' : 'var(--accent-primary)'} strokeWidth="4" strokeDasharray={`${composerContext.percent * 0.9425} 94.25`} transform="rotate(-90 18 18)" /></svg>
                       <span>{composerContext.percent}%</span>

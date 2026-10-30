@@ -15,6 +15,12 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
   const drawerRef = useRef(null);
   const panesRef = useRef(null);
   const keepButton = useRef(null);
+  const live = useRef({ mounted: true, threadId });
+  live.current.threadId = threadId;
+  useEffect(() => {
+    live.current.mounted = true;
+    return () => { live.current.mounted = false; };
+  }, []);
   const ids = drawer.terminals.map(terminal => terminal.id);
   const primaryId = drawer.terminalId;
   const partnerId = resolveSplitPartner(layout, ids, primaryId);
@@ -43,8 +49,10 @@ export function ThreadTerminalDrawer({ threadId, drawer, terminalInputAllowed, s
   async function closeTerminal(id) {
     setConfirmClose(null);
     const last = ids.length === 1;
+    const requestedFor = threadId;
     if (last) onRequestClose?.();
     const closed = await drawer.closeTerminal(id);
+    if (!live.current.mounted || live.current.threadId !== requestedFor) return;
     if (!closed) { if (last) onRequestReopen?.(); return; }
     if (partnerId) {
       setSplit(null);

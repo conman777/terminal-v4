@@ -25,6 +25,7 @@ export function applyOptimistic(snapshot, operation) {
   const saving = new Set();
   switch (operation.kind) {
     case 'enqueue':
+      if (items.some(item => item.itemId === operation.itemId)) break;
       items.push({ itemId: operation.itemId, revision: 0, text: operation.text, inputRequestId: operation.itemId, state: 'pending' });
       order.push(operation.itemId); saving.add(operation.itemId); break;
     case 'edit': {

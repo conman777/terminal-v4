@@ -291,4 +291,15 @@ describe('advanced schedule capability', () => {
       expect.stringMatching(/^Missed 1 scheduled run while/),
     ]);
   });
+  it('shows a persistent banner and disables scheduling controls when the task worker is unavailable', async () => {
+    apiFetch.mockReset().mockImplementation(async url => ({ ok: true, json: async () => url === '/api/workspace/schedules/capabilities'
+      ? { advancedTimingProtocolVersion: 1, workerAvailable: false, workerReason: 'newer' }
+      : { tasks: [task], schedules: [schedule] } }));
+    render(<WorkspaceTasksPanel workspacePath={path} />);
+    expect(await screen.findByText('Scheduled tasks are unavailable: this data directory was written by a newer version. See the upgrade guide.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Task prompt'), { target: { value: 'Check build' } });
+    fireEvent.change(screen.getByLabelText('Schedule name'), { target: { value: 'Review' } });
+    expect(['Queue task', 'Create schedule', 'Enable Morning review', 'Run Morning review now'].map(name => screen.getByRole('button', { name }).disabled)).toEqual([true, true, true, true]);
+    expect(screen.getByRole('button', { name: 'Remove Morning review' }).disabled).toBe(false);
+  });
 });
