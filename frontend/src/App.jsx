@@ -51,6 +51,7 @@ import { PaneLayoutProvider, usePaneLayout } from './contexts/PaneLayoutContext'
 import { PreviewProvider, usePreview } from './contexts/PreviewContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { AutocorrectProvider } from './contexts/AutocorrectContext';
+import { ConversationLinksProvider } from './contexts/ConversationLinksContext';
 import { useMobileDetect } from './hooks/useMobileDetect';
 import { useMobileInputZoomLock } from './hooks/useMobileInputZoomLock';
 import { useViewportMetrics } from './hooks/useViewportHeight';
@@ -1783,6 +1784,19 @@ function AppContent({ serverControl }) {
     setFilePaneTarget({ desktopId, paneId: pane.id, sessionId: pane.sessionId, path, request: ++filePaneRequest.current });
     setShowFileManager(true);
   };
+  const [fileLineTarget, setFileLineTarget] = useState(null);
+  const fileLineRequest = useRef(0);
+  useEffect(() => { if (!showFileManager) setFileLineTarget(null); }, [showFileManager]);
+  const filesKey = fileLineTarget ? `${filesWorkspaceKey}:line:${fileLineTarget.request}` : filesWorkspaceKey;
+  const conversationLinks = useMemo(() => navigationSession && navigationWorkspacePath ? {
+    root: navigationWorkspacePath,
+    openFile: (path, line) => {
+      setFileLineTarget({ root: navigationWorkspacePath, path, line: line || 1, request: ++fileLineRequest.current });
+      setShowFileManager(true);
+    },
+    openThread: id => handleSelectHistorySession(id),
+    hasThread: id => [...activeSessions, ...archivedSessions].some(session => session.id === id),
+  } : null, [navigationSession?.id, navigationWorkspacePath, activeSessions, archivedSessions, handleSelectHistorySession]);
   const navigationDraftId = navigationSession?.id || 'workspace-start';
   const readNavigationResponse = () => workspaceResponses.get(navigationSession?.id) || '';
   const navigationCanInsert = environmentAllows(getActiveEnvironment(), isStructuredSessionId(navigationSession?.id) || !navigationSession ? 'agentExecute' : 'terminalInput');
@@ -1800,6 +1814,7 @@ function AppContent({ serverControl }) {
   </>;
 
   return (
+    <ConversationLinksProvider value={conversationLinks}>
     <div className={`layout${isMobile ? ' mobile' : ''}${touchDesktopViewport ? ' touch-viewport' : ''}${effectiveNavCollapsed ? ' nav-collapsed' : ''}`} style={layoutStyle}>
       <OwnerCleanupRecovery key={user?.id} onResolved={retryLoadSessions} />
       <RawInputRecovery sessions={sessions} />
@@ -2144,7 +2159,8 @@ function AppContent({ serverControl }) {
           {showFileManager && (
             <Suspense fallback={null}>
               <FileManager
-                key={filesWorkspaceKey}
+                key={filesKey}
+                initialLineTarget={fileLineTarget}
                 initialPath={filesInitialPath}
                 sessionId={navigationSession?.id || null}
                 isOpen={showFileManager}
@@ -2331,7 +2347,8 @@ function AppContent({ serverControl }) {
           />
           <Suspense fallback={null}>
             <FileManager
-              key={filesWorkspaceKey}
+              key={filesKey}
+              initialLineTarget={fileLineTarget}
               initialPath={filesInitialPath}
               sessionId={navigationSession?.id || null}
               isOpen={showFileManager}
@@ -2342,6 +2359,7 @@ function AppContent({ serverControl }) {
         </>
       )}
     </div>
+    </ConversationLinksProvider>
   );
 }
 

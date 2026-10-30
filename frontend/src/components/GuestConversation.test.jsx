@@ -28,6 +28,29 @@ describe('GuestConversation', () => {
     expect(fetchMock.mock.calls[1][0]).toContain('/api/structured-share/guest/ss-1/messages?after=0');
   });
 
+  it('removes the secret fragment from the address bar and history as soon as the page opens, before any exchange', () => {
+    const replace = vi.spyOn(history, 'replaceState');
+    render(<GuestConversation pollMs={50} />);
+    expect(window.location.hash).toBe('');
+    expect(replace).toHaveBeenCalledWith(null, '', '/');
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValueOnce(json(grant)).mockResolvedValue(page());
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ id: 'abc', secret: 'def' });
+    replace.mockRestore();
+  });
+
+  it('sends no referrer while the guest page is open and restores the policy afterwards', async () => {
+    fetchMock.mockResolvedValueOnce(json(grant)).mockResolvedValue(page());
+    const { unmount } = render(<GuestConversation pollMs={50} />);
+    expect(document.querySelector('meta[name="referrer"]')?.content).toBe('no-referrer');
+    fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }));
+    await screen.findByText('Hello');
+    expect(fetchMock.mock.calls.every(([, options]) => options.referrerPolicy === 'no-referrer')).toBe(true);
+    unmount();
+    expect(document.querySelector('meta[name="referrer"]')).toBeNull();
+  });
+
   it('resumes from the returned cursor and does not duplicate messages', async () => {
     fetchMock.mockResolvedValueOnce(json(grant)).mockResolvedValueOnce(page()).mockResolvedValue(page({ messages: [] }));
     await open();

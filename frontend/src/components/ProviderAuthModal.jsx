@@ -73,6 +73,7 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
   }
   const [providers, setProviders] = useState([]);
   const [values, setValues] = useState({});
+  const [settingValues, setSettingValues] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(null);
   const [copied, setCopied] = useState(null);
@@ -102,17 +103,21 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
     return () => { mounted.current = false; statusRequest.current?.abort(); clearTimeout(copyTimer.current); };
   }, []);
 
+  const settingValue = (provider, key) => settingValues[provider.id]?.[key] ?? provider.configuredSettings?.[key] ?? '';
+  const missingSettings = provider => (provider.settings || []).some(field => field.required && !String(settingValue(provider, field.key)).trim());
+  const settingsPayload = provider => Object.fromEntries((provider.settings || []).map(field => [field.key, String(settingValue(provider, field.key)).trim()]).filter(([, value]) => value));
+
   const save = async provider => {
     if (remoteEnvironment || writing.current) return;
     const value = values[provider.id]?.trim();
-    if (!value) return;
+    if (!value || missingSettings(provider)) return;
     writing.current = true;
     onWritingChange(true);
     setSaving(provider.id);
     setError(null);
     setNotice(null);
     try {
-      await apiPut(`/api/agent/auth/${provider.id}/api-key`, { apiKey: value });
+      await apiPut(`/api/agent/auth/${provider.id}/api-key`, provider.settings?.length ? { apiKey: value, settings: settingsPayload(provider) } : { apiKey: value });
       if (!mounted.current) return;
       setValues(current => ({ ...current, [provider.id]: '' }));
       setNotice(`${provider.label} API key saved securely.`);
@@ -228,6 +233,24 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
                       <small>Run the command in a Terminal v4 terminal, then use Refresh provider status to check the connection.</small>
                     </div>
                   )}
+                  {provider.methods?.includes('api-key') && provider.settings?.length > 0 && (
+                    <div className="tv4-provider-auth-settings">
+                      {provider.help && <small>{provider.help}</small>}
+                      {provider.settings.map(field => (
+                        <input
+                          key={field.key}
+                          type="text"
+                          disabled={Boolean(remoteEnvironment) || saving !== null || pending}
+                          value={settingValue(provider, field.key)}
+                          onChange={event => setSettingValues(current => ({ ...current, [provider.id]: { ...current[provider.id], [field.key]: event.target.value } }))}
+                          placeholder={field.placeholder || field.label}
+                          autoComplete="off"
+                          spellCheck={false}
+                          aria-label={`${provider.label} ${field.label}${field.required ? ' (required)' : ''}`}
+                        />
+                      ))}
+                    </div>
+                  )}
                   {provider.methods?.includes('api-key') && (
                     <div className="tv4-provider-auth-key-row">
                       <input
@@ -239,7 +262,7 @@ function OpenProviderAuthModal({ onClose, sessionId, remoteEnvironment, writing,
                         autoComplete="off"
                         aria-label={`${provider.label} API key`}
                       />
-                      <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || saving !== null || pending} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
+                      <button type="button" className="btn-primary" disabled={Boolean(remoteEnvironment) || !values[provider.id]?.trim() || missingSettings(provider) || saving !== null || pending} onClick={() => save(provider)}>{saving === provider.id ? 'Saving…' : provider.configured ? 'Replace' : 'Save'}</button>
                       {provider.configured && <button type="button" className="btn-secondary" disabled={Boolean(remoteEnvironment) || saving !== null || pending} onClick={() => remove(provider)}>Remove</button>}
                     </div>
                   )}

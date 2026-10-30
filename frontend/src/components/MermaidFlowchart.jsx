@@ -30,7 +30,23 @@ function parseFlowchart(source) {
     if (nodes.size > 32 || edges.length > 64) return null;
   }
   if (!edges.length) return null;
-  for (const [from, to] of edges) { nodes.get(from).outgoing.push(to); nodes.get(to).incoming += 1; }
+  const outgoingEdges = new Map([...nodes.keys()].map(id => [id, []]));
+  edges.forEach((edge, position) => outgoingEdges.get(edge[0]).push(position));
+  const visiting = new Set(), finished = new Set();
+  for (const root of nodes.keys()) {
+    if (finished.has(root)) continue;
+    const stack = [{ id: root, next: 0 }];
+    visiting.add(root);
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const position = outgoingEdges.get(frame.id)[frame.next++];
+      if (position === undefined) { visiting.delete(frame.id); finished.add(frame.id); stack.pop(); continue; }
+      const target = edges[position][1];
+      if (visiting.has(target)) edges[position][3] = true;
+      else if (!finished.has(target)) { visiting.add(target); stack.push({ id: target, next: 0 }); }
+    }
+  }
+  for (const [from, to, , back] of edges) { if (back) continue; nodes.get(from).outgoing.push(to); nodes.get(to).incoming += 1; }
   const ready = [...nodes.values()].filter(node => node.incoming === 0);
   const ordered = [];
   for (let index = 0; index < ready.length; index += 1) {
@@ -54,7 +70,8 @@ function parseFlowchart(source) {
       node.y = horizontal ? acrossPosition : layer * 100 + 36;
     }
   }
-  return { nodes, edges, horizontal, width: horizontal ? groups.length * 180 : across * 160, height: horizontal ? across * 160 : groups.length * 100 };
+  const hasBack = edges.some(edge => edge[3]);
+  return { nodes, edges, horizontal, width: (horizontal ? groups.length * 180 : across * 160) + (hasBack && !horizontal ? 80 : 0), height: (horizontal ? across * 160 : groups.length * 100) + (hasBack && horizontal ? 80 : 0) };
 }
 
 export function MermaidFlowchart({ source }) {
@@ -62,10 +79,21 @@ export function MermaidFlowchart({ source }) {
   const graph = parseFlowchart(source);
   if (!graph) return null;
   return <div className="md-flowchart-scroll" role="region" aria-label="Mermaid flowchart" tabIndex={0} data-conversation-scroll-region>
-    <svg role="img" aria-label={`Flowchart: ${graph.edges.map(([from, to, label]) => `${graph.nodes.get(from).label} to ${graph.nodes.get(to).label}${label ? ` (${label})` : ''}`).join('; ')}`} width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`}>
+    <svg role="img" aria-label={`Flowchart: ${graph.edges.map(([from, to, label, back]) => `${graph.nodes.get(from).label} to ${graph.nodes.get(to).label}${label ? ` (${label})` : ''}${back ? ' (loops back)' : ''}`).join('; ')}`} width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`}>
       <defs><marker id={markerId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
-      {graph.edges.map(([from, to, edgeLabel], index) => {
+      {graph.edges.map(([from, to, edgeLabel, back], index) => {
         const start = graph.nodes.get(from), end = graph.nodes.get(to);
+        if (back) {
+          const side = graph.horizontal ? [0, 20] : [60, 0];
+          const [sx, sy] = [start.x + side[0], start.y + side[1]], [ex, ey] = [end.x + side[0], end.y + side[1]];
+          const bulge = 55;
+          const path = graph.horizontal
+            ? `M ${sx} ${sy} C ${sx} ${Math.max(sy, ey) + bulge} ${ex} ${Math.max(sy, ey) + bulge} ${ex} ${ey}`
+            : `M ${sx} ${sy} C ${Math.max(sx, ex) + bulge} ${sy} ${Math.max(sx, ex) + bulge} ${ey} ${ex} ${ey}`;
+          const mid = graph.horizontal ? [(sx + ex) / 2, Math.max(sy, ey) + bulge * 0.75 + 12] : [Math.max(sx, ex) + bulge * 0.75 + 4, (sy + ey) / 2];
+          return <g key={index}><path className="md-flowchart-back" d={path} fill="none" stroke="currentColor" strokeDasharray="4 3" markerEnd={`url(#${markerId})`} />
+            {edgeLabel && <text className="md-flowchart-edge-label" x={mid[0]} y={mid[1]} textAnchor="middle"><title>{edgeLabel}</title>{Array.from(edgeLabel).length > 20 ? `${Array.from(edgeLabel).slice(0, 19).join('')}…` : edgeLabel}</text>}</g>;
+        }
         const x1 = start.x + (graph.horizontal ? 60 : 0), y1 = start.y + (graph.horizontal ? 0 : 20);
         const x2 = end.x - (graph.horizontal ? 60 : 0), y2 = end.y - (graph.horizontal ? 0 : 20);
         const label = Array.from(edgeLabel);

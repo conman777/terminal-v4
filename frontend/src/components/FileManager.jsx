@@ -49,7 +49,7 @@ async function checkOperationResponse(response, fallback) {
   throw new Error(message);
 }
 
-export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath = '~', sessionId = null }) {
+export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath = '~', sessionId = null, initialLineTarget = null }) {
   const environment = useSyncExternalStore(subscribeEnvironment, getActiveEnvironment);
   const canWrite = environmentAllows(environment, 'fileWrite');
   const canReadContents = environmentAllows(environment, 'transfer');
@@ -215,8 +215,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
     setSelectedContentMatch({ ...match, root });
   }
 
-  async function openCurrentLine() {
-    const match = selectedContentMatch;
+  async function openCurrentLine(match = selectedContentMatch) {
     if (!match || !sessionId || !canReadContents) return;
     cancelLinePreview();
     const controller = new AbortController();
@@ -243,6 +242,22 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
       if (previewRequest.current === controller) { previewRequest.current = null; setLinePreviewLoading(false); }
     }
   }
+
+  const openedLineTarget = useRef(null);
+  const pendingLineOpen = useRef(false);
+  useEffect(() => {
+    const target = initialLineTarget;
+    if (!isOpen || !target || !sessionId || !canReadContents || openedLineTarget.current === target) return;
+    openedLineTarget.current = target;
+    const match = { root: target.root, path: target.path, line: target.line, text: '' };
+    pendingLineOpen.current = true;
+    showContentMatch(target.root, match);
+  }, [isOpen, initialLineTarget, sessionId, canReadContents]);
+  useEffect(() => {
+    if (!pendingLineOpen.current || !selectedContentMatch) return;
+    pendingLineOpen.current = false;
+    openCurrentLine(selectedContentMatch);
+  }, [selectedContentMatch]);
 
   useLayoutEffect(() => {
     if (!isOpen) return;
@@ -792,7 +807,7 @@ export function FileManager({ isOpen, onClose, onNavigateTerminal, initialPath =
         </div>
         <pre>{selectedContentMatch.text}</pre>
         <p>File may have changed since search.</p>
-        <button type="button" onClick={openCurrentLine} disabled={linePreviewLoading || !canReadContents}>Open current file at line</button>
+        <button type="button" onClick={() => openCurrentLine()} disabled={linePreviewLoading || !canReadContents}>Open current file at line</button>
         {linePreviewLoading && <p role="status">Opening file…</p>}
         {linePreviewError && <p role="alert">{linePreviewError}</p>}
         {linePreview && <><p>Current file preview</p><div className="file-manager-live-preview" role="region" aria-label="Current file preview" tabIndex={0}>

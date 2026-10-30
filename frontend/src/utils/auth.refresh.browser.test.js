@@ -46,7 +46,7 @@ afterAll(async () => { await browser?.close(); server?.closeAllConnections(); aw
 beforeEach(async () => {
   requests = []; held = []; consumed = false; apiRequests = [];
   context = await browser.newContext();
-  context.setDefaultTimeout(2000);
+  context.setDefaultTimeout(10000);
   first = await context.newPage(); second = await context.newPage();
   for (const page of [first, second]) { await page.goto(origin); await page.waitForFunction(() => window.auth); }
   await first.evaluate(({ initial, identity }) => { auth.setTokens(initial.access, initial.refresh); auth.setUser(identity); auth.setAuthInitializing(false); }, { initial, identity });

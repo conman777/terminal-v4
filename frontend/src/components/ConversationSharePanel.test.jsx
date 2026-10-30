@@ -94,6 +94,12 @@ describe('ConversationSharePanel', () => {
     expect(screen.getByText(/Guest joined: Pat/)).toBeInTheDocument();
   });
 
+  it('explains that signing out stopped sharing', async () => {
+    apiFetch.mockResolvedValue(listing([], [{ shareId: 'share-1', at: 10, kind: 'owner_signed_out', detail: '' }]));
+    render(<ConversationSharePanel sessionId={SID} />);
+    expect(await screen.findByText(/Sharing stopped because you signed out or changed your password/)).toBeInTheDocument();
+  });
+
   it('reports failures and keeps the link secret out of the list', async () => {
     apiFetch.mockImplementation(async (_url, options) => options?.method === 'POST' ? response({ error: 'Revoke an existing share link before creating another' }, 400) : listing());
     render(<ConversationSharePanel sessionId={SID} />);

@@ -8,6 +8,7 @@ const AUDIT = {
   created: 'Link created', redeemed: 'Guest joined', exchange_denied: 'Link reuse or invalid attempt blocked', revoked: 'Sharing stopped',
   expired: 'Link expired', message_proposed: 'Guest suggested a message', approved: 'You approved a guest message',
   dismissed: 'You dismissed a guest message', session_unavailable: 'Conversation became unavailable; access ended',
+  owner_signed_out: 'Sharing stopped because you signed out or changed your password',
 };
 const STATES = { unredeemed: 'Waiting for a guest to open the link', active: 'Guest joined', expired: 'Expired', revoked: 'Sharing stopped' };
 

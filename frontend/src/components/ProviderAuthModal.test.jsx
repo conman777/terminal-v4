@@ -176,4 +176,22 @@ describe('ProviderAuthModal', () => {
     setActiveEnvironment(null);
   });
 
+  it('requires and submits endpoint settings for cloud providers without echoing the key', async () => {
+    apiGetMock.mockResolvedValue({ providers: [{ id: 'azure-foundry', label: 'Azure AI Foundry', methods: ['api-key'], status: 'not-configured', configured: false, help: 'Model name is the deployment name.', settings: [
+      { key: 'endpoint', label: 'Resource endpoint', required: true },
+      { key: 'apiVersion', label: 'API version', required: true },
+      { key: 'authHeader', label: 'Auth header', required: false },
+    ] }] });
+    render(<ProviderAuthModal isOpen onClose={vi.fn()} />);
+    fireEvent.change(await screen.findByLabelText('Azure AI Foundry API key'), { target: { value: 'azure-secret-value' } });
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Azure AI Foundry Resource endpoint (required)'), { target: { value: ' https://r.openai.azure.com ' } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Azure AI Foundry API version (required)'), { target: { value: '2024-10-21' } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(apiPutMock).toHaveBeenCalledWith('/api/agent/auth/azure-foundry/api-key', { apiKey: 'azure-secret-value', settings: { endpoint: 'https://r.openai.azure.com', apiVersion: '2024-10-21' } }));
+  });
+
 });

@@ -3,12 +3,20 @@ import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import { MermaidFlowchart, parseFlowchart } from './MermaidFlowchart';
 import { MermaidSequence, parseSequence } from './MermaidSequence';
+import { HighlightedCode } from './HighlightedCode';
+import { CodeCopyButton } from './CodeCopyButton';
+import { CitationChip } from './CitationChip';
+import { ImageLightbox } from './ImageLightbox';
+import { useConversationLinks } from '../contexts/ConversationLinksContext';
+import { collectCitationDefinitions, parseCitationTarget, parseFileReference } from '../utils/conversationCitations';
+import { HIGHLIGHT_MAX_CHARS, highlightLanguage } from '../utils/syntaxHighlight';
 import './LightweightMarkdown.css';
 
-const LINK_RE = /(`+)|\[([^\]]+)\]\(|\*\*([^*]+)\*\*|(https?:\/\/)|(?<![\\$])\$(?!\$)/g;
+const LINK_RE = /(`+)|\[([^\]]+)\]\(|\*\*([^*]+)\*\*|(https?:\/\/)|(?<![\\$])\$(?!\$)|\[(\d{1,3})\](?![(\[:])|<cite(?:\s+href="([^"<>]{1,500})")?>([^<]{1,200})<\/cite>/g;
 const SAFE_URL_RE = /^https?:\/\//i;
 const HEADING_RE = /^(#{1,4})\s+(.+)$/;
 const FENCE_RE = /^(`{3,}|~{3,})([\w.+#-]*)[ \t]*$/;
+const DEFINITION_RE = /^\[(\d{1,3})\]:[ \t]+(\S{1,2048})(?:[ \t]+"([^"]{0,200})")?[ \t]*$/;
 const IMAGE_RE = /^!\[([^\]]*)\]\(([^\s)]+)\)\s*$/;
 const safeUrl = href => SAFE_URL_RE.test(href) || /^\/(?![\\/])/.test(href);
 
@@ -65,7 +73,14 @@ function linkDestination(text, start, explicit) {
   return { href: href.replace(/[.,;:!]+$/, ''), end: index, suffix: href.match(/[.,;:!]+$/)?.[0] || '' };
 }
 
-function renderInline(text, linkClassName) {
+function InlineCode({ content }) {
+  const links = useConversationLinks();
+  const reference = links?.openFile ? parseFileReference(content) : null;
+  if (reference) return <CitationChip target={{ kind: 'file', ...reference }} label={content} />;
+  return <code className="inline-code">{content}</code>;
+}
+
+function renderInline(text, linkClassName, options = {}) {
   if (!text) return null;
 
   const parts = [];
@@ -86,15 +101,23 @@ function renderInline(text, linkClassName) {
       if (span) end = span.end;
     } else if (match[1]) {
       const span = codeSpan(text, match.index);
-      parts.push(span ? <code key={match.index} className="inline-code">{span.content}</code> : match[0]);
+      parts.push(span ? <InlineCode key={match.index} content={span.content} /> : match[0]);
       if (span) end = span.end;
     } else if (match[3]) {
       parts.push(<strong key={match.index}>{match[3]}</strong>);
+    } else if (match[5]) {
+      const definition = options.definitions?.get(match[5]);
+      const target = definition && parseCitationTarget(definition.url);
+      parts.push(target ? <CitationChip key={match.index} target={target} label={match[5]} title={definition.title} /> : match[0]);
+    } else if (match[7]) {
+      const target = match[6] && parseCitationTarget(match[6]);
+      parts.push(target ? <CitationChip key={match.index} target={target} label={match[7]} /> : <cite key={match.index}>{match[7]}</cite>);
     } else {
       const destination = linkDestination(text, match[2] ? end : match.index, Boolean(match[2]));
       if (destination) {
         const { href, suffix } = destination;
-        parts.push(safeUrl(href)
+        const special = match[2] && /^(thread|file):/i.test(href) ? parseCitationTarget(href) : null;
+        parts.push(special ? <CitationChip key={match.index} target={special} label={match[2]} /> : safeUrl(href)
           ? <a key={match.index} href={href} target="_blank" rel="noopener noreferrer" className={linkClassName}>{match[2] || href}</a>
           : <span key={match.index}>{match[2] || href}</span>);
         if (suffix) parts.push(suffix);
@@ -133,6 +156,7 @@ function isBlockStart(line, nextLine) {
     /^\s*\$\$/.test(line)
     || isTableStart(line, nextLine)
     || IMAGE_RE.test(line)
+    || DEFINITION_RE.test(line)
     || /^>\s?/.test(line)
     || FENCE_RE.test(line)
     || Boolean(listMarker(line))
@@ -242,6 +266,13 @@ function parseBlocks(content) {
       continue;
     }
 
+    const definition = line.match(DEFINITION_RE);
+    if (definition) {
+      blocks.push({ type: 'definition', label: definition[1], url: definition[2], title: definition[3] || '' });
+      index += 1;
+      continue;
+    }
+
     const image = line.match(IMAGE_RE);
     if (image) {
       blocks.push({ type: 'image', alt: image[1], src: image[2] });
@@ -295,20 +326,23 @@ function parseBlocks(content) {
 
 function MarkdownImage({ src, alt }) {
   const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
   if (!safeUrl(src)) return <p>{alt || 'Image unavailable'}</p>;
   return (
     <figure className="md-image">
-      <a href={src} target="_blank" rel="noopener noreferrer" aria-label={`Open image: ${alt || 'Image'}`}>
-        {failed ? <span className="md-image-fallback">Image unavailable: {alt || 'Image'}</span>
-          : <img src={src} alt={alt} loading="lazy" decoding="async" onError={() => setFailed(true)} />}
-      </a>
+      {failed ? <span className="md-image-fallback">Image unavailable: {alt || 'Image'}</span>
+        : <button type="button" className="md-image-open" aria-haspopup="dialog" aria-label={`View larger: ${alt || 'Image'}`} onClick={() => setOpen(true)}>
+          <img src={src} alt={alt} loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+        </button>}
       {alt && <figcaption>{alt}</figcaption>}
+      {open && <ImageLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
     </figure>
   );
 }
 
 function renderBlocks(blocks, options, tight = false) {
   const { linkClassName, codeClassName, renderCodeActions } = options;
+
   return blocks.map((block, index) => {
     if (block.type === 'math') {
       const markup = mathMarkup(block.content, true);
@@ -318,33 +352,44 @@ function renderBlocks(blocks, options, tight = false) {
     if (block.type === 'code') {
       const isFlowchart = block.closed && block.language.toLowerCase() === 'mermaid' && parseFlowchart(block.content);
       const isSequence = block.closed && block.language.toLowerCase() === 'mermaid' && !isFlowchart && parseSequence(block.content);
+      const language = block.language.toLowerCase();
+      const unrendered = language === 'mermaid' && !isFlowchart && !isSequence;
+      const tooLarge = highlightLanguage(language) && block.content.length > HIGHLIGHT_MAX_CHARS;
+      const source = <pre className={codeClassName} tabIndex={0} role="region" aria-label={`${block.language} code`} data-conversation-scroll-region><HighlightedCode content={block.content} language={language} /></pre>;
       return (
         <div key={index} className="code-block-wrapper md-code-block">
           <div className="md-code-toolbar">
             <span className="md-code-language">{block.language}</span>
-            {renderCodeActions?.(block.content)}
+            {unrendered && <span className="md-code-note">{block.closed ? 'Unsupported diagram syntax. Showing source.' : 'Diagram is incomplete. Showing source.'}</span>}
+            {tooLarge && <span className="md-code-note">Large block. Highlighting skipped.</span>}
+            {renderCodeActions ? renderCodeActions(block.content) : <CodeCopyButton text={block.content} />}
           </div>
           {isFlowchart && <MermaidFlowchart source={block.content} />}
           {isSequence && <MermaidSequence source={block.content} />}
-          {isFlowchart || isSequence ? <details className="md-diagram-source"><summary>Show diagram source</summary><pre className={codeClassName} tabIndex={0} role="region" aria-label={`${block.language} code`} data-conversation-scroll-region><code>{block.content}</code></pre></details>
-            : <pre className={codeClassName} tabIndex={0} role="region" aria-label={`${block.language} code`} data-conversation-scroll-region><code>{block.content}</code></pre>}
+          {isFlowchart || isSequence ? <details className="md-diagram-source"><summary>Show diagram source</summary>{source}</details> : source}
         </div>
       );
     }
 
+    if (block.type === 'definition') {
+      const target = parseCitationTarget(block.url);
+      return <p key={index} className="md-source"><span className="md-source-number">[{block.label}]</span>{' '}
+        {target ? <CitationChip target={target} label={block.title || block.url} title={block.title} /> : <span>{block.title ? `${block.title} ` : ''}{block.url}</span>}</p>;
+    }
+
     if (block.type === 'table') {
       return <div className="md-table-scroll" role="region" aria-label="Markdown table" tabIndex={0} data-conversation-scroll-region key={index}><table className="md-table">
-        <thead><tr>{block.headers.map((cell, column) => <th key={column} scope="col">{renderInline(cell, linkClassName)}</th>)}</tr></thead>
-        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{block.headers.map((_, column) => <td key={column}>{renderInline(row[column] || '', linkClassName)}</td>)}</tr>)}</tbody>
+        <thead><tr>{block.headers.map((cell, column) => <th key={column} scope="col">{renderInline(cell, linkClassName, options)}</th>)}</tr></thead>
+        <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{block.headers.map((_, column) => <td key={column}>{renderInline(row[column] || '', linkClassName, options)}</td>)}</tr>)}</tbody>
       </table></div>;
     }
     if (block.type === 'image') return <MarkdownImage key={`${index}-${block.src}`} src={block.src} alt={block.alt} />;
-    if (block.type === 'quote') return <blockquote className="md-blockquote" key={index}>{renderInline(block.content, linkClassName)}</blockquote>;
+    if (block.type === 'quote') return <blockquote className="md-blockquote" key={index}>{renderInline(block.content, linkClassName, options)}</blockquote>;
     if (block.type === 'heading') {
       const HeadingTag = `h${block.level}`;
       return (
         <HeadingTag key={index}>
-          {renderInline(block.content, linkClassName)}
+          {renderInline(block.content, linkClassName, options)}
         </HeadingTag>
       );
     }
@@ -362,10 +407,10 @@ function renderBlocks(blocks, options, tight = false) {
       );
     }
 
-    if (tight) return <Fragment key={index}>{renderInline(block.content, linkClassName)}</Fragment>;
+    if (tight) return <Fragment key={index}>{renderInline(block.content, linkClassName, options)}</Fragment>;
     return (
       <p key={index}>
-        {renderInline(block.content, linkClassName)}
+        {renderInline(block.content, linkClassName, options)}
       </p>
     );
   });
@@ -378,9 +423,10 @@ export const LightweightMarkdown = memo(function LightweightMarkdown({
   renderCodeActions
 }) {
   if (!content) return null;
+  const blocks = parseBlocks(content);
   return (
     <div className="lightweight-markdown">
-      {renderBlocks(parseBlocks(content), { linkClassName, codeClassName, renderCodeActions })}
+      {renderBlocks(blocks, { linkClassName, codeClassName, renderCodeActions, definitions: collectCitationDefinitions(blocks) })}
     </div>
   );
 });

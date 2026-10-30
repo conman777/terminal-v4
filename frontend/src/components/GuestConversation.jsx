@@ -25,11 +25,17 @@ export function GuestConversation({ pollMs = 3000 }) {
   const [busy, setBusy] = useState(false);
   const controller = useRef(null);
   const timer = useRef(null);
-  useEffect(() => () => { controller.current?.abort(); clearTimeout(timer.current); }, []);
+  useEffect(() => {
+    const meta = document.createElement('meta');
+    meta.name = 'referrer'; meta.content = 'no-referrer';
+    document.head.appendChild(meta);
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    return () => { meta.remove(); controller.current?.abort(); clearTimeout(timer.current); };
+  }, []);
 
   async function call(path, options = {}, credential = access?.credential) {
     const response = await fetch(resolveHomeApiUrl(path), {
-      ...options, credentials: 'omit', cache: 'no-store', signal: controller.current?.signal,
+      ...options, credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer', signal: controller.current?.signal,
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(credential ? { Authorization: `Bearer ${credential}` } : {}) },
     });
     const data = await response.json().catch(() => null);
@@ -71,7 +77,6 @@ export function GuestConversation({ pollMs = 3000 }) {
     try {
       const { response, data } = await call('/api/structured-share/exchange', { method: 'POST', body: JSON.stringify({ ...link, displayName: name }) }, null);
       if (!response.ok) throw new Error(response.status === 401 ? 'This link is invalid, was already used, or has expired. Ask the owner for a new one.' : data?.error || 'This link is unavailable.');
-      history.replaceState(null, '', window.location.pathname + window.location.search);
       setAccess(data); setStatus(''); follow(data);
     } catch (failure) { if (!controller.current.signal.aborted) setStatus(failure.message); } finally { setBusy(false); }
   }

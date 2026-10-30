@@ -2,7 +2,8 @@ import { expect, test } from '@playwright/test';
 import { expectFits, fixtureDraft, installFixture, managedChromium, openUtility, settingsSections, shellCommand, toolTabs } from './ui-unification-fixture';
 
 test.skip(process.env.E2E_UI_UNIFICATION !== '1', 'Opt in only against the authorized local-testing gateway; never a live account.');
-test.use({ baseURL: process.env.BASE_URL || 'http://conors-macbook-pro.tail98a634.ts.net:8080', launchOptions: { executablePath: managedChromium } });
+test.skip(!process.env.BASE_URL, 'Set BASE_URL to the explicit local-testing server under test; this spec has no default host.');
+test.use({ baseURL: process.env.BASE_URL, launchOptions: { executablePath: managedChromium } });
 
 test.describe('small phone workspace start', () => {
   test.use({ viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true });

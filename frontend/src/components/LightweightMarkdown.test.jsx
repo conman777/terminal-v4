@@ -57,7 +57,7 @@ describe('LightweightMarkdown', () => {
     expect(view.container.querySelector('img, iframe, script, a')).toBeNull();
   });
 
-  it('renders labelled left-to-right branching flowcharts and leaves cycles as source', () => {
+  it('renders labelled left-to-right branching flowcharts', () => {
     const view = render(<LightweightMarkdown content={'```mermaid\nflowchart LR\nstart[Start] --> ready{Ready}\nready -->|Yes| done[Done]\nready -->|No| stop[Stop]\n```'} />);
     expect(screen.getByRole('img', { name: 'Flowchart: Start to Ready; Ready to Done (Yes); Ready to Stop (No)' })).toBeVisible();
     expect(screen.getByText('Ready', { selector: 'text' })).toBeVisible();
@@ -65,9 +65,6 @@ describe('LightweightMarkdown', () => {
     expect(view.container.querySelector('polygon')).not.toBeNull();
     view.rerender(<LightweightMarkdown content={'```mermaid\nflowchart LR\nstart[Start] --> ready[Ready]\nready --> done[Done]\nready --> stop[Stop]\n```'} />);
     expect(screen.getByRole('img', { name: 'Flowchart: Start to Ready; Ready to Done; Ready to Stop' })).toBeVisible();
-    view.rerender(<LightweightMarkdown content={'```mermaid\ngraph TD\nA --> B\nB --> A\n```'} />);
-    expect(screen.getByRole('region', { name: 'mermaid code' })).toBeVisible();
-    expect(view.container.querySelector('svg')).toBeNull();
   });
 
   it('renders bounded sequence messages with accessible participant labels and preserves the source', () => {
@@ -340,7 +337,7 @@ describe('LightweightMarkdown', () => {
     expect(screen.getByText('Keep the original and review carefully.').tagName).toBe('BLOCKQUOTE');
     const image = screen.getByRole('img', { name: 'Layout' });
     expect(image).toHaveAttribute('loading', 'lazy');
-    expect(screen.getByRole('link', { name: 'Open image: Layout' })).toHaveAttribute('href', 'https://example.com/layout.png');
+    expect(screen.getByRole('button', { name: 'View larger: Layout' })).toHaveAttribute('aria-haspopup', 'dialog');
     expect(screen.queryByRole('img', { name: 'Unsafe' })).not.toBeInTheDocument();
     fireEvent.error(image);
     expect(screen.getByText('Image unavailable: Layout')).toBeVisible();
@@ -375,7 +372,7 @@ describe('LightweightMarkdown', () => {
 
     expect(screen.getByText('config')).toHaveClass('inline-code');
     expect(screen.getByRole('link', { name: 'https://example.com' })).toHaveAttribute('href', 'https://example.com');
-    expect(screen.getByText('const ok = true;')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'js code' })).toHaveTextContent('const ok = true;');
     expect(screen.getByRole('button', { name: 'Copy 16' })).toBeInTheDocument();
     expect(renderCodeActions).toHaveBeenCalledWith('const ok = true;');
   });
