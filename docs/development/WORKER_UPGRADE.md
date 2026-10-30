@@ -16,8 +16,8 @@ directory at the same time.
   acquires the lock first, then:
   - creates or upgrades the marker when it is absent or older;
   - refuses to start (logged as an error, no retry) when the marker is newer or
-    unreadable. Restore a compatible build, or review the marker before
-    deleting it.
+    unreadable. See "Compatibility marker rules" below; never delete or edit
+    the marker to get past a refusal.
 - A refused worker does not stop the server. The HTTP API stays up so other
   features keep working; this is deliberate. Per data directory the process
   tracks the worker as starting, running, refused or stopped. While it is
@@ -37,11 +37,10 @@ directory at the same time.
   other processes or older builds pointed at the same data directory are not
   affected by it. Delegated sub-agent tasks are launched by the agent itself
   rather than the worker and are not gated.
-- Recovery: stop the server, start a build whose protocol is at least the
-  marker's (the normal fix), or, if you are certain the marker is wrong or
-  corrupt, restore it from a backup or remove `worker-protocol.json` and
-  restart. The status is re-evaluated at each start; it is not cleared at
-  runtime.
+- Recovery: stop the server and start a build whose protocol is at least the
+  marker's (the normal fix, check `workerProtocol` in `/api/build-info`), or
+  restore the whole data directory from a backup taken before the upgrade. The
+  status is re-evaluated at each start; it is not cleared at runtime.
 - Builds that predate the marker still honour the lock but do not read the
   marker. They can run again after a downgrade and rewrite stores without the
   newer fields, so never downgrade over a newer data directory.
@@ -57,6 +56,20 @@ directory at the same time.
 4. Pending completion receipts under `workspace-tasks/completions/` are merged
    into owner stores by the new worker. Oversized outcomes are kept as a
    truncated receipt with an error note rather than lost.
+
+## Compatibility marker rules
+
+These apply to every compatibility marker (`worker-protocol.json`, ledger
+schema markers) and are the same in SAFE_UPDATE.md and
+BACKGROUND_PROCESS_LIFECYCLE.md.
+
+1. Never delete, rewrite or hand-edit a marker to make an older binary start.
+   A refusal is correct behaviour: the data was written in a newer format.
+2. A downgrade is only supported by restoring the data directory backup taken
+   before the newer build first started (this loses writes made since). Never
+   run an older build over a data directory a newer one has touched.
+3. A marker that is unreadable is a fault, not a license to remove it: restore
+   it from the backup, or stop and investigate.
 
 ## Rollback
 

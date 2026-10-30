@@ -408,3 +408,14 @@ until an operator has accepted the limits above. Every guarantee listed under
 "Verification" is established and green, so enabling it is supported, not
 experimental. Live-provider verification (a real model choosing to call the
 tools) has not been done.
+
+## Compatibility and downgrade
+
+Everything above that says an older binary "fails closed", "does not honor the
+hold protocol" or may "replay after a downgrade" follows one rule, shared with
+WORKER_UPGRADE.md ("Compatibility marker rules") and SAFE_UPDATE.md: never
+delete, rewrite or hand-edit a ledger schema, control table or protocol marker
+to let an older build start, and downgrade only by restoring the data directory
+backup taken before the newer build first ran. The completion markers described
+in this document are queue entries, not compatibility markers; they are drained
+by the consumer and are not removed by hand.

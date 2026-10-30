@@ -60,92 +60,149 @@ served asset hashes separately and record all three before and after an update.
 
 1. Never run an old and a new worker/server against the same data directory at once.
    The Rust task worker records `workspace-tasks/worker-protocol.json`
-   (`{"protocol":N}`, currently `WORKER_PROTOCOL = 1` in `rust/crates/api/src/workspace_tasks.rs`).
+   (`{"protocol":N}`; `WORKER_PROTOCOL` in `rust/crates/api/src/workspace_tasks.rs`,
+   currently 2, reported live as `workerProtocol` by `/api/build-info`).
    A newer marker makes an older binary refuse to start; an unreadable marker makes
-   startup refuse. Treat that refusal as correct behaviour, never delete the marker to
-   get around it.
+   startup refuse. Marker rules (identical in WORKER_UPGRADE.md and
+   BACKGROUND_PROCESS_LIFECYCLE.md): never delete, rewrite or edit a marker to get
+   around a refusal; a downgrade means restoring the data directory backup taken
+   before the newer build first started, and nothing else.
 2. Stop the old process fully before the new one starts. Ports alone do not protect
    the data dir (Node 3020 and Rust 3030 can open the same files).
 3. Backend and frontend ship as a pair: build both from the same commit, record it.
 4. Do not edit the preview-system files without explicit permission (CLAUDE.md).
 
+## Build identity and verification tools
+
+- `GET /api/build-info` (Rust API, unauthenticated, no paths or user names) returns
+  `commit` (12-char git hash embedded by `rust/crates/api/build.rs`, `unknown` if git
+  was unavailable; override with `TERMINAL_V4_BUILD_COMMIT`), `dirty` (tracked files
+  were modified at build time), `builtAtUnix`, `apiVersion`, `workerProtocol`, and
+  `frontend` = `{available, assets, manifestHash}` computed from the `index.html` the
+  server is actually serving (`manifestHash` = SHA-256 of the sorted, newline-joined
+  `assets/...` names referenced by `index.html`). The legacy Node backend has no such
+  route, so verification against it fails by design.
+- `scripts/verify-deployment.mjs --url URL [--expect-commit HASH] [--dist frontend/dist] [--allow-dirty]`
+  (also `npm run verify:deployment -- ...`) exits 0 only if: build-info is served and
+  has a real commit; the commit matches `--expect-commit` (prefix match); the build is
+  not dirty (unless allowed); `/` is HTML referencing hashed assets whose manifest hash
+  equals build-info's; every referenced asset is really served (not the SPA HTML
+  fallback); and with `--dist`, the asset names and bytes equal the local `dist`.
+  A bare `200 {"status":"ok"}` from `/api/health` or any 200 at `/` is never accepted.
+- The desktop app logs `[tauri] Serving frontend: <dir> (index.html modified ..., main=..)`
+  and warns when the checkout `frontend/dist` differs from the bundled one. It still
+  prefers the checkout dist; it does not compare against the backend commit (the dist
+  carries no commit). Always run verify-deployment against the app's port (3030).
+
 ## Procedure
 
 Run from the checkout. Replace `$DATA` with the data dir the target server really uses
-(Node: `/Users/conordart/terminal-v4/data` for the current process; Rust/app:
-`~/Library/Application Support/terminal-v4` or `$TERMINAL_DATA_DIR`).
+(Rust/app: `~/Library/Application Support/terminal-v4` or `$TERMINAL_DATA_DIR`; the
+legacy Node process uses `/Users/conordart/terminal-v4/data`). Choose the target
+commit once and use it everywhere: `COMMIT=$(git rev-parse --short=12 HEAD)`, with a
+clean `git status --short`.
 
-### 0. Verify current state
+### 0. Record the current state
 
 ```bash
 git rev-parse HEAD; git branch --show-current; git status --short
 lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(3020|3030|3040|8080)\b'
-lsof -p <PID> -a -d cwd -Fn; ps -o pid,lstart,command -p <PID>
-curl -s http://127.0.0.1:3020/ | grep -oE 'assets/[^"]+' | sort > /tmp/served-assets.txt
-grep -oE 'assets/[^"]+' frontend/dist/index.html | sort | diff - /tmp/served-assets.txt
-curl -s http://127.0.0.1:3020/api/health
+ps -o pid,lstart,command -p <PID>
+curl -s http://127.0.0.1:<port>/api/build-info     # 404 means an old or Node server
+cat "$DATA/workspace-tasks/worker-protocol.json" 2>/dev/null
 ```
 
-### 1. Build the new version without touching the served one
+### 1. Build frontend and backend from one commit
 
-Build in a separate worktree/copy so the live `dist/` is untouched until cutover.
+Only from a clean tree at `$COMMIT` (a dirty tree makes `dirty:true`, which
+verification rejects). Build into scratch outputs first so the live `dist/` and
+binary are untouched.
 
 ```bash
-# Node backend: legacy-peer-deps is required (the npm resolver crashes on the canvas peer)
-cd backend && npm install --legacy-peer-deps && npm run build
-cd ../frontend && npm install --legacy-peer-deps && npm run build   # if the same resolver error appears
-# Rust (app / gateway-backed server): needs a recent toolchain; 1.99.1 works,
-# roughly >=1.95 is needed (atomic_try_update)
-RUSTUP_TOOLCHAIN=1.99.1 cargo build --release -p terminal-v4-api --manifest-path rust/Cargo.toml
+SCRATCH=$(mktemp -d)
+npm --prefix frontend ci --legacy-peer-deps
+(cd frontend && npx vite build --outDir "$SCRATCH/dist" --emptyOutDir)
+RUSTUP_TOOLCHAIN=1.99.1 CARGO_TARGET_DIR="$SCRATCH/target" \
+  cargo build --release -p terminal-v4-api --manifest-path rust/Cargo.toml
 ```
 
-Record the commit and the new `index-*.js` / `*.css` hashes. Run the tests for the
-parts changed (see TESTING_GUIDE.md) before cutover; a build that was not tested is
-not a tested build.
+(`rebuild.sh` builds into the checkout's `frontend/dist` and `rust/target`; use it only
+at cutover time, from the same clean commit.) Run the focused tests for what changed
+(TESTING_GUIDE.md), plus `npm run test:verify-deployment`.
 
-### 2. Back up user data (server stopped, or at least quiescent)
+### 2. Scratch-verify on an unused port and a throwaway data dir
+
+Never point this at `$DATA`. Ports 3041+ are suggested.
+
+```bash
+HOST=127.0.0.1 PORT=3041 TERMINAL_DATA_DIR="$SCRATCH/data" TERMINAL_V4_FRONTEND_DIR="$SCRATCH/dist" \
+  "$SCRATCH/target/release/terminal-v4-api" & NEW_PID=$!
+sleep 3
+node scripts/verify-deployment.mjs --url http://127.0.0.1:3041 --expect-commit "$COMMIT" --dist "$SCRATCH/dist"
+kill $NEW_PID
+```
+
+Do not continue unless it prints `OK`.
+
+### 3. Stop the old server
+
+```bash
+kill <old PID>                                  # SIGTERM; quit the Tauri app if it shares $DATA
+lsof -nP -iTCP:<port> -sTCP:LISTEN              # must print nothing
+```
+
+### 4. Back up the data dir (nothing is writing to it now)
 
 ```bash
 STAMP=$(date +%Y%m%d-%H%M%S)
-# Stop first (step 3) for a consistent SQLite copy; otherwise use sqlite3 .backup
 cp -Rp "$DATA" "$HOME/terminal-v4-backup-$STAMP"
-ls -la "$HOME/terminal-v4-backup-$STAMP"
-cat "$DATA/workspace-tasks/worker-protocol.json" 2>/dev/null   # note protocol marker
+cat "$DATA/workspace-tasks/worker-protocol.json" 2>/dev/null
+cp -Rp frontend/dist "$HOME/terminal-v4-dist-prev-$STAMP"   # and the old binary / backend/dist
 ```
 
-Also keep the old `backend/dist`, `frontend/dist` and (for Rust) the old
-`terminal-v4-api` binary: `cp -Rp frontend/dist frontend/dist.prev-$STAMP`, etc.
-Back up `vault-encryption.key` (or keep `VAULT_ENCRYPTION_KEY`) with the data, or stored
-secrets become unreadable. Keep the same `JWT_SECRET`/env so sessions survive.
+Keep `vault-encryption.key` (or `VAULT_ENCRYPTION_KEY`) and `JWT_SECRET` the same, or
+stored secrets and sessions are lost. This backup is the only valid downgrade path.
 
-### 3. Stop old, then start new
+### 5. Install and start the new build
+
+Install the verified `dist` and binary (`rsync -a --delete "$SCRATCH/dist/" frontend/dist/`;
+copy the binary or run `rebuild.sh` from the same clean commit) and start the new
+server with the same env and `$DATA`, bound to loopback with the Tailscale gateway in
+front (SETUP.md), not `0.0.0.0`.
+
+### 6. Verify the live server
 
 ```bash
-kill <PID of node dist/index.js>   # SIGTERM, wait until the port is free
-lsof -nP -iTCP:3020 -sTCP:LISTEN   # must print nothing
+node scripts/verify-deployment.mjs --url http://127.0.0.1:<port> --expect-commit "$COMMIT" --dist frontend/dist
+node scripts/verify-deployment.mjs --url http://<tailscale-address-or-name>:<port> --expect-commit "$COMMIT" --dist frontend/dist   # only if exposed
 ```
-Quit the Tauri app too if it shares `$DATA`. Only then swap in the new `dist/`
-(or point `TERMINAL_V4_FRONTEND_DIR` at it) and start the new server with the same env
-and `$DATA`. Prefer binding loopback only and exposing it through the Tailscale
-gateway (3040, SETUP.md) rather than `0.0.0.0`.
+Then sign in and confirm prior sessions and notes are present. A failure here means
+roll back; do not "fix forward" on the live data dir.
 
-### 4. Health check
+### 7. Rollback
 
-```bash
-curl -fsS http://127.0.0.1:<port>/api/health
-curl -s http://127.0.0.1:<port>/ | grep -oE 'assets/[^"]+'     # expect the new hashes
-curl -fsS http://100.71.88.107:<port>/api/health               # only if Tailscale exposure is intended
-cat "$DATA/workspace-tasks/worker-protocol.json"
-```
-Then sign in, open an existing session/notes and confirm prior data is present.
+1. Stop the new server (confirm the port is free).
+2. Restore the data dir: `mv "$DATA" "$DATA.failed-$STAMP" && cp -Rp "$HOME/terminal-v4-backup-$STAMP" "$DATA"`
+   (loses writes since the backup). Do this whenever the new build ran against `$DATA`,
+   because it may have advanced the protocol marker; never delete the marker instead.
+3. Restore the previous `dist/` and binary, start the old server, and verify it
+   (`verify-deployment` if the old build has build-info, otherwise the recorded asset
+   hashes from step 0).
 
-### 5. Rollback
+## What a human must do on the live Tailscale machine
 
-1. Stop the new server (confirm port free).
-2. If the protocol marker was raised by the new version, the old binary will refuse
-   to start. Restore the whole backup: `mv "$DATA" "$DATA.failed-$STAMP" && cp -Rp
-   "$HOME/terminal-v4-backup-$STAMP" "$DATA"` (this loses writes made since the backup).
-3. Restore the previous `dist/` directories and binary, start the old server, repeat step 4.
+This tooling cannot do these and they were not done:
+
+1. Decide the cutover: the machine currently serves the legacy Node server on 3020 over
+   `0.0.0.0`. Moving to the Rust API behind the gateway is a deliberate change.
+2. Build from a clean checkout of the chosen commit and run steps 1-2 there.
+3. Stop the old server and the Tauri app, take the data backup (step 4), start the new
+   server, and run step 6 against both loopback and the Tailscale name/address.
+4. Check with `tailscale serve status` / `tailscale status` what is exposed and which
+   ACLs apply; confirm non-health routes demand authentication from a tailnet peer.
+5. Set `E2E_UI_UNIFICATION=1 BASE_URL=<explicit local-testing URL>` only for the UI
+   spec, against a local-testing instance, never a live account.
+6. Keep the backup until the new build has run a normal period; delete it only then.
 
 ## Not verifiable from this machine / by this check
 
