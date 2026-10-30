@@ -41,7 +41,7 @@ impl StructuredSessionManager {
             .ok_or("Background process manager is unavailable")?;
         tokio::runtime::Handle::try_current()
             .map_err(|_| "Background completion delivery requires an async runtime")?;
-        background.enable_commands();
+        background.try_enable_commands()?;
         self.start_background_completion_worker()
     }
 }

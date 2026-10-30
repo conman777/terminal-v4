@@ -196,6 +196,9 @@ async fn prepare(
     action: ScheduleChange,
     changes: Option<ScheduleEdit>,
 ) -> Result<ReviewedScheduleChange, String> {
+    if !matches!(action, ScheduleChange::Pause | ScheduleChange::Remove) {
+        require_worker(&data_dir).map_err(|error| error.message)?;
+    }
     if owner.is_empty()
         || session_id.is_empty()
         || turn_id.is_empty()
@@ -249,6 +252,12 @@ pub(crate) async fn commit_reviewed_schedule_change(
     expires_at: i64,
     cancelled: impl Fn() -> bool + Send + 'static,
 ) -> Result<serde_json::Value, String> {
+    if !matches!(
+        reviewed.action,
+        ScheduleChange::Pause | ScheduleChange::Remove
+    ) {
+        require_worker(&reviewed.data_dir).map_err(|error| error.message)?;
+    }
     tokio::task::spawn_blocking(move || commit_locked(reviewed, expires_at, cancelled))
         .await
         .map_err(|_| "Schedule outcome is uncertain; inspect it before retrying".to_string())?

@@ -3622,6 +3622,70 @@ fn worker_lease(data_dir: &FsPath) -> Result<std::fs::File, ApiError> {
 
 static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static LAUNCH_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkerStatus {
+    Starting,
+    Running,
+    Refused { reason: &'static str },
+    Stopped,
+}
+
+pub const WORKER_REFUSED_REASON: &str = "This data directory was written by a newer version of Terminal V4 (or its task worker marker is unreadable), so scheduled tasks are disabled. See docs/development/WORKER_UPGRADE.md.";
+
+static WORKER_STATUS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, WorkerStatus>>,
+> = std::sync::OnceLock::new();
+
+fn set_worker_status(key: &FsPath, status: WorkerStatus) {
+    let map = WORKER_STATUS.get_or_init(Default::default);
+    let mut map = map.lock().unwrap_or_else(|error| error.into_inner());
+    map.insert(key.to_path_buf(), status);
+}
+
+pub fn worker_status(data_dir: &FsPath) -> Option<WorkerStatus> {
+    let map = WORKER_STATUS.get()?;
+    let map = map.lock().unwrap_or_else(|error| error.into_inner());
+    data_dir
+        .canonicalize()
+        .ok()
+        .and_then(|key| map.get(&key).cloned())
+        .or_else(|| map.get(data_dir).cloned())
+}
+
+pub(crate) fn require_worker(data_dir: &FsPath) -> Result<(), ApiError> {
+    match worker_status(data_dir) {
+        Some(WorkerStatus::Refused { reason }) => Err(ApiError {
+            status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            message: reason.into(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+pub async fn await_worker_settled(
+    data_dir: &FsPath,
+    timeout: std::time::Duration,
+) -> Option<WorkerStatus> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let status = worker_status(data_dir);
+        if status != Some(WorkerStatus::Starting) || tokio::time::Instant::now() >= deadline {
+            return status;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+pub async fn report_worker_refusal(data_dir: PathBuf) {
+    if let Some(WorkerStatus::Refused { reason }) =
+        await_worker_settled(&data_dir, std::time::Duration::from_secs(30)).await
+    {
+        tracing::error!(
+            "SCHEDULED TASKS DISABLED: {reason} The API stays up; creating, running, resuming or editing schedules and queueing tasks is rejected with 503."
+        );
+    }
+}
+
 static WORKERS: std::sync::OnceLock<
     std::sync::Mutex<std::collections::HashMap<PathBuf, tokio::sync::watch::Sender<bool>>>,
 > = std::sync::OnceLock::new();
@@ -4204,9 +4268,17 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn schedule_capabilities(
+    State(state): State<AppState>,
     Extension(_user): Extension<AuthenticatedUser>,
 ) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "advancedTimingProtocolVersion": 1 }))
+    let reason = require_worker(&state.config().data_dir)
+        .err()
+        .map(|error| error.message);
+    Json(serde_json::json!({
+        "advancedTimingProtocolVersion": 1,
+        "workerAvailable": reason.is_none(),
+        "workerReason": reason,
+    }))
 }
 
 async fn no_store(mut response: axum::response::Response) -> axum::response::Response {
@@ -4288,6 +4360,7 @@ async fn create_task(
     Extension(user): Extension<AuthenticatedUser>,
     Json(input): Json<TaskInput>,
 ) -> Result<Json<TaskRecord>, ApiError> {
+    require_worker(&state.config().data_dir)?;
     let input = canonical_task(input).await?;
     let _activity = crate::workspace_activity::enter(FsPath::new(&input.workspace_path))
         .map_err(ApiError::bad_request)?;
@@ -4386,6 +4459,7 @@ pub(crate) async fn create_owner_schedule(
     owner: String,
     input: ScheduleInput,
 ) -> Result<ScheduleRecord, ApiError> {
+    require_worker(&data_dir)?;
     if let Some(when) = input.run_once_at {
         if input.at.is_some() || when <= now_ms() || when > 8_640_000_000_000_000 {
             return Err(ApiError::bad_request(
@@ -4478,6 +4552,7 @@ pub(crate) async fn prepare_reviewed_schedule(
     input: ScheduleInput,
     skill: Option<ScheduleSkill>,
 ) -> Result<ReviewedSchedule, ApiError> {
+    require_worker(&data_dir)?;
     if owner.is_empty()
         || session_id.is_empty()
         || turn_id.is_empty()
@@ -4559,6 +4634,7 @@ pub(crate) async fn commit_reviewed_schedule(
     expires_at: i64,
     cancelled: impl Fn() -> bool + Send + 'static,
 ) -> Result<ScheduleRecord, ApiError> {
+    require_worker(&reviewed.data_dir)?;
     tokio::task::spawn_blocking(move || {
         let _guard = STORE_LOCK
             .lock()
@@ -4610,6 +4686,7 @@ async fn update_schedule(
     Path(id): Path<Uuid>,
     Json(input): Json<ScheduleUpdate>,
 ) -> Result<Json<ScheduleRecord>, ApiError> {
+    require_worker(&state.config().data_dir)?;
     let record = edit_store(
         state.config().data_dir.clone(),
         user.user_id,
@@ -4655,6 +4732,7 @@ async fn run_schedule(
     Extension(user): Extension<AuthenticatedUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<TaskRecord>, ApiError> {
+    require_worker(&state.config().data_dir)?;
     let record = edit_store(
         state.config().data_dir.clone(),
         user.user_id,
@@ -5749,6 +5827,9 @@ mod worker_durability_tests {
 struct WorkerRegistration(PathBuf);
 impl Drop for WorkerRegistration {
     fn drop(&mut self) {
+        if !matches!(worker_status(&self.0), Some(WorkerStatus::Refused { .. })) {
+            set_worker_status(&self.0, WorkerStatus::Stopped);
+        }
         if let Some(workers) = WORKERS.get() {
             if let Ok(mut keys) = workers.lock() {
                 keys.remove(&self.0);
@@ -5773,6 +5854,7 @@ pub fn start_worker(state: AppState) -> bool {
     let (stop, mut shutdown) = tokio::sync::watch::channel(false);
     keys.insert(data_dir.clone(), stop);
     drop(keys);
+    set_worker_status(&data_dir, WorkerStatus::Starting);
     tokio::spawn(async move {
         let _registration = WorkerRegistration(data_dir.clone());
         let _lease = loop {
@@ -5782,6 +5864,12 @@ pub fn start_worker(state: AppState) -> bool {
             match worker_lease(&data_dir) {
                 Ok(lease) => break lease,
                 Err(error) if error.message.contains("refusing") => {
+                    set_worker_status(
+                        &data_dir,
+                        WorkerStatus::Refused {
+                            reason: WORKER_REFUSED_REASON,
+                        },
+                    );
                     tracing::error!(error = %error.message, "Workspace task worker not started; see docs/development/WORKER_UPGRADE.md");
                     return;
                 }
@@ -5794,6 +5882,7 @@ pub fn start_worker(state: AppState) -> bool {
                 _ = shutdown.changed() => {},
             }
         };
+        set_worker_status(&data_dir, WorkerStatus::Running);
         let mut running = tokio::task::JoinSet::new();
         let mut deliveries = tokio::task::JoinSet::new();
         let mut occupied = std::collections::HashSet::new();
@@ -6460,7 +6549,7 @@ mod route_io_tests {
             (status, body),
             (
                 StatusCode::OK,
-                serde_json::json!({"advancedTimingProtocolVersion": 1})
+                serde_json::json!({"advancedTimingProtocolVersion": 1, "workerAvailable": true, "workerReason": null})
             )
         );
         assert!(!config.data_dir.join("workspace-tasks").exists());
@@ -7706,6 +7795,10 @@ mod reviewed_schedule_tests {
 #[cfg(test)]
 #[path = "workspace_tasks/schedule_cron_tests.rs"]
 mod schedule_cron_tests;
+
+#[cfg(test)]
+#[path = "workspace_tasks/worker_refusal_tests.rs"]
+mod worker_refusal_tests;
 
 #[cfg(all(test, unix))]
 #[path = "workspace_tasks/worker_process_tests.rs"]

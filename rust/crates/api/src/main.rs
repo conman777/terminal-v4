@@ -39,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .recover_orphaned_tmux_sessions()
         .await;
     terminal_v4_api::workspace_tasks::start_worker(state.clone());
+    tokio::spawn(terminal_v4_api::workspace_tasks::report_worker_refusal(
+        config.data_dir.clone(),
+    ));
     let listener = tokio::net::TcpListener::bind(config.bind_addr()).await?;
 
     terminal_v4_api::start_services(&state);

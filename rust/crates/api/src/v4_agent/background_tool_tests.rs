@@ -74,6 +74,7 @@ async fn retired_session_cannot_request_a_new_background_approval() {
     let workspace = root.path().canonicalize().unwrap();
     let manager =
         BackgroundProcesses::create(&root.path().canonicalize().unwrap().join("ledger")).unwrap();
+    manager.enable_commands();
     let scope = scope();
     manager
         .retire_session(&scope.owner, &scope.session_id)
@@ -120,6 +121,7 @@ async fn retirement_during_pending_approval_rejects_the_action_even_after_restar
     let workspace = root.path().canonicalize().unwrap();
     let path = root.path().canonicalize().unwrap().join("ledger");
     let manager = BackgroundProcesses::create(&path).unwrap();
+    manager.enable_commands();
     let scope = scope();
     let (seen, observed) = tokio::sync::oneshot::channel();
     let waiting_reviewer = WaitingReviewer {

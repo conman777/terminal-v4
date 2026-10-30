@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 use std::{fs::File, path::Path, sync::Mutex};
 
 pub(super) const MAX_RETIRED_SESSIONS: i64 = 4096;
+const COMMANDS_EVER_ENABLED: &str = "commands_ever_enabled";
+pub(super) const RETIREMENT_CAPACITY_MESSAGE: &str = "Background retirement capacity exhausted: this data directory already holds the maximum number of retired-conversation records. The conversation was not changed; an operator must free capacity (see docs/development/BACKGROUND_PROCESS_LIFECYCLE.md) before deleting more conversations";
 pub(super) const MIN_RETAINED_PER_SESSION: i64 = 8;
 const MAX_PENDING_PAGE: usize = 64;
 #[cfg(unix)]
@@ -215,10 +217,13 @@ impl Ledger {
             .map_err(|_| "Background review ledger is invalid")?;
         db.execute_batch(
             "CREATE TABLE IF NOT EXISTS launched_processes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, pid INTEGER NOT NULL, pgid INTEGER NOT NULL, started_sec INTEGER, started_usec INTEGER);
+             CREATE TABLE IF NOT EXISTS ledger_flags(name TEXT PRIMARY KEY);
              CREATE TABLE IF NOT EXISTS recovery_outcomes(key BLOB PRIMARY KEY, session_key BLOB NOT NULL, outcome TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS pending_completions(seq INTEGER PRIMARY KEY AUTOINCREMENT, key BLOB NOT NULL UNIQUE, session_key BLOB NOT NULL, owner TEXT NOT NULL, session TEXT NOT NULL, workspace TEXT NOT NULL, incarnation TEXT, action_id TEXT NOT NULL, state TEXT NOT NULL, code INTEGER);",
         )
         .map_err(|_| "Cannot initialize background recovery tables")?;
+        db.execute_batch(&format!("INSERT OR IGNORE INTO ledger_flags(name) SELECT '{COMMANDS_EVER_ENABLED}' WHERE EXISTS(SELECT 1 FROM receipts) OR EXISTS(SELECT 1 FROM launched_processes) OR EXISTS(SELECT 1 FROM retired_sessions);"))
+            .map_err(|_| "Cannot migrate background command marker")?;
         for dir in [Some(path), path.parent()].into_iter().flatten() {
             File::open(dir)
                 .and_then(|file| file.sync_all())
@@ -518,6 +523,11 @@ impl Ledger {
             );
         }
         tx.execute(
+            "INSERT OR IGNORE INTO ledger_flags(name) VALUES(?1)",
+            params![COMMANDS_EVER_ENABLED],
+        )
+        .map_err(|_| "Cannot claim background action")?;
+        tx.execute(
             "INSERT INTO receipts(key,owner_key,session_key,state) VALUES(?1,?2,?3,'unknown')",
             params![key, owner_key, session_key],
         )
@@ -526,7 +536,66 @@ impl Ledger {
             .map_err(|_| "Cannot commit background action claim")?;
         Ok(key)
     }
-    pub(super) fn retire_session(&self, owner: &str, session: &str) -> Result<(), String> {
+    pub(super) fn mark_commands_enabled(&self) -> Result<(), String> {
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        db.execute(
+            "INSERT OR IGNORE INTO ledger_flags(name) VALUES(?1)",
+            params![COMMANDS_EVER_ENABLED],
+        )
+        .map_err(|_| "Cannot persist background command marker")?;
+        Ok(())
+    }
+    fn needs_tombstone(tx: &rusqlite::Connection, session_key: &[u8]) -> Result<bool, String> {
+        tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ledger_flags WHERE name=?2) OR EXISTS(SELECT 1 FROM receipts WHERE session_key=?1) OR EXISTS(SELECT 1 FROM launched_processes WHERE session_key=?1)",
+            params![session_key, COMMANDS_EVER_ENABLED],
+            |r| r.get(0),
+        )
+        .map_err(|_| "Cannot check background retirement need".into())
+    }
+    /// Whether retiring would need a new tombstone slot, failing when none is
+    /// free. `reserved` counts slots already promised to in-flight deletions.
+    pub(super) fn can_retire(
+        &self,
+        owner: &str,
+        session: &str,
+        reserved: i64,
+    ) -> Result<bool, String> {
+        if owner.is_empty() || session.is_empty() || owner.len() > 256 || session.len() > 256 {
+            return Err("Invalid background session".into());
+        }
+        let session_key = Self::hash_parts(&[owner, session]);
+        let db = self
+            .db
+            .lock()
+            .map_err(|_| "Background receipt ledger unavailable")?;
+        let retired: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM retired_sessions WHERE session_key=?1)",
+                params![session_key],
+                |r| r.get(0),
+            )
+            .map_err(|_| "Cannot check retired background session")?;
+        if retired {
+            return Ok(false);
+        }
+        if !Self::needs_tombstone(&db, &session_key)? {
+            return Ok(false);
+        }
+        let count: i64 = db
+            .query_row("SELECT COUNT(*) FROM retired_sessions", [], |r| r.get(0))
+            .map_err(|_| "Cannot check retirement capacity")?;
+        if count.saturating_add(reserved) >= MAX_RETIRED_SESSIONS {
+            return Err(RETIREMENT_CAPACITY_MESSAGE.into());
+        }
+        Ok(true)
+    }
+    /// Returns whether the session is tombstoned (and so needs the
+    /// cross-process fence tombstone too).
+    pub(super) fn retire_session(&self, owner: &str, session: &str) -> Result<bool, String> {
         if owner.is_empty() || session.is_empty() || owner.len() > 256 || session.len() > 256 {
             return Err("Invalid background session".into());
         }
@@ -555,12 +624,13 @@ impl Ledger {
                 |r| r.get(0),
             )
             .map_err(|_| "Cannot check retired background session")?;
-        if !retired {
+        let tombstoned = retired || Self::needs_tombstone(&tx, &session_key)?;
+        if !retired && tombstoned {
             let count: i64 = tx
                 .query_row("SELECT COUNT(*) FROM retired_sessions", [], |r| r.get(0))
                 .map_err(|_| "Cannot check retirement capacity")?;
             if count >= MAX_RETIRED_SESSIONS {
-                return Err("Background retirement capacity exhausted".into());
+                return Err(RETIREMENT_CAPACITY_MESSAGE.into());
             }
             tx.execute(
                 "INSERT INTO retired_sessions(session_key) VALUES(?1)",
@@ -586,7 +656,7 @@ impl Ledger {
         }
         tx.commit()
             .map_err(|_| "Cannot commit background retirement")?;
-        Ok(())
+        Ok(tombstoned)
     }
     pub(super) fn finish(&self, key: &[u8], state: &BackgroundState) -> Result<(), String> {
         let (name, code) = Self::state_columns(state);

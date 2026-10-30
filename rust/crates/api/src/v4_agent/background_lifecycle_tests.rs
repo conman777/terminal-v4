@@ -594,6 +594,7 @@ async fn writer_busy_deletion_keeps_background_session_usable_until_retry() {
     manager
         .bind_background_processes(background.clone())
         .unwrap();
+    background.enable_commands();
     let session = manager
         .create_session(
             "owner",
@@ -845,6 +846,7 @@ async fn deletion_rejects_late_background_approval() {
     manager
         .bind_background_processes(background.clone())
         .unwrap();
+    background.enable_commands();
     let scope = ActionScope {
         owner: "owner".into(),
         session_id: session.id.clone(),

@@ -1483,3 +1483,124 @@ mod production {
         let _ = manager.shutdown().await;
     }
 }
+
+fn seed_full_retirement_table(data: &Path) {
+    let mut db = rusqlite::Connection::open(
+        data.canonicalize()
+            .unwrap()
+            .join("background-processes")
+            .join("receipts.sqlite3"),
+    )
+    .unwrap();
+    let tx = db.transaction().unwrap();
+    for index in 0..4096 {
+        tx.execute(
+            "INSERT INTO retired_sessions(session_key) VALUES(?1)",
+            [format!("seed-{index}").into_bytes()],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+fn tombstones(data: &Path) -> i64 {
+    rusqlite::Connection::open(
+        data.canonicalize()
+            .unwrap()
+            .join("background-processes")
+            .join("receipts.sqlite3"),
+    )
+    .unwrap()
+    .query_row("SELECT COUNT(*) FROM retired_sessions", [], |r| r.get(0))
+    .unwrap()
+}
+
+fn provision_without_commands(fixture: &Fixture) -> Arc<BackgroundProcesses> {
+    let mut db = fixture.app.lock_db().unwrap();
+    let background = Arc::new(
+        crate::v4_agent::background_process::bootstrap::open_or_provision(
+            fixture._data.path(),
+            &mut db,
+        )
+        .unwrap(),
+    );
+    fixture
+        .manager
+        .bind_background_processes(background.clone())
+        .unwrap();
+    background
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_at_the_retirement_cap_fails_early_and_leaves_the_session_intact() {
+    let fixture = fixture().await;
+    let (background, _, _) = actor_fixture(&fixture).await;
+    let bench = Bench::of(&fixture);
+    seed_full_retirement_table(&bench.data);
+    let path = structured_session_path(fixture.app.config(), "owner", &bench.id);
+    let before = std::fs::read(&path).unwrap();
+
+    let error = bench
+        .manager
+        .delete_session("owner", &bench.id)
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("capacity exhausted"), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(tombstones(&bench.data), 4096);
+    {
+        let state = bench.live.state.lock().await;
+        assert_eq!((state.deleting, state.retiring), (false, false));
+    }
+    assert!(bench
+        .manager
+        .get_session("owner", &bench.id)
+        .await
+        .unwrap()
+        .is_some());
+
+    fixture.controller.done.send_replace(true);
+    let mut db = rusqlite::Connection::open(
+        bench
+            .data
+            .canonicalize()
+            .unwrap()
+            .join("background-processes")
+            .join("receipts.sqlite3"),
+    )
+    .unwrap();
+    db.execute("DELETE FROM retired_sessions WHERE rowid=1", [])
+        .unwrap();
+    db.close().unwrap();
+    bench
+        .manager
+        .delete_session("owner", &bench.id)
+        .await
+        .unwrap();
+    assert!(!path.exists());
+    assert_eq!(tombstones(&bench.data), 4096);
+    drop(background);
+    fixture.manager.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_with_commands_never_enabled_ignores_a_full_retirement_table() {
+    let fixture = fixture().await;
+    let background = provision_without_commands(&fixture);
+    let bench = Bench::of(&fixture);
+    seed_full_retirement_table(&bench.data);
+    let path = structured_session_path(fixture.app.config(), "owner", &bench.id);
+
+    fixture.controller.done.send_replace(true);
+    bench
+        .manager
+        .delete_session("owner", &bench.id)
+        .await
+        .unwrap();
+
+    assert!(!path.exists());
+    assert_eq!(tombstones(&bench.data), 4096);
+    drop(background);
+    fixture.manager.shutdown().await.unwrap();
+}

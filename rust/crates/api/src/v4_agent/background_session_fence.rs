@@ -158,6 +158,31 @@ pub(crate) fn acquire_launch(
     Ok(lease)
 }
 
+fn tombstone_count(dir: &Path) -> Result<usize, String> {
+    Ok(std::fs::read_dir(dir)
+        .map_err(|_| "Background fence is unavailable")?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("retired-"))
+        .count())
+}
+
+pub(crate) fn can_retire(
+    data: &Path,
+    owner: &str,
+    session: &str,
+    reserved: usize,
+) -> Result<(), String> {
+    validate(owner, session)?;
+    let dir = directory(data)?;
+    if retired(&dir, owner, session)? {
+        return Ok(());
+    }
+    if tombstone_count(&dir)?.saturating_add(reserved) >= MAX_TOMBSTONES {
+        return Err("Background fence capacity exhausted: the conversation was not changed; an operator must free capacity (see docs/development/BACKGROUND_PROCESS_LIFECYCLE.md) before deleting more conversations".into());
+    }
+    Ok(())
+}
+
 pub(crate) fn retire(data: &Path, owner: &str, session: &str) -> Result<(), String> {
     validate(owner, session)?;
     let dir = directory(data)?;
@@ -168,12 +193,7 @@ pub(crate) fn retire(data: &Path, owner: &str, session: &str) -> Result<(), Stri
     if retired(&dir, owner, session)? {
         return Ok(());
     }
-    let count = std::fs::read_dir(&dir)
-        .map_err(|_| "Background fence is unavailable")?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("retired-"))
-        .count();
-    if count >= MAX_TOMBSTONES {
+    if tombstone_count(&dir)? >= MAX_TOMBSTONES {
         return Err("Background fence capacity exhausted".into());
     }
     let path = tombstone(&dir, owner, session);

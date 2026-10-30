@@ -204,6 +204,17 @@ struct Registry {
     shutdown_failed: bool,
     workers: Vec<tokio::task::JoinHandle<()>>,
 }
+#[must_use]
+pub(crate) struct RetirementReservation(Option<Arc<std::sync::atomic::AtomicUsize>>);
+
+impl Drop for RetirementReservation {
+    fn drop(&mut self) {
+        if let Some(slots) = self.0.take() {
+            slots.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+}
+
 pub(crate) struct BackgroundProcesses {
     #[cfg(unix)]
     instance_id: uuid::Uuid,
@@ -225,6 +236,7 @@ pub(crate) struct BackgroundProcesses {
     recovery_blocked: std::sync::atomic::AtomicBool,
     launch_budget_ms: std::sync::atomic::AtomicU64,
     unconfirmed: Arc<Mutex<bool>>,
+    retirement_reservations: Arc<std::sync::atomic::AtomicUsize>,
     running_limits: (
         std::sync::atomic::AtomicUsize,
         std::sync::atomic::AtomicUsize,
@@ -500,9 +512,15 @@ impl BackgroundProcesses {
         self.ledger.pending_completions(COMPLETION_PAGE)
     }
 
-    pub(crate) fn enable_commands(&self) {
+    pub(crate) fn try_enable_commands(&self) -> Result<(), String> {
+        self.ledger.mark_commands_enabled()?;
         self.commands_enabled
             .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn enable_commands(&self) {
+        let _ = self.try_enable_commands();
     }
 
     pub(crate) fn commands_enabled(&self) -> bool {
@@ -865,6 +883,7 @@ impl BackgroundProcesses {
             recovery_blocked: std::sync::atomic::AtomicBool::new(false),
             launch_budget_ms: std::sync::atomic::AtomicU64::new(LAUNCH_BUDGET.as_millis() as u64),
             unconfirmed: Arc::new(Mutex::new(false)),
+            retirement_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             running_limits: Self::default_running_limits(),
             #[cfg(unix)]
             owner_gate: None,
@@ -907,6 +926,7 @@ impl BackgroundProcesses {
             recovery_blocked: std::sync::atomic::AtomicBool::new(recovery_blocked),
             launch_budget_ms: std::sync::atomic::AtomicU64::new(LAUNCH_BUDGET.as_millis() as u64),
             unconfirmed: Arc::new(Mutex::new(false)),
+            retirement_reservations: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             running_limits: Self::default_running_limits(),
             #[cfg(unix)]
             owner_gate: None,
@@ -1784,16 +1804,40 @@ impl BackgroundProcesses {
     }
     // The caller must authenticate and hold the session deletion fence. The
     // tombstone permanently rejects new actions even if deletion later fails.
+    pub(crate) fn reserve_retirement(
+        &self,
+        owner: &str,
+        session: &str,
+    ) -> Result<RetirementReservation, String> {
+        let slots = self.retirement_reservations.clone();
+        let reserved = slots.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut reservation = RetirementReservation(Some(slots));
+        if !self.ledger.can_retire(owner, session, reserved as i64)? {
+            reservation
+                .0
+                .take()
+                .map(|slots| slots.fetch_sub(1, std::sync::atomic::Ordering::SeqCst));
+            return Ok(reservation);
+        }
+        #[cfg(unix)]
+        if let Some(root) = self.ledger.data_root() {
+            session_fence::can_retire(root, owner, session, reserved)?;
+        }
+        Ok(reservation)
+    }
+
     pub(crate) async fn retire_session(&self, owner: &str, session: &str) -> Result<(), String> {
         if owner.is_empty() || session.is_empty() || owner.len() > 256 || session.len() > 256 {
             return Err("Invalid background session".into());
         }
         self.cleanup_session(owner, session).await?;
         let mut registry = self.registry.lock().await;
-        self.ledger.retire_session(owner, session)?;
+        let tombstoned = self.ledger.retire_session(owner, session)?;
         #[cfg(unix)]
-        if let Some(root) = self.ledger.data_root() {
-            session_fence::retire(root, owner, session)?;
+        if tombstoned {
+            if let Some(root) = self.ledger.data_root() {
+                session_fence::retire(root, owner, session)?;
+            }
         }
         registry
             .entries

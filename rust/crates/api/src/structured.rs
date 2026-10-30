@@ -6405,6 +6405,11 @@ impl StructuredSessionManager {
             )?;
         #[cfg(unix)]
         self.ensure_background_for_deletion().await?;
+        #[cfg(any(test, unix))]
+        let _retirement_slot = match self.inner.background_processes.get() {
+            Some(background) => Some(background.reserve_retirement(user_id, id)?),
+            None => None,
+        };
         let lease = request_ledger::acquire_lease(&self.inner.config, user_id, id)?;
         let (process, resources, prior_deleting, prior_retiring) = {
             let mut state = session.state.lock().await;

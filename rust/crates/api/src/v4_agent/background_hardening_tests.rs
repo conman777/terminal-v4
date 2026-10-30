@@ -475,6 +475,7 @@ async fn another_process_launching_blocks_retirement_and_a_retired_session_block
 async fn retiring_a_session_persists_the_fence_tombstone() {
     let root = tempfile::tempdir().unwrap();
     let manager = plain(root.path());
+    manager.try_enable_commands().unwrap();
     assert!(!session_fence::is_retired(root.path(), "owner", "session").unwrap());
     manager.retire_session("owner", "session").await.unwrap();
     assert!(session_fence::is_retired(root.path(), "owner", "session").unwrap());
@@ -741,4 +742,143 @@ async fn completions_persist_with_the_outcome_and_drain_exactly_once_across_thre
     codes.sort();
     assert_eq!(codes, (1..total as i32).collect::<Vec<_>>());
     assert!(reopened.pending_completions().unwrap().is_empty());
+}
+
+fn ledger_db(root: &Path) -> Connection {
+    Connection::open(
+        root.canonicalize()
+            .unwrap()
+            .join("background-processes")
+            .join("receipts.sqlite3"),
+    )
+    .unwrap()
+}
+
+fn tombstone_rows(root: &Path) -> i64 {
+    ledger_db(root)
+        .query_row("SELECT COUNT(*) FROM retired_sessions", [], |r| r.get(0))
+        .unwrap()
+}
+
+fn fence_files(root: &Path) -> usize {
+    std::fs::read_dir(root.join(".background-session-fence"))
+        .map(|dir| {
+            dir.filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().starts_with("retired-"))
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn retiring_sessions_never_writes_tombstones_while_commands_were_never_enabled() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = plain(root.path());
+    let count = ledger::MAX_RETIRED_SESSIONS + 4;
+    for index in 0..count {
+        let session = format!("session-{index}");
+        let _slot = manager.reserve_retirement("owner", &session).unwrap();
+        manager.retire_session("owner", &session).await.unwrap();
+    }
+    assert_eq!(
+        (tombstone_rows(root.path()), fence_files(root.path())),
+        (0, 0)
+    );
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_session_with_a_receipt_is_tombstoned_even_if_the_marker_was_lost() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = plain(root.path());
+    let key = manager
+        .ledger
+        .claim(&scope(root.path(), "owner", "session"), "action")
+        .unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Exited { code: Some(0) })
+        .unwrap();
+    ledger_db(root.path())
+        .execute("DELETE FROM ledger_flags", [])
+        .unwrap();
+    manager.retire_session("owner", "session").await.unwrap();
+    assert!(session_fence::is_retired(root.path(), "owner", "session").unwrap());
+    assert_eq!(tombstone_rows(root.path()), 1);
+    manager.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_commands_marker_persists_across_reopen_and_tombstones_later_sessions() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = plain(root.path());
+    manager.try_enable_commands().unwrap();
+    manager.shutdown().await.unwrap();
+    drop(manager);
+    let reopened = BackgroundProcesses::open(
+        &root
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("background-processes"),
+    )
+    .unwrap();
+    reopened.retire_session("owner", "later").await.unwrap();
+    assert!(session_fence::is_retired(root.path(), "owner", "later").unwrap());
+    assert_eq!(tombstone_rows(root.path()), 1);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn at_the_cap_retirement_fails_early_keeps_the_session_and_stale_launches_stay_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = plain(root.path());
+    manager.try_enable_commands().unwrap();
+    manager
+        .retire_session("owner", "retired-early")
+        .await
+        .unwrap();
+    {
+        let mut db = ledger_db(root.path());
+        let tx = db.transaction().unwrap();
+        for index in 1..ledger::MAX_RETIRED_SESSIONS - 1 {
+            tx.execute(
+                "INSERT INTO retired_sessions(session_key) VALUES(?1)",
+                [format!("seed-{index}").into_bytes()],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let last = scope(root.path(), "owner", "last");
+    let slot = manager.reserve_retirement("owner", "last").unwrap();
+    manager.retire_session("owner", "last").await.unwrap();
+    drop(slot);
+    assert_eq!(tombstone_rows(root.path()), ledger::MAX_RETIRED_SESSIONS);
+
+    let kept = scope(root.path(), "owner", "kept");
+    let key = manager.ledger.claim(&kept, "kept-action").unwrap();
+    manager
+        .ledger
+        .finish(&key, &BackgroundState::Exited { code: Some(0) })
+        .unwrap();
+    let error = manager
+        .reserve_retirement("owner", "kept")
+        .err()
+        .expect("cap must refuse early");
+    assert!(error.contains("capacity exhausted"), "{error}");
+    assert_eq!(tombstone_rows(root.path()), ledger::MAX_RETIRED_SESSIONS);
+    assert!(!manager.ledger.is_retired("owner", "kept").unwrap());
+    assert_eq!(
+        manager.ledger.read(&kept, "kept-action").unwrap(),
+        BackgroundState::Exited { code: Some(0) }
+    );
+
+    for session in ["retired-early", "last"] {
+        let stale = scope(root.path(), "owner", session);
+        assert!(manager.ledger.claim(&stale, "stale").is_err());
+        assert!(session_fence::acquire_launch(root.path(), "owner", session).is_err());
+    }
+    let _ = last;
+    manager.shutdown().await.unwrap();
 }
