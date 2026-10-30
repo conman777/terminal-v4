@@ -3,6 +3,7 @@ use super::*;
 pub(crate) struct GuestView<'a> {
     pub(crate) incarnation: String,
     pub(crate) title: &'a str,
+    pub(crate) cwd: &'a str,
     pub(crate) events: &'a [StructuredSessionEvent],
 }
 
@@ -27,6 +28,7 @@ impl StructuredSessionManager {
         Ok(Some(read(GuestView {
             incarnation,
             title: &state.title,
+            cwd: &state.cwd,
             events: &state.events,
         })))
     }

@@ -139,6 +139,60 @@ fn desktop_jwt_secret(share_mode: &str, backend_env: &[(String, String)]) -> Opt
     Some(seed)
 }
 
+fn frontend_summary(dir: &Path) -> String {
+    let index = dir.join("index.html");
+    let built = std::fs::metadata(&index)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_secs().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let main_script = std::fs::read_to_string(&index)
+        .ok()
+        .and_then(|html| {
+            let start = html.find("assets/index-")?;
+            let tail = &html[start..];
+            Some(tail[..tail.find('"')?].to_string())
+        })
+        .unwrap_or_else(|| "none".to_string());
+    format!(
+        "{} (index.html modified unix={built}, main={main_script})",
+        dir.display()
+    )
+}
+
+fn select_frontend_dir(checkout: &Path, bundled: Option<&Path>) -> Option<PathBuf> {
+    let checkout_ready = checkout.join("index.html").is_file();
+    let bundled = bundled.filter(|dir| dir.join("index.html").is_file());
+    if checkout_ready {
+        if let Some(bundled) = bundled {
+            let same = std::fs::read(checkout.join("index.html")).ok()
+                == std::fs::read(bundled.join("index.html")).ok();
+            if !same {
+                eprintln!(
+                    "[tauri] WARNING: checkout frontend differs from the bundled frontend; serving checkout. checkout={} bundled={}. Verify it matches the backend with scripts/verify-deployment.mjs.",
+                    frontend_summary(checkout),
+                    frontend_summary(bundled)
+                );
+            }
+        }
+        eprintln!("[tauri] Serving frontend: {}", frontend_summary(checkout));
+        return Some(checkout.to_path_buf());
+    }
+    if let Some(bundled) = bundled {
+        eprintln!(
+            "[tauri] Serving bundled frontend: {}",
+            frontend_summary(bundled)
+        );
+        return Some(bundled.to_path_buf());
+    }
+    eprintln!(
+        "[tauri] WARNING: no frontend dist found at {} or in app resources",
+        checkout.display()
+    );
+    None
+}
+
 fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> {
     assert_backend_port_available()?;
 
@@ -186,17 +240,18 @@ fn spawn_backend<R: tauri::Runtime>(app_handle: &AppHandle<R>) -> Result<Child> 
     if let Some(secret) = jwt_secret {
         command.env("JWT_SECRET", secret);
     }
-    // Prefer the checkout's build so a rebuilt frontend shows without rebuilding the app.
-    let checkout_frontend = repo_root.join("frontend").join("dist");
-    if checkout_frontend.join("index.html").is_file() {
-        command.env("TERMINAL_V4_FRONTEND_DIR", &checkout_frontend);
+    let bundled_frontend = app_handle
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|resources| resources.join("frontend").join("dist"));
+    if let Some(frontend) = select_frontend_dir(
+        &repo_root.join("frontend").join("dist"),
+        bundled_frontend.as_deref(),
+    ) {
+        command.env("TERMINAL_V4_FRONTEND_DIR", frontend);
     }
     if let Ok(resources) = app_handle.path().resource_dir() {
-        let frontend = resources.join("frontend").join("dist");
-        if frontend.join("index.html").is_file() && !checkout_frontend.join("index.html").is_file()
-        {
-            command.env("TERMINAL_V4_FRONTEND_DIR", frontend);
-        }
         if resources.join("scripts").is_dir() || resources.join("browser-runtime").is_dir() {
             command.env("TERMINAL_V4_RUNTIME_ROOT", &resources);
         }
@@ -754,6 +809,31 @@ mod tests {
     };
     use super::{gateway_settings, restart_delay, shared_data_dir, GatewaySettings};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn frontend_selection_prefers_checkout_then_bundled_then_none() {
+        let root = std::env::temp_dir().join(format!("tauri-frontend-{}", std::process::id()));
+        let (checkout, bundled) = (root.join("checkout"), root.join("bundled"));
+        std::fs::create_dir_all(&checkout).unwrap();
+        std::fs::create_dir_all(&bundled).unwrap();
+        assert_eq!(super::select_frontend_dir(&checkout, Some(&bundled)), None);
+        std::fs::write(bundled.join("index.html"), "b").unwrap();
+        assert_eq!(
+            super::select_frontend_dir(&checkout, Some(&bundled)),
+            Some(bundled.clone())
+        );
+        std::fs::write(
+            checkout.join("index.html"),
+            "<script src=\"/assets/index-X.js\">",
+        )
+        .unwrap();
+        assert_eq!(
+            super::select_frontend_dir(&checkout, Some(&bundled)),
+            Some(checkout.clone())
+        );
+        assert!(super::frontend_summary(&checkout).contains("main=assets/index-X.js"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn restarts_back_off_up_to_thirty_seconds() {

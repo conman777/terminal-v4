@@ -14,6 +14,8 @@ pub(crate) struct Page<'a> {
     pub(crate) omitted: usize,
 }
 
+pub(crate) const MAX_EVENTS: usize = crate::structured::MAX_STRUCTURED_EVENTS;
+
 pub(crate) fn project_page<'a>(
     events: &[StructuredSessionEvent],
     generation: &'a str,
@@ -21,7 +23,6 @@ pub(crate) fn project_page<'a>(
     max_messages: usize,
     max_bytes: usize,
 ) -> Result<Page<'a>, &'static str> {
-    const MAX_EVENTS: usize = 262_144;
     const MAX_MESSAGE_BYTES: usize = 16 * 1024;
     const MAX_PAGE_BYTES: usize = 512 * 1024;
     if generation.is_empty()
@@ -98,7 +99,7 @@ pub(crate) fn project_page<'a>(
             page.cursor.seq = seq;
             continue;
         }
-        let text = crate::session_search::safe_history_text(content);
+        let text = super::structured_projection::guest_text(content);
         if !page.messages.is_empty()
             && (page.messages.len() >= max_messages || bytes + text.len() > max_bytes)
         {
@@ -279,5 +280,42 @@ mod tests {
                 omitted: 0
             }
         );
+    }
+    #[test]
+    fn event_cap_equals_the_storage_cap_so_a_stream_cannot_outgrow_a_stored_conversation() {
+        assert_eq!(MAX_EVENTS, 32_768);
+        let make = |seq: i64| {
+            event(
+                json!({"type":"message_completed","ts":seq,"seq":seq,"role":"assistant","messageId":format!("m{seq}"),"content":"x"}),
+            )
+        };
+        let at_cap: Vec<_> = (1..=MAX_EVENTS as i64).map(make).collect();
+        assert!(project_page(&at_cap, "g", cursor("g", 0), 100, 1024).is_ok());
+        let over: Vec<_> = (1..=MAX_EVENTS as i64 + 1).map(make).collect();
+        assert!(project_page(&over, "g", cursor("g", 0), 100, 1024).is_err());
+    }
+
+    #[test]
+    fn a_full_size_stream_yields_a_page_no_larger_than_the_requested_bounds() {
+        let big = "word ".repeat(3000);
+        let events: Vec<_> = (1..=MAX_EVENTS as i64)
+            .map(|seq| event(json!({"type":"message_completed","ts":seq,"seq":seq,"role":"assistant","messageId":format!("m{seq}"),"content":big})))
+            .collect();
+        let page = project_page(&events, "g", cursor("g", 0), 100, 128 * 1024).unwrap();
+        let bytes: usize = page.messages.iter().map(|m| m.text.len()).sum();
+        assert!(
+            page.messages.len() <= 100 && bytes <= 128 * 1024,
+            "{} messages, {bytes} bytes",
+            page.messages.len()
+        );
+    }
+
+    #[test]
+    fn guest_pages_apply_secret_and_path_redaction() {
+        let events = vec![event(
+            json!({"type":"message_completed","ts":1,"seq":1,"role":"assistant","messageId":"a","content":"open /Users/me/private/x.rs with Bearer abcdefghijklmnop0123"}),
+        )];
+        let page = project_page(&events, "g", cursor("g", 0), 10, 1000).unwrap();
+        assert_eq!(page.messages[0].text, "open [path] with Bearer [redacted]");
     }
 }

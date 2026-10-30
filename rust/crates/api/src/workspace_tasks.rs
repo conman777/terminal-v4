@@ -25,7 +25,7 @@ pub(crate) use schedule_change::{
 const TASK_LIMIT: usize = 200;
 const RECEIPT_LIMIT: usize = 512 * 1024;
 const COMPACT_RESULT_LIMIT: usize = 16 * 1024;
-const WORKER_PROTOCOL: u64 = 2;
+pub(crate) const WORKER_PROTOCOL: u64 = 2;
 
 fn compact_receipt(record: &TaskRecord) -> TaskRecord {
     let mut compact = record.clone();

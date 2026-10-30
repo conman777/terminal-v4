@@ -48,7 +48,8 @@ fn options_reject_duplicate_identity_and_unsupported_transports() {
     ]))
     .is_err());
     assert!(!supports("hermes"));
-    assert!(!supports("bedrock"));
+    assert!(supports("bedrock"));
+    assert!(!supports("copilot"));
     assert!(supports("anthropic-api"));
     assert!(supports("openai-api"));
 }

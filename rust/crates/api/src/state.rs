@@ -878,6 +878,8 @@ impl AppState {
                 return Err("Unsupported owner cleanup installation".into());
             }
         }
+        crate::structured_share::revoke_owner_shares(&transaction, user_id)
+            .map_err(|_| "Conversation shares could not be revoked")?;
         transaction
             .execute(
                 "DELETE FROM refresh_tokens WHERE user_id = ?",
@@ -1443,6 +1445,8 @@ impl AppState {
                 "DELETE FROM refresh_tokens WHERE user_id = ?",
                 params![user.user_id],
             )
+            .map_err(|error| error.to_string())?;
+        crate::structured_share::revoke_owner_shares(&connection, &user.user_id)
             .map_err(|error| error.to_string())?;
 
         Ok(ChangePasswordResult::Changed)

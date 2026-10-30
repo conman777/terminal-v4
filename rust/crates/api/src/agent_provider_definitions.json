@@ -1722,34 +1722,35 @@
   },
   {
     "id": "bedrock",
-    "label": "AWS Bedrock",
-    "transport": "bedrock-converse",
-    "auth": "cloud",
+    "label": "AWS Bedrock (OpenAI-compatible)",
+    "transport": "openai-chat",
+    "auth": "api-key",
     "authMethods": [
-      "cli"
+      "api-key"
     ],
-    "command": "aws configure",
-    "commandHelp": "Configure the AWS CLI credentials used by the Bedrock runtime.",
-    "baseUrl": "bedrock://runtime",
+    "cloud": "bedrock",
+    "baseUrl": "",
     "envKeys": [],
+    "help": "Uses a Bedrock API key (bearer) against the bedrock-runtime OpenAI-compatible Chat Completions endpoint.",
+    "settings": [
+      {
+        "key": "region",
+        "label": "AWS region",
+        "placeholder": "us-west-2",
+        "required": true
+      }
+    ],
     "models": [
       {
-        "id": "anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "label": "Claude 3.7 Sonnet",
+        "id": "openai.gpt-oss-120b-1:0",
+        "label": "gpt-oss-120b",
         "default": true,
         "reasoningLevels": [],
         "reasoningStatus": "unknown"
       },
       {
-        "id": "amazon.nova-pro-v1:0",
-        "label": "Amazon Nova Pro",
-        "default": false,
-        "reasoningLevels": [],
-        "reasoningStatus": "unknown"
-      },
-      {
-        "id": "meta.llama3-3-70b-instruct-v1:0",
-        "label": "Llama 3.3 70B",
+        "id": "openai.gpt-oss-20b-1:0",
+        "label": "gpt-oss-20b",
         "default": false,
         "reasoningLevels": [],
         "reasoningStatus": "unknown"
@@ -1758,28 +1759,40 @@
   },
   {
     "id": "vertex",
-    "label": "Google Vertex AI",
-    "transport": "vertex-openai",
-    "auth": "cloud",
+    "label": "Google Vertex AI (OpenAI-compatible)",
+    "transport": "openai-chat",
+    "auth": "api-key",
     "authMethods": [
-      "cli"
+      "api-key"
     ],
-    "command": "gcloud auth application-default login",
-    "commandHelp": "Sign in with Google Application Default Credentials for Vertex AI.",
-    "baseUrl": "https://us-central1-aiplatform.googleapis.com",
+    "cloud": "vertex",
+    "baseUrl": "",
     "envKeys": [],
-    "projectEnvKey": "GOOGLE_CLOUD_PROJECT",
-    "locationEnvKey": "GOOGLE_CLOUD_LOCATION",
+    "help": "Paste a short-lived OAuth access token (for example from gcloud auth print-access-token); it expires after about an hour and must be replaced.",
+    "settings": [
+      {
+        "key": "project",
+        "label": "Google Cloud project ID",
+        "placeholder": "my-project-123",
+        "required": true
+      },
+      {
+        "key": "location",
+        "label": "Location",
+        "placeholder": "us-central1",
+        "required": true
+      }
+    ],
     "models": [
       {
-        "id": "gemini-2.5-pro",
+        "id": "google/gemini-2.5-pro",
         "label": "Gemini 2.5 Pro",
         "default": true,
         "reasoningLevels": [],
         "reasoningStatus": "unknown"
       },
       {
-        "id": "gemini-2.5-flash",
+        "id": "google/gemini-2.5-flash",
         "label": "Gemini 2.5 Flash",
         "default": false,
         "reasoningLevels": [],
@@ -1789,15 +1802,36 @@
   },
   {
     "id": "azure-foundry",
-    "label": "Azure AI Foundry",
-    "transport": "azure-openai",
+    "label": "Azure AI Foundry / Azure OpenAI",
+    "transport": "openai-chat",
     "auth": "api-key",
-    "baseUrl": "",
-    "baseUrlEnvKey": "AZURE_FOUNDRY_ENDPOINT",
-    "envKeys": [
-      "AZURE_FOUNDRY_API_KEY"
+    "authMethods": [
+      "api-key"
     ],
-    "deploymentEnvKey": "AZURE_FOUNDRY_DEPLOYMENT",
+    "cloud": "azure",
+    "baseUrl": "",
+    "envKeys": [],
+    "help": "The V4 model name is the Azure deployment name; use a custom model name for other deployments.",
+    "settings": [
+      {
+        "key": "endpoint",
+        "label": "Resource endpoint",
+        "placeholder": "https://my-resource.openai.azure.com",
+        "required": true
+      },
+      {
+        "key": "apiVersion",
+        "label": "API version",
+        "placeholder": "2024-10-21",
+        "required": true
+      },
+      {
+        "key": "authHeader",
+        "label": "Auth header (api-key or bearer)",
+        "placeholder": "api-key",
+        "required": false
+      }
+    ],
     "models": [
       {
         "id": "gpt-4.1",
@@ -1807,19 +1841,13 @@
         "reasoningStatus": "unknown"
       },
       {
-        "id": "claude-sonnet-4",
-        "label": "Claude Sonnet deployment",
+        "id": "gpt-5",
+        "label": "GPT-5 deployment (Responses API)",
         "default": false,
         "reasoningLevels": [],
-        "reasoningStatus": "unknown"
+        "reasoningStatus": "unknown",
+        "transport": "openai-responses"
       }
-    ],
-    "reasoningLevels": [
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max"
     ]
   }
 ]

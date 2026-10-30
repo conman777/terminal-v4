@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn invalid_or_unsupported_selections_fail_without_synthesizing_capabilities() {
         assert!(select("missing", "model").is_err());
-        assert!(select("bedrock", "model").is_err());
+        assert!(select("copilot", "model").is_err());
         assert!(select("openai-api", "bad\nmodel").is_err());
         assert!(select("openai-api", "").is_err());
         let custom = select("deepseek", "custom-model").unwrap();

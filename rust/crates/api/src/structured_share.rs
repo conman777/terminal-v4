@@ -1,6 +1,9 @@
 use crate::{
     auth::AuthenticatedUser,
-    collaboration::structured_stream::{project_page, Cursor},
+    collaboration::{
+        structured_projection::{guest_text, strip_workspace},
+        structured_stream::{project_page, Cursor},
+    },
     state::AppState,
     ApiError,
 };
@@ -19,6 +22,7 @@ use std::{
     collections::HashMap,
     sync::{LazyLock, Mutex},
 };
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 const CREDENTIAL_PREFIX: &str = "tv4share.";
 const DEFAULT_EXPIRY_SECONDS: i64 = 86_400;
@@ -30,6 +34,10 @@ const MAX_PROPOSAL_CHARS: usize = 4000;
 const RETENTION_SECONDS: i64 = 30 * 86_400;
 const SWEEP_INTERVAL_SECONDS: i64 = 30;
 const PRIVATE: &str = "no-store";
+const CLOCK_SKEW_SECONDS: i64 = 300;
+const MAX_LIMIT_KEYS: usize = 8192;
+const MAX_CONCURRENT_PROJECTIONS: usize = 4;
+const DENIED_AUDIT_INTERVAL_SECONDS: i64 = 60;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -72,6 +80,10 @@ fn token() -> String {
 
 fn hash(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
 }
 
 fn denied() -> ApiError {
@@ -132,25 +144,76 @@ fn audit(
     );
 }
 
-static LIMITS: LazyLock<Mutex<HashMap<String, (i64, u32)>>> =
+struct Bucket {
+    start: i64,
+    count: u32,
+    window: i64,
+}
+
+static LIMITS: LazyLock<Mutex<HashMap<String, Bucket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn allow_in(
+    map: &mut HashMap<String, Bucket>,
+    key: &str,
+    limit: u32,
+    window: i64,
+    at: i64,
+) -> bool {
+    let live = |bucket: &Bucket| (0..bucket.window).contains(&(at - bucket.start));
+    if map.len() >= MAX_LIMIT_KEYS && !map.contains_key(key) {
+        map.retain(|_, bucket| live(bucket));
+        if map.len() >= MAX_LIMIT_KEYS {
+            return false;
+        }
+    }
+    let entry = map.entry(key.to_owned()).or_insert(Bucket {
+        start: at,
+        count: 0,
+        window,
+    });
+    if !live(entry) {
+        *entry = Bucket {
+            start: at,
+            count: 0,
+            window,
+        };
+    }
+    if entry.count >= limit {
+        return false;
+    }
+    entry.count += 1;
+    true
+}
 
 fn allow(key: &str, limit: u32, window: i64, at: i64) -> bool {
     let mut map = LIMITS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if map.len() > 4096 {
-        map.retain(|_, (start, _)| at - *start < 3600);
+    allow_in(&mut map, key, limit, window, at)
+}
+
+static PROJECTIONS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_PROJECTIONS);
+
+fn projection_permit(gate: &Semaphore) -> Result<SemaphorePermit<'_>, ApiError> {
+    gate.try_acquire().map_err(|_| limited())
+}
+
+pub(crate) fn revoke_owner_shares(db: &Connection, owner: &str) -> rusqlite::Result<usize> {
+    db.execute_batch(SCHEMA)?;
+    let at = now();
+    let active: Vec<(String, String)> = {
+        let mut statement = db.prepare(
+            "SELECT id,session FROM structured_shares WHERE owner=?1 AND revoked IS NULL AND swept IS NULL",
+        )?;
+        let rows = statement.query_map([owner], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for (id, session) in &active {
+        revoke_row(db, id, at)?;
+        audit(db, id, owner, session, at, "owner_signed_out", "");
     }
-    let entry = map.entry(key.to_owned()).or_insert((at, 0));
-    if at - entry.0 >= window {
-        *entry = (at, 0);
-    }
-    if entry.1 >= limit {
-        return false;
-    }
-    entry.1 += 1;
-    true
+    Ok(active.len())
 }
 
 pub(crate) fn sweep(db: &Connection, at: i64) -> rusqlite::Result<usize> {
@@ -447,11 +510,15 @@ struct ExchangeBody {
     display_name: Option<String>,
 }
 
+fn is_bidi_control(character: char) -> bool {
+    matches!(character, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 fn clean_name(value: Option<&str>) -> String {
     let cleaned: String = value
         .unwrap_or("Guest")
         .chars()
-        .filter(|character| !character.is_control())
+        .filter(|character| !character.is_control() && !is_bidi_control(*character))
         .take(80)
         .collect();
     let trimmed = cleaned.trim();
@@ -477,32 +544,49 @@ fn claim(state: &AppState, body: &ExchangeBody, at: i64) -> Result<Claim, ApiErr
     let name = clean_name(body.display_name.as_deref());
     let connection = db(state)?;
     maybe_sweep(&connection, at);
-    let claimed = connection
-        .execute(
-            "UPDATE structured_shares SET credential_hash=?3, redeemed=?4, last_seen=?4, guest_name=?5 WHERE id=?1 AND secret_hash=?2 AND expires>?4 AND revoked IS NULL AND credential_hash IS NULL AND swept IS NULL",
-            params![body.id, hash(&body.secret), hash(&credential), at, name],
-        )
-        .map_err(storage)?;
-    let row: Option<(String, String, i64, i64, String)> = connection
+    let row: Option<(String, String, i64, i64, String, String)> = connection
         .query_row(
-            "SELECT owner,session,expires,allow_messages,incarnation FROM structured_shares WHERE id=?1",
+            "SELECT owner,session,expires,allow_messages,incarnation,secret_hash FROM structured_shares WHERE id=?1",
             [&body.id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
         )
         .optional()
         .map_err(storage)?;
-    let Some((owner, session, expires, allow_messages, incarnation)) = row else {
+    let Some((owner, session, expires, allow_messages, incarnation, stored_hash)) = row else {
         return Err(denied());
     };
+    let presented = hash(&body.secret);
+    let claimed = if ct_eq(stored_hash.as_bytes(), presented.as_bytes()) {
+        connection
+            .execute(
+                "UPDATE structured_shares SET credential_hash=?3, redeemed=?4, last_seen=?4, guest_name=?5 WHERE id=?1 AND secret_hash=?2 AND expires>?4 AND created<=?4+?6 AND expires<=created+?7 AND revoked IS NULL AND credential_hash IS NULL AND swept IS NULL",
+                params![
+                    body.id,
+                    presented,
+                    hash(&credential),
+                    at,
+                    name,
+                    CLOCK_SKEW_SECONDS,
+                    DEFAULT_EXPIRY_SECONDS
+                ],
+            )
+            .map_err(storage)?
+    } else {
+        0
+    };
     if claimed != 1 {
-        audit(
-            &connection,
-            &body.id,
-            &owner,
-            &session,
-            at,
-            "exchange_denied",
-            "",
+        let _ = connection.execute(
+            "INSERT INTO structured_share_audit(share,owner,session,at,kind,detail) SELECT ?1,?2,?3,?4,'exchange_denied','' WHERE NOT EXISTS (SELECT 1 FROM structured_share_audit WHERE share=?1 AND kind='exchange_denied' AND at>?5)",
+            params![body.id, owner, session, at, at - DENIED_AUDIT_INTERVAL_SECONDS],
         );
         return Err(denied());
     }
@@ -569,7 +653,8 @@ async fn exchange(
     let title = state
         .structured_session_manager()
         .with_guest_view(&claimed.owner, &claimed.session, |view| {
-            (view.incarnation == incarnation).then(|| view.title.to_owned())
+            (view.incarnation == incarnation)
+                .then(|| strip_workspace(guest_text(view.title), view.cwd))
         })
         .await
         .ok()
@@ -581,7 +666,7 @@ async fn exchange(
         Json(json!({
             "credential": claimed.credential, "sessionId": claimed.session, "expiresAt": claimed.expires,
             "allowGuestMessages": claimed.allow_messages,
-            "title": crate::session_search::safe_history_text(&title).chars().take(200).collect::<String>(),
+            "title": guest_text(&title).chars().take(200).collect::<String>(),
         })),
     ))
 }
@@ -617,8 +702,8 @@ fn authorize(
     maybe_sweep(&connection, at);
     let guest = connection
         .query_row(
-            "SELECT id,owner,session,incarnation,allow_messages,COALESCE(guest_name,'Guest'),last_seen FROM structured_shares WHERE credential_hash=?1 AND session=?2 AND expires>?3 AND revoked IS NULL AND swept IS NULL",
-            params![hash(credential), session, at],
+            "SELECT id,owner,session,incarnation,allow_messages,COALESCE(guest_name,'Guest'),last_seen FROM structured_shares WHERE credential_hash=?1 AND session=?2 AND expires>?3 AND created<=?3+?4 AND expires<=created+?5 AND revoked IS NULL AND swept IS NULL",
+            params![hash(credential), session, at, CLOCK_SKEW_SECONDS, DEFAULT_EXPIRY_SECONDS],
             |row| {
                 Ok((
                     Guest {
@@ -662,6 +747,7 @@ async fn messages(
     if !allow(&format!("read:{}", guest.share), 120, 60, at) {
         return Err(limited());
     }
+    let _permit = projection_permit(&PROJECTIONS)?;
     let after = query.after.unwrap_or(0).max(0);
     let requested = query.generation;
     let incarnation = guest.incarnation.clone();
@@ -681,13 +767,17 @@ async fn messages(
             )
             .map_err(|reason| if reason.contains("snapshot") { "snapshot" } else { "cursor" })?;
             let last = view.events.last().map_or(0, |event| event.seq());
+            let mut page = page;
+            for message in &mut page.messages {
+                message.text = strip_workspace(std::mem::take(&mut message.text), view.cwd);
+            }
             Ok(json!({
                 "generation": view.incarnation,
                 "cursor": page.cursor.seq,
                 "messages": page.messages,
                 "omitted": page.omitted,
                 "caughtUp": page.cursor.seq >= last,
-                "title": crate::session_search::safe_history_text(view.title).chars().take(200).collect::<String>(),
+                "title": strip_workspace(guest_text(view.title), view.cwd).chars().take(200).collect::<String>(),
             }))
         })
         .await
@@ -766,9 +856,10 @@ async fn propose(
     let text = body.text.trim();
     if text.is_empty()
         || text.chars().count() > MAX_PROPOSAL_CHARS
-        || text
-            .chars()
-            .any(|character| character.is_control() && !matches!(character, '\n' | '\t'))
+        || text.chars().any(|character| {
+            (character.is_control() && !matches!(character, '\n' | '\t'))
+                || is_bidi_control(character)
+        })
     {
         return Err(ApiError::bad_request(
             "Write a message of up to 4000 characters without control characters",
@@ -1432,36 +1523,65 @@ mod tests {
         let _ = guest;
     }
 
-    fn route_paths() -> Vec<String> {
-        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    walk(&path, out);
-                } else if path.extension().is_some_and(|e| e == "rs") {
-                    out.push(path);
-                }
-            }
-        }
-        let mut files = Vec::new();
-        walk(
-            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            &mut files,
-        );
-        let pattern = regex_lite::Regex::new(r#"\.route\(\s*"(/[^"]*)""#).unwrap();
-        let mut paths = std::collections::BTreeSet::new();
-        for file in files {
-            let source = std::fs::read_to_string(file).unwrap();
-            for capture in pattern.captures_iter(&source) {
-                let path = capture[1].to_owned();
-                let concrete = regex_lite::Regex::new(r"\{\*?[^}]*\}")
-                    .unwrap()
-                    .replace_all(&path, "x")
-                    .into_owned();
-                paths.insert(concrete);
-            }
-        }
+    fn router_paths(app: &Router) -> Vec<String> {
+        let dump = format!("{app:?}");
+        let pattern = regex_lite::Regex::new(r#"RouteId\(\d+\): "(/[^"]*)""#).unwrap();
+        let placeholder = regex_lite::Regex::new(r"\{\*?[^}]*\}").unwrap();
+        let paths: std::collections::BTreeSet<String> = pattern
+            .captures_iter(&dump)
+            .map(|capture| placeholder.replace_all(&capture[1], "x").into_owned())
+            .collect();
         paths.into_iter().collect()
+    }
+
+    async fn status_with(
+        f: &Fixture,
+        method: &str,
+        uri: &str,
+        headers: &[(&str, String)],
+    ) -> StatusCode {
+        let mut request = Request::builder().method(method).uri(uri);
+        for (name, value) in headers {
+            request = request.header(*name, value);
+        }
+        let body = if method == "GET" || method == "DELETE" {
+            Body::empty()
+        } else {
+            request = request.header("content-type", "application/json");
+            Body::from("{}")
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            f.app.clone().oneshot(request.body(body).unwrap()),
+        )
+        .await
+        .expect("request timed out")
+        .unwrap()
+        .status()
+    }
+
+    #[test]
+    fn route_enumeration_reads_the_assembled_router_including_merged_and_nested_routes() {
+        let f = fixture();
+        let paths = router_paths(&f.app);
+        assert!(paths.len() > 250, "only {} routes enumerated", paths.len());
+        for expected in [
+            "/api/structured-share/exchange",
+            "/api/structured/sessions/x/shares",
+            "/api/structured/sessions/x/shares/x/proposals/x",
+            "/api/structured/sessions/x/ws",
+            "/api/terminal/x/ws",
+            "/api/latency/ws",
+            "/api/preview/x/performance/stream",
+            "/preview/x",
+            "/preview/x/x",
+            "/api/health",
+        ] {
+            assert!(
+                paths.iter().any(|path| path == expected),
+                "{expected} missing"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1472,17 +1592,23 @@ mod tests {
         let issued = share(&f, "owner", &id, json!({"allowGuestMessages": true})).await;
         let (_, guest) = redeem(&f, &issued).await;
         let credential = guest["credential"].as_str().unwrap().to_owned();
-        let paths = route_paths();
-        assert!(paths.len() > 100, "route enumeration found {}", paths.len());
+        let paths = router_paths(&f.app);
         let mut protected = 0;
-        for path in &paths {
+        for path in paths.iter().map(String::as_str).chain([
+            "/",
+            "/index.html",
+            "/assets/x.js",
+            "/api/unknown",
+            "/ws",
+            "/events",
+        ]) {
             if path.starts_with("/api/structured-share/") || path.starts_with("/api/auth/") {
                 continue;
             }
             for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
-                let body = (method != "GET" && method != "DELETE").then(|| json!({}));
-                let anonymous = call(&f, method, path, None, body.clone()).await.0;
-                let guest_status = call(&f, method, path, Some(&credential), body).await.0;
+                let anonymous = status_with(&f, method, path, &[]).await;
+                let bearer = [("authorization", format!("Bearer {credential}"))];
+                let guest_status = status_with(&f, method, path, &bearer).await;
                 assert_eq!(guest_status, anonymous, "{method} {path}");
                 assert!(
                     !guest_status.is_success() || anonymous.is_success(),
@@ -1492,9 +1618,38 @@ mod tests {
                     protected += 1;
                 }
             }
+            for method in ["GET", "POST"] {
+                let anonymous = status_with(&f, method, path, &[]).await;
+                let separator = if path.contains('?') { '&' } else { '?' };
+                for (uri, headers) in [
+                    (format!("{path}{separator}token={credential}"), vec![]),
+                    (
+                        format!("{path}{separator}previewToken={credential}"),
+                        vec![],
+                    ),
+                    (
+                        path.to_owned(),
+                        vec![("cookie", format!("terminal_preview_token={credential}"))],
+                    ),
+                    (
+                        path.to_owned(),
+                        vec![("sec-websocket-protocol", credential.clone())],
+                    ),
+                    (
+                        path.to_owned(),
+                        vec![
+                            ("x-api-key", credential.clone()),
+                            ("x-auth-token", credential.clone()),
+                        ],
+                    ),
+                ] {
+                    let guest_status = status_with(&f, method, &uri, &headers).await;
+                    assert_eq!(guest_status, anonymous, "{method} {uri} {headers:?}");
+                }
+            }
         }
         assert!(
-            protected > 150,
+            protected > 800,
             "only {protected} protected route methods exercised"
         );
         for path in [
@@ -1522,5 +1677,550 @@ mod tests {
             .0,
             StatusCode::OK
         );
+    }
+
+    #[tokio::test]
+    async fn the_share_api_accepts_only_the_session_bound_guest_credential() {
+        let f = fixture();
+        let a = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &a, json!({"allowGuestMessages": true})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let credential = guest["credential"].as_str().unwrap();
+        assert!(credential.starts_with(CREDENTIAL_PREFIX) && credential.len() == 73);
+        let owner = jwt(&f, "owner");
+        let owner_paths = [
+            ("GET", format!("/api/structured/sessions/{a}/shares")),
+            ("POST", format!("/api/structured/sessions/{a}/shares")),
+            (
+                "DELETE",
+                format!(
+                    "/api/structured/sessions/{a}/shares/{}",
+                    issued["id"].as_str().unwrap()
+                ),
+            ),
+            (
+                "POST",
+                format!("/api/structured/sessions/{a}/shares/s/proposals/p"),
+            ),
+        ];
+        for (method, path) in owner_paths {
+            assert_eq!(
+                call(
+                    &f,
+                    method,
+                    &path,
+                    Some(credential),
+                    Some(json!({"decision": "approve"}))
+                )
+                .await
+                .0,
+                StatusCode::UNAUTHORIZED,
+                "{method} {path}"
+            );
+        }
+        let (status, _) = call(
+            &f,
+            "POST",
+            "/api/structured-share/exchange",
+            Some(&owner),
+            Some(json!({"id": "x", "secret": "y"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(read(&f, &owner, &a, "").await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn constant_time_comparison_requires_equal_length_and_content() {
+        assert!(ct_eq(b"abc", b"abc"));
+        assert!(!ct_eq(b"abc", b"abd"));
+        assert!(!ct_eq(b"abc", b"ab"));
+        assert!(!ct_eq(b"", b"a"));
+        assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn tokens_are_256_bit_hex_and_never_repeat() {
+        let tokens: std::collections::HashSet<String> = (0..2000).map(|_| token()).collect();
+        assert_eq!(tokens.len(), 2000);
+        assert!(tokens
+            .iter()
+            .all(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())));
+        assert_eq!(hash("x").len(), 64);
+        assert_ne!(hash("x"), "x");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_secret_never_burns_the_link_and_repeated_denials_are_audited_once_a_minute() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({})).await;
+        for _ in 0..5 {
+            let (status, _) = call(
+                &f,
+                "POST",
+                "/api/structured-share/exchange",
+                None,
+                Some(json!({"id": issued["id"], "secret": "b".repeat(64)})),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+        }
+        let denied_rows: i64 = f
+            .state
+            .lock_db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM structured_share_audit WHERE kind='exchange_denied'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(denied_rows, 1);
+        let (status, guest) = redeem(&f, &issued).await;
+        assert_eq!(status, StatusCode::OK, "{guest}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_exchanges_of_one_link_produce_exactly_one_guest() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({})).await;
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..8 {
+            let app = f.app.clone();
+            let body = json!({"id": issued["id"], "secret": issued["secret"]}).to_string();
+            tasks.spawn(async move {
+                let response = app
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/api/structured-share/exchange")
+                            .header("content-type", "application/json")
+                            .body(Body::from(body))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .unwrap();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+                )
+            });
+        }
+        let mut winners = Vec::new();
+        let mut losers = 0;
+        while let Some(result) = tasks.join_next().await {
+            let (status, body) = result.unwrap();
+            match status {
+                StatusCode::OK => winners.push(body),
+                StatusCode::UNAUTHORIZED => losers += 1,
+                other => panic!("unexpected {other}"),
+            }
+        }
+        assert_eq!((winners.len(), losers), (1, 7));
+        let credentials: i64 = f
+            .state
+            .lock_db()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(credential_hash) FROM structured_shares",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(credentials, 1);
+        let credential = winners[0]["credential"].as_str().unwrap();
+        assert_eq!(read(&f, credential, &id, "").await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn clock_skew_cannot_extend_a_link_or_a_credential_and_future_dated_rows_fail_closed() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let before = now();
+        let issued = share(&f, "owner", &id, json!({"expiresInSeconds": 3600})).await;
+        let body = ExchangeBody {
+            id: issued["id"].as_str().unwrap().into(),
+            secret: issued["secret"].as_str().unwrap().into(),
+            display_name: None,
+        };
+        assert!(claim(&f.state, &body, before - 10_000).is_err());
+        let claimed = claim(&f.state, &body, before + 5).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {}", claimed.credential).parse().unwrap(),
+        );
+        assert!(authorize(&f.state, &headers, &id, before - 10_000).is_err());
+        assert!(authorize(&f.state, &headers, &id, before + 3599).is_ok());
+        f.state
+            .lock_db()
+            .unwrap()
+            .execute("UPDATE structured_shares SET expires=created+999999", [])
+            .unwrap();
+        assert!(authorize(&f.state, &headers, &id, before + 5).is_err());
+        f.state
+            .lock_db()
+            .unwrap()
+            .execute("UPDATE structured_shares SET expires=created+3600", [])
+            .unwrap();
+        assert!(authorize(&f.state, &headers, &id, before + 5).is_ok());
+        assert!(authorize(&f.state, &headers, &id, before + 3601).is_err());
+        assert!(authorize(&f.state, &headers, &id, before + 86_400 * 30).is_err());
+    }
+
+    #[test]
+    fn rate_limit_table_is_bounded_and_fails_closed_for_new_keys_until_windows_expire() {
+        let mut map = HashMap::new();
+        for index in 0..MAX_LIMIT_KEYS {
+            assert!(allow_in(&mut map, &format!("k{index}"), 1, 60, 100));
+        }
+        assert!(!allow_in(&mut map, "newcomer", 1, 60, 100));
+        assert!(!allow_in(&mut map, "k0", 1, 60, 100));
+        assert_eq!(map.len(), MAX_LIMIT_KEYS);
+        assert!(allow_in(&mut map, "newcomer", 1, 60, 160));
+        assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn rate_limit_window_restarts_when_the_clock_moves_backwards() {
+        let mut map = HashMap::new();
+        assert!(allow_in(&mut map, "k", 1, 60, 1000));
+        assert!(!allow_in(&mut map, "k", 1, 60, 1001));
+        assert!(allow_in(&mut map, "k", 1, 60, 400));
+    }
+
+    #[test]
+    fn concurrent_projections_are_capped_and_refused_with_429() {
+        let gate = Semaphore::new(2);
+        let first = projection_permit(&gate).unwrap();
+        let _second = projection_permit(&gate).unwrap();
+        assert_eq!(
+            projection_permit(&gate).err().map(|error| error.status),
+            Some(StatusCode::TOO_MANY_REQUESTS)
+        );
+        drop(first);
+        assert!(projection_permit(&gate).is_ok());
+        assert_eq!(MAX_CONCURRENT_PROJECTIONS, 4);
+    }
+
+    #[tokio::test]
+    async fn owner_sign_out_revokes_every_share_and_pending_message_of_that_owner_only() {
+        let f = fixture();
+        let mine = conversation(&f, "owner").await;
+        let theirs = conversation(&f, "neighbour").await;
+        let active = share(&f, "owner", &mine, json!({"allowGuestMessages": true})).await;
+        let (_, guest) = redeem(&f, &active).await;
+        let credential = guest["credential"].as_str().unwrap().to_owned();
+        let (status, _) = call(
+            &f,
+            "POST",
+            &format!("/api/structured-share/guest/{mine}/proposals"),
+            Some(&credential),
+            Some(json!({"text": "please continue"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let waiting = share(&f, "owner", &mine, json!({})).await;
+        let neighbour_share = share(&f, "neighbour", &theirs, json!({})).await;
+        let (_, neighbour_guest) = redeem(&f, &neighbour_share).await;
+        let neighbour_credential = neighbour_guest["credential"].as_str().unwrap();
+        assert_eq!(read(&f, &credential, &mine, "").await.0, StatusCode::OK);
+
+        f.state.logout_user("owner").unwrap();
+
+        assert_eq!(
+            read(&f, &credential, &mine, "").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(redeem(&f, &waiting).await.0, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            read(&f, neighbour_credential, &theirs, "").await.0,
+            StatusCode::OK
+        );
+        let connection = f.state.lock_db().unwrap();
+        let statuses: Vec<String> = connection
+            .prepare("SELECT status FROM structured_share_proposals")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(statuses, vec!["expired".to_owned()]);
+        let signed_out: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM structured_share_audit WHERE kind='owner_signed_out' AND owner='owner'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(signed_out, 2);
+        let leftovers: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM structured_shares WHERE owner='owner' AND (credential_hash IS NOT NULL OR secret_hash<>'')",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[tokio::test]
+    async fn changing_the_owner_password_revokes_that_owners_shares() {
+        let f = fixture();
+        let user = f
+            .state
+            .create_local_user_for_test("alice", "old-password-1")
+            .unwrap();
+        let id = conversation(&f, &user.id).await;
+        let issued = share(&f, &user.id, &id, json!({})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let credential = guest["credential"].as_str().unwrap();
+        assert_eq!(read(&f, credential, &id, "").await.0, StatusCode::OK);
+        let owner = AuthenticatedUser {
+            user_id: user.id.clone(),
+            username: "alice".into(),
+        };
+        f.state
+            .change_password(&owner, "old-password-1", "new-password-2")
+            .unwrap();
+        assert_eq!(
+            read(&f, credential, &id, "").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_conversation_ends_the_guest_session_on_the_next_read() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let credential = guest["credential"].as_str().unwrap();
+        assert_eq!(read(&f, credential, &id, "").await.0, StatusCode::OK);
+        let (status, _) = call(
+            &f,
+            "DELETE",
+            &format!("/api/structured/sessions/{id}"),
+            Some(&jwt(&f, "owner")),
+            None,
+        )
+        .await;
+        assert!(status.is_success(), "{status}");
+        assert_eq!(
+            read(&f, credential, &id, "").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            read(&f, credential, &id, "").await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn guests_cannot_approve_and_only_the_owner_can_through_a_json_bearer_request() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({"allowGuestMessages": true})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let credential = guest["credential"].as_str().unwrap().to_owned();
+        let (_, proposal) = call(
+            &f,
+            "POST",
+            &format!("/api/structured-share/guest/{id}/proposals"),
+            Some(&credential),
+            Some(json!({"text": "run the deploy"})),
+        )
+        .await;
+        let share_id = issued["id"].as_str().unwrap();
+        let path = format!(
+            "/api/structured/sessions/{id}/shares/{share_id}/proposals/{}",
+            proposal["id"].as_str().unwrap()
+        );
+        let approve = json!({"decision": "approve"});
+        assert_eq!(
+            call(&f, "POST", &path, Some(&credential), Some(approve.clone()))
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(&f, "POST", &path, None, Some(approve.clone())).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &f,
+                "POST",
+                &format!("{path}?token={credential}"),
+                None,
+                Some(approve.clone())
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        let preview =
+            crate::auth::issue_preview_token(&f.state.config().jwt_secret, "owner", "owner");
+        assert_eq!(
+            status_with(
+                &f,
+                "POST",
+                &path,
+                &[
+                    ("cookie", format!("terminal_preview_token={preview}")),
+                    ("content-type", "application/json".into())
+                ]
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &f,
+                "POST",
+                &path,
+                Some(&jwt(&f, "stranger")),
+                Some(approve.clone())
+            )
+            .await
+            .0,
+            StatusCode::NOT_FOUND
+        );
+        let owner = jwt(&f, "owner");
+        let form = Request::builder()
+            .method("POST")
+            .uri(&path)
+            .header("authorization", format!("Bearer {owner}"))
+            .header("content-type", "text/plain")
+            .body(Body::from(approve.to_string()))
+            .unwrap();
+        assert_eq!(
+            f.app.clone().oneshot(form).await.unwrap().status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+        let (_, listing) = call(
+            &f,
+            "GET",
+            &format!("/api/structured/sessions/{id}/shares"),
+            Some(&owner),
+            None,
+        )
+        .await;
+        assert_eq!(listing["shares"][0]["proposals"][0]["status"], "pending");
+        let (status, decided) = call(&f, "POST", &path, Some(&owner), Some(approve)).await;
+        assert_eq!(
+            (status, decided["text"].as_str()),
+            (StatusCode::OK, Some("run the deploy"))
+        );
+    }
+
+    #[tokio::test]
+    async fn guest_reads_expose_only_redacted_user_and_assistant_text_for_adversarial_events() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let workspace = f
+            ._dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let manager = f.state.structured_session_manager();
+        let cwd = f._dir.path().to_str().unwrap();
+        for value in [
+            json!({"type":"user_message_accepted","ts":1,"seq":1,"requestId":"REQ-SECRET","turnId":"TURN-SECRET","messageId":"u","content":format!("look at {cwd}/src/main.rs"),"attachments":[{"attachmentId":"ATT-SECRET","artifactId":"ART-SECRET","mimeType":"image/png","bytes":1,"name":"ATT-NAME.png"}]}),
+            json!({"type":"message_completed","ts":2,"seq":2,"role":"system","messageId":"s","content":"SYSTEM-PROMPT-SECRET"}),
+            json!({"type":"message_completed","ts":3,"seq":3,"role":"tool","messageId":"t","content":"TOOL-ROLE-SECRET"}),
+            json!({"type":"message_completed","ts":4,"seq":4,"role":"developer","messageId":"d","content":"DEVELOPER-SECRET"}),
+            json!({"type":"tool_started","ts":5,"seq":5,"toolName":"Bash","toolInput":{"env":{"AWS_SECRET":"TOOL-INPUT-SECRET"}}}),
+            json!({"type":"approval_required","ts":6,"seq":6,"toolName":"Bash","toolInput":{},"description":"APPROVAL-SECRET"}),
+            json!({"type":"message_completed","ts":7,"seq":7,"role":"assistant","messageId":"a","content":format!("Edited {cwd}/src/lib.rs. Use Bearer abcdefghijklmnop0123456789 and OPENAI_KEY=sk-live-abc123 at https://u:pw@host/x#frag=1")}),
+        ] {
+            manager
+                .push_event_for_test("owner", &id, event(value))
+                .await;
+        }
+        let issued = share(&f, "owner", &id, json!({})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let (status, page) = read(&f, guest["credential"].as_str().unwrap(), &id, "").await;
+        assert_eq!(status, StatusCode::OK);
+        let encoded = page.to_string();
+        for private in [
+            "REQ-SECRET",
+            "TURN-SECRET",
+            "ATT-SECRET",
+            "ART-SECRET",
+            "ATT-NAME",
+            "SYSTEM-PROMPT-SECRET",
+            "TOOL-ROLE-SECRET",
+            "DEVELOPER-SECRET",
+            "TOOL-INPUT-SECRET",
+            "APPROVAL-SECRET",
+            "abcdefghijklmnop0123456789",
+            "sk-live-abc123",
+            "u:pw",
+            "frag=1",
+            workspace.as_str(),
+        ] {
+            assert!(!encoded.contains(private), "leaked {private}: {encoded}");
+        }
+        assert_eq!(page["messages"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn guest_names_and_suggestions_cannot_carry_bidirectional_control_characters() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({"allowGuestMessages": true})).await;
+        let (_, guest) = call(
+            &f,
+            "POST",
+            "/api/structured-share/exchange",
+            None,
+            Some(json!({"id": issued["id"], "secret": issued["secret"], "displayName": "Ali\u{202e}ce"})),
+        )
+        .await;
+        let credential = guest["credential"].as_str().unwrap();
+        let stored: String = f
+            .state
+            .lock_db()
+            .unwrap()
+            .query_row("SELECT guest_name FROM structured_shares", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, "Alice");
+        let (status, _) = call(
+            &f,
+            "POST",
+            &format!("/api/structured-share/guest/{id}/proposals"),
+            Some(credential),
+            Some(json!({"text": "approve \u{202e}txt.exe"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn owner_listings_never_contain_the_link_secret_or_guest_credential() {
+        let f = fixture();
+        let id = conversation(&f, "owner").await;
+        let issued = share(&f, "owner", &id, json!({})).await;
+        let (_, guest) = redeem(&f, &issued).await;
+        let (_, listing) = call(
+            &f,
+            "GET",
+            &format!("/api/structured/sessions/{id}/shares"),
+            Some(&jwt(&f, "owner")),
+            None,
+        )
+        .await;
+        let encoded = listing.to_string();
+        assert!(!encoded.contains(issued["secret"].as_str().unwrap()));
+        assert!(!encoded.contains(guest["credential"].as_str().unwrap()));
+        assert!(!encoded.contains(&hash(issued["secret"].as_str().unwrap())));
     }
 }

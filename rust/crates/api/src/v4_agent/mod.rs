@@ -8,6 +8,7 @@ pub(crate) mod background_process;
 #[allow(dead_code)]
 pub(crate) mod background_quiescence;
 pub(crate) mod browser;
+pub(crate) mod cloud_provider;
 mod compaction;
 pub(crate) mod context;
 #[cfg(unix)]
@@ -638,23 +639,47 @@ impl Provider {
         )
     }
     fn new(provider: &str, secret: String, model: &str) -> Result<Self, String> {
+        Self::with_loopback(provider, secret, model, cloud_provider::loopback_allowed())
+    }
+    fn with_loopback(
+        provider: &str,
+        secret: String,
+        model: &str,
+        allow_loopback: bool,
+    ) -> Result<Self, String> {
         let selection = provider_config::select(provider, model)?;
         let transport = selection.transport;
-        let endpoint = selection
-            .base_url_env_key
-            .as_deref()
-            .and_then(|key| std::env::var(key).ok())
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(selection.base_url);
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(120));
+        let (url, secret) = if cloud_provider::kind(provider).is_some() {
+            let route =
+                cloud_provider::resolve(provider, &transport, model, &secret, allow_loopback)?;
+            if let Some(key) = route.api_key_header {
+                let mut value = reqwest::header::HeaderValue::from_str(&key)
+                    .map_err(|_| "Provider credential contains invalid characters")?;
+                value.set_sensitive(true);
+                let mut headers = reqwest::header::HeaderMap::new();
+                headers.insert("api-key", value);
+                builder = builder.default_headers(headers);
+            }
+            (route.url, route.bearer.unwrap_or_default())
+        } else {
+            let endpoint = selection
+                .base_url_env_key
+                .as_deref()
+                .and_then(|key| std::env::var(key).ok())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(selection.base_url);
+            (checked_url(&endpoint, &transport)?, secret)
+        };
         Ok(Self {
             #[cfg(unix)]
             profile: None,
-            url: checked_url(&endpoint, &transport)?,
+            url,
             transport,
             secret,
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(120))
+            client: builder
                 .build()
                 .map_err(|_| "Cannot initialize provider client")?,
         })
@@ -730,6 +755,8 @@ impl Provider {
             request
                 .header("x-api-key", &self.secret)
                 .header("anthropic-version", "2023-06-01")
+        } else if self.secret.is_empty() {
+            request
         } else {
             request.bearer_auth(&self.secret)
         };
@@ -738,7 +765,11 @@ impl Provider {
             .await
             .map_err(|_| "Provider request failed; check connectivity and endpoint settings")?;
         if !response.status().is_success() {
-            return Err(format!("Provider returned HTTP {}. Check the API key, model, quota, and endpoint settings.",response.status().as_u16()));
+            let status = response.status().as_u16();
+            return Err(format!(
+                "Provider returned HTTP {status}. {}",
+                cloud_provider::status_hint(status)
+            ));
         }
         let is_stream = response
             .headers()
@@ -2295,6 +2326,9 @@ async fn run_inner(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cloud_provider_mock_tests;
 
 #[cfg(test)]
 mod read_only_tests;

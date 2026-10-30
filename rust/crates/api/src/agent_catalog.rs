@@ -76,6 +76,8 @@ fn mask(secret: &str) -> String {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ApiKeyInput {
     api_key: String,
+    #[serde(default)]
+    settings: Option<serde_json::Map<String, Value>>,
 }
 async fn save_key(
     State(state): State<AppState>,
@@ -95,8 +97,21 @@ async fn save_key(
             "API key must be 8-10000 characters without control characters",
         ));
     }
+    let stored = if crate::v4_agent::cloud_provider::kind(&provider).is_some() {
+        crate::v4_agent::cloud_provider::pack(
+            &provider,
+            secret,
+            input.settings.as_ref(),
+            crate::v4_agent::cloud_provider::loopback_allowed(),
+        )
+        .map_err(ApiError::bad_request)?
+    } else if input.settings.is_some() {
+        return Err(ApiError::bad_request("Provider does not take settings"));
+    } else {
+        secret.to_owned()
+    };
     let encrypted = vault::VaultCipher::load(&state.config().data_dir)
-        .and_then(|cipher| cipher.encrypt(secret))
+        .and_then(|cipher| cipher.encrypt(&stored))
         .map_err(|_| ApiError::internal("Could not encrypt credential"))?;
     let name = provider_name(&provider);
     let mut database = state.lock_db().map_err(ApiError::internal)?;
@@ -313,7 +328,7 @@ async fn authentication(
             .get("authMethods")
             .cloned()
             .unwrap_or_else(|| json!([definition["auth"]]));
-        providers.push(json!({"id":id,"label":definition["label"],"methods":methods,"command":definition.get("oauthCommand").or_else(||definition.get("command")),"help":definition.get("oauthHelp").or_else(||definition.get("commandHelp")),"status":if credential.is_some(){"ready"}else{"not-configured"},"configured":credential.is_some(),"masked":credential.map(|secret|mask(secret)),"models":definition["models"].as_array().map(Vec::len).unwrap_or(0)}));
+        providers.push(json!({"id":id,"label":definition["label"],"methods":methods,"command":definition.get("oauthCommand").or_else(||definition.get("command")),"help":definition.get("oauthHelp").or_else(||definition.get("commandHelp")).or_else(||definition.get("help")),"status":if credential.is_some(){"ready"}else{"not-configured"},"configured":credential.is_some(),"masked":credential.map(|secret|mask(&crate::v4_agent::cloud_provider::api_key(id,secret))),"settings":definition.get("settings"),"configuredSettings":credential.map(|secret|crate::v4_agent::cloud_provider::public_settings(id,secret)).filter(|value|!value.is_null()),"models":definition["models"].as_array().map(Vec::len).unwrap_or(0)}));
     }
     Ok((
         [(header::CACHE_CONTROL, "private, no-store")],
@@ -651,6 +666,108 @@ mod tests {
         .unwrap()
     }
     #[tokio::test]
+    async fn cloud_provider_settings_are_validated_stored_encrypted_and_exposed_without_the_key() {
+        let state = state();
+        let app = router(state.clone());
+        let put = |provider: &str, body: &str| {
+            request(
+                "PUT",
+                &format!("/api/agent/auth/{provider}/api-key"),
+                Some("owner"),
+                body,
+            )
+        };
+        for (provider, body) in [
+            ("bedrock", r#"{"apiKey":"synthetic-bedrock-key"}"#),
+            (
+                "bedrock",
+                r#"{"apiKey":"synthetic-bedrock-key","settings":{"region":"../x"}}"#,
+            ),
+            (
+                "azure-foundry",
+                r#"{"apiKey":"synthetic-azure-key","settings":{"endpoint":"https://evil.example.com","apiVersion":"2024-10-21"}}"#,
+            ),
+            (
+                "azure-foundry",
+                r#"{"apiKey":"synthetic-azure-key","settings":{"endpoint":"https://r.openai.azure.com","apiVersion":"2024-10-21","extra":"1"}}"#,
+            ),
+            (
+                "vertex",
+                r#"{"apiKey":"synthetic-vertex-key","settings":{"project":"BAD","location":"us-central1"}}"#,
+            ),
+            (
+                "deepseek",
+                r#"{"apiKey":"synthetic-provider-secret","settings":{"region":"us-west-2"}}"#,
+            ),
+        ] {
+            let response = app.clone().oneshot(put(provider, body)).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "{provider} {body}"
+            );
+            assert!(!json(response).await.to_string().contains("synthetic"));
+        }
+        let response = app
+            .clone()
+            .oneshot(put(
+                "azure-foundry",
+                r#"{"apiKey":"synthetic-azure-key-1234","settings":{"endpoint":"https://r.openai.azure.com/","apiVersion":"2024-10-21"}}"#,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let saved = json(response).await;
+        assert_eq!(saved["masked"], "****1234");
+        let user = AuthenticatedUser {
+            user_id: "owner".into(),
+            username: "owner".into(),
+        };
+        let stored = state.list_vault_keys(&user).unwrap().remove(0).key_value;
+        assert!(
+            !stored.contains("synthetic-azure-key-1234") && !stored.contains("openai.azure.com")
+        );
+        let auth = json(
+            app.clone()
+                .oneshot(request("GET", "/api/agent/auth", Some("owner"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let azure = auth["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|provider| provider["id"] == "azure-foundry")
+            .unwrap();
+        assert_eq!(azure["methods"], serde_json::json!(["api-key"]));
+        assert_eq!(azure["masked"], "****1234");
+        assert_eq!(
+            azure["configuredSettings"],
+            serde_json::json!({"endpoint":"https://r.openai.azure.com","apiVersion":"2024-10-21","authHeader":"api-key"})
+        );
+        assert_eq!(azure["settings"][0]["key"], "endpoint");
+        assert!(!auth.to_string().contains("synthetic-azure-key-1234"));
+        let catalog = json(
+            app.oneshot(request("GET", "/api/agent/catalog", Some("owner"), ""))
+                .await
+                .unwrap(),
+        )
+        .await;
+        let ids: Vec<_> = catalog["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|agent| agent["id"].as_str())
+            .collect();
+        for id in ["azure-foundry", "bedrock", "vertex"] {
+            assert!(ids.contains(&id), "{id}");
+        }
+        for id in ["copilot", "moa", "copilot-acp"] {
+            assert!(!ids.contains(&id), "{id}");
+        }
+    }
+    #[tokio::test]
     async fn catalog_and_auth_require_authentication() {
         let app = router(state());
         for path in [
@@ -864,14 +981,7 @@ mod tests {
         .await;
         let agents = catalog["agents"].as_array().unwrap();
         assert!(!agents.iter().any(|agent| agent["status"] == "unsupported"
-            || [
-                "bedrock",
-                "vertex",
-                "azure-foundry",
-                "copilot",
-                "copilot-acp",
-                "moa"
-            ]
-            .contains(&agent["id"].as_str().unwrap_or_default())));
+            || ["copilot", "copilot-acp", "moa"]
+                .contains(&agent["id"].as_str().unwrap_or_default())));
     }
 }

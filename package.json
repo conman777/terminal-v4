@@ -13,6 +13,8 @@
     "rust:test": "cargo test --manifest-path rust/Cargo.toml",
     "browser:install": "node scripts/prepare-browser-runtime.cjs",
     "browser:verify": "node scripts/prepare-browser-runtime.cjs --verify",
+    "verify:deployment": "node scripts/verify-deployment.mjs",
+    "test:verify-deployment": "node --test scripts/verify-deployment.test.mjs",
     "test:browser-runtime": "node --test scripts/prepare-browser-runtime.test.cjs",
     "app:build": "npm run browser:install && npm run frontend:build && cargo build -p terminal-v4-api --manifest-path rust/Cargo.toml",
     "app:verify": "node scripts/verify-local-app.cjs",

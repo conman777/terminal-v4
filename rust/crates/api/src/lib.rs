@@ -5,6 +5,7 @@ mod agent_mcp_apps;
 mod agent_runtime;
 mod auth;
 mod browser_runtime;
+mod build_info;
 mod collaboration;
 mod device_relay;
 mod external_auth;
@@ -602,6 +603,7 @@ pub fn app(state: AppState) -> Router {
         .merge(remote_tunnels::public_routes())
         .route("/api/health", get(health))
         .route("/api/client-build", get(client_build))
+        .route("/api/build-info", get(build_info_route))
         .route("/api/auth/register", post(register_disabled))
         .route("/api/auth/login", post(login))
         .route("/api/auth/mode", get(local_testing::mode))
@@ -836,6 +838,21 @@ fn find_frontend_dist_from_ancestors(start_dir: &FsPath) -> Option<PathBuf> {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse::ok())
+}
+
+async fn build_info_route(State(state): State<AppState>) -> axum::response::Response {
+    let info = build_info::build_info(
+        &resolve_frontend_dir(&state.config().data_dir),
+        workspace_tasks::WORKER_PROTOCOL,
+    );
+    (
+        [(
+            axum::http::header::CACHE_CONTROL,
+            "no-cache, no-store, must-revalidate",
+        )],
+        Json(info),
+    )
+        .into_response()
 }
 
 async fn client_build(State(state): State<AppState>) -> axum::response::Response {
@@ -7909,6 +7926,44 @@ mod tests {
         assert_eq!(payload["mainStylesheet"], Value::Null);
         assert!(payload["indexMtimeMs"].is_u64());
         assert!(payload["checkedAt"].is_u64());
+    }
+
+    #[tokio::test]
+    async fn build_info_route_reports_commit_and_served_manifest_without_auth() {
+        let temp_root = tempdir().expect("temp dir should create");
+        let frontend_dist = temp_root.path().join("frontend").join("dist");
+        fs::create_dir_all(&frontend_dist).expect("frontend dist should create");
+        let html = r#"<script type="module" src="/assets/index-Build42.js"></script>"#;
+        fs::write(frontend_dist.join("index.html"), html).expect("index html should write");
+
+        let state = test_state_with_data_dir(temp_root.path().join("app").join("data"));
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/build-info")
+                    .body(Body::empty())
+                    .expect("request should build"),
+            )
+            .await
+            .expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let payload: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            payload["frontend"]["assets"],
+            json!(["assets/index-Build42.js"])
+        );
+        assert_eq!(
+            payload["frontend"]["manifestHash"],
+            crate::build_info::manifest_hash(&["assets/index-Build42.js".to_string()])
+        );
+        assert_eq!(
+            payload["workerProtocol"],
+            crate::workspace_tasks::WORKER_PROTOCOL
+        );
+        assert_eq!(payload["commit"], crate::build_info::COMMIT);
+        assert!(!String::from_utf8_lossy(&body).contains(temp_root.path().to_str().unwrap()));
     }
 
     #[test]

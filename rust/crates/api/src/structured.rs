@@ -7415,7 +7415,7 @@ impl StructuredSessionManager {
 
 const MAX_STRUCTURED_BYTES: usize = 16 * 1024 * 1024;
 pub(crate) const MAX_STRUCTURED_FILE_BYTES: usize = MAX_STRUCTURED_BYTES + 1_048_576;
-const MAX_STRUCTURED_EVENTS: usize = 32768;
+pub(crate) const MAX_STRUCTURED_EVENTS: usize = 32768;
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
