@@ -97,6 +97,17 @@ fn unavailable() -> Value {
     json!({ "pullRequest": null, "availability": "gh_unavailable", "reason": "Install the GitHub CLI (gh) and sign in to see pull request status" })
 }
 
+fn friendly_failure(detail: &str) -> String {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("none of the git remotes") || lower.contains("no git remotes") {
+        return "this repository has no GitHub remote".into();
+    }
+    if lower.contains("gh auth login") || lower.contains("not logged in") {
+        return "you are not signed in to GitHub in the GitHub CLI".into();
+    }
+    detail.trim().chars().take(400).collect()
+}
+
 async fn fetch_view(program: &str, repo: &Path, branch: &str) -> ViewOutcome {
     let run = tokio::time::timeout(
         Duration::from_secs(20),
@@ -122,7 +133,7 @@ async fn fetch_view(program: &str, repo: &Path, branch: &str) -> ViewOutcome {
         {
             return ViewOutcome::NoPullRequest;
         }
-        return ViewOutcome::Failed(detail.trim().chars().take(400).collect());
+        return ViewOutcome::Failed(friendly_failure(&detail));
     }
     match serde_json::from_slice::<Value>(&output.stdout) {
         Ok(view) => ViewOutcome::Found(view),
@@ -463,6 +474,47 @@ mod tests {
                 2,
                 json!("gh_unavailable")
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn common_gh_failures_get_a_short_message_without_environment_hints() {
+        let repo = repo();
+        let path = repo.path().to_str().unwrap();
+        let signed_out = fake_gh(
+            "",
+            4,
+            "To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.",
+            0,
+        );
+        let no_remote = fake_gh(
+            "",
+            1,
+            "none of the git remotes configured for this repository point to a known GitHub host. To tell gh about a new GitHub host, please use `gh auth login`",
+            0,
+        );
+        let cache = PullRequestCache::new();
+        let first = status_with(&program(&signed_out), path, &cache)
+            .await
+            .unwrap()["reason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let cache = PullRequestCache::new();
+        let second = status_with(&program(&no_remote), path, &cache)
+            .await
+            .unwrap()["reason"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            (
+                first.contains("not signed in to GitHub"),
+                first.contains("GH_TOKEN"),
+                second.contains("no GitHub remote"),
+                second.contains("gh auth login"),
+            ),
+            (true, false, true, false)
         );
     }
 
